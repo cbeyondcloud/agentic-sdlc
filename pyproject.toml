@@ -41,3 +41,7 @@ extend-exclude = ["docs", "reports", "research_notes"]
 [tool.ruff.lint]
 # E/F: pyflakes + pycodestyle errors, I: import order, B: common bugs, UP: modern syntax
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+# Our own packages: imports of these are grouped last, separate from third-party libraries.
+known-first-party = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]

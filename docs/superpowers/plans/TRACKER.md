@@ -34,7 +34,7 @@ Exit: acceptance scenarios 1, 2 and 4 pass in **standalone mode** on a laptop (M
 
 | ID | Sub-plan | Item | Depends on | Done when | PW | Status | Notes |
 |---|---|---|---|---|---|---|---|
-| M1-01 | SP1 | `AgentDefinition` model + Markdown loader | P0-01 | `core/tests/definitions/test_agent.py` passes (5 tests in detailed plan) | 0.5 | Pending | |
+| M1-01 | SP1 | `AgentDefinition` model + Markdown loader | P0-01 | `core/tests/definitions/test_agent.py` passes (5 tests in detailed plan) | 0.5 | Done | feat(core): agent definition model and loader — 6 tests, check.py --all green (Windows + Linux) |
 | M1-02 | SP1 | `PipelineDefinition` model + YAML loader | P0-01 | `test_pipeline.py` passes (5 tests) | 0.5 | Pending | |
 | M1-03 | SP1 | `OrgPolicy` model + policy-dir loader + policy version (incl. `allowed_repo_patterns`, `tool_mirror_url`, `licence_scan`) | P0-01 | `test_policy_load.py` passes (5 tests) | 1 | Pending | |
 | M1-04 | SP1 | Layered discovery + `resolve_agent` (tiers, team narrowing, clamping, violations) | M1-01, M1-03 | `test_resolve.py` + `test_discovery.py` pass (7 tests) | 1 | Pending | |
