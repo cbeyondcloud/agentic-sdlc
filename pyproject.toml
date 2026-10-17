@@ -1,0 +1,43 @@
+# Root of the uv workspace. It is not a package itself; it ties the four
+# packages together so they share one lock file (uv.lock) and one virtualenv.
+[project]
+name = "agentic-sdlc-workspace"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+
+[tool.uv.workspace]
+members = ["core", "commons", "cli", "control-plane"]
+
+# Each member depends on the others by name; these lines tell uv to use the
+# local folders instead of looking them up on a package index.
+[tool.uv.sources]
+agentic-core = { workspace = true }
+sdlc-commons = { workspace = true }
+agentic-cli = { workspace = true }
+agentic-control-plane = { workspace = true }
+
+# Tools used only while developing (never shipped to users).
+[dependency-groups]
+dev = [
+    "agentic-core",
+    "sdlc-commons",
+    "agentic-cli",
+    "agentic-control-plane",
+    "pytest>=8.3",
+    "ruff>=0.7",
+    "pre-commit>=4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["core/tests", "commons/tests", "cli/tests", "control-plane/tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Documentation folders contain Markdown with code snippets; never lint them.
+extend-exclude = ["docs", "reports", "research_notes"]
+
+[tool.ruff.lint]
+# E/F: pyflakes + pycodestyle errors, I: import order, B: common bugs, UP: modern syntax
+select = ["E", "F", "I", "B", "UP"]
