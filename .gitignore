@@ -1,0 +1,26 @@
+# --- Python build and cache files ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# --- Virtual environments and tool caches ---
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Per-developer local state created by the agentic CLI (never shared) ---
+.agentic/local/
+
+# --- Throwaway spike output (spike code itself is committed under spikes/) ---
+spikes/**/out/
+
+# --- Personal Claude Code settings and executor scratch space ---
+.claude/settings.local.json
+.superpowers/
+
+# --- OS noise ---
+.DS_Store
+Thumbs.db

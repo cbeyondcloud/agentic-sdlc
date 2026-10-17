@@ -1,0 +1,9 @@
+# Store every text file with LF line endings in git, whatever the OS.
+# This matters for the run ledger: handoff files are hashed (digest-pinned),
+# so a Windows checkout with CRLF must not change their bytes in the repo.
+* text=auto eol=lf
+
+# Windows scripts keep CRLF so PowerShell and cmd run them correctly.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
