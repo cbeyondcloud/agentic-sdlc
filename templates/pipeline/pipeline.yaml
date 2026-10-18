@@ -2,7 +2,7 @@
 # PIPELINE DEFINITION TEMPLATE
 # Who may change pipelines: only org admins and team leads.
 #   Org mode: pipelines live in the org policy repo, in pipelines/ (org admins)
-#   or pipelines/teams/<team>/ (that team's leads), and change only through a
+#   or teams/<team>/pipelines/ (that team's leads), and change only through a
 #   pull request approved by them. Developers and repo maintainers request
 #   changes. A locally edited pipeline will not run.
 #   Standalone mode (no org): copy to .agentic/pipelines/<name>.yaml.

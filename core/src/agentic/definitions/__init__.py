@@ -7,6 +7,7 @@ from agentic.definitions.agent import (
     Limits,
     load_agent,
 )
+from agentic.definitions.discovery import DefinitionSet, Layer, UnknownDefinitionError
 from agentic.definitions.errors import DefinitionError
 from agentic.definitions.pipeline import (
     ActionStep,
@@ -24,14 +25,17 @@ __all__ = [
     "AgentDefinition",
     "AgentStep",
     "ChildLimits",
+    "DefinitionSet",
     "DefinitionError",
     "DenyRules",
     "GateStep",
+    "Layer",
     "Limits",
     "LoopSpec",
     "LoopStep",
     "PipelineDefinition",
     "Step",
+    "UnknownDefinitionError",
     "load_agent",
     "load_pipeline",
 ]
