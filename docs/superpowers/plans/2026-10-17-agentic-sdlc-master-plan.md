@@ -462,6 +462,29 @@ Control plane: 2–3 replicas × 1 vCPU / 1 GB; Postgres: 4 vCPU / 16 GB with HA
 
 ---
 
+## Executive cost breakdown (owner request, part of M3-01)
+
+The executive report shows total cost decomposed into drivers, for the **whole org** and for **each user** (and filterable by team, pipeline, agent and month):
+
+```
+total cost = users × sessions per user × turns per session × requests per turn × tokens per request × cost per token
+```
+
+| Factor | Definition in this framework | Computed as | Source |
+|---|---|---|---|
+| users | People who ran ≥ 1 pipeline in the period (per-user view: 1) | count of distinct run owners | control plane `runs` |
+| sessions per user | One session = one pipeline run | runs ÷ users | control plane `runs` |
+| turns per session | One turn = one agent step executed (each loop iteration and each child agent counts) | step executions ÷ runs | run ledger `step_started` events (ingested) |
+| requests per turn | One request = one model API call | model calls ÷ step executions | TokenLean `usage_events` joined by `tags.run_id` + `tags.step` (ST-2) |
+| tokens per request | Input + output + cache-read + cache-write tokens per call (also shown split) | tokens ÷ model calls | TokenLean `usage_events` |
+| cost per token | Effective blended USD rate (varies with model mix and cache hits) | actual cost ÷ tokens | TokenLean `cost_actual_usd` |
+
+**Reconciliation rule:** every factor is a ratio of measured totals, so the product equals the actual total cost exactly; the report shows `product of factors` next to `sum of actual cost` and flags any difference > 0.5 % (a data-quality alert, e.g. untagged calls). Calls without run tags are reported as a separate "unattributed" line, never hidden.
+
+**Why this shape:** it tells an executive *which lever moved* — more users (adoption), more runs per user (usage), longer runs (pipeline design / review loops), chattier agents (prompt/skill quality), bigger prompts (context size), or pricier tokens (model mix, cache misses).
+
+**Also shown:** month-over-month change attributed to each factor; per-user table sortable by any factor; a **what-if** panel (e.g. "users = 1000, everything else at current median" → projected monthly cost); per-model split of cost per token; cached-token share.
+
 ## Enterprise coverage review (1000-person rollout)
 
 Each function the owner asked for, mapped to the tracker rows that deliver it.
@@ -470,7 +493,7 @@ Each function the owner asked for, mapped to the tracker rows that deliver it.
 |---|---|
 | **Observability** — who/which team/agent did what and why, sessions, turns, tokens, cost | M1-12/13 cost capture and budgets; M1-43 OTel + TokenLean trace join; M1-47 structured logs + `agentic logs`; M2-20 central sinks; M2-37/38 dashboards; M2-31/33 (ST-2/ST-5); M2-12 control-plane health/alerts |
 | **Audit** — tamper-evident, code + config, who/what/why | M1-06/07 hash-chained ledger; M1-22 digest-pinned approvals; M1-45 git trailers; M2-05 chained audit table; M2-26 `audit verify`; M2-02 policy versions; M2-13 audit export; M2-55 tamper E2E |
-| **Executive dashboards / ROI** | M3-01 Executive ROI dashboard + chargeback export (cost per accepted change, request→merged-PR cycle time, DORA lead time and change-failure rate via Zyroflo `metrics.dora`, rework rate, PR merge rate, human wait time, TokenLean savings, monthly cost per team) |
+| **Executive dashboards / ROI** | M3-01 Executive ROI dashboard + chargeback export + cost-driver breakdown per org and per user (users × sessions × turns × requests × tokens × cost/token) (cost per accepted change, request→merged-PR cycle time, DORA lead time and change-failure rate via Zyroflo `metrics.dora`, rework rate, PR merge rate, human wait time, TokenLean savings, monthly cost per team) |
 | **Roles** | M2-03 RBAC + default roles + repo maintainers from CODEOWNERS; M2-25 CLI; M1-22 gate roles/four-eyes; M2-14 service accounts + bulk import; M2-18 provisioning |
 | **Guardrails** | M1-04 tool/tier/backend/classification enforcement; M1-31 shell policy + Zyroflo guards; M1-41 secret scan before egress; M1-42 untrusted content; M2-48 pre-pass + SCA + blocked licences; M2-49 handoff PII scan; TokenLean G29–G31 |
 | **Safe execution** | M1-30 worktree per step; M1-32/33 OS sandbox; M2-42 egress limits; M3-10 resource limits; M2-24 diff budget; M1-54 `--dry-run`; P0-03 architecture test |
@@ -499,7 +522,7 @@ Status for every row: **Pending** at plan approval. Columns: `PW` = estimated pe
 | ID | Sub-plan | Item | Depends on | Done when | PW | Status | Notes |
 |---|---|---|---|---|---|---|---|
 | P0-01 | SP0 | Repo bootstrap: git init, uv workspace (`core`, `commons`, `cli`, `control-plane`), ruff, pytest, pre-commit, CI matrix (Windows/macOS/Linux), MIT LICENSE, `.gitattributes eol=lf`; copy spec, research, this plan and `TRACKER.md` into the repo | — | `uv run pytest` and `uv run ruff check .` green locally and in CI on all 3 OSes; tracker committed | 1 | Pending | |
-| P0-02 | SP0 | Spec revision **r3**: fold in decisions D26–D32 (D31 agent deny lists, D32 opencode backend + Antigravity spike), the enterprise-review additions, and the "Users and roles", "Developer onboarding", "Deployment landscape", skills and learning-loop sections from this plan; renumber spec §21 spikes to match | P0-01 | Spec r3 committed; every D-number and spike referenced in this plan exists in the spec; owner sign-off | 1 | Pending | |
+| P0-02 | SP0 | Spec revision **r3**: fold in decisions D26–D32 (D31 agent deny lists, D32 opencode backend + Antigravity spike), the enterprise-review additions, and the "Users and roles", "Developer onboarding", "Deployment landscape", skills, learning-loop and executive cost breakdown sections from this plan; renumber spec §21 spikes to match | P0-01 | Spec r3 committed; every D-number and spike referenced in this plan exists in the spec; owner sign-off | 1 | Pending | |
 | P0-03 | SP0 | Architecture test (import-linter): `openai`/`anthropic` SDKs importable only from `agentic.transport`; supply-chain CI: pip-audit, gitleaks on the repo, licence allow-list check of `uv.lock` | P0-01 | CI job fails on a deliberate violation of each rule and passes on main | 0.5 | Pending | |
 | S1 | Spike | TokenLean cost capture through Pydantic AI (stream + non-stream) | P0-01 | Record shows headers/body read on both paths or names the gap and the fallback | 1 | Pending | |
 | S2 | Spike | Claude Agent SDK end-to-end through TokenLean (managed settings, base URL, headers, `--bare`, JSON schema output) | P0-01 | Record with a working lock-down config or the blocking gap | 1 | Pending | |
@@ -660,13 +683,13 @@ Exit: acceptance scenario 3 (admin override) on the org stack (M2-53), kill-swit
 | M2-57 | SP7 | `opencode` backend (D32): `opencode run --format json`, lock-down profile via `OPENCODE_CONFIG_CONTENT` (provider `baseURL` → TokenLean, model forced) and `OPENCODE_PERMISSION` compiled from the shell policy and deny lists; wrapped in `srt`/container (OpenCode has no own sandbox); verify `baseURL` against official docs first | M1-27, M1-31, M1-32 | Contract tests against pinned OpenCode version pass; calls appear in TokenLean usage with X-Agentic headers; a denied command is refused | 1.5 | Pending | |
 | M2-56 | SP20 | **M2 demo + retro**: org demo (admin override, kill switch, dashboards, audit); re-estimate M3; scope levers | M2-53, M2-54, M2-55, M2-38 | Retro notes committed; go/no-go recorded | 0.5 | Pending | |
 
-### M3 — Scale and operations (~31 PW, ~8 weeks)
+### M3 — Scale and operations (~31.5 PW, ~8 weeks)
 
 Exit: full §1.3 suite on staging (M3-25), Helm install from runbook alone (M3-05), load test passed (M3-22), learning loop E2E (M3-16), pilot go/no-go (M3-26).
 
 | ID | Sub-plan | Item | Depends on | Done when | PW | Status | Notes |
 |---|---|---|---|---|---|---|---|
-| M3-01 | SP16 | Executive ROI dashboard + monthly chargeback export (cost per accepted change, request→merged-PR cycle time, DORA lead time & change-failure rate via Zyroflo `metrics.dora`, rework rate, PR merge rate, human wait time, TokenLean savings, cost per team) | M2-37, M1-58 | Dashboard loads on seeded data; CSV export matches SQL totals | 2 | Pending | |
+| M3-01 | SP16 | Executive ROI dashboard + monthly chargeback export (cost per accepted change, request→merged-PR cycle time, DORA lead time & change-failure rate via Zyroflo `metrics.dora`, rework rate, PR merge rate, human wait time, TokenLean savings, cost per team) **+ cost-driver breakdown for org and each user: users × sessions/user × turns/session × requests/turn × tokens/request × cost/token, with reconciliation, unattributed line, month-over-month attribution and what-if panel** (see "Executive cost breakdown") | M2-37, M1-58 | Dashboard loads on seeded data; CSV export matches SQL totals; product of the six factors equals summed actual cost within 0.5 % on seeded data, for org and for each user; untagged calls appear as "unattributed" | 2.5 | Pending | |
 | M3-02 | SP16 | Umbrella Helm chart `agentic-platform` (control plane, workers, TokenLean sub-chart, observability provisioning; BYO Postgres/Grafana/TokenLean); Postgres backup/PITR + restore drill; upgrade runbook | M2-01, M2-39, M3-03 | `helm lint`; install on kind; restore drill executed and documented | 3 | Pending | |
 | M3-03 | SP19 | TokenLean **ST-8 (cloud)**: `deploy/lite/cloud/helm/tokenlean-lite` + `install/upgrade/uninstall/smoke` scripts | M1-67, M2-52 | `helm lint` + `cloud/install` + `cloud/smoke` pass on kind | 1 | Pending | |
 | M3-04 | SP16 | Environments dev/staging/prod: values files, External Secrets, cert-manager TLS, policy branch per env, promotion runbooks | M3-02, M2-02 | Staging installed from chart; promotion dry run documented | 1.5 | Pending | |
