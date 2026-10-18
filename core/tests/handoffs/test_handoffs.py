@@ -131,7 +131,7 @@ def test_missing_front_matter_rejected():
 
 def make_agent(name: str, consumes: list[str], produces: str | None) -> AgentDefinition:
     return AgentDefinition(
-        name=name, version="1.0.0", description=name, instructions="Do it.",
+        name=name, type="general", version="1.0.0", description=name, instructions="Do it.",
         consumes=consumes, produces=produces,
     )  # fmt: skip
 
@@ -211,3 +211,20 @@ def test_unclosed_quote_points_at_its_line():
         parse_handoff(text)
 
     assert "started at line 4" in str(error.value)  # run_id is on line 4
+
+
+def test_compat_uses_handoffs_inherited_from_the_agent_type(fixtures: Path):
+    # The developer file below sets no consumes/produces: they come from its type (D35).
+    from agentic.policy import ResolveContext, load_policy, resolve_agent
+
+    policy = load_policy(fixtures / "policy" / "policy")
+    bare_developer = AgentDefinition(
+        name="developer", type="developer", version="1.0.0", description="d", instructions="x"
+    )
+    resolved, violations = resolve_agent(bare_developer, policy, ResolveContext())
+    assert violations == []
+
+    steps = [{"id": "develop", "agent": "developer"}]  # nothing produces "design" first
+    problems = check_compatibility(pipeline(steps), {"developer": resolved})
+
+    assert [p.requested for p in problems] == ["design", "review"]

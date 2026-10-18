@@ -28,7 +28,7 @@ BACKEND_PATTERN = r"^(native|claude-code|codex|opencode|acp:.+|remote:.+)$"
 
 
 class Limits(BaseModel):
-    """Upper bounds for one agent run. None means "use the policy default"."""
+    """Upper bounds for one agent run. None means "not set here: use the type's cap"."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -38,13 +38,16 @@ class Limits(BaseModel):
 
 
 class ChildLimits(BaseModel):
-    """How many child agents an agent may spawn, and the limits each child gets."""
+    """How many child agents an agent may spawn, and the limits each child gets.
+
+    None means "not set here: use the agent type's cap" (D35). 0 means none allowed.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    max_total: int = 0  # 0 = this agent may not spawn children
-    max_concurrent: int = 1
-    max_depth: int = 1
+    max_total: int | None = None
+    max_concurrent: int | None = None
+    max_depth: int | None = None
     per_child: Limits = Limits()
 
 
@@ -62,31 +65,37 @@ class DenyRules(BaseModel):
 
 
 class AgentDefinition(BaseModel):
-    """Everything an agent file declares. Unknown fields are rejected (typo safety)."""
+    """Everything an agent file declares. Unknown fields are rejected (typo safety).
+
+    Every agent has an org-defined `type` (D35). A setting left as None is not set
+    here and is inherited from the type; a setting given here may only narrow the
+    type's ceiling. The resolver (agentic.policy.resolve) applies both rules.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     # --- identity ---
     name: str
+    type: str = Field(pattern=r"^[a-z][a-z0-9-]*$")  # an agent type defined in org policy
     version: str
     owner: str | None = None
     status: Literal["active", "deprecated"] = "active"
     description: str
 
     # --- model request (admin policy maps tiers to real models) ---
-    tier: str | None = "balanced"
+    tier: str | None = None
     model: str | None = None
     effort: Literal["low", "medium", "high"] | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
 
     # --- where and how it runs ---
-    backend: str = Field(default="native", pattern=BACKEND_PATTERN)
-    tools: list[str] = []
-    shell: list[str] = []
-    skills: list[str] = []
+    backend: str | None = Field(default=None, pattern=BACKEND_PATTERN)
+    tools: list[str] | None = None
+    shell: list[str] | None = None
+    skills: list[str] | None = None
 
     # --- handoffs: which documents it reads and which one it writes ---
-    consumes: list[str] = []
+    consumes: list[str] | None = None
     produces: str | None = None
 
     # --- limits (clamped by policy) ---
@@ -110,7 +119,7 @@ class AgentDefinition(BaseModel):
     def allow_and_deny_do_not_contradict(self) -> "AgentDefinition":
         # Allowing "git" while denying "git push" is fine (deny narrows the allow).
         # Listing the very same command in both is a mistake the author should fix.
-        contradictions = sorted(set(self.shell) & set(self.deny.shell))
+        contradictions = sorted(set(self.shell or []) & set(self.deny.shell))
         if contradictions:
             raise ValueError(
                 f"shell commands are both allowed and denied: {', '.join(contradictions)}"

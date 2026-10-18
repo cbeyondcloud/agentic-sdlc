@@ -15,7 +15,8 @@ def make_layer(
         path = root / "agents" / f"{name}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            f"---\nname: {name}\nversion: 1.0.0\ndescription: {description}\n---\nDo it.\n",
+            f"---\nname: {name}\ntype: general\nversion: 1.0.0\ndescription: {description}\n"
+            "---\nDo it.\n",
             encoding="utf-8",
         )
     for name in pipelines:

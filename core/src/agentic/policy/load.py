@@ -5,7 +5,8 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
     tiers.yaml            tiers, team_overrides
     classifications.yaml  default_classification, classifications
     tools.yaml            catalog, forbidden, deny
-    limits.yaml           default, roles, concurrency
+    agent-types.yaml      types (caps, ceilings and defaults per agent type, D35)
+    limits.yaml           concurrency
     licences.yaml         blocked, scan
     retention.yaml        days                      (placeholder until OR-01)
     org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines
@@ -37,11 +38,8 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "classifications": "classifications",
     },
     "tools.yaml": {"catalog": "tools_catalog", "forbidden": "forbidden_tools", "deny": "deny"},
-    "limits.yaml": {
-        "default": "default_role_limits",
-        "roles": "role_limits",
-        "concurrency": "concurrency",
-    },
+    "agent-types.yaml": {"types": "agent_types"},
+    "limits.yaml": {"concurrency": "concurrency"},
     "licences.yaml": {"blocked": "blocked_licences", "scan": "licence_scan"},
     "retention.yaml": {"days": "retention_days"},
     "org.yaml": {

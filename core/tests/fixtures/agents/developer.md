@@ -1,5 +1,6 @@
 ---
 name: developer
+type: developer
 version: 1.2.0
 owner: platform-team
 status: active

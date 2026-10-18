@@ -2,15 +2,19 @@
 # =============================================================================
 # AGENT DEFINITION TEMPLATE
 # Copy to .agentic/agents/<your-agent-name>.md and edit.
-# Only name, version and description are required.
+# Required: name, type, version and description.
+# Every agent has an org-defined TYPE (e.g. developer, code-review, general).
+# The type is the org-approved template: any setting you leave out is
+# inherited from it, and any setting you write may only NARROW it (fewer
+# tools, a smaller budget...). Caps come from the type, never from the name.
 # Optional settings are shown commented out with a sample value; to use one,
-# delete the leading "# ". The value in [brackets] is what applies if you leave
-# the setting out. Settings marked (policy) are requests only: org and team
-# policy decide the final value, and a forbidden request stops the run with an
-# explanation before anything is spent.
+# delete the leading "# ". [brackets] say what applies if you leave it out.
+# A request beyond the type or org policy stops the run with an explanation
+# before anything is spent.
 # =============================================================================
 
 name: my-agent                         # required; lowercase-with-hyphens, unique in the repo
+type: general                          # required; an agent type defined by your org (agentic types list)
 version: 0.1.0                         # required; MAJOR.MINOR.PATCH
 description: One line saying what this agent does.   # required
 
@@ -18,34 +22,34 @@ description: One line saying what this agent does.   # required
 # owner: payments-team                 # team or person responsible   [unset]
 # status: active                       # active | deprecated   [active]
 
-# --- model (policy) ----------------------------------------------------------
-# tier: balanced                       # an org tier, e.g. deep-reasoning | balanced | fast   [balanced]
-# model: anthropic/claude-sonnet       # exact model; normally leave unset and use tier   [unset]
-# effort: medium                       # low | medium | high   [unset = model default]
-# temperature: 0.2                     # 0.0 to 2.0   [unset = model default]
+# --- model ---------------------------------------------------------------------
+# tier: balanced                       # an org tier, e.g. deep-reasoning | balanced | fast   [the type's tier]
+# model: anthropic/claude-sonnet       # exact model; only org-approved models; normally leave unset   [from the tier]
+# effort: medium                       # low | medium | high   [the tier's default]
+# temperature: 0.2                     # 0.0 to 2.0   [the tier's default]
 
-# --- where it runs and what it may use (policy) -------------------------------
-# backend: native                      # native | claude-code | codex | opencode | acp:<agent> | remote:<service>   [native]
-# tools: [read_files, search, edit_files, run_shell, codeintel, spawn_agent]   # allow-list: anything not listed is unavailable   [none]
-# shell: [pytest, "npm test"]          # command prefixes it may run (needs run_shell)   [none]
-# skills: [superpowers/test-driven-development]   # names from the org skill catalog   [none]
+# --- where it runs and what it may use (within the type's ceiling) ---------------
+# backend: native                      # native | claude-code | codex | opencode | acp:<agent> | remote:<service>   [the type's first backend]
+# tools: [read_files, search, edit_files]   # allow-list; anything not listed is unavailable   [the type's tools]
+# shell: [pytest, "npm test"]          # command prefixes it may run (needs run_shell)   [the type's shell list]
+# skills: [superpowers/test-driven-development]   # names from the org skill catalog   [the type's skills]
 
 # --- handoffs: documents it reads and writes ----------------------------------
-# consumes: [design]                   # kinds: requirements | design | dev-report | review | test-report   [none]
-# produces: dev-report                 # the one kind it writes   [unset]
+# consumes: [design]                   # kinds: requirements | design | dev-report | review | test-report   [the type's list]
+# produces: dev-report                 # must match the type's kind if the type fixes one   [the type's kind]
 
-# --- limits per run (policy clamps each to the org/team maximum) --------------
+# --- limits per run (never above the type's caps; a team may lower them) --------
 # limits:
-#   budget_usd: 5                      # US dollars   [policy default]
-#   max_turns: 80                      # model round-trips   [policy default]
-#   max_minutes: 60                    # wall-clock minutes   [policy default]
+#   budget_usd: 1                      # US dollars   [the type's cap]
+#   max_turns: 30                      # model round-trips   [the type's cap]
+#   max_minutes: 20                    # wall-clock minutes   [the type's cap]
 
-# --- child agents it may spawn (policy) ----------------------------------------
+# --- child agents it may spawn (never above the type's caps) ---------------------
 # children:
-#   max_total: 3                       # 0 = may not spawn children   [0]
-#   max_concurrent: 2                  # running at the same time   [1]
-#   max_depth: 1                       # 2 = children may spawn their own children   [1]
-#   per_child: { budget_usd: 1, max_turns: 30, max_minutes: 15 }   # each child's share   [policy default]
+#   max_total: 0                       # 0 = may not spawn children   [the type's cap]
+#   max_concurrent: 0                  # running at the same time   [the type's cap]
+#   max_depth: 0                       # 1 = children may not spawn their own   [the type's cap]
+#   per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 }   # each child's share   [the type's cap]
 
 # --- guardrails: what this agent may NEVER do, even if policy allows it --------
 # deny:

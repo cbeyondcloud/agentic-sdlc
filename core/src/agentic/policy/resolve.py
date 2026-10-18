@@ -1,12 +1,19 @@
 """Resolving an agent: turning what its file *requests* into what policy *allows*.
 
-    AgentDefinition (requests)  +  OrgPolicy (+ team narrowing)  ->  ResolvedAgent or violations
+    AgentDefinition (requests) + its AgentType (template) + OrgPolicy + team -> ResolvedAgent
 
-Two kinds of outcome per setting:
-  * refused  - a forbidden request (tool, tier, backend, model) is a Violation;
-               any violation means the agent does not run (preflight stops the run).
-  * clamped  - a number above the allowed maximum (budget, turns, children...)
-               is quietly lowered to the maximum; that is not a violation.
+For every setting:
+  1. inherit  - a setting the agent leaves unset comes from its agent type (D35);
+  2. ceiling  - a setting the agent does set must stay within its type's ceiling;
+  3. policy   - the result must also satisfy org policy, the repo's class and the team.
+
+Two kinds of outcome:
+  * refused  - a forbidden request (unknown team or type, tier, model, backend,
+               tool, shell command, skill, handoff kind) is a Violation; any
+               violation means the agent does not run (preflight stops the run).
+  * clamped  - a number above the allowed cap (budget, turns, children...) is
+               quietly lowered to the cap. Caps come from the agent TYPE, never
+               from the agent's name; a team may only lower them.
 """
 
 from dataclasses import dataclass
@@ -14,7 +21,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict
 
 from agentic.definitions import AgentDefinition, ChildLimits, DenyRules, Limits
-from agentic.policy.model import OrgPolicy, RoleLimits, TierSpec
+from agentic.policy.model import AgentType, ClassificationRule, OrgPolicy, RoleLimits, TeamPolicy
 
 
 @dataclass(frozen=True)
@@ -36,13 +43,14 @@ class Violation:
 
 
 class ResolvedAgent(BaseModel):
-    """What the agent is actually allowed to do on this run."""
+    """What the agent is actually allowed to do on this run (every value final)."""
 
     model_config = ConfigDict(frozen=True)
 
     definition: AgentDefinition
+    type: str
     classification: str
-    tier: str | None
+    tier: str
     model: str
     effort: str | None
     temperature: float | None
@@ -50,6 +58,8 @@ class ResolvedAgent(BaseModel):
     tools: list[str]
     shell: list[str]  # allowed command prefixes, minus any that a deny entry covers
     skills: list[str]
+    consumes: list[str]
+    produces: str | None
     limits: Limits
     children: ChildLimits
     deny_shell: list[str]  # org + team + agent, in that order (D31)
@@ -59,89 +69,127 @@ class ResolvedAgent(BaseModel):
 def resolve_agent(
     agent: AgentDefinition, policy: OrgPolicy, ctx: ResolveContext
 ) -> tuple[ResolvedAgent | None, list[Violation]]:
-    """Check every restricted setting. Returns (ResolvedAgent, []) or (None, violations)."""
+    """Check every setting. Returns (ResolvedAgent, []) or (None, violations)."""
     violations: list[Violation] = []
-    team = policy.teams.get(ctx.team) if ctx.team else None
 
-    # --- repo classification ---
+    def refuse(field: str, requested: object, allowed: object, reason: str) -> None:
+        violations.append(Violation(field, requested, allowed, reason))
+
+    # --- context first: an unknown team or class must fail closed, never open ---
+    team: TeamPolicy | None = None
+    if ctx.team is not None:
+        team = policy.teams.get(ctx.team)
+        if team is None:
+            refuse("team", ctx.team, sorted(policy.teams), "the team is not defined in org policy")
     class_name = ctx.repo_classification or policy.default_classification
     rule = policy.classifications.get(class_name)
     if rule is None:
-        reason = "the repo's classification is not defined in org policy"
-        known = sorted(policy.classifications)
-        violations.append(Violation("classification", class_name, known, reason))
+        refuse("classification", class_name, sorted(policy.classifications),
+               "the repo's classification is not defined in org policy")  # fmt: skip
+    agent_type = policy.agent_types.get(agent.type)
+    if agent_type is None:
+        refuse("type", agent.type, sorted(policy.agent_types),
+               "the agent type is not defined in org policy")  # fmt: skip
+    if violations:
         return None, violations
+    assert rule is not None and agent_type is not None  # narrowed by the checks above
 
-    # --- tier: must exist, be allowed for this repo class, and for this team ---
-    tier_spec: TierSpec | None = None
-    if agent.tier is not None:
-        if agent.tier not in policy.tiers:
-            violations.append(Violation("tier", agent.tier, sorted(policy.tiers),
-                                        "unknown tier"))  # fmt: skip
-        else:
-            tier_spec = (
-                policy.team_overrides.get(ctx.team or "", {}).get(agent.tier)
-                or (policy.tiers[agent.tier])
-            )
-            if agent.tier not in rule.allowed_tiers:
-                violations.append(Violation("tier", agent.tier, rule.allowed_tiers,
-                                            f"not allowed for '{class_name}' repos"))  # fmt: skip
-            if team and team.allowed_tiers is not None and agent.tier not in team.allowed_tiers:
-                violations.append(Violation("tier", agent.tier, team.allowed_tiers,
-                                            f"not allowed for team '{ctx.team}'"))  # fmt: skip
+    # --- tier: inherit from the type; must be allowed for this class and team ---
+    tier = agent.tier or agent_type.tier
+    allowed_tiers = _allowed_tiers(policy, rule, team)
+    if tier not in policy.tiers:
+        refuse("tier", tier, sorted(policy.tiers), "unknown tier")
+    else:
+        if tier not in rule.allowed_tiers:
+            refuse("tier", tier, rule.allowed_tiers, f"not allowed for '{class_name}' repos")
+        if team and team.allowed_tiers is not None and tier not in team.allowed_tiers:
+            refuse("tier", tier, team.allowed_tiers, f"not allowed for team '{ctx.team}'")
 
-    # --- model: an explicit model must be approved; the final model must suit the repo ---
-    approved = _approved_models(policy, rule.allowed_models)
-    if agent.model is not None and agent.model not in approved:
-        violations.append(Violation("model", agent.model, sorted(approved),
-                                    "not an approved model; ask for a tier instead"))  # fmt: skip
-    model = agent.model or (tier_spec.model if tier_spec else None)
-    if model is None and agent.tier is None:
-        violations.append(Violation("model", None, sorted(policy.tiers),
-                                    "the agent names neither a tier nor a model"))  # fmt: skip
-    elif model is not None and rule.allowed_models is not None and model not in rule.allowed_models:
-        violations.append(Violation("model", model, rule.allowed_models,
-                                    f"not allowed for '{class_name}' repos"))  # fmt: skip
+    # --- model: from the tier (team override first); an explicit model must be approved ---
+    tier_model = _tier_model(policy, tier, ctx.team)
+    approved = _approved_models(policy, rule, allowed_tiers, ctx.team)
+    if agent.model is not None:
+        if agent.model not in approved:
+            reason = "not an approved model for this repo and team; ask for a tier instead"
+            refuse("model", agent.model, sorted(approved), reason)
+        model = agent.model
+    else:
+        model = tier_model
+        if (
+            model is not None
+            and rule.allowed_models is not None
+            and model not in rule.allowed_models
+        ):
+            refuse("model", model, rule.allowed_models, f"not allowed for '{class_name}' repos")
 
-    # --- backend ---
-    if agent.backend not in rule.allowed_backends:
-        violations.append(Violation("backend", agent.backend, rule.allowed_backends,
-                                    f"not allowed for '{class_name}' repos"))  # fmt: skip
+    # --- backend: inherit the type's first; within the type and the repo class ---
+    backend = agent.backend or agent_type.backends[0]
+    if backend not in agent_type.backends:
+        refuse("backend", backend, agent_type.backends, f"beyond the '{agent.type}' type")
+    elif backend not in rule.allowed_backends:
+        refuse("backend", backend, rule.allowed_backends, f"not allowed for '{class_name}' repos")
 
-    # --- tools: must be in the catalog and not forbidden ---
-    for tool in agent.tools:
+    # --- tools: inherit; each in the catalog, not forbidden, within the type ---
+    tools = agent.tools if agent.tools is not None else list(agent_type.tools)
+    for tool in tools:
         if tool not in policy.tools_catalog:
-            violations.append(Violation("tools", tool, policy.tools_catalog,
-                                        "not in the org tool catalog"))  # fmt: skip
+            refuse("tools", tool, policy.tools_catalog, "not in the org tool catalog")
         elif tool in policy.forbidden_tools:
-            violations.append(Violation("tools", tool, "not " + ", ".join(policy.forbidden_tools),
-                                        "forbidden by org policy"))  # fmt: skip
+            refuse("tools", tool, "not " + ", ".join(policy.forbidden_tools),
+                   "forbidden by org policy")  # fmt: skip
+        elif tool not in agent_type.tools:
+            refuse("tools", tool, agent_type.tools, f"beyond the '{agent.type}' type")
+
+    # --- shell: inherit; each entry within one of the type's command prefixes ---
+    shell = agent.shell if agent.shell is not None else list(agent_type.shell)
+    for command in shell:
+        if not any(_covers(prefix, command) for prefix in agent_type.shell):
+            refuse("shell", command, agent_type.shell, f"beyond the '{agent.type}' type")
+
+    # --- skills and handoffs: inherit; within the type ---
+    skills = agent.skills if agent.skills is not None else list(agent_type.skills)
+    for skill in skills:
+        if skill not in agent_type.skills:
+            refuse("skills", skill, agent_type.skills, f"beyond the '{agent.type}' type")
+    consumes = agent.consumes if agent.consumes is not None else list(agent_type.consumes)
+    for kind in consumes:
+        if kind not in agent_type.consumes:
+            refuse("consumes", kind, agent_type.consumes, f"beyond the '{agent.type}' type")
+    produces = agent.produces or agent_type.produces
+    if agent_type.produces and produces != agent_type.produces:
+        refuse("produces", produces, agent_type.produces,
+               f"the '{agent.type}' type always produces '{agent_type.produces}'")  # fmt: skip
 
     if violations:
         return None, violations
 
     # --- deny lists: union of org, team and agent (D31) ---
     deny = _merge_deny(policy.deny, team.deny if team else None, agent.deny)
+    team_cap = team.limits_max.get(agent.type) if team else None
 
-    # --- limits: min(requested, org role cap, team cap); missing request = the cap ---
-    org_cap = policy.role_limits.get(agent.name, policy.default_role_limits)
-    team_cap = team.limits_max.get(agent.name) if team else None
+    # Tier defaults (effort, temperature) belong to the tier's model; they are not
+    # applied to an explicitly named different model.
+    tier_spec = policy.team_overrides.get(ctx.team or "", {}).get(tier) or policy.tiers[tier]
+    defaults_apply = agent.model is None or agent.model == tier_model
 
     resolved = ResolvedAgent(
         definition=agent,
+        type=agent.type,
         classification=class_name,
-        tier=agent.tier,
-        model=model,
-        effort=agent.effort or (tier_spec.effort if tier_spec else None),
+        tier=tier,
+        model=model,  # type: ignore[arg-type]
+        effort=agent.effort or (tier_spec.effort if defaults_apply else None),
         temperature=agent.temperature
         if agent.temperature is not None
-        else (tier_spec.temperature if tier_spec else None),
-        backend=agent.backend,
-        tools=list(agent.tools),
-        shell=[cmd for cmd in agent.shell if not any(_covers(d, cmd) for d in deny.shell)],
-        skills=list(agent.skills),
-        limits=_clamp_limits(agent.limits, org_cap, policy.default_role_limits, team_cap),
-        children=_clamp_children(agent.children, org_cap, policy.default_role_limits, team_cap),
+        else (tier_spec.temperature if defaults_apply else None),
+        backend=backend,
+        tools=tools,
+        shell=[cmd for cmd in shell if not any(_covers(d, cmd) for d in deny.shell)],
+        skills=skills,
+        consumes=consumes,
+        produces=produces,
+        limits=_clamp_limits(agent.limits, agent_type, team_cap),
+        children=_clamp_children(agent.children, agent_type, team_cap),
         deny_shell=deny.shell,
         deny_paths=deny.paths,
     )
@@ -151,23 +199,45 @@ def resolve_agent(
 # --- helpers ---------------------------------------------------------------
 
 
-def _approved_models(policy: OrgPolicy, class_models: list[str] | None) -> set[str]:
-    """Models an agent may name explicitly: the class list, else what the tiers map to."""
-    if class_models is not None:
-        return set(class_models)
-    models = {spec.model for spec in policy.tiers.values()}
-    for overrides in policy.team_overrides.values():
-        models |= {spec.model for spec in overrides.values()}
-    return models
+def _allowed_tiers(
+    policy: OrgPolicy, rule: ClassificationRule, team: TeamPolicy | None
+) -> list[str]:
+    """Tiers allowed for this repo class AND this team."""
+    tiers = [t for t in rule.allowed_tiers if t in policy.tiers]
+    if team and team.allowed_tiers is not None:
+        tiers = [t for t in tiers if t in team.allowed_tiers]
+    return tiers
 
 
-def _covers(deny_prefix: str, allowed: str) -> bool:
-    """True if a denied command prefix makes an allowed entry pointless.
+def _tier_model(policy: OrgPolicy, tier: str, team_name: str | None) -> str | None:
+    """The real model behind a tier, using this team's override (never another team's)."""
+    override = policy.team_overrides.get(team_name or "", {}).get(tier)
+    if override:
+        return override.model
+    spec = policy.tiers.get(tier)
+    return spec.model if spec else None
+
+
+def _approved_models(
+    policy: OrgPolicy, rule: ClassificationRule, allowed_tiers: list[str], team_name: str | None
+) -> set[str]:
+    """Models an agent may name explicitly (review finding 1).
+
+    The class's own list when it has one; otherwise only the models behind the
+    tiers this repo class and this team may use (with this team's overrides).
+    """
+    if rule.allowed_models is not None:
+        return set(rule.allowed_models)
+    return {m for t in allowed_tiers if (m := _tier_model(policy, t, team_name))}
+
+
+def _covers(prefix: str, command: str) -> bool:
+    """True if `command` is the command prefix itself or a narrower form of it.
 
     "git push" covers "git push" and "git push origin main", but not "git"
     (allowing "git" while denying "git push" is a valid, narrower combination).
     """
-    return allowed == deny_prefix or allowed.startswith(deny_prefix + " ")
+    return command == prefix or command.startswith(prefix + " ")
 
 
 def _merge_deny(*layers: DenyRules | None) -> DenyRules:
@@ -186,36 +256,32 @@ def _smallest(*values: float | int | None) -> float | int | None:
     return min(present) if present else None
 
 
-def _clamp_one(requested: Limits, caps: list[Limits | None]) -> Limits:
-    clamped = {}
-    for name in Limits.model_fields:
-        cap = _smallest(*(getattr(c, name) for c in caps if c is not None))
-        wanted = getattr(requested, name)
-        clamped[name] = cap if wanted is None else _smallest(wanted, cap)
-    return Limits(**clamped)
-
-
-def _clamp_limits(
-    requested: Limits, org_cap: RoleLimits, default: RoleLimits, team_cap: RoleLimits | None
-) -> Limits:
-    # A field the role cap leaves unset falls back to the org default for that field.
-    org = Limits(**{
-        name: getattr(org_cap.max, name) if getattr(org_cap.max, name) is not None
-        else getattr(default.max, name)
+def _clamp_one(requested: Limits, type_cap: object, team_cap: Limits | None) -> Limits:
+    """Each field = min(request, type cap, team cap). The type cap is always set (D35)."""
+    return Limits(**{
+        name: _smallest(getattr(requested, name), getattr(type_cap, name),
+                        getattr(team_cap, name) if team_cap else None)
         for name in Limits.model_fields
     })  # fmt: skip
-    return _clamp_one(requested, [org, team_cap.max if team_cap else None])
+
+
+def _clamp_limits(requested: Limits, agent_type: AgentType, team_cap: RoleLimits | None) -> Limits:
+    return _clamp_one(requested, agent_type.limits.max, team_cap.max if team_cap else None)
 
 
 def _clamp_children(
-    requested: ChildLimits, org_cap: RoleLimits, default: RoleLimits, team_cap: RoleLimits | None
+    requested: ChildLimits, agent_type: AgentType, team_cap: RoleLimits | None
 ) -> ChildLimits:
-    caps = [org_cap.children_max or default.children_max,
-            team_cap.children_max if team_cap else None]  # fmt: skip
-    present = [cap for cap in caps if cap is not None]
+    type_children = agent_type.limits.children_max
+    team_children = team_cap.children_max if team_cap else None
     counts = {
-        name: _smallest(getattr(requested, name), *(getattr(cap, name) for cap in present))
+        name: _smallest(getattr(requested, name), getattr(type_children, name),
+                        getattr(team_children, name) if team_children else None)
         for name in ("max_total", "max_concurrent", "max_depth")
-    }
-    per_child = _clamp_one(requested.per_child, [cap.per_child for cap in present])
+    }  # fmt: skip
+    per_child = _clamp_one(
+        requested.per_child,
+        type_children.per_child,
+        team_children.per_child if team_children else None,
+    )
     return ChildLimits(**counts, per_child=per_child)

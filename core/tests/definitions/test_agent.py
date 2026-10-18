@@ -14,12 +14,13 @@ def write_agent(folder: Path, front_matter: str, body: str = "Do the job.") -> P
     return path
 
 
-MINIMAL = "name: helper\nversion: 0.1.0\ndescription: A minimal agent."
+MINIMAL = "name: helper\nversion: 0.1.0\ndescription: A minimal agent.\ntype: general"
 
 
 def test_loads_spec_example(fixtures: Path):
     agent = load_agent(fixtures / "agents" / "developer.md")
 
+    assert agent.type == "developer"
     assert (agent.name, agent.tier, agent.backend, agent.produces) == (
         "developer",
         "balanced",
@@ -57,14 +58,35 @@ def test_bad_backend_rejected(tmp_path: Path):
     assert "backend" in str(error.value)
 
 
-def test_minimal_agent_defaults(tmp_path: Path):
+def test_minimal_agent_inherits_from_its_type(tmp_path: Path):
     agent = load_agent(write_agent(tmp_path, MINIMAL))
 
-    assert agent.tier == "balanced"
-    assert agent.backend == "native"
-    assert agent.tools == []
+    # None = "not set here: inherit from the agent type" (D35)
+    assert agent.type == "general"
+    assert agent.tier is None
+    assert agent.backend is None
+    assert agent.tools is None
+    assert agent.produces is None
     assert agent.limits.budget_usd is None
-    assert agent.children.max_total == 0
+    assert agent.children.max_total is None
+
+
+def test_type_is_required(tmp_path: Path):
+    path = write_agent(tmp_path, "name: helper\nversion: 0.1.0\ndescription: x")
+
+    with pytest.raises(DefinitionError) as error:
+        load_agent(path)
+
+    assert "type: Field required" in str(error.value)
+
+
+def test_type_must_be_a_simple_name(tmp_path: Path):
+    path = write_agent(tmp_path, MINIMAL.replace("type: general", "type: Dev Agent!"))
+
+    with pytest.raises(DefinitionError) as error:
+        load_agent(path)
+
+    assert "type" in str(error.value)
 
 
 def test_broken_yaml_reported_as_definition_error(tmp_path: Path):
@@ -153,10 +175,10 @@ def test_non_utf8_file_reported(tmp_path: Path):
 
 
 def test_field_error_names_the_line(tmp_path: Path):
-    # Front matter starts on line 2: name=2, version=3, description=4, temperature=5.
+    # Front matter starts on line 2: name=2, version=3, description=4, type=5, temperature=6.
     path = write_agent(tmp_path, MINIMAL + "\ntemperature: 5")
 
     with pytest.raises(DefinitionError) as error:
         load_agent(path)
 
-    assert "temperature: Input should be less than or equal to 2 (line 5)" in str(error.value)
+    assert "temperature: Input should be less than or equal to 2 (line 6)" in str(error.value)

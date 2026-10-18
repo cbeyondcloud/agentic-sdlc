@@ -27,8 +27,10 @@ def test_loads_fixture_policy(policy_dir: Path):
     assert policy.default_classification == "internal"
     assert policy.forbidden_tools == ["web_fetch", "git_push"]
     assert policy.deny.shell == ["git push --force", "rm -rf /"]
-    assert policy.role_limits["developer"].max.budget_usd == 5
-    assert policy.default_role_limits.children_max.max_total == 2
+    assert policy.agent_types["developer"].limits.max.budget_usd == 5
+    assert policy.agent_types["developer"].produces == "dev-report"
+    assert policy.agent_types["general"].limits.children_max.max_total == 0
+    assert policy.concurrency == {"per_user": 3, "per_team": 20}
     assert policy.teams["payments"].allowed_tiers == ["balanced", "fast"]
     assert policy.teams["payments"].deny.shell == ["kubectl"]
     assert policy.blocked_licences == ["AGPL-3.0", "GPL-3.0", "SSPL-1.0"]
@@ -196,3 +198,61 @@ def test_duplicate_key_in_policy_file_rejected(policy_dir: Path):
         load_policy(policy_dir)
 
     assert "duplicate" in str(error.value).lower()
+
+
+# --- agent types (D35) ---
+
+
+def edit(path: Path, old: str, new: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    assert old in text, f"fixture text not found: {old}"
+    path.write_text(text.replace(old, new), encoding="utf-8")
+
+
+def test_agent_type_caps_must_be_complete(policy_dir: Path):
+    # A missing cap used to mean "unlimited" (review finding 3).
+    edit(policy_dir / "agent-types.yaml",
+         "max: { budget_usd: 5, max_turns: 80, max_minutes: 60 }",
+         "max: { budget_usd: 5, max_turns: 80 }")  # fmt: skip
+
+    with pytest.raises(PolicyError) as error:
+        load_policy(policy_dir)
+
+    assert "agent_types.developer.limits.max.max_minutes" in str(error.value)
+
+
+def test_agent_type_must_name_a_known_tier(policy_dir: Path):
+    edit(policy_dir / "agent-types.yaml", "tier: fast", "tier: turbo")
+
+    with pytest.raises(PolicyError) as error:
+        load_policy(policy_dir)
+
+    assert "turbo" in str(error.value)
+
+
+def test_agent_type_tools_must_be_in_catalog(policy_dir: Path):
+    edit(policy_dir / "agent-types.yaml", "tools: [read_files, search, edit_files]",
+         "tools: [read_files, teleport]")  # fmt: skip
+
+    with pytest.raises(PolicyError) as error:
+        load_policy(policy_dir)
+
+    assert "teleport" in str(error.value)
+
+
+def test_team_override_must_name_a_known_team(policy_dir: Path):
+    edit(policy_dir / "tiers.yaml", "team_overrides:\n  payments:", "team_overrides:\n  paymnets:")
+
+    with pytest.raises(PolicyError) as error:
+        load_policy(policy_dir)
+
+    assert "paymnets" in str(error.value)
+
+
+def test_team_limits_must_name_a_known_agent_type(policy_dir: Path):
+    edit(policy_dir / "teams" / "payments.yaml", "limits_max:\n  developer:", "limits_max:\n  dev:")
+
+    with pytest.raises(PolicyError) as error:
+        load_policy(policy_dir)
+
+    assert "dev" in str(error.value)
