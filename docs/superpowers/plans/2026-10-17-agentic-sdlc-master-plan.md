@@ -694,7 +694,7 @@ Exit: full §1.3 suite on staging (M3-25), Helm install from runbook alone (M3-0
 | M3-03 | SP19 | TokenLean **ST-8 (cloud)**: `deploy/lite/cloud/helm/tokenlean-lite` + `install/upgrade/uninstall/smoke` scripts | M1-67, M2-52 | `helm lint` + `cloud/install` + `cloud/smoke` pass on kind | 1 | Pending | |
 | M3-04 | SP16 | Environments dev/staging/prod: values files, External Secrets, cert-manager TLS, policy branch per env, promotion runbooks | M3-02, M2-02 | Staging installed from chart; promotion dry run documented | 1.5 | Pending | |
 | M3-05 | SP16 | Day-0 bootstrap runbook + script: policy repo from template, GitHub app/Jira connector, SMTP, first org admin, roles, CLI to internal index, smoke run | M3-04, M2-51, M2-03, M3-21 | Fresh staging bootstrapped end to end from the runbook alone | 1 | Pending | |
-| M3-06 | SP15 | Retention jobs per data type (`retention.yaml`) mapped to TokenLean retention; trace capture default off, team opt-in | M2-05 | Tests: expired rows removed; audit kept longest | 1 | Pending | |
+| M3-06 | SP15 | Retention jobs per data type (`retention.yaml`) mapped to TokenLean retention; trace capture default off, team opt-in — implements the policy defined in **OR-01** | M2-05, OR-01 | Tests: expired rows removed; audit kept longest | 1 | Pending | |
 | M3-07 | SP15 | Run heartbeat from CLI; zombie detection → mark stale, alert, release concurrency slot | M2-04, M2-08, M1-21 | Tests: run without heartbeat > N min marked stale and slot freed | 1 | Pending | |
 | M3-08 | SP14 | `agentic gc`: prune finished worktrees/run folders by age; disk cap warning in `status` | M1-30, M1-21 | Tests: only finished runs pruned; cap warning shown | 0.5 | Pending | |
 | M3-09 | SP14 | `agentic doctor` + `agentic support-bundle` (redacted) | M1-53, M1-47 | Tests: bundle contains no secrets; doctor reports every prerequisite | 1 | Pending | |
@@ -715,6 +715,14 @@ Exit: full §1.3 suite on staging (M3-25), Helm install from runbook alone (M3-0
 | M3-24 | SP19 | TokenLean **ST-7**: optimisation opt-in process — enable one group at a time after A/B on the eval harness | M1-66, M1-63 | Documented procedure + first A/B record | 0.5 | Pending | |
 | M3-25 | SP20 | **Acceptance (staging)**: full §1.3 suite (scenarios 1–4) against the staging org stack with real models | M3-04, M2-53 | All four pass on staging; results committed | 1 | Pending | |
 | M3-26 | SP20 | **M3 demo + pilot go/no-go** | M3-25, M3-22, M3-16, M3-23 | Go/no-go recorded; pilot wave scheduled | 0.5 | Pending | |
+
+### Open requirements (to be defined later; not yet estimated)
+
+Requirements the owner has raised but deliberately left undefined. Each must be defined (and its rows estimated) before the tasks that depend on it start.
+
+| ID | Requirement | What must be decided | Blocks | Status | Notes |
+|---|---|---|---|---|---|
+| OR-01 | **Data retention policy** | Retention period and end-of-life action (delete / pseudonymise / archive) for each data type: local run folders and worktrees, run ledgers and handoffs, prompts and responses (Langfuse traces), TokenLean `usage_events`, control-plane run/event tables, the audit chain (must stay verifiable after deletion), personal skills and memory, learning-loop feedback records, eval corpora, logs and support bundles, backups. Also: legal hold, per-user erasure requests, regional/regulatory constraints, who may change the policy, and how deletion is proven. | M3-06 (retention jobs), E4-01, E4-02 | Open — to be defined later | Raised by owner 2026-10-18. Until defined: nothing is deleted automatically; trace capture stays off by default. |
 
 ### Phases 2–4 — epics (each broken down into its own plan when started)
 
