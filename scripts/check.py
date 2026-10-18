@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import os
 import platform
 import shutil
 import subprocess
@@ -77,15 +78,33 @@ def run_linux() -> bool:
     # git is a framework prerequisite (worktrees, policy versions), so the clean
     # container gets it too; the slim image does not ship it.
     install_git = "apt-get update -qq && apt-get install -y -qq git >/dev/null"
+    # Zyroflo (sdlc-harness) is a private GitHub dependency. The throwaway container
+    # gets the developer's existing `gh` token via an environment variable (never
+    # written to the image or the repo) and git uses it for github.com only.
+    github_auth = (
+        'if [ -n "$GH_TOKEN" ]; then git config --global '
+        'url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"; fi'
+    )
     script = (
-        f"{install_git} && mkdir -p /work && cd /work && tar -xf - "
+        f"{install_git} && {github_auth} && mkdir -p /work && cd /work && tar -xf - "
         f"&& uv sync --locked -q && {inner}"
     )
-    cmd = ["docker", "run", "--rm", "-i", LINUX_IMAGE, "sh", "-c", script]
+    env = dict(os.environ, GH_TOKEN=_github_token())
+    cmd = ["docker", "run", "--rm", "-i", "-e", "GH_TOKEN", LINUX_IMAGE, "sh", "-c", script]
     print(f"[linux] running checks in {LINUX_IMAGE}", flush=True)
-    ok = subprocess.run(cmd, input=tracked_files_tar()).returncode == 0
+    ok = subprocess.run(cmd, input=tracked_files_tar(), env=env).returncode == 0
     print("[linux] all checks passed" if ok else "[linux] FAILED")
     return ok
+
+
+def _github_token() -> str:
+    """The developer's GitHub token from GH_TOKEN, or from the gh CLI login."""
+    if os.environ.get("GH_TOKEN"):
+        return os.environ["GH_TOKEN"]
+    if shutil.which("gh") is None:
+        return ""
+    result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 def main() -> int:

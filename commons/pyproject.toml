@@ -3,7 +3,9 @@ name = "sdlc-commons"
 version = "0.1.0"
 description = "Shared with Zyroflo: ledger, guards, worktree, graph"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "sdlc-harness",
+]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]
@@ -11,3 +13,6 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-name = "sdlc_commons"
+
+[tool.uv.sources]
+sdlc-harness = { git = "https://github.com/cbeyondcloud/sdlc-harness", rev = "a0c1b14a364258f0f605feac0905f11052011bad" }
