@@ -111,14 +111,12 @@ def test_review_values_available_for_pipeline_conditions():
 
 def test_broken_front_matter_reports_line():
     text = handoff("review", "open_blocking: 0\nfindings: [unclosed\n")
-    original = text
 
     with pytest.raises(HandoffError) as error:
         parse_handoff(text)
 
     # Line 1 is "---"; the broken list starts on line 10 of the document.
-    assert "line 10" in str(error.value)
-    assert text == original  # the human's edit is never altered
+    assert "started at line 10" in str(error.value)
 
 
 def test_missing_front_matter_rejected():
@@ -183,3 +181,33 @@ def test_compat_reports_unknown_agent():
 
     assert [v.field for v in violations] == ["agent"]
     assert "ghost-writer" in violations[0].reason
+
+
+def test_non_string_kind_rejected_cleanly():
+    # A person editing `kind:` into a list used to crash with a raw TypeError.
+    with pytest.raises(HandoffError) as error:
+        parse_handoff(handoff("[a, b]", "open_blocking: 0\n"))
+
+    assert "kind" in str(error.value)
+
+
+def test_field_error_names_the_line():
+    # ---=1, kind=2, schema_version=3, run_id=4, step=5, agent=6, produced_at=7, status=8
+    text = handoff("review", "open_blocking: 0\n").replace("status: complete", "status: finished")
+
+    with pytest.raises(HandoffError) as error:
+        parse_handoff(text)
+
+    assert "status:" in str(error.value)
+    assert "(line 8)" in str(error.value)
+
+
+def test_unclosed_quote_points_at_its_line():
+    text = handoff("review", "open_blocking: 0\nfindings: []\n").replace(
+        "run_id: r-1", 'run_id: "r-1'
+    )
+
+    with pytest.raises(HandoffError) as error:
+        parse_handoff(text)
+
+    assert "started at line 4" in str(error.value)  # run_id is on line 4

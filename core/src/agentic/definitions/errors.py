@@ -4,9 +4,14 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from agentic.yamlio import line_of
+
 
 def describe_validation_error(
-    error: ValidationError, whole_file_label: str, union_tags: frozenset[str] = frozenset()
+    error: ValidationError,
+    whole_file_label: str,
+    union_tags: frozenset[str] = frozenset(),
+    lines: dict[tuple, int] | None = None,
 ) -> list[str]:
     """Turn a pydantic error into readable lines: one '<field>: <what is wrong>' per issue.
 
@@ -17,20 +22,25 @@ def describe_validation_error(
     Pydantic inserts the chosen tag into the error path right after the list
     position ("steps.3.loop.loop.max_iterations"); those are removed so the path
     reads like the YAML the user wrote ("steps.3.loop.max_iterations").
+
+    lines maps YAML key paths to file line numbers (agentic.yamlio.load_yaml);
+    when given, each problem ends with "(line N)".
     """
-    lines = []
+    result = []
     for issue in error.errors():
-        parts: list[str] = []
+        parts: list[str | int] = []
         previous: object = None
         for part in issue["loc"]:
             if not (isinstance(previous, int) and part in union_tags):
-                parts.append(str(part))
+                parts.append(part)
             previous = part
-        field = ".".join(parts) or whole_file_label
+        field = ".".join(str(part) for part in parts) or whole_file_label
+        line = line_of(lines, tuple(parts)) if lines and parts else None
+        where = f" (line {line})" if line else ""
         message = issue["msg"].removeprefix("Value error, ")
         # Whole-document checks may report several problems joined by "; ": one line each.
-        lines.extend(f"{field}: {part}" for part in message.split("; "))
-    return lines
+        result.extend(f"{field}: {part}{where}" for part in message.split("; "))
+    return result
 
 
 class DefinitionError(Exception):
@@ -55,6 +65,7 @@ class DefinitionError(Exception):
         error: ValidationError,
         whole_file_label: str,
         union_tags: frozenset[str] = frozenset(),
+        lines: dict[tuple, int] | None = None,
     ) -> "DefinitionError":
         """Build from a pydantic error (see describe_validation_error)."""
-        return cls(path, describe_validation_error(error, whole_file_label, union_tags))
+        return cls(path, describe_validation_error(error, whole_file_label, union_tags, lines))

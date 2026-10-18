@@ -150,3 +150,49 @@ def test_problems_are_reported_one_per_line_under_policy_heading(policy_dir: Pat
     assert "invalid policy" in message
     assert "\n  - policy: teams.payments.allowed_tiers names unknown tier 'turbo'" in message
     assert "\n  - policy: default_classification 'secret' is not one of" in message
+
+
+# --- unexpected files are errors, never silently ignored (SP1 review, M1-74) ---
+
+
+def test_yml_policy_file_rejected(policy_dir: Path):
+    (policy_dir / "tools.yaml").rename(policy_dir / "tools.yml")  # would drop all forbidden tools
+
+    with pytest.raises(PolicyError) as error:
+        load_policy(policy_dir)
+
+    assert "tools.yml" in str(error.value)
+
+
+def test_yml_team_file_rejected(policy_dir: Path):
+    (policy_dir / "teams" / "payments.yaml").rename(policy_dir / "teams" / "payments.yml")
+
+    with pytest.raises(PolicyError) as error:
+        load_policy(policy_dir)
+
+    assert "payments.yml" in str(error.value)
+
+
+def test_other_files_in_policy_folder_rejected(policy_dir: Path):
+    (policy_dir / "notes.txt").write_text("todo", encoding="utf-8")
+
+    with pytest.raises(PolicyError) as error:
+        load_policy(policy_dir)
+
+    assert "notes.txt" in str(error.value)
+
+
+def test_hidden_files_are_ignored(policy_dir: Path):
+    (policy_dir / ".gitkeep").write_text("", encoding="utf-8")
+
+    assert load_policy(policy_dir).default_classification == "internal"
+
+
+def test_duplicate_key_in_policy_file_rejected(policy_dir: Path):
+    tools = policy_dir / "tools.yaml"
+    tools.write_text(tools.read_text(encoding="utf-8") + "forbidden: []\n", encoding="utf-8")
+
+    with pytest.raises(PolicyError) as error:
+        load_policy(policy_dir)
+
+    assert "duplicate" in str(error.value).lower()

@@ -17,10 +17,10 @@ import subprocess
 from pathlib import Path
 
 from pydantic import ValidationError
-from ruamel.yaml import YAML, YAMLError
 
 from agentic.definitions import DefinitionError
 from agentic.policy.model import OrgPolicy
+from agentic.yamlio import YamlFileError, load_yaml, read_text
 
 
 class PolicyError(DefinitionError):
@@ -57,7 +57,14 @@ def load_policy(root: Path) -> OrgPolicy:
     problems: list[str] = []
     data: dict[str, object] = {"teams": {}}
 
-    for path in sorted(root.glob("*.yaml")):
+    # Look at EVERY entry, not just *.yaml: a policy file saved as tools.yml or a team
+    # file as payments.yml must be an error, never silently ignored (it would loosen
+    # policy). Hidden files such as .gitkeep are skipped.
+    for path in _visible_entries(root):
+        if path.is_dir():
+            if path.name != "teams":
+                problems.append(f"{path.name}/: unexpected folder (only teams/ is allowed)")
+            continue
         if path.name not in FILE_FIELDS:
             problems.append(f"{path.name}: unknown policy file (expected one of: "
                             f"{', '.join(FILE_FIELDS)})")  # fmt: skip
@@ -70,8 +77,11 @@ def load_policy(root: Path) -> OrgPolicy:
             else:
                 data[field] = value
 
-    for path in sorted((root / "teams").glob("*.yaml")):
-        data["teams"][path.stem] = _read_yaml(path, problems)  # type: ignore[index]
+    for path in _visible_entries(root / "teams"):
+        if path.is_file() and path.suffix == ".yaml":
+            data["teams"][path.stem] = _read_yaml(path, problems)  # type: ignore[index]
+        else:
+            problems.append(f"teams/{path.name}: unexpected entry (team files are <team>.yaml)")
 
     if problems:
         raise PolicyError(root, problems)
@@ -83,11 +93,17 @@ def load_policy(root: Path) -> OrgPolicy:
         raise PolicyError.from_validation_error(root, error, "policy") from error
 
 
+def _visible_entries(folder: Path) -> list[Path]:
+    if not folder.is_dir():
+        return []
+    return sorted(entry for entry in folder.iterdir() if not entry.name.startswith("."))
+
+
 def _read_yaml(path: Path, problems: list[str]) -> dict:
     try:
-        content = YAML(typ="safe").load(path.read_text(encoding="utf-8")) or {}
-    except YAMLError as error:
-        problems.append(f"{path.name}: YAML is not valid: {error}")
+        content = load_yaml(read_text(path))[0] or {}
+    except YamlFileError as error:
+        problems.append(f"{path.name}: {error}")
         return {}
     if not isinstance(content, dict):
         problems.append(f"{path.name}: must contain key: value settings")

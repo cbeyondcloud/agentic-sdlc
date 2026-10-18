@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Literal
 
 from agentic.definitions.agent import AgentDefinition, load_agent
+from agentic.definitions.errors import DefinitionError
 from agentic.definitions.pipeline import PipelineDefinition, load_pipeline
 
 Layer = Literal["org", "team", "repo"]
@@ -52,10 +53,10 @@ class DefinitionSet:
         for layer, root in (("org", org), ("team", team), ("repo", repo)):
             if root is None:
                 continue
-            for path in sorted((root / "agents").glob("*.md")):
+            for path in _files(root / "agents", ".md"):
                 agent = load_agent(path)
                 found.agents[agent.name] = (agent, layer)
-            for path in sorted((root / "pipelines").glob("*.yaml")):
+            for path in _files(root / "pipelines", ".yaml"):
                 if layer == "repo" and not allow_repo_pipelines:
                     found.warnings.append(
                         f"ignored repo pipeline {path.name}: pipelines are managed in the "
@@ -87,3 +88,20 @@ class DefinitionSet:
             known = ", ".join(sorted(table)) or "none"
             raise UnknownDefinitionError(f"no {kind} named '{name}' (known: {known})")
         return table[name]
+
+
+def _files(folder: Path, suffix: str) -> list[Path]:
+    """Every visible file in `folder`, which must all end in `suffix`.
+
+    A wrong extension (reviewer.yml instead of reviewer.md, ship.yml instead of
+    ship.yaml) or a stray file is an error: silently skipping it would hide a
+    definition the author expects to exist.
+    """
+    if not folder.is_dir():
+        return []
+    entries = sorted(entry for entry in folder.iterdir() if not entry.name.startswith("."))
+    unexpected = [entry for entry in entries if not (entry.is_file() and entry.suffix == suffix)]
+    if unexpected:
+        names = ", ".join(entry.name for entry in unexpected)
+        raise DefinitionError(folder, [f"unexpected entries (only *{suffix} files): {names}"])
+    return entries

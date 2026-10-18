@@ -27,9 +27,9 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from ruamel.yaml import YAML, YAMLError
 
 from agentic.definitions.errors import DefinitionError
+from agentic.yamlio import YamlFileError, load_yaml, read_text
 
 
 class AgentStep(BaseModel):
@@ -164,13 +164,13 @@ def load_pipeline(path: Path) -> PipelineDefinition:
     Raises DefinitionError with one readable line per problem.
     """
     try:
-        data = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
-    except YAMLError as error:
-        raise DefinitionError(path, [f"YAML is not valid: {error}"]) from error
+        data, lines = load_yaml(read_text(path))
+    except YamlFileError as error:
+        raise DefinitionError(path, [str(error)]) from error
 
     try:
         return PipelineDefinition.model_validate(data)
     except ValidationError as error:
         raise DefinitionError.from_validation_error(
-            path, error, "pipeline", union_tags=STEP_KINDS
+            path, error, "pipeline", union_tags=STEP_KINDS, lines=lines
         ) from error

@@ -8,8 +8,6 @@ decides what is actually allowed (see agentic.policy.resolve).
 from pathlib import Path
 from typing import Literal
 
-import frontmatter
-import yaml
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -20,6 +18,7 @@ from pydantic import (
 )
 
 from agentic.definitions.errors import DefinitionError
+from agentic.yamlio import YamlFileError, load_yaml, read_text, split_front_matter
 
 # Backends an agent may ask to run on (spec §9.1, D32).
 #   native / claude-code / codex / opencode -> dedicated adapters with tested lock-down profiles
@@ -125,12 +124,14 @@ def load_agent(path: Path) -> AgentDefinition:
     Raises DefinitionError with one readable line per problem.
     """
     try:
-        document = frontmatter.load(path)
-    except yaml.YAMLError as error:
-        raise DefinitionError(path, [f"YAML header is not valid: {error}"]) from error
+        header, body = split_front_matter(read_text(path))
+        meta, lines = load_yaml(header, first_line=2)  # line 1 is the opening '---'
+    except YamlFileError as error:
+        raise DefinitionError(path, [str(error)]) from error
+    if not isinstance(meta, dict):
+        raise DefinitionError(path, ["the YAML header must contain key: value settings"])
 
-    data = {**document.metadata, "instructions": document.content}
     try:
-        return AgentDefinition.model_validate(data)
+        return AgentDefinition.model_validate({**meta, "instructions": body})
     except ValidationError as error:
-        raise DefinitionError.from_validation_error(path, error, "agent") from error
+        raise DefinitionError.from_validation_error(path, error, "agent", lines=lines) from error

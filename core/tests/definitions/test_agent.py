@@ -120,3 +120,43 @@ def test_supported_backend_names_accepted(tmp_path: Path, backend: str):
     agent = load_agent(write_agent(tmp_path, MINIMAL + f"\nbackend: {backend}"))
 
     assert agent.backend == backend
+
+
+# --- reading files safely (SP1 review fixes, M1-74) ---
+
+
+def test_repeated_deny_block_rejected(tmp_path: Path):
+    # A second `deny:` used to silently replace the first, loosening the guardrail.
+    path = write_agent(tmp_path, MINIMAL + "\ndeny:\n  shell: [kubectl]\ndeny:\n  shell: []")
+
+    with pytest.raises(DefinitionError) as error:
+        load_agent(path)
+
+    assert "duplicate" in str(error.value).lower()
+
+
+def test_byte_order_mark_is_ignored(tmp_path: Path):
+    path = tmp_path / "agent.md"
+    path.write_bytes(("﻿---\n" + MINIMAL + "\n---\nDo the job.\n").encode())
+
+    assert load_agent(path).name == "helper"
+
+
+def test_non_utf8_file_reported(tmp_path: Path):
+    path = tmp_path / "agent.md"
+    path.write_bytes(b"---\nname: caf\xe9\nversion: 0.1.0\ndescription: x\n---\nDo it.\n")
+
+    with pytest.raises(DefinitionError) as error:
+        load_agent(path)
+
+    assert "UTF-8" in str(error.value)
+
+
+def test_field_error_names_the_line(tmp_path: Path):
+    # Front matter starts on line 2: name=2, version=3, description=4, temperature=5.
+    path = write_agent(tmp_path, MINIMAL + "\ntemperature: 5")
+
+    with pytest.raises(DefinitionError) as error:
+        load_agent(path)
+
+    assert "temperature: Input should be less than or equal to 2 (line 5)" in str(error.value)

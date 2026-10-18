@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic.definitions import DefinitionSet, UnknownDefinitionError
+from agentic.definitions import DefinitionError, DefinitionSet, UnknownDefinitionError
 
 
 def make_layer(
@@ -71,3 +71,15 @@ def test_unknown_agent_name_raises(tmp_path: Path):
         found.agent("ghost")
 
     assert "ghost" in str(error.value)
+
+
+@pytest.mark.parametrize("bad", ["agents/reviewer.yml", "pipelines/ship.yml", "agents/notes.txt"])
+def test_unexpected_file_in_layer_rejected(tmp_path: Path, bad: str):
+    org = make_layer(tmp_path / "org", agents={"developer": "org"})
+    (org / bad).parent.mkdir(parents=True, exist_ok=True)
+    (org / bad).write_text("name: x\n", encoding="utf-8")
+
+    with pytest.raises(DefinitionError) as error:
+        DefinitionSet.discover(org=org, team=None, repo=None)
+
+    assert bad.split("/")[1] in str(error.value)

@@ -116,3 +116,28 @@ def test_broken_yaml_reported_as_definition_error(tmp_path: Path):
         load_pipeline(path)
 
     assert str(path) in str(error.value)
+
+
+def test_field_error_names_the_line(tmp_path: Path):
+    # name=1, version=2, steps=3, "- loop:"=4, id=5, max_iterations=6
+    path = write_pipeline(
+        tmp_path,
+        "  - loop:\n      id: l1\n      max_iterations: 0\n      until: 'x'\n"
+        "      steps:\n          - id: a\n            agent: developer\n",
+    )
+
+    with pytest.raises(DefinitionError) as error:
+        load_pipeline(path)
+
+    assert "steps.0.loop.max_iterations: Input should be greater than or equal to 1 (line 6)" in (
+        str(error.value)
+    )
+
+
+def test_duplicate_key_rejected(tmp_path: Path):
+    path = write_pipeline(tmp_path, "  - id: a\n    agent: qa\n    agent: developer\n")
+
+    with pytest.raises(DefinitionError) as error:
+        load_pipeline(path)
+
+    assert "duplicate" in str(error.value).lower()
