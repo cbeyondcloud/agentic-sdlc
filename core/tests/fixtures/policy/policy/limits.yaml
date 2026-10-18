@@ -1,0 +1,9 @@
+# Maximum limits per agent role (keyed by agent name); "default" applies to any other agent.
+default:
+  max: { budget_usd: 2, max_turns: 40, max_minutes: 30 }
+  children_max: { max_total: 2, max_concurrent: 1, max_depth: 1, per_child: { budget_usd: 0.5, max_turns: 20, max_minutes: 10 } }
+roles:
+  developer:
+    max: { budget_usd: 5, max_turns: 80, max_minutes: 60 }
+    children_max: { max_total: 5, max_concurrent: 2, max_depth: 2, per_child: { budget_usd: 1, max_turns: 30, max_minutes: 15 } }
+concurrency: { per_user: 3, per_team: 20 }

@@ -1,0 +1,6 @@
+# Tools agents may request, tools nobody may use, and org-wide deny rules (D31).
+catalog: [read_files, search, edit_files, run_shell, codeintel, spawn_agent, activate_skill, web_fetch, git_push]
+forbidden: [web_fetch, git_push]
+deny:
+  shell: ["git push --force", "rm -rf /"]
+  paths: [".git/**"]

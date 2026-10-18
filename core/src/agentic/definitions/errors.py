@@ -12,11 +12,13 @@ class DefinitionError(Exception):
     show the user exactly what to fix.
     """
 
+    kind = "definition"  # subclasses name what was invalid, e.g. "policy"
+
     def __init__(self, path: Path, errors: list[str]) -> None:
         self.path = path
         self.errors = errors
         bullet_list = "\n".join(f"  - {error}" for error in errors)
-        super().__init__(f"{path}: invalid definition\n{bullet_list}")
+        super().__init__(f"{path}: invalid {self.kind}\n{bullet_list}")
 
     @classmethod
     def from_validation_error(
@@ -46,5 +48,6 @@ class DefinitionError(Exception):
                 previous = part
             field = ".".join(parts) or whole_file_label
             message = issue["msg"].removeprefix("Value error, ")
-            lines.append(f"{field}: {message}")
+            # Whole-file checks may report several problems joined by "; ": one line each.
+            lines.extend(f"{field}: {part}" for part in message.split("; "))
         return cls(path, lines)

@@ -74,7 +74,13 @@ def run_linux() -> bool:
         print("[linux] SKIPPED: docker not found")
         return True
     inner = " && ".join(" ".join(cmd) for _, cmd in CHECKS)
-    script = f"mkdir -p /work && cd /work && tar -xf - && uv sync --locked -q && {inner}"
+    # git is a framework prerequisite (worktrees, policy versions), so the clean
+    # container gets it too; the slim image does not ship it.
+    install_git = "apt-get update -qq && apt-get install -y -qq git >/dev/null"
+    script = (
+        f"{install_git} && mkdir -p /work && cd /work && tar -xf - "
+        f"&& uv sync --locked -q && {inner}"
+    )
     cmd = ["docker", "run", "--rm", "-i", LINUX_IMAGE, "sh", "-c", script]
     print(f"[linux] running checks in {LINUX_IMAGE}", flush=True)
     ok = subprocess.run(cmd, input=tracked_files_tar()).returncode == 0

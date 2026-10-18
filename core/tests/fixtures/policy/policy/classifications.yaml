@@ -1,0 +1,13 @@
+# Repo sensitivity classes and what each allows (spec §12.4).
+default_classification: internal
+classifications:
+  public:
+    allowed_tiers: [deep-reasoning, balanced, fast, local]
+    allowed_backends: [native, claude-code, codex, opencode]
+  internal:
+    allowed_tiers: [deep-reasoning, balanced, fast, local]
+    allowed_backends: [native, claude-code, codex, opencode]
+  restricted:
+    allowed_tiers: [local]
+    allowed_models: [ollama/qwen-coder]
+    allowed_backends: [native]
