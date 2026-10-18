@@ -6,16 +6,18 @@ Runs the same checks CI used to run: lock file, lint, format, tests.
     uv run python scripts/check.py --linux   # inside a clean Linux container (needs Docker)
     uv run python scripts/check.py --all     # both
 
-The git pre-push hook runs `--all` automatically (see .pre-commit-config.yaml).
+Run `--all` before pushing; it is not wired into a git hook.
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import platform
 import shutil
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -44,28 +46,38 @@ def run_native() -> bool:
     return True
 
 
+def tracked_files_tar() -> bytes:
+    """A tar archive of exactly the files git would track (tracked + new, minus ignored).
+
+    So the container sees the same files as a fresh clone would, plus uncommitted
+    work, but never git-ignored scratch such as .venv/ or .superpowers/.
+    """
+    listing = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=REPO_ROOT, capture_output=True, check=True,
+    ).stdout  # fmt: skip
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as archive:
+        for name in filter(None, listing.decode().split("\0")):
+            if (REPO_ROOT / name).is_file():  # skips files deleted but not yet committed
+                archive.add(REPO_ROOT / name, arcname=name)
+    return buffer.getvalue()
+
+
 def run_linux() -> bool:
     """Run every check inside a clean Linux container.
 
-    The repo is mounted read-only and copied (minus .venv and .git) into the
-    container, so the Windows virtualenv on the host is never touched.
+    The files are streamed into the container (never mounted), so the Windows
+    virtualenv and scratch folders on the host are never seen or touched.
     """
     if shutil.which("docker") is None:
         print("[linux] SKIPPED: docker not found")
         return True
     inner = " && ".join(" ".join(cmd) for _, cmd in CHECKS)
-    script = (
-        "tar --exclude=./.venv --exclude=./.git -C /src -cf - . | tar -C /work -xf - "
-        f"&& cd /work && uv sync --locked -q && {inner}"
-    )
-    cmd = [
-        "docker", "run", "--rm",
-        "-v", f"{REPO_ROOT}:/src:ro",
-        "--tmpfs", "/work:exec",
-        LINUX_IMAGE, "sh", "-c", script,
-    ]  # fmt: skip
+    script = f"mkdir -p /work && cd /work && tar -xf - && uv sync --locked -q && {inner}"
+    cmd = ["docker", "run", "--rm", "-i", LINUX_IMAGE, "sh", "-c", script]
     print(f"[linux] running checks in {LINUX_IMAGE}", flush=True)
-    ok = subprocess.run(cmd).returncode == 0
+    ok = subprocess.run(cmd, input=tracked_files_tar()).returncode == 0
     print("[linux] all checks passed" if ok else "[linux] FAILED")
     return ok
 

@@ -24,6 +24,9 @@ children:
   max_concurrent: 2
   max_depth: 2
   per_child: { budget_usd: 1, max_turns: 30, max_minutes: 15 }
+deny:
+  shell: ["git push", "git commit --amend"]
+  paths: [".github/**", "infra/**"]
 ---
 You are the Developer. Read the approved design handoff and implement it in
 small commits. Write a failing test first, then the code.

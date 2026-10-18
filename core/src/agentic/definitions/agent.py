@@ -10,7 +10,14 @@ from typing import Literal
 
 import frontmatter
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from agentic.definitions.errors import DefinitionError
 
@@ -37,6 +44,19 @@ class ChildLimits(BaseModel):
     max_concurrent: int = 1
     max_depth: int = 1
     per_child: Limits = Limits()
+
+
+class DenyRules(BaseModel):
+    """What this agent may never do, even if org policy or its own allow-lists permit it.
+
+    Deny always beats allow. When the agent runs, these are combined (union) with
+    the org's and team's deny lists, and child agents inherit them (D31).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    shell: list[str] = []  # command prefixes, e.g. "git push" also blocks "git push --force"
+    paths: list[str] = []  # file globs the agent may never write, e.g. "infra/**"
 
 
 class AgentDefinition(BaseModel):
@@ -71,6 +91,9 @@ class AgentDefinition(BaseModel):
     limits: Limits = Limits()
     children: ChildLimits = ChildLimits()
 
+    # --- guardrails: what this agent may never do (D31) ---
+    deny: DenyRules = DenyRules()
+
     # --- the Markdown body: what the agent is supposed to do, in plain English ---
     instructions: str
 
@@ -80,6 +103,17 @@ class AgentDefinition(BaseModel):
         if not value.strip():
             raise ValueError("the Markdown body (the agent's instructions) is empty")
         return value.strip()
+
+    @model_validator(mode="after")
+    def allow_and_deny_do_not_contradict(self) -> "AgentDefinition":
+        # Allowing "git" while denying "git push" is fine (deny narrows the allow).
+        # Listing the very same command in both is a mistake the author should fix.
+        contradictions = sorted(set(self.shell) & set(self.deny.shell))
+        if contradictions:
+            raise ValueError(
+                f"shell commands are both allowed and denied: {', '.join(contradictions)}"
+            )
+        return self
 
 
 def load_agent(path: Path) -> AgentDefinition:
@@ -96,8 +130,11 @@ def load_agent(path: Path) -> AgentDefinition:
     try:
         return AgentDefinition.model_validate(data)
     except ValidationError as error:
-        problems = [
-            f"{'.'.join(str(part) for part in issue['loc'])}: {issue['msg']}"
-            for issue in error.errors()
-        ]
-        raise DefinitionError(path, problems) from error
+        raise DefinitionError(path, [_describe(issue) for issue in error.errors()]) from error
+
+
+def _describe(issue: dict) -> str:
+    """Turn one pydantic error into a readable line: '<field>: <what is wrong>'."""
+    field = ".".join(str(part) for part in issue["loc"]) or "agent"  # whole-file checks
+    message = issue["msg"].removeprefix("Value error, ")
+    return f"{field}: {message}"

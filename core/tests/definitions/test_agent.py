@@ -74,3 +74,40 @@ def test_broken_yaml_reported_as_definition_error(tmp_path: Path):
         load_agent(path)
 
     assert str(path) in str(error.value)
+
+
+# --- deny rules: what this agent may never do (D31) ---
+
+
+def test_deny_rules_loaded(fixtures: Path):
+    agent = load_agent(fixtures / "agents" / "developer.md")
+
+    assert agent.deny.shell == ["git push", "git commit --amend"]
+    assert agent.deny.paths == [".github/**", "infra/**"]
+
+
+def test_deny_defaults_to_empty(tmp_path: Path):
+    agent = load_agent(write_agent(tmp_path, MINIMAL))
+
+    assert agent.deny.shell == []
+    assert agent.deny.paths == []
+
+
+def test_command_both_allowed_and_denied_rejected(tmp_path: Path):
+    path = write_agent(tmp_path, MINIMAL + "\nshell: [pytest]\ndeny:\n  shell: [pytest]")
+
+    with pytest.raises(DefinitionError) as error:
+        load_agent(path)
+
+    assert "pytest" in str(error.value)
+    assert "both allowed and denied" in str(error.value)
+    assert "- agent: shell commands are both allowed and denied: pytest" in str(error.value)
+
+
+def test_unknown_deny_field_rejected(tmp_path: Path):
+    path = write_agent(tmp_path, MINIMAL + "\ndeny:\n  network: [example.com]")
+
+    with pytest.raises(DefinitionError) as error:
+        load_agent(path)
+
+    assert "deny.network" in str(error.value)
