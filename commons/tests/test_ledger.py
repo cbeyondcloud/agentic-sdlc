@@ -51,7 +51,7 @@ def test_unknown_event_field_is_a_ledger_error(tmp_path: Path):
     with pytest.raises(LedgerError) as error:
         ledger.record("step_started", phase="design", attempt=1, actor="agent", team="payments")
 
-    assert "team" in str(error.value)  # Zyroflo refuses fields it does not know (until Z1)
+    assert "team" in str(error.value)  # not a core field; our ids go in ext (M1-07)
 
 
 def test_artifacts_are_written_with_lf_so_digests_match_across_os(tmp_path: Path):

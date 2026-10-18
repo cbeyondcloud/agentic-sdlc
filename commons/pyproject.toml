@@ -15,4 +15,4 @@ build-backend = "uv_build"
 module-name = "sdlc_commons"
 
 [tool.uv.sources]
-sdlc-harness = { git = "https://github.com/cbeyondcloud/sdlc-harness", rev = "a0c1b14a364258f0f605feac0905f11052011bad" }
+sdlc-harness = { git = "https://github.com/cbeyondcloud/sdlc-harness", rev = "8718087343e834d072ff1764e5d5d209044256a8" }

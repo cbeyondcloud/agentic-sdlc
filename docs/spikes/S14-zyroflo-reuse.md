@@ -35,7 +35,7 @@ Throwaway project in the scratchpad (never imported by product code):
 
 | ID | Gap | Proposed Zyroflo change | Tracker |
 |---|---|---|---|
-| Z1 | Event fields are a fixed list; unknown fields are refused (correctly) | Optional namespaced extension block on events (e.g. `ext: {…}`), included in the hash, ignored by Zyroflo's own readers | M1-07 |
+| Z1 | Event fields are a fixed list; unknown fields are refused (correctly) | Optional namespaced extension block on events (e.g. `ext: {…}`), included in the hash, ignored by Zyroflo's own readers | M1-07 — **merged** as sdlc-harness#78 (8718087) |
 | Z2 | Lifecycle content (`sdlc/stages`, `sdlc_templates`) and `third_party/manifest.json` are not in the installed package | Ship them as package data; add a resource accessor | M1-10 |
 | Z3 | Run-folder root is fixed at `<target>/.sdlc/runs/` | Optional run-folder root parameter (default unchanged) | M1-10 |
 | Z4 | Import name `tools` is very generic (collision risk) | Add an alias package `zyroflo` re-exporting `tools.*`; `tools` keeps working | M2-29 |
