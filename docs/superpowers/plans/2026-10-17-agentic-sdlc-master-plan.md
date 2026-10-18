@@ -4,7 +4,7 @@
 
 **Goal:** Build the provider-agnostic, enterprise-governed agentic SDLC framework described in the design spec, delivering v1 as three milestones (M1 standalone core → M2 org governance → M3 scale and operations) after a short spike phase, and tracking Phases 2–4 as epics.
 
-**Architecture:** One Python core library used by a CLI (standalone mode) and by a small FastAPI control plane (org mode). All model calls go through TokenLean (LITE profile); Zyroflo (sdlc-harness) artefacts are extracted into a shared `commons` package; OSS libraries (Pydantic AI, python-frontmatter, Claude Agent SDK, codex, srt, code-review-graph…) do the heavy lifting.
+**Architecture:** One Python core library used by a CLI (standalone mode) and by a small FastAPI control plane (org mode). All model calls go through TokenLean (LITE profile); Zyroflo (sdlc-harness) is reused as a pinned dependency behind thin adapters in `commons` (D34); OSS libraries (Pydantic AI, python-frontmatter, Claude Agent SDK, codex, srt, code-review-graph…) do the heavy lifting.
 
 **Tech Stack:** Python 3.12, uv workspace, Pydantic v2, Pydantic AI v2, python-frontmatter, ruamel.yaml, httpx, openai/anthropic SDKs, Typer/Cyclopts + Rich + questionary, FastAPI + Postgres + Alembic, OpenTelemetry, Grafana, Helm, pytest.
 
@@ -68,6 +68,7 @@ The user wants a framework of specialised AI agents (BA, Design, Developer, Code
 - Unmeasured values are **null, never 0** (Zyroflo metrics doctrine).
 - Ledger hash (Zyroflo-compatible): `"sha256:" + sha256(json.dumps(body, sort_keys=True, separators=(",",":"), ensure_ascii=False))` where `body` = entry minus `hash` and `signature`; `prev` = previous entry's `hash`, first entry `prev = ""`.
 - Restricted fields (tier/model, effort, temperature, backend, tools, shell, skills, limits, children) are **never merged** across layers; org policy (+ team narrowing, tighten-only) is their only source; definitions only *request*.
+- **Zyroflo is reused, not rewritten (D34)**: Zyroflo (`sdlc-harness`) is a pinned git dependency used unchanged; `sdlc_commons` is the only package that imports it (thin adapters). Gaps are closed by small, backward-compatible Zyroflo PRs reviewed and merged by the owner (Z1–Z4, see `docs/spikes/S14-zyroflo-reuse.md`). Never copy Zyroflo code into this repo.
 - **Pipelines are admin-controlled (D33)**: in org mode, pipeline definitions (and per-repo overlays) live only in the policy repo — `pipelines/` (org admins) and `teams/<team>/pipelines/` (that team's leads) — and change only by a PR approved through CODEOWNERS with branch protection. Repo maintainers and developers request changes but cannot make them. Repo-level `.agentic/pipelines/` is ignored unless org policy sets `allow_repo_pipelines: true`. A run uses only the approved, hash-matched version; a locally edited pipeline is refused. Standalone mode (no org) keeps local pipelines.
 - **Deny lists (D31)**: org policy, team policy and each agent file may declare `deny` rules (`shell` command prefixes, `paths` globs). Deny lists are the one thing that is **merged** across layers — as a union, because adding a restriction is always safe; a deny always beats an allow; child agents inherit their parent's denies.
 - No telemetry to third parties; strip vendor telemetry from reused components (e.g. superpowers visual companion).
@@ -524,7 +525,7 @@ Status for every row: **Pending** at plan approval. Columns: `PW` = estimated pe
 | ID | Sub-plan | Item | Depends on | Done when | PW | Status | Notes |
 |---|---|---|---|---|---|---|---|
 | P0-01 | SP0 | Repo bootstrap: git init, uv workspace (`core`, `commons`, `cli`, `control-plane`), ruff, pytest, pre-commit, CI matrix (Windows/macOS/Linux), MIT LICENSE, `.gitattributes eol=lf`; copy spec, research, this plan and `TRACKER.md` into the repo | — | `uv run pytest` and `uv run ruff check .` green locally and in CI on all 3 OSes; tracker committed | 1 | Pending | |
-| P0-02 | SP0 | Spec revision **r3**: fold in decisions D26–D33 (D31 agent deny lists, D32 opencode backend + Antigravity spike, D33 pipelines admin-controlled), the enterprise-review additions, and the "Users and roles", "Developer onboarding", "Deployment landscape", skills, learning-loop and executive cost breakdown sections from this plan; renumber spec §21 spikes to match | P0-01 | Spec r3 committed; every D-number and spike referenced in this plan exists in the spec; owner sign-off | 1 | Pending | |
+| P0-02 | SP0 | Spec revision **r3**: fold in decisions D26–D34 (D31 agent deny lists, D32 opencode backend + Antigravity spike, D33 pipelines admin-controlled, D34 Zyroflo as pinned dependency), the enterprise-review additions, and the "Users and roles", "Developer onboarding", "Deployment landscape", skills, learning-loop and executive cost breakdown sections from this plan; renumber spec §21 spikes to match | P0-01 | Spec r3 committed; every D-number and spike referenced in this plan exists in the spec; owner sign-off | 1 | Pending | |
 | P0-03 | SP0 | Architecture test (import-linter): `openai`/`anthropic` SDKs importable only from `agentic.transport`; supply-chain CI: pip-audit, gitleaks on the repo, licence allow-list check of `uv.lock` | P0-01 | CI job fails on a deliberate violation of each rule and passes on main | 0.5 | Pending | |
 | S1 | Spike | TokenLean cost capture through Pydantic AI (stream + non-stream) | P0-01 | Record shows headers/body read on both paths or names the gap and the fallback | 1 | Pending | |
 | S2 | Spike | Claude Agent SDK end-to-end through TokenLean (managed settings, base URL, headers, `--bare`, JSON schema output) | P0-01 | Record with a working lock-down config or the blocking gap | 1 | Pending | |
@@ -539,10 +540,10 @@ Status for every row: **Pending** at plan approval. Columns: `PW` = estimated pe
 | S11 | Spike | Serena (GPL) as separate process — legal (only if multilspy insufficient) | S5 | Record (may be `Dropped`) | 0.25 | Pending | |
 | S12 | Spike | Docker Desktop licensing at 1000 seats; Podman alternative | — | Record with recommendation | 0.25 | Pending | |
 | S13 | Spike | Safe expression evaluator: cel-python vs simpleeval | P0-01 | Record naming the choice with licence | 0.5 | Pending | |
-| S14 | Spike | Zyroflo reuse packaging: shared `commons` package (Zyroflo stays stdlib-only) vs vendoring; slice plan for `policy.py` guard rules | P0-01 | Record with package boundaries, Zyroflo impact and a dry-run extraction of `entry_hash` | 1.5 | Pending | |
+| S14 | Spike | Zyroflo reuse packaging (D34) | P0-01 | Record `docs/spikes/S14-zyroflo-reuse.md`: direct pinned dependency + adapters, gaps Z1–Z4 | 1.5 | Done | Owner decision 2026-10-18: depend on Zyroflo unchanged, small backward-compatible PRs for gaps |
 | P0-04 | SP0 | Spike review: go/no-go, re-estimate M1, spec amendments if any decision changed | S1–S14 | Decisions recorded in spec revision line; M1 rows re-estimated; owner sign-off | 0.5 | Pending | |
 
-### M1 — Standalone core (~70 PW, ~17 weeks)
+### M1 — Standalone core (~69 PW, ~17 weeks)
 
 Exit: acceptance scenarios 1, 2 and 4 pass in **standalone mode** on a laptop (M1-68…70), cross-platform CI green (M1-71), **agent quality gate passed** (M1-64), demo and go/no-go (M1-72).
 
@@ -553,11 +554,11 @@ Exit: acceptance scenarios 1, 2 and 4 pass in **standalone mode** on a laptop (M
 | M1-03 | SP1 | `OrgPolicy` model + policy-dir loader + policy version (incl. `allowed_repo_patterns`, `tool_mirror_url`, `licence_scan`, `allow_repo_pipelines` (D33, default false)) | P0-01 | `test_policy_load.py` passes (6 tests) | 1 | Pending | |
 | M1-04 | SP1 | Layered discovery + `resolve_agent` (tiers, team narrowing, clamping, violations; deny lists = union of org + team + agent, deny beats allow; repo-level pipelines ignored with a warning unless `allow_repo_pipelines` — D33) | M1-01, M1-03 | `test_resolve.py` + `test_discovery.py` pass (8 tests) | 1 | Pending | |
 | M1-05 | SP1 | Handoff envelope + kind models + parser + produces/consumes compatibility | M1-01, M1-02 | `test_handoffs.py` passes (6 tests incl. Review Focus 5) | 1 | Pending | |
-| M1-06 | SP2 | Commons ledger core: `entry_hash`, chain append/verify, `digest_of`, DSSE sign/verify (from Zyroflo `approve.py`/`events.py`/`state.py`) | S14 | Ported Zyroflo ledger tests pass; CRLF-vs-LF digest equality test; kill-mid-append leaves chain verifiable | 1.5 | Pending | |
-| M1-07 | SP2 | Event types extended with agentic fields (team, agent, parent, tier, policy_version; limit/kill/skill events); JSON schema generated | M1-06 | Schema file generated from code; unknown field rejected; Zyroflo event fixtures still validate | 0.5 | Pending | |
-| M1-08 | SP2 | Guard rules from `policy.py` L3215–4105: `deny_commands` tokeniser, protected paths, push target, diff budget | S14 | Ported guard tests pass incl. `sudo`/`xargs`/PowerShell unwrapping cases | 1 | Pending | |
-| M1-09 | SP2 | Worktree manager from `worktree.py` with components passed as argument | S14 | Ported tests pass on 3 OSes; rollback on partial creation verified | 1 | Pending | |
-| M1-10 | SP2 | Lifecycle content as data: P0–P11 SOPs, LIFECYCLE, STEP_SPEC, review rubric, gate-regime table | S14 | Loader returns all 12 stages with front-matter fields; rubric weights sum to 10 | 0.5 | Pending | |
+| M1-06 | SP2 | Ledger adapter in `sdlc_commons` over Zyroflo (`sdlc-harness`, pinned git dependency, used unchanged): `approve.entry_hash/read_chain/verify_chain/sign_entry/verify_signatures`, `events.append/verify/read`, `state.digest_of/drift`; add `sdlc-harness` dependency | S14 | Adapter tests: chain written + verified, tamper detected and named, CRLF-vs-LF digest equality (Review Focus 1), kill-mid-append leaves a verifiable chain | 1 | Pending | |
+| M1-07 | SP2 | **Zyroflo PR Z1**: optional namespaced extension block on events (`ext`), included in the hash, ignored by Zyroflo readers; then adapter writes agentic fields (team, agent@version, parent, tier, policy_version) and limit/kill/skill events into it; pin bump | M1-06 | Zyroflo PR merged by owner with its full suite green; adapter tests: ext fields round-trip and are covered by the chain hash | 0.75 | Pending | |
+| M1-08 | SP2 | Guard adapter over Zyroflo (`sdlc-harness`, pinned git dependency, used unchanged): map ResolvedAgent deny lists + org shell policy into a Zyroflo policy dict; call `policy.denied_command/destructive/protected/confinement/push_target/budget` | S14 | Adapter tests: merged deny list blocks `git push -f`, `find … -exec rm -rf`, `sudo kubectl …`; protected path refused; diff budget enforced | 0.5 | Pending | |
+| M1-09 | SP2 | Worktree adapter over Zyroflo (`sdlc-harness`, pinned git dependency, used unchanged): `worktree.plan/create/remove` with components from the repo config | S14 | Adapter tests on Windows + Linux: one worktree per run/component, rollback on partial creation, removal | 0.5 | Pending | |
+| M1-10 | SP2 | **Zyroflo PR Z2 + Z3**: ship `sdlc/stages`, `sdlc_templates`, `third_party/manifest.json` as package data with a resource accessor (Z2); optional run-folder root parameter, default unchanged (Z3); then loader for lifecycle content in `sdlc_commons` | S14 | Zyroflo PRs merged with suite green; loader returns all 12 stages with front-matter fields; review rubric weights sum to 10; run folder can be placed under `.agentic/local/runs/` | 0.75 | Pending | |
 | M1-11 | SP3 | httpx client factory stamping `X-Agentic-*` + `traceparent`; forbidden-header guard | M1-04 | Tests: all 10 headers present; sending `X-Step-Name`/`X-Workflow-ID`/`X-Session-ID` raises | 0.5 | Pending | |
 | M1-12 | SP3 | Cost capture: `x-tokenlean-*` headers, body `_token_opt`, stream usage-chunk fallback marked `estimated` | M1-11, S1, M1-65 | Tests on recorded responses: exact cost on non-stream; `estimated` on stream without headers (Review Focus 4) | 1 | Pending | |
 | M1-13 | SP3 | Budget ledger: run → step → child slices, reservations, limit-hit signals | M1-12 | Tests: child cannot exceed slice; step limit hit raises `LimitHit(kind="budget")`; totals reconcile | 1 | Pending | |
@@ -622,7 +623,7 @@ Exit: acceptance scenarios 1, 2 and 4 pass in **standalone mode** on a laptop (M
 | M1-72 | SP20 | **M1 demo + retro**: live demo to owner; agent quality gate result; re-estimate M2; decide scope levers | M1-64, M1-71 | Retro notes committed; M2 rows re-estimated; go/no-go recorded | 0.5 | Pending | |
 | M1-73 | SP20 | **Call-flow documentation** (owner request): `docs/architecture/call-flow.md` — Mermaid sequence diagram + step table of a full `feature-delivery` run from `agentic run` to the final PR/ledger entry, with every default step, gate, loop, policy/preflight check, kill-switch check, budget ledger update, sandbox, TokenLean call and audit event; each box marked as implemented (file:function) or planned (tracker row). Draft after M1-05; updated as components land; final at M1-72 | M1-05 | Draft committed after SP1; final version matches the running system at the M1 demo | 1 | Pending | |
 
-### M2 — Org governance (~55.5 PW, ~13–14 weeks)
+### M2 — Org governance (~54 PW, ~13 weeks)
 
 Exit: acceptance scenario 3 (admin override) on the org stack (M2-53), kill-switch propagation ≤ 30 s (M2-54), audit verify + export with tamper detection (M2-55), demo and go/no-go (M2-56).
 
@@ -654,9 +655,9 @@ Exit: acceptance scenario 3 (admin override) on the org stack (M2-53), kill-swit
 | M2-24 | SP6 | Diff-size budget per review batch | M1-08, M1-22 | Tests: Developer splits work when budget exceeded | 0.5 | Pending | |
 | M2-25 | SP14 | Admin commands: `rbac`, `killswitch`, `pause` | M1-49, M2-03, M2-06 | Tests: permission refusal per role | 1 | Pending | |
 | M2-26 | SP14 | `agentic audit verify` (local ledgers + control-plane chain) | M1-49, M1-06, M2-05 | Tests: tampered entry detected and located | 0.5 | Pending | |
-| M2-27 | SP2 | Commons connector mapping (`dig`, `spec_for`) from Zyroflo `connect.py` | S14 | Ported tests pass | 0.5 | Pending | |
-| M2-28 | SP2 | Commons domain-graph package from Zyroflo `tools/graph` (+ tests, fixture estates) | S14 | Graph suite passes (neo4j tests optional) | 1 | Pending | |
-| M2-29 | SP2 | Zyroflo consumes commons (Zyroflo repo branch; stdlib-only path preserved) | M1-06…M1-10, M2-27, M2-28 | Zyroflo full test suite green on its branch | 1 | Pending | |
+| M2-27 | SP2 | Connector adapter over Zyroflo (`sdlc-harness`, pinned git dependency, used unchanged): `connect.dig/spec_for/mapping_for` | S14 | Adapter tests with the Jira and GitHub-issue mappings | 0.25 | Pending | |
+| M2-28 | SP2 | Domain-graph access via Zyroflo (`sdlc-harness`, pinned git dependency, used unchanged): `tools.graph` build/impact/MCP used as-is from `sdlc_commons` | S14 | Adapter test runs impact on a Zyroflo fixture estate (neo4j optional) | 0.5 | Pending | |
+| M2-29 | SP2 | **Zyroflo PR Z4**: alias package `zyroflo` re-exporting `tools.*` (old name keeps working); switch `sdlc_commons` imports; pin bump | M1-06…M1-10 | Zyroflo PR merged with suite green; `sdlc_commons` imports only `zyroflo.*` | 0.5 | Pending | |
 | M2-30 | SP19 | TokenLean **ST-1**: team level under tenant (key→team, column, team spend caps, team config overlays) | — | TokenLean tests green; team cap returns 429 | 2 | Pending | |
 | M2-31 | SP19 | TokenLean **ST-2**: `tags` JSONB on `usage_events` from allow-listed `X-Agentic-*` headers | — | Tests: tags stored; non-allow-listed header ignored | 1 | Pending | |
 | M2-32 | SP19 | TokenLean **ST-4**: OpenAI Responses endpoint `/v1/responses` | — | Codex smoke call succeeds; usage row written | 1.5 | Pending | |
@@ -763,7 +764,7 @@ agentic-sdlc/
 ├── core/      pyproject.toml, src/agentic/{definitions,policy,engine,agents,transport,backends,
 │              sandbox,handoffs,codeintel,skills,memory,integrations,security,telemetry,auth,learning}/,
 │              tests/<same areas>/
-├── commons/   pyproject.toml, src/sdlc_commons/{ledger,events,guards,worktree,connectors,graph,lifecycle}/, tests/
+├── commons/   pyproject.toml, src/sdlc_commons/{ledger,guards,worktree,connectors,graph,lifecycle}/ (thin adapters over Zyroflo, D34), tests/
 ├── cli/       pyproject.toml, src/agentic_cli/, tests/
 ├── control-plane/ pyproject.toml, src/agentic_cp/{api,policy_sync,rbac,ingest,audit,killswitch,notify,learning}/,
 │              migrations/, dashboards/, tests/
@@ -890,7 +891,7 @@ Produces: a tested library that loads agent, pipeline, policy and handoff files 
 | Sub-plan | Milestone(s) | Delivers | Key reuse |
 |---|---|---|---|
 | SP1 Definitions & policy | M1 | agent/pipeline/policy models, resolution, handoffs | python-frontmatter, ruamel.yaml, Pydantic |
-| SP2 Commons | M1, M2 | `sdlc_commons` ledger, events, guards, worktree, lifecycle (M1); connectors, graph, Zyroflo switchover (M2) | Zyroflo `approve.py` (`entry_hash` L135, `verify_chain`, `sign_entry`), `events.py` (L48–83), `state.py` (`digest_of`, `append_record`), `policy.py` L3215–4105, `worktree.py`, `connect.py`, `tools/graph/*`, `sdlc/stages/*`, `validate.py` |
+| SP2 Commons | M1, M2 | thin adapters over the pinned Zyroflo dependency: ledger, guards, worktree, lifecycle content (M1); connectors, graph, `zyroflo` alias (M2); Zyroflo PRs Z1–Z4 | `tools.sdlc.approve/events/state/policy/guard/worktree/connect`, `tools.graph.*`, `tools.review.prepass` — see `docs/spikes/S14-zyroflo-reuse.md` |
 | SP3 Transport | M1 | headers, cost capture, budget ledger, corporate network | openai/anthropic SDK `http_client`, httpx event hooks |
 | SP4 Agent runtime | M1 | AgentRunner, tools, child spawner, stuck detector | Pydantic AI v2 (`UsageLimits`, deferred tools), OpenHands `StuckDetector` |
 | SP5 Handoff templates | M1 | per-kind templates, validation retry | spec-kit templates, Zyroflo `review-rubric.md` |
