@@ -21,8 +21,11 @@ from pydantic import (
 
 from agentic.definitions.errors import DefinitionError
 
-# Backends an agent may ask to run on (spec §9.1).
-BACKEND_PATTERN = r"^(native|claude-code|codex|acp:.+|remote:.+)$"
+# Backends an agent may ask to run on (spec §9.1, D32).
+#   native / claude-code / codex / opencode -> dedicated adapters with tested lock-down profiles
+#   acp:<agent>     -> any Agent Client Protocol agent via one generic adapter (acp:antigravity)
+#   remote:<service> -> hosted agents such as Devin (submit / poll / collect)
+BACKEND_PATTERN = r"^(native|claude-code|codex|opencode|acp:.+|remote:.+)$"
 
 
 class Limits(BaseModel):

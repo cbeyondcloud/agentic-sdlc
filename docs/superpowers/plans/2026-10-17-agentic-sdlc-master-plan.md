@@ -499,7 +499,7 @@ Status for every row: **Pending** at plan approval. Columns: `PW` = estimated pe
 | ID | Sub-plan | Item | Depends on | Done when | PW | Status | Notes |
 |---|---|---|---|---|---|---|---|
 | P0-01 | SP0 | Repo bootstrap: git init, uv workspace (`core`, `commons`, `cli`, `control-plane`), ruff, pytest, pre-commit, CI matrix (Windows/macOS/Linux), MIT LICENSE, `.gitattributes eol=lf`; copy spec, research, this plan and `TRACKER.md` into the repo | — | `uv run pytest` and `uv run ruff check .` green locally and in CI on all 3 OSes; tracker committed | 1 | Pending | |
-| P0-02 | SP0 | Spec revision **r3**: fold in decisions D26–D30, the enterprise-review additions, and the "Users and roles", "Developer onboarding", "Deployment landscape", skills and learning-loop sections from this plan; renumber spec §21 spikes to match | P0-01 | Spec r3 committed; every D-number and spike referenced in this plan exists in the spec; owner sign-off | 1 | Pending | |
+| P0-02 | SP0 | Spec revision **r3**: fold in decisions D26–D32 (D31 agent deny lists, D32 opencode backend + Antigravity spike), the enterprise-review additions, and the "Users and roles", "Developer onboarding", "Deployment landscape", skills and learning-loop sections from this plan; renumber spec §21 spikes to match | P0-01 | Spec r3 committed; every D-number and spike referenced in this plan exists in the spec; owner sign-off | 1 | Pending | |
 | P0-03 | SP0 | Architecture test (import-linter): `openai`/`anthropic` SDKs importable only from `agentic.transport`; supply-chain CI: pip-audit, gitleaks on the repo, licence allow-list check of `uv.lock` | P0-01 | CI job fails on a deliberate violation of each rule and passes on main | 0.5 | Pending | |
 | S1 | Spike | TokenLean cost capture through Pydantic AI (stream + non-stream) | P0-01 | Record shows headers/body read on both paths or names the gap and the fallback | 1 | Pending | |
 | S2 | Spike | Claude Agent SDK end-to-end through TokenLean (managed settings, base URL, headers, `--bare`, JSON schema output) | P0-01 | Record with a working lock-down config or the blocking gap | 1 | Pending | |
@@ -507,7 +507,7 @@ Status for every row: **Pending** at plan approval. Columns: `PW` = estimated pe
 | S4 | Spike | Archon / OpenHands behind a proxy — re-confirm build-vs-adopt | P0-01 | Record; D1/D17 confirmed or spec amended | 1 | Pending | |
 | S5 | Spike | Code-graph bake-off (code-review-graph, codebase-memory-mcp, Graphify, Zyroflo domain-graph) with corpus replay + judging protocol, Windows + Linux, Python/TS/Java repos | P0-01 | Record names the default symbol adapter with recall@20 and precision@10 per tool | 2 | Pending | |
 | S6 | Spike | Windows sandbox strength: `srt` vs Codex sandbox vs WSL2 | P0-01 | Record names the Windows default and what it cannot block | 1 | Pending | |
-| S7 | Spike | ACP adapter stability (phase-2 input) | P0-01 | Record | 0.5 | Pending | |
+| S7 | Spike | ACP adapter stability (phase-2 input) + **Antigravity CLI** check (D32): ACP support, routing through TokenLean (custom base URL), licence/terms, Windows support | P0-01 | Record: ACP adapter verdict; Antigravity usable as `acp:antigravity`, needs a dedicated adapter, or not viable | 1 | Pending | |
 | S8 | Spike | Pydantic AI deferred-tool serialisation across processes (gate pause/resume) | P0-01 | Record with a resumed run across two processes or the gap | 0.5 | Pending | |
 | S9 | Spike | Committed shard index in `main`: size growth, merge behaviour, LFS need | P0-01 | Record with numbers from 2 real repos | 0.5 | Pending | |
 | S10 | Spike | Skill and agent A/B method (judging protocol, blinding, sample size) | P0-01 | Record + eval harness sketch used by M1-63 | 1 | Pending | |
@@ -596,7 +596,7 @@ Exit: acceptance scenarios 1, 2 and 4 pass in **standalone mode** on a laptop (M
 | M1-71 | SP20 | Cross-platform CI green for M1 scope (CLI, sandbox, init, E2E) | M1-68, M1-69, M1-70 | CI matrix green 3 consecutive runs | 1 | Pending | |
 | M1-72 | SP20 | **M1 demo + retro**: live demo to owner; agent quality gate result; re-estimate M2; decide scope levers | M1-64, M1-71 | Retro notes committed; M2 rows re-estimated; go/no-go recorded | 0.5 | Pending | |
 
-### M2 — Org governance (~54 PW, ~13 weeks)
+### M2 — Org governance (~55.5 PW, ~13–14 weeks)
 
 Exit: acceptance scenario 3 (admin override) on the org stack (M2-53), kill-switch propagation ≤ 30 s (M2-54), audit verify + export with tamper detection (M2-55), demo and go/no-go (M2-56).
 
@@ -642,7 +642,7 @@ Exit: acceptance scenario 3 (admin override) on the org stack (M2-53), kill-swit
 | M2-38 | SP16 | Seven Grafana dashboards (org, team, run explorer, agent quality, limits & safety, audit explorer, adoption) provisioned alongside the LITE set | M2-37 | Provisioning test loads all; each panel query returns rows on seeded data | 2 | Pending | |
 | M2-39 | SP16 | docker-compose local org stack (control plane + Postgres + Grafana + TokenLean LITE) | M2-01, M2-38, M1-67 | `docker compose up` + smoke passes | 0.5 | Pending | |
 | M2-40 | SP7 | `codex` backend (`codex exec --json --output-schema`) through TokenLean Responses; shell policy compiled to Codex execpolicy | M1-27, S3, M2-32 | Contract tests against pinned Codex version pass | 1.5 | Pending | |
-| M2-41 | SP7 | Runner conformance tiers (Zyroflo `RUNNER_CONTRACT.md` / `provider_smoke`) for native, claude-code, codex | M1-28, M1-29, M2-40 | Conformance suite green for all three | 1 | Pending | |
+| M2-41 | SP7 | Runner conformance tiers (Zyroflo `RUNNER_CONTRACT.md` / `provider_smoke`) for native, claude-code, codex, opencode | M1-28, M1-29, M2-40, M2-57 | Conformance suite green for all four | 1 | Pending | |
 | M2-42 | SP8 | Egress restriction config (TokenLean + allow-listed registries) | M1-32, M1-33 | Tests: blocked host refused inside sandbox | 0.5 | Pending | |
 | M2-43 | SP9 | Domain-graph adapter (commons) | M1-34, M2-28 | Tests on Zyroflo fixture estates | 1 | Pending | |
 | M2-44 | SP9 | Nightly index workflow template (from Zyroflo `snapshot-publish.yml`, nightly, service account) | M1-36, M2-14 | actionlint clean; dry run commits only changed shards | 0.5 | Pending | |
@@ -657,6 +657,7 @@ Exit: acceptance scenario 3 (admin override) on the org stack (M2-53), kill-swit
 | M2-53 | SP20 | **Acceptance 3 (org)**: admin changes tier mapping and a tool restriction in the policy repo; next run honours both; run record shows policy version | M2-02, M2-09, M1-68 | Scripted E2E passes on the compose org stack | 0.5 | Pending | |
 | M2-54 | SP20 | Kill-switch propagation test: switch flipped → running pipeline stops within 30 s and ≤ 1 turn; no orphan processes | M2-19, M2-06, M2-22 | E2E timing test passes 5/5 runs | 0.5 | Pending | |
 | M2-55 | SP20 | Audit E2E: `audit verify` + `audit export` on a real run; tampered entry detected | M2-26, M2-13 | E2E passes | 0.5 | Pending | |
+| M2-57 | SP7 | `opencode` backend (D32): `opencode run --format json`, lock-down profile via `OPENCODE_CONFIG_CONTENT` (provider `baseURL` → TokenLean, model forced) and `OPENCODE_PERMISSION` compiled from the shell policy and deny lists; wrapped in `srt`/container (OpenCode has no own sandbox); verify `baseURL` against official docs first | M1-27, M1-31, M1-32 | Contract tests against pinned OpenCode version pass; calls appear in TokenLean usage with X-Agentic headers; a denied command is refused | 1.5 | Pending | |
 | M2-56 | SP20 | **M2 demo + retro**: org demo (admin override, kill switch, dashboards, audit); re-estimate M3; scope levers | M2-53, M2-54, M2-55, M2-38 | Retro notes committed; go/no-go recorded | 0.5 | Pending | |
 
 ### M3 — Scale and operations (~31 PW, ~8 weeks)

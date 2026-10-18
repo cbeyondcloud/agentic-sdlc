@@ -111,3 +111,12 @@ def test_unknown_deny_field_rejected(tmp_path: Path):
         load_agent(path)
 
     assert "deny.network" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "backend", ["native", "claude-code", "codex", "opencode", "acp:antigravity", "remote:devin"]
+)
+def test_supported_backend_names_accepted(tmp_path: Path, backend: str):
+    agent = load_agent(write_agent(tmp_path, MINIMAL + f"\nbackend: {backend}"))
+
+    assert agent.backend == backend
