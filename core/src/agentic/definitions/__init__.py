@@ -8,7 +8,7 @@ from agentic.definitions.agent import (
     load_agent,
 )
 from agentic.definitions.discovery import DefinitionSet, Layer, UnknownDefinitionError
-from agentic.definitions.errors import DefinitionError
+from agentic.definitions.errors import DefinitionError, describe_validation_error
 from agentic.definitions.pipeline import (
     ActionStep,
     AgentStep,
@@ -36,6 +36,7 @@ __all__ = [
     "PipelineDefinition",
     "Step",
     "UnknownDefinitionError",
+    "describe_validation_error",
     "load_agent",
     "load_pipeline",
 ]
