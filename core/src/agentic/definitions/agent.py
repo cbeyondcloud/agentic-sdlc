@@ -130,11 +130,4 @@ def load_agent(path: Path) -> AgentDefinition:
     try:
         return AgentDefinition.model_validate(data)
     except ValidationError as error:
-        raise DefinitionError(path, [_describe(issue) for issue in error.errors()]) from error
-
-
-def _describe(issue: dict) -> str:
-    """Turn one pydantic error into a readable line: '<field>: <what is wrong>'."""
-    field = ".".join(str(part) for part in issue["loc"]) or "agent"  # whole-file checks
-    message = issue["msg"].removeprefix("Value error, ")
-    return f"{field}: {message}"
+        raise DefinitionError.from_validation_error(path, error, "agent") from error

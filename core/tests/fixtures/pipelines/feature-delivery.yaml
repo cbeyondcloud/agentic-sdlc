@@ -1,0 +1,30 @@
+name: feature-delivery
+version: 1.0.0
+regime: team
+inputs:
+  request: { from: [text, file, jira] }
+steps:
+  - id: requirements
+    agent: business-analyst
+  - id: design
+    agent: design
+    when: "requirements.size != 'trivial'"
+  - gate: design-approval
+    approver_role: team-lead
+    four_eyes: false
+  - loop:
+      id: build-review
+      max_iterations: 3
+      until: "review.open_blocking == 0"
+      on_exhausted: gate
+      steps:
+        - id: develop
+          agent: developer
+        - id: review
+          agent: code-review
+  - gate: review-approval
+    approver_role: approver
+  - id: qa
+    agent: qa
+  - id: publish
+    action: github.open_pr
