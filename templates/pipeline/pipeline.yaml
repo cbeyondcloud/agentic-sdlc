@@ -1,6 +1,11 @@
 # =============================================================================
 # PIPELINE DEFINITION TEMPLATE
-# Copy to .agentic/pipelines/<your-pipeline-name>.yaml and edit.
+# Who may change pipelines: only org admins and team leads.
+#   Org mode: pipelines live in the org policy repo, in pipelines/ (org admins)
+#   or pipelines/teams/<team>/ (that team's leads), and change only through a
+#   pull request approved by them. Developers and repo maintainers request
+#   changes. A locally edited pipeline will not run.
+#   Standalone mode (no org): copy to .agentic/pipelines/<name>.yaml.
 # Required: name, version and at least one step.
 # Optional settings and extra step examples are commented out with sample
 # values; to use one, delete the leading "# " and keep the indentation.
