@@ -34,7 +34,7 @@ Exit: acceptance scenarios 1, 2 and 4 pass in **standalone mode** on a laptop (M
 
 | ID | Sub-plan | Item | Depends on | Done when | PW | Status | Notes |
 |---|---|---|---|---|---|---|---|
-| M1-01 | SP1 | `AgentDefinition` model + Markdown loader, incl. optional `deny:` block (`shell` command prefixes, `paths` globs) — D31 | P0-01 | `core/tests/definitions/test_agent.py` passes (5 tests in detailed plan) | 0.5 | Done | a4ef92b + deny block (D31) commit — 10 tests, check.py --all green (Windows + Linux) |
+| M1-01 | SP1 | `AgentDefinition` model + Markdown loader, incl. optional `deny:` block (`shell` command prefixes, `paths` globs) — D31 | P0-01 | `core/tests/definitions/test_agent.py` passes (5 tests in detailed plan) | 0.5 | Done | a4ef92b + deny block (D31) commit — 10 tests, check.py --all green (Windows + Linux); + templates/agent/agent.md (all fields with commented samples, 3 tests) |
 | M1-02 | SP1 | `PipelineDefinition` model + YAML loader | P0-01 | `test_pipeline.py` passes (5 tests) | 0.5 | Done | feat(core): pipeline definition — 8 tests, check.py --all green (Windows + Linux) |
 | M1-03 | SP1 | `OrgPolicy` model + policy-dir loader + policy version (incl. `allowed_repo_patterns`, `tool_mirror_url`, `licence_scan`) | P0-01 | `test_policy_load.py` passes (5 tests) | 1 | Pending | |
 | M1-04 | SP1 | Layered discovery + `resolve_agent` (tiers, team narrowing, clamping, violations; deny lists = union of org + team + agent, deny beats allow) | M1-01, M1-03 | `test_resolve.py` + `test_discovery.py` pass (7 tests) | 1 | Pending | |
@@ -89,7 +89,7 @@ Exit: acceptance scenarios 1, 2 and 4 pass in **standalone mode** on a laptop (M
 | M1-53 | SP14 | `agentic login` + `agentic init` (prereqs, policy cache, skills, tool fetch, index overlay, readiness report; `--install-missing`; `--standalone`) | M1-49, M1-48, M1-37, M1-33, M1-51, M1-50 | Tests: init writes nothing outside `~/.agentic` and `.agentic/local`; readiness report lists every check | 1.5 | Pending | |
 | M1-54 | SP14 | `run` (incl. `--dry-run`), `resume`, `status`, `runs` | M1-49, M1-21, M1-22, M1-24, M1-25, M1-26 | Tests: dry-run spends nothing and prints resolved plan; resume continues a paused run | 1.5 | Pending | |
 | M1-55 | SP14 | Gate UX: `approve`, `reject --feedback`, `edit` ($EDITOR), Rich display of handoff + diff | M1-54, M1-22 | Tests: each verb updates ledger; edit re-validates before approval | 1 | Pending | |
-| M1-56 | SP14 | `validate`, `agents|pipelines|skills list/search`, `policy show` | M1-49 | Tests: validate reports policy violations with field names | 0.5 | Pending | |
+| M1-56 | SP14 | `validate`, `agents|pipelines|skills list/search`, `agents new <name>` (copies `templates/agent/agent.md`), `policy show` | M1-49 | Tests: validate reports policy violations with field names | 0.5 | Pending | |
 | M1-57 | SP14 | `cost` (run/step/agent/child breakdown) | M1-54, M1-13 | Test: totals match ledger to the cent | 0.5 | Pending | |
 | M1-58 | SP17 | GitHub adapter: branch push, open PR with run links, CI status watch (Zyroflo `release.py` flow) | M1-45 | Contract tests against a test repo pass | 1 | Pending | |
 | M1-59 | SP18 | **Agent quality assets**: 3 golden handoffs per kind; eval corpus harvested from 2 pilot repos (Zyroflo `corpus_harvest`) with ≥ 20 scoping, 20 review and 10 defect cases | M1-05, M1-19 | Corpus committed under `library/eval/`; every golden handoff parses; case counts met | 1.5 | Pending | |
