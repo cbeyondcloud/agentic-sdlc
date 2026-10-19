@@ -1,0 +1,27 @@
+{
+  "_source": "TokenLean src/proxy/main.py:1668-1670 (x-tokenlean-cache hit), savings/models.py:157-183",
+  "headers": {
+    "x-tokenlean-request-id": "req-3",
+    "x-tokenlean-routed-model": "gpt-5-mini",
+    "x-tokenlean-cache": "hit:L1"
+  },
+  "body": {
+    "id": "chatcmpl-3",
+    "model": "gpt-5-mini",
+    "choices": [],
+    "usage": {
+      "prompt_tokens": 900,
+      "completion_tokens": 100,
+      "total_tokens": 1000
+    },
+    "_token_opt": {
+      "request_id": "req-3",
+      "routed_model": "gpt-5-mini",
+      "tokens_provider_billed": 0,
+      "response_tokens": 100,
+      "cost_actual_usd": 0.0,
+      "cache_hit": true,
+      "cache_level": "L1"
+    }
+  }
+}

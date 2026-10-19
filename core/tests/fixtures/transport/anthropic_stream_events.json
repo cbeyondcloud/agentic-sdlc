@@ -1,0 +1,38 @@
+{
+  "_source": "TokenLean protocols/anthropic_ingress.py:332,392-397 (message_start input 0, message_delta usage)",
+  "headers": {},
+  "events": [
+    {
+      "type": "message_start",
+      "message": {
+        "id": "msg_2",
+        "model": "claude-sonnet-5-5",
+        "usage": {
+          "input_tokens": 0,
+          "output_tokens": 1
+        }
+      }
+    },
+    {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": {
+        "type": "text_delta",
+        "text": "done"
+      }
+    },
+    {
+      "type": "message_delta",
+      "delta": {
+        "stop_reason": "end_turn"
+      },
+      "usage": {
+        "input_tokens": 812,
+        "output_tokens": 95
+      }
+    },
+    {
+      "type": "message_stop"
+    }
+  ]
+}

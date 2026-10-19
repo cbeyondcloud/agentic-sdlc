@@ -1,0 +1,30 @@
+{
+  "_source": "a live stream cut short: no final usage chunk (TokenLean main.py:1489-1492 strips it without include_usage)",
+  "headers": {},
+  "events": [
+    {
+      "id": "c2",
+      "model": "gpt-5-mini",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant"
+          }
+        }
+      ]
+    },
+    {
+      "id": "c2",
+      "model": "gpt-5-mini",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "par"
+          }
+        }
+      ]
+    }
+  ]
+}
