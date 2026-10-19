@@ -6,7 +6,7 @@
 | Date | 2026-10-16 |
 | Owner | Sumit Gupta |
 | Supporting research | [OSS reuse report](../../../reports/Agentic%20SDLC%20OSS%20reuse.md) · [research notes](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/) · [Zyroflo comparison](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/sdlc_harness_comparison.md) |
-| Revision | r3 (2026-10-18): decisions D26-D35 folded in; new §23 Users and roles, §24 Developer onboarding (init, skills, custom skills, learning loop), §25 Deployment landscape (incl. TokenLean LITE), §26 Executive cost breakdown, §27 Enterprise coverage; §5 agent types and deny lists; §19 milestones |
+| Revision | r3 (2026-10-18): decisions D26-D35 folded in; new §23 Users and roles, §24 Developer onboarding (init, skills, custom skills, learning loop), §25 Deployment landscape (incl. TokenLean LITE), §26 Executive cost breakdown, §27 Enterprise coverage; §5 agent types and deny lists; §19 milestones. Since r3: D36 (httpx2), D37 (handoff templates inherit a base, extend-only layering, §7.4) |
 | Earlier | r2 (2026-10-17): Zyroflo (sdlc-harness) artefacts folded in — §1.4, D16, D25, §6, §7, §9.2, §10, §14.5, §16, §18–§21 |
 
 ---
@@ -107,6 +107,7 @@ Decisions agreed during requirements clarification (2026-10-16).
 | D34 | Zyroflo dependency | Zyroflo (`sdlc-harness`) is a pinned git dependency used unchanged behind thin adapters in `sdlc_commons`; gaps closed by small backward-compatible Zyroflo PRs (§1.4, spike S14) |
 | D35 | Agent types | Every agent declares an org-defined type; the type (not the name) sets caps, ceilings and defaults; agents inherit and may only narrow; teams lower caps (§5.5) |
 | D36 | HTTP client | `agentic.transport` is built on **httpx2** (the Pydantic team's maintained successor to httpx, BSD-3): the Anthropic SDK requires it and Pydantic AI drops plain httpx in v3; cost capture is a wrapping transport under the identity client (spike S1) |
+| D37 | Handoff templates | Every handoff kind inherits one **generic base template** (fields and body sections). Org, team and repo layers may **add** fields and sections and **tighten** existing ones (optional → required, fewer choices), never remove, rename, loosen or retype them; new kinds (inheriting the base) only at org and team level; repo extensions are changed by PR approved by the repo maintainers (§7.4) |
 
 **Confirmed assumptions**: agents request a **capability tier** by default (exact model optional, admins can override); **preflight** validates every step before a run starts; **child agents inherit and can only narrow** their parent's tools, budget and limits.
 
@@ -460,6 +461,25 @@ Validation: python-frontmatter + Pydantic; invalid output triggers an automatic 
 ### 7.3 Run ledger (from Zyroflo)
 
 Each run keeps Zyroflo-format, hash-chained `events.jsonl` and `approvals.jsonl` in its run folder. Every handoff and gated diff is recorded by **digest**; an approval entry pins those digests and chains to the previous entry. The engine refuses to advance past a gate without a valid approval entry. In org mode the entries are also sent to the control plane, which verifies the chain on ingest (§14.5). For runs that produce a PR, a compact ledger summary is committed on the branch and the **CI ledger merge check** (Zyroflo `ledger-check.yml`) blocks merging when gates are unapproved or the chain is broken.
+
+### 7.4 Template inheritance and extensions (D37)
+
+Each handoff schema is built from layers, top to bottom; every layer may only add or tighten, so a handoff valid for a lower layer is always valid for every layer above it:
+
+| Layer | Defines | Where | Changed by |
+|---|---|---|---|
+| Base | Fields every handoff has: `status` (envelope), `summary` (one line, required), `open_questions` (list). Sections: `## Summary` first, `## Open questions` last | framework | framework releases |
+| Kind | The five built-in kinds of §7.2, each adding its fields and sections to the base | framework | framework releases |
+| Org | Extensions of any kind; new kinds that inherit the base | policy repo `handoffs/<kind>.yaml` | org admins (CODEOWNERS) |
+| Team | Extensions of any kind; new kinds that inherit the base | policy repo `teams/<team>/handoffs/<kind>.yaml` | that team's leads |
+| Repo | Extensions of existing kinds only | `.agentic/handoffs/<kind>.yaml` | repo maintainers (PR, CODEOWNERS) |
+
+- **Attributes** are front-matter fields (`string`, `integer`, `number`, `boolean`, `list` of strings, `enum`; each with a description and an example) and body sections (a `##` heading with guidance). A section is required: the agent's document must contain its heading.
+- **Allowed**: add a field (optional or required) or a section; make an optional field required; narrow an `enum` (or a built-in choice field) to fewer values. **Refused at load**, naming the file and line: removing, renaming, loosening or retyping any field or section from a layer above, and new kinds defined at repo level.
+- Merged order: base `## Summary`, the kind's sections, org, team and repo sections, base `## Open questions`. Fields merge by name.
+- The template an agent receives (§7.2), the validation of its answer, the retry with errors and a human's edit at a gate all use the same merged schema. A run fixes its merged schemas at start (their digest is recorded in the run), so a policy change mid-run does not change what a step must produce.
+- A type's or agent's `produces` / `consumes` must name a kind in the merged catalog; an agent file naming an unknown kind is refused when definitions are discovered, and an agent type naming one is refused in preflight.
+- Phase 0–M1 scope: top-level fields only (no nested objects in extensions); tightening of nested built-in fields (e.g. `findings[].file`) is later.
 
 ---
 
