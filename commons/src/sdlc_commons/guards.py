@@ -147,7 +147,16 @@ class Guard:
             for reason in policy.destructive(self.policy, spelling):
                 why = scrub(reason.replace(repr(spelling), "the command", 1))
                 blocks.setdefault(("destructive", why), Block("destructive", why))
-        commands = [c for spelling in spellings for c in _commands(spelling)]
+        try:
+            commands = [c for spelling in _rule_spellings(command) for c in _commands(spelling)]
+        except _TooComplex:
+            return [
+                Block(
+                    "framework",
+                    f"the command nests more than {_MAX_POSITIONS} programs "
+                    f"in one segment - refused unread (framework floor)",
+                )
+            ]
         layers = (("denied-command", self.deny_shell, "org, team or agent policy"),
                   ("framework", FRAMEWORK_DENY_SHELL, "framework floor"))  # fmt: skip
         for wall, rules, owner in layers:
@@ -155,6 +164,9 @@ class Guard:
                 if _rule_hits(rule, commands):
                     why = f"the command matches the deny rule {rule!r} ({owner})"
                     blocks.setdefault((wall, why), Block(wall, why))
+        if _ANSI_QUOTING.search(command):
+            why = "$'...' and $\"...\" quoting can hide a program (framework floor)"
+            blocks.setdefault(("framework", why), Block("framework", why))
         if any(_GIT_ENV.match(word) for spelling in spellings for word in _words(spelling)):
             why = "a GIT_* variable can make git run a command (framework floor)"
             blocks.setdefault(("framework", why), Block("framework", why))
@@ -238,45 +250,66 @@ def _tighter(base: int, requested: int | None) -> int:
 #
 # Zyroflo's `destructive` judges its own defaults. The deny lists and the
 # framework floor are judged here, by WHERE a word stands: a rule's program must
-# be at a command position (a segment's start, after a wrapper like `sudo`, after
-# `-c` or `-exec`), and its first plain word must be that program's subcommand.
-# So `git push` refuses `git -C repo push` and never `git commit -m "add push"`
-# or `git log --grep push`; `eval` refuses `eval …` and never `make eval`.
+# be at a command position - a segment's start (after `VAR=value` and control
+# keywords), one of the first words after a program that runs its arguments
+# (`sudo`, `ssh host`, `docker run image`), or the word an interpreter is told to
+# run (`bash -lc`, `cmd /c`, `powershell -Command`, `find -exec`) - and its first
+# plain word must be one of that program's first plain words. So `git push`
+# refuses `git -C repo push` and never `git commit -m push` or `git log --grep
+# push`; `eval` refuses `eval …` and never `make eval`.
 
-#: `then`/`do`/`!` and redirects at a segment's start hide the program from a tokenizer.
-_STRUCTURE = re.compile(r"(?:(?<=^)|(?<=[\s;&|(]))(?:then|do|else|elif|!|\d*[<>]+&?[^\s;&|]*)"
-                        r"(?=\s|$)")  # fmt: skip
-_SEPARATORS = frozenset(";|&()<>{}`\n")
+#: Control keywords, and redirects (with their target), as separators: they hide
+#: the program that follows from a tokenizer. A here-string keeps its text.
+_STRUCTURE = re.compile(
+    r"(?:(?<=^)|(?<=[\s;&|(]))"
+    r"(?:if|while|until|select|elif|then|do|else|!|<<<|\d*[<>]+&?\s*[^\s;&|<>]*)"
+    r"(?=\s|$)"
+)
+_SEPARATORS = frozenset(";|&()<>{}`\n\r")
 _ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _GIT_ENV = re.compile(r"GIT_[A-Z0-9_]*=")
-#: Programs that run the command that follows them.
+_ANSI_QUOTING = re.compile(r"""\$['"]""")
+#: Words skipped at a segment's start: they are not the program.
+_TRANSPARENT = frozenset({"if", "while", "until", "select", "elif", "then", "do", "else", "!",
+                          "{", "time", "coproc"})  # fmt: skip
+#: Programs that run a command given among their first few arguments.
 _WRAPPERS = frozenset({
-    "sudo", "doas", "env", "command", "builtin", "nohup", "time", "exec", "timeout", "stdbuf",
+    "sudo", "doas", "env", "command", "builtin", "nohup", "exec", "timeout", "stdbuf",
     "nice", "ionice", "setsid", "xargs", "parallel", "watch", "chroot", "runuser", "su",
-    "pkexec", "runas", "start", "start-process", "call",
+    "pkexec", "runas", "start", "start-process", "call", "ssh", "wsl", "npx", "uv", "uvx",
+    "pipx", "bunx", "strace", "ltrace", "flock", "docker", "podman",
 })  # fmt: skip
-#: Options whose value is a command.
-_CARRIERS = frozenset({"-c", "/c", "/k", "-command", "--command", "-exec", "-execdir", "-ok"})
-#: Options that take the next word as their value, so it is not the subcommand.
+_WRAPPER_REACH = 3  # how many plain words after a wrapper may be the command
+_MAX_POSITIONS = 32  # more programs nested in one segment is refused unread
+_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash", "fish"})
+_SHELL_RUN = re.compile(r"-[A-Za-z]*c[A-Za-z]*")  # -c, -lc, -ec, -xc …
+#: Options whose value is a plain word that is not a subcommand.
 _VALUE_OPTIONS = frozenset({
     "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path",
-    "-n", "--context", "--kubeconfig",
+    "-n", "--context", "--kubeconfig", "-m", "--message", "-F", "--file", "--grep", "-S",
+    "-G", "--author", "-e", "--regexp",
 })  # fmt: skip
+_SUBCOMMAND_REACH = 3  # how many plain words after the program may be the subcommand
 _POWERSHELL = frozenset({"powershell", "pwsh"})
 _SUFFIXES = (".exe", ".cmd", ".bat", ".com", ".ps1", ".sh")
 
 
+class _TooComplex(Exception):
+    """A segment nests more programs than the guard will follow."""
+
+
 @dataclass(frozen=True)
 class _Word:
-    text: str  # quotes removed
-    quoted: bool
+    text: str  # quotes removed; for a separator, its character
+    quoted: bool = False
+    sep: bool = False
 
 
-def _tokens(text: str) -> list[_Word | None]:
-    """Words and separators (None), in ONE pass: quoted text belongs to its word
+def _tokens(text: str) -> list[_Word]:
+    """Words and separators in ONE pass: quoted text belongs to its word
     (`de""lete` is `delete`, `C:\\"Program Files"\\x` is one word); `;|&(){}<>`,
     backticks, newlines and `$(` separate commands."""
-    out: list[_Word | None] = []
+    out: list[_Word] = []
     buf: list[str] = []
     quoted, quote, i = False, "", 0
     while i < len(text):
@@ -288,12 +321,12 @@ def _tokens(text: str) -> list[_Word | None]:
                 buf.append(c)
         elif c in "'\"":
             quote, quoted = c, True
-        elif c.isspace() or c in _SEPARATORS or (c == "$" and text[i + 1 : i + 2] == "("):
+        elif c in _SEPARATORS or c.isspace() or (c == "$" and text[i + 1 : i + 2] == "("):
             if buf or quoted:
                 out.append(_Word("".join(buf), quoted))
             buf, quoted = [], False
-            if not c.isspace():
-                out.append(None)
+            if not c.isspace() or c in _SEPARATORS:
+                out.append(_Word("(" if c == "$" else c, sep=True))
                 i += c == "$"
         else:
             buf.append(c)
@@ -304,18 +337,31 @@ def _tokens(text: str) -> list[_Word | None]:
 
 
 def _words(text: str) -> list[str]:
-    return [t.text for t in _tokens(text) if t is not None]
+    return [t.text for t in _tokens(text) if not t.sep]
 
 
 def _spellings(command: str) -> list[str]:
-    """The command as typed, and as it reads once structure (`then`, `!`,
-    redirects), quotes and quoted program paths no longer hide its programs."""
-    structural = _STRUCTURE.sub(";", command)
+    """The command as typed, and as it reads once structure (keywords,
+    redirects), cmd's doubled quotes, quotes and quoted program paths no longer
+    hide its programs."""
     out: dict[str, None] = {}
-    for base in (command, structural):
-        for text in (base, _with_paths_as_programs(base)):
-            light = re.sub(r"""['"^`]""", "", text)
-            out.update({text: None, light: None, light.replace("\\", ""): None})
+    for base in (command, command.replace('""', '"')):
+        for shaped in (base, _STRUCTURE.sub(";", base)):
+            for text in (shaped, _with_paths_as_programs(shaped)):
+                light = re.sub(r"""['"^`]""", "", text)
+                out.update({text: None, light: None, light.replace("\\", ""): None})
+    return list(out)
+
+
+def _rule_spellings(command: str) -> list[str]:
+    """The spellings the deny rules are asked of: quotes KEPT, so a quoted
+    argument (a commit message, a grep pattern) stays one word; the tokenizer
+    already joins quotes inside a word (`c''url` is `curl`)."""
+    out: dict[str, None] = {}
+    for base in (command, command.replace('""', '"')):
+        for shaped in (base, _STRUCTURE.sub(";", base)):
+            for text in (shaped, _with_paths_as_programs(shaped)):
+                out.update({text: None, text.replace("\\", ""): None})  # `su\do` is `sudo`
     return list(out)
 
 
@@ -324,8 +370,8 @@ def _with_paths_as_programs(text: str) -> str:
     Files\\Git\\usr\\bin\\rm.exe" -rf x` reads `rm.exe -rf x`."""
     parts = []
     for token in _tokens(text):
-        if token is None:
-            parts.append(";")
+        if token.sep:
+            parts.append(token.text if token.text not in "\n\r" else ";")
         elif token.quoted and ("/" in token.text or "\\" in token.text):
             parts.append(_basename(token.text))
         elif token.quoted:
@@ -339,24 +385,61 @@ def _commands(text: str, depth: int = 0) -> list[tuple[str, list[str]]]:
     """(program, the words after it in its segment) at every command position."""
     found: list[tuple[str, list[str]]] = []
     segment: list[_Word] = []
-    for token in [*_tokens(text), None]:
-        if token is not None:
+    after = ""  # the separator before this segment
+    for token in [*_tokens(text), _Word(";", sep=True)]:
+        if not token.sep:
             segment.append(token)
             continue
-        start = 0
-        while start < len(segment) and _ENV_ASSIGNMENT.match(segment[start].text):
-            start += 1  # `FOO=1 git push`: the program comes after the assignments
-        positions = {start} if start < len(segment) else set()
-        if positions and _program(segment[start].text) in _WRAPPERS:
-            positions |= set(range(start + 1, len(segment)))  # `sudo -u root rm …`
-        positions |= {j + 1 for j, w in enumerate(segment[:-1]) if w.text.lower() in _CARRIERS}
-        for j in sorted(positions):
+        start = 1 if after in "<>" and after else 0  # a redirect's target is not a command
+        while start < len(segment) and (_ENV_ASSIGNMENT.match(segment[start].text)
+                                        or segment[start].text in _TRANSPARENT):  # fmt: skip
+            start += 1
+        for j in _positions(segment, start):
             word = segment[j]
             found.append((_program(word.text), [w.text for w in segment[j + 1 :]]))
             if word.quoted and depth < 3 and any(ch.isspace() for ch in word.text):
                 found += _commands(word.text, depth + 1)  # `bash -c 'kubectl delete …'`
-        segment = []
+        segment, after = [], token.text
     return found
+
+
+def _positions(segment: list[_Word], start: int) -> list[int]:
+    """The command positions of one segment, from its program onward."""
+    if start >= len(segment):
+        return []
+    positions, queue = {start}, [start]
+    while queue:
+        j = queue.pop()
+        program = _program(segment[j].text)
+        later = []
+        if program in _WRAPPERS:  # `sudo -u root X`, `ssh host X`, `docker run --rm img X`
+            plain = [k for k in range(j + 1, len(segment))
+                     if not segment[k].text.startswith("-")
+                     and not _ENV_ASSIGNMENT.match(segment[k].text)]  # fmt: skip
+            later = plain[:_WRAPPER_REACH]
+        if (k := _carried(segment, j, program)) is not None:
+            later.append(k)
+        for k in later:
+            if k not in positions:
+                positions.add(k)
+                queue.append(k)
+        if len(positions) > _MAX_POSITIONS:
+            raise _TooComplex
+    return sorted(positions)
+
+
+def _carried(segment: list[_Word], j: int, program: str) -> int | None:
+    """The position of the command an interpreter at `j` is told to run."""
+    for k in range(j + 1, len(segment) - 1):
+        word = segment[k].text
+        lowered = word.lower()
+        shell = program in _SHELLS and _SHELL_RUN.fullmatch(word)
+        cmd = program == "cmd" and lowered in ("/c", "/k", "/r")
+        powershell = program in _POWERSHELL and len(lowered) >= 2 and "-command".startswith(lowered)
+        find = program == "find" and lowered in ("-exec", "-execdir", "-ok", "-okdir")
+        if shell or cmd or powershell or find:
+            return k + 1
+    return None
 
 
 def _rule_hits(rule: str, commands: list[tuple[str, list[str]]]) -> bool:
@@ -370,26 +453,41 @@ def _rule_hits(rule: str, commands: list[tuple[str, list[str]]]) -> bool:
         if not _same_program(name, wanted):
             continue
         lowered = [a.lower() for a in args]
-        if plain and (_subcommand(args) or "").lower() not in plain[0]:
+        if plain and not set(plain[0]) & {s.lower() for s in _subcommands(args)}:
             continue
         if not all(any(alt in lowered for alt in alts) for alts in plain[1:]):
             continue
         prefix = wanted in _POWERSHELL  # PowerShell takes any prefix of a parameter name
-        if all(any(_option_hit(alt, lowered, prefix) for alt in alts) for alts in options):
+        # git's global options (`git -c …`, `--config-env`) stand before the subcommand;
+        # after it, `-c` is another command's own flag (`git grep -c`).
+        where = _before_subcommand(args) if wanted == "git" and not plain else lowered
+        if all(any(_option_hit(alt, where, prefix) for alt in alts) for alts in options):
             return True
     return False
 
 
-def _subcommand(args: list[str]) -> str | None:
-    i = 0
-    while i < len(args):
+def _before_subcommand(args: list[str]) -> list[str]:
+    """The options before a program's first plain word, case kept: for git, `-C`
+    (change directory) is not `-c` (set config)."""
+    head, i = [], 0
+    while i < len(args) and args[i].startswith("-"):
+        head.append(args[i])
+        i += 2 if args[i] in _VALUE_OPTIONS else 1
+    return head
+
+
+def _subcommands(args: list[str]) -> list[str]:
+    """The first plain words after a program - one of them is its subcommand
+    (`kubectl --as admin delete`: admin, delete)."""
+    found, i = [], 0
+    while i < len(args) and len(found) < _SUBCOMMAND_REACH:
         if args[i] in _VALUE_OPTIONS:
             i += 2
-        elif args[i].startswith("-"):
-            i += 1
-        else:
-            return args[i]
-    return None
+            continue
+        if not args[i].startswith("-"):
+            found.append(args[i])
+        i += 1
+    return found
 
 
 def _option_hit(alt: str, words: list[str], prefix: bool) -> bool:
