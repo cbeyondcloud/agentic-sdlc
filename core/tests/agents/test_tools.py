@@ -4,9 +4,12 @@ The tools run against a REAL run tree (a git worktree made by Zyroflo through th
 commons adapter) with the REAL SP2 guard - not paths a test assembled by hand.
 """
 
+import asyncio
 import os
 import subprocess
 import sys
+import time
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -65,7 +68,7 @@ class FakeSandbox:
     def __init__(self) -> None:
         self.ran: list[str] = []
 
-    def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
+    async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
         self.ran.append(command)
         return ShellResult(exit_code=0, stdout=f"ran in {cwd.name}", stderr="", timed_out=False)
 
@@ -287,14 +290,56 @@ def test_the_shell_needs_an_isolated_sandbox_unless_allowed(tree, resolved):
     )
 
 
-def test_the_local_sandbox_runs_and_times_out(tree):
-    sandbox = LocalProcessSandbox()
-    py = f'"{sys.executable}"'
+def script(folder: Path, name: str, code: str) -> str:
+    """A shell command running a small Python script (no nested quoting)."""
+    path = folder / name
+    path.write_text(code, encoding="utf-8")
+    return f'"{sys.executable}" "{path}"'
 
-    done = sandbox.run(f'{py} -c "print(6 * 7)"', cwd=tree[1], timeout_s=30)
+
+def test_the_local_sandbox_runs_and_times_out(tree, tmp_path):
+    sandbox = LocalProcessSandbox()
+
+    done = asyncio.run(sandbox.run(script(tmp_path, "a.py", "print(6 * 7)"), tree[1], 30))
     assert (done.exit_code, done.stdout.strip(), done.timed_out) == (0, "42", False)
-    slow = sandbox.run(f'{py} -c "import time; time.sleep(30)"', cwd=tree[1], timeout_s=1)
+    sleeper = script(tmp_path, "b.py", "import time\ntime.sleep(30)\n")
+    slow = asyncio.run(sandbox.run(sleeper, tree[1], 1))
     assert slow.timed_out and slow.exit_code is None
+
+
+def test_the_local_sandbox_caps_output_and_hides_secrets(tree, tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTIC_TEST_API_TOKEN", "do-not-leak")
+    sandbox = LocalProcessSandbox()
+
+    big = asyncio.run(sandbox.run(script(tmp_path, "big.py", "print('x' * 200000)"), tree[1], 30))
+    assert len(big.stdout) < 60_000 and "more" in big.stdout
+    code = "import os\nprint(os.environ.get('AGENTIC_TEST_API_TOKEN', 'absent'))\n"
+    env = asyncio.run(sandbox.run(script(tmp_path, "env.py", code), tree[1], 30))
+    assert env.stdout.strip() == "absent"
+
+
+def test_a_stopped_run_kills_its_shell_command(tree, resolved, tmp_path):  # review I2
+    from agentic.agents.runner import AgentTask, PydanticAIRunner
+    from agentic.transport import BudgetLedger
+
+    late = tree[1] / "late.txt"
+    code = f"import time\ntime.sleep(4)\nopen(r'{late}', 'w').write('x')\n"
+    command = script(tmp_path, "late.py", code)
+    ctx = context(tree, resolved, sandbox=LocalProcessSandbox(), allow_unisolated=True)
+    tools = build_tools(agent_with(resolved, ["run_shell"]), ctx)
+
+    def model(messages, info):
+        return ModelResponse(parts=[ToolCallPart("run_shell", {"command": command})])
+
+    step = BudgetLedger(Decimal("5")).run.open("build", "step", Decimal("1"))
+    runner = PydanticAIRunner(
+        resolved, FunctionModel(model), budget=step, state_dir=tmp_path, tools=tools, time_limit_s=1
+    )
+    outcome = asyncio.run(runner.run(AgentTask("x", {}, "go")))
+
+    assert outcome.stopped == "time"
+    time.sleep(5)
+    assert not late.exists()  # the command died with the run instead of running on
 
 
 # ── codeintel and skills ──────────────────────────────────────────────────────
@@ -332,3 +377,84 @@ def test_testmodel_sees_every_offered_tool(tree, resolved):
         "impact",
         "tests_for",
     }
+
+
+# ── review fixes: tools never crash the run (I1), slow patterns (I2), edits (M5), names (M6)
+
+
+@pytest.mark.parametrize(
+    ("tool", "args"),
+    [
+        ("write_file", {"path": "src", "text": "x"}),  # onto a directory
+        ("search", {"pattern": "x", "glob": "/**"}),  # an absolute glob
+        ("search", {"pattern": "x", "glob": ""}),
+        ("search", {"pattern": "x", "glob": "../**"}),
+        ("search", {"pattern": "(unclosed", "glob": "**/*"}),
+        ("read_file", {"path": "src"}),  # a directory, not a file
+    ],
+)
+def test_a_bad_argument_is_refused_not_a_crash(tree, resolved, tool, args):
+    tools = build_tools(
+        agent_with(resolved, ["read_files", "search", "edit_files"]), context(tree, resolved)
+    )
+
+    assert call(tools, tool, **args).startswith("REFUSED")
+
+
+def test_text_that_cannot_be_encoded_is_refused(tree, resolved):
+    # a provider SDK can hand over a lone surrogate parsed from JSON; called directly
+    # because Pydantic AI's own message serialiser cannot carry one
+    tools = build_tools(agent_with(resolved, ["edit_files"]), context(tree, resolved))
+    write = next(t for t in tools if t.name == "write_file")
+
+    assert write.function(path="s.txt", text="\ud800").startswith("REFUSED")
+    assert not (tree[1] / "s.txt").exists()
+
+
+def test_a_catastrophic_pattern_is_refused_quickly(tree, resolved):
+    (tree[1] / "src" / "slow.txt").write_text("a" * 60 + "!\n", encoding="utf-8")
+    tools = build_tools(agent_with(resolved, ["search"]), context(tree, resolved))
+
+    started = time.perf_counter()
+    seen = call(tools, "search", pattern="(a|aa)+$")
+    assert time.perf_counter() - started < 5
+    assert seen.startswith("REFUSED") and "slow" in seen
+
+
+def test_a_very_long_pattern_is_refused(tree, resolved):
+    tools = build_tools(agent_with(resolved, ["search"]), context(tree, resolved))
+
+    assert call(tools, "search", pattern="a" * 500).startswith("REFUSED")
+
+
+def test_edit_keeps_windows_line_endings(tree, resolved):
+    target = tree[1] / "src" / "crlf.py"
+    target.write_bytes(b"def a():\r\n    return 1\r\n")
+    tools = build_tools(agent_with(resolved, ["edit_files"]), context(tree, resolved))
+
+    call(
+        tools,
+        "edit_file",
+        path="src/crlf.py",
+        old="def a():\n    return 1",
+        new="def a():\n    return 2",
+    )
+    assert target.read_bytes() == b"def a():\r\n    return 2\r\n"
+
+
+def test_edit_refuses_a_file_that_is_not_utf8(tree, resolved):
+    target = tree[1] / "src" / "latin.txt"
+    target.write_bytes("caf\xe9".encode("latin-1"))
+    tools = build_tools(agent_with(resolved, ["edit_files"]), context(tree, resolved))
+
+    assert call(tools, "edit_file", path="src/latin.txt", old="caf", new="cof").startswith(
+        "REFUSED"
+    )
+    assert target.read_bytes() == "caf\xe9".encode("latin-1")
+
+
+@pytest.mark.parametrize("name", ["CON", "nul", "aux.txt", "src/COM1.py"])
+def test_windows_device_names_are_refused(tree, resolved, name):
+    tools = build_tools(agent_with(resolved, ["edit_files"]), context(tree, resolved))
+
+    assert call(tools, "write_file", path=name, text="x").startswith("REFUSED")

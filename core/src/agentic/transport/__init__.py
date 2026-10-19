@@ -8,6 +8,7 @@ from agentic.transport.client import (
     IdentityHeaderError,
     make_async_client,
     make_client,
+    make_network_transport,
 )
 from agentic.transport.cost import (
     CallCost,
@@ -39,6 +40,7 @@ __all__ = [
     "IdentityError",
     "IdentityHeaderError",
     "make_async_client",
+    "make_network_transport",
     "make_client",
     "NetworkError",
     "NetworkSettings",

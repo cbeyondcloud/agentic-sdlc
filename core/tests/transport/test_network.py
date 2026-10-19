@@ -116,3 +116,41 @@ def test_an_environment_ca_file_that_is_missing_is_a_clear_error(tmp_path: Path,
 
     with pytest.raises(NetworkError, match="REQUESTS_CA_BUNDLE"):
         make_client("https://tl.example", IDENTITY)
+
+
+# ── SP4 review I6: the metering transport sits on a network transport ────────
+
+
+class Passing(httpx2.AsyncBaseTransport):
+    """Wraps a transport the way the metering transport does."""
+
+    def __init__(self, inner: httpx2.AsyncBaseTransport) -> None:
+        self.inner = inner
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        return await self.inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
+
+
+def test_a_wrapping_transport_keeps_the_proxy_and_ca(
+    https_server, ca_bundle, connect_proxy, monkeypatch
+):
+    import asyncio
+
+    from agentic.transport import make_async_client, make_network_transport
+
+    proxy, seen = connect_proxy
+    monkeypatch.setenv("HTTPS_PROXY", proxy)
+    settings = NetworkSettings(ca_bundle=ca_bundle)
+
+    async def call() -> str:
+        wrapped = Passing(make_network_transport(settings))
+        async with make_async_client(
+            https_server, IDENTITY, network=settings, _transport=wrapped
+        ) as client:
+            return (await client.get("/")).text
+
+    assert asyncio.run(call()) == "ok"
+    assert seen == [https_server.removeprefix("https://")]

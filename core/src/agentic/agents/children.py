@@ -10,13 +10,23 @@ can only ever narrow:
   * limits   - the lower of what is asked and the parent's `per_child` caps;
   * budget   - a slice of the parent's ledger, closed when the child ends.
 
+The count, concurrency and depth caps are the ROOT agent's and hold for the
+whole tree: every spawner in it shares one counter and one set of slots, and the
+runner factory is handed the child's own spawner (never a bare depth), so a
+factory cannot reset the limits. Only the root waits for a free slot; a nested
+spawn that finds none is refused - waiting there could deadlock, as its parent
+holds a slot until the child ends.
+
 A spawn that breaks a limit is not an exception: it returns `stopped:
 "refused"` with the reason, and the parent decides what to do. A child that
 hits its own limit returns its partial output marked `stopped:` (budget, turns,
-time, stuck). A step or run limit hit inside a child reaches the engine.
+time, stuck). A child cannot wait for a human: one that pauses for approval
+returns `stopped: "paused"`. A step or run limit hit inside a child reaches the
+engine.
 """
 
 import asyncio
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -29,7 +39,9 @@ from agentic.definitions import Limits
 from agentic.policy import ResolvedAgent
 from agentic.transport import BudgetError, BudgetSlice, LimitHit
 
-RunnerFactory = Callable[[ResolvedAgent, BudgetSlice, int], AgentRunner]
+# (child, its budget slice, its own spawner - for its spawn_agent tool) -> runner
+RunnerFactory = Callable[[ResolvedAgent, BudgetSlice, "ChildSpawner"], AgentRunner]
+CHILD_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
 
 
 @dataclass(frozen=True)
@@ -46,9 +58,21 @@ class ChildSpec:
 @dataclass(frozen=True)
 class ChildResult:
     output: str | None
-    stopped: Literal["budget", "turns", "time", "stuck", "refused"] | None
+    stopped: Literal["budget", "turns", "time", "stuck", "paused", "refused"] | None
     cost_usd: Decimal
     reason: str = ""
+
+
+class _Tree:
+    """What every spawner in one agent tree shares: the root's caps and counters."""
+
+    def __init__(self, root: ResolvedAgent) -> None:
+        caps = root.children
+        self.max_total, self.max_depth = caps.max_total or 0, caps.max_depth or 0
+        self.max_concurrent = caps.max_concurrent or 1
+        self.spawned = 0
+        self.lock = asyncio.Lock()
+        self.slots = asyncio.Semaphore(self.max_concurrent)
 
 
 class ChildSpawner:
@@ -57,18 +81,28 @@ class ChildSpawner:
         parent: ResolvedAgent,
         parent_budget: BudgetSlice,
         runner_factory: RunnerFactory,
-        depth: int = 0,
+        *,
+        _tree: _Tree | None = None,
+        _depth: int = 0,
     ) -> None:
-        caps = parent.children
         self.parent, self.parent_budget, self.runner_factory = parent, parent_budget, runner_factory
-        self.depth = depth
-        self.max_total, self.max_depth = caps.max_total or 0, caps.max_depth or 0
-        self.per_child = caps.per_child
-        self._spawned = 0
-        self._lock = asyncio.Lock()
-        self._slots = asyncio.Semaphore(caps.max_concurrent or 1)
+        self.tree = _tree or _Tree(parent)
+        self.depth = _depth
+        self.max_total, self.max_depth = self.tree.max_total, self.tree.max_depth
+        self.per_child = parent.children.per_child
+
+    def for_child(self, child: ResolvedAgent, budget: BudgetSlice) -> "ChildSpawner":
+        """The spawner a child uses for its own children: same tree, one level deeper."""
+        return ChildSpawner(
+            child, budget, self.runner_factory, _tree=self.tree, _depth=self.depth + 1
+        )
 
     async def spawn(self, spec: ChildSpec) -> ChildResult:
+        if not CHILD_NAME.fullmatch(spec.name):
+            return _refused(
+                "a child's name is 1-40 lowercase letters, digits and dashes, "
+                f"starting with a letter or digit: {spec.name[:60]!r}"
+            )
         if self.depth + 1 > self.max_depth:
             return _refused(
                 f"max_depth {self.max_depth} reached (this agent is at depth {self.depth})"
@@ -76,31 +110,56 @@ class ChildSpawner:
         tools = list(spec.tools) if spec.tools is not None else list(self.parent.tools)
         if wider := sorted(set(tools) - set(self.parent.tools)):
             return _refused(f"a child cannot have tools its parent lacks: {wider}")
-        async with self._lock:
-            if self._spawned >= self.max_total:
-                return _refused(f"max_total {self.max_total} children already spawned")
-            self._spawned += 1
+        tree = self.tree
+        async with tree.lock:
+            if tree.spawned >= tree.max_total:
+                return _refused(f"max_total {tree.max_total} agents already spawned in this tree")
+            tree.spawned += 1
+        if self.depth > 0 and tree.slots.locked():  # nested: never wait (see above)
+            await self._give_back()
+            return _refused(f"max_concurrent {tree.max_concurrent} agents already running")
+        async with tree.slots:
+            return await self._run(spec, tools)
+
+    async def _run(self, spec: ChildSpec, tools: list[str]) -> ChildResult:
         limits = _narrow(spec.limits, self.per_child)
         try:
             budget = self.parent_budget.open(spec.name, "child", _usd(limits.budget_usd))
         except LimitHit:
-            async with self._lock:
-                self._spawned -= 1  # nothing ran: the spawn does not count
+            await self._give_back()  # nothing ran: the spawn does not count
             return _refused("the parent has no budget left for a child")
-        child = self._child(spec, tools, limits)
-        async with self._slots:
-            runner = self.runner_factory(child, budget, self.depth + 1)
+        started = False
+        try:
+            child = self._child(spec, tools, limits)
+            runner = self.runner_factory(child, budget, self.for_child(child, budget))
+            started = True
+            outcome = await runner.run(
+                AgentTask(instructions=spec.instructions, inputs={}, prompt=spec.prompt)
+            )
+        finally:
+            cost = budget.total_spent()
             try:
-                outcome = await runner.run(
-                    AgentTask(instructions=spec.instructions, inputs={}, prompt=spec.prompt)
-                )
-            finally:
-                cost = budget.total_spent()
-                try:
-                    budget.close()
-                except BudgetError:
-                    pass  # calls still in flight after a failure: the slice stays open
-        return ChildResult(output=outcome.output, stopped=outcome.stopped, cost_usd=cost)
+                budget.close()
+            except BudgetError:
+                pass  # calls still in flight after a failure: the slice stays open
+            if not started:
+                await self._give_back()  # the child was never built: the spawn does not count
+        if outcome.status == "paused":
+            return ChildResult(
+                output=outcome.output,
+                stopped="paused",
+                cost_usd=cost,
+                reason=f"the child asked for approval of {len(outcome.pending)} tool call(s); "
+                "a child cannot wait for a human",
+            )
+        reason = outcome.detail or ""
+        return ChildResult(
+            output=outcome.output, stopped=outcome.stopped, cost_usd=cost, reason=reason
+        )
+
+    async def _give_back(self) -> None:
+        async with self.tree.lock:
+            self.tree.spawned -= 1
 
     def tools(self) -> list[Tool]:
         """`spawn_agent`, if the parent may spawn at all."""

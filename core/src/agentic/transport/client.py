@@ -98,6 +98,30 @@ def make_async_client(
                              follow_redirects=False)  # fmt: skip
 
 
+class _ClientTransport(httpx2.AsyncBaseTransport):
+    """Sends through a plain client, so its proxy (HTTPS_PROXY / NO_PROXY) and CA
+    settings apply. A client given `transport=` ignores both, which is how a
+    wrapping transport (metering) would otherwise lose them."""
+
+    def __init__(self, client: httpx2.AsyncClient) -> None:
+        self.client = client
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        return await self.client.send(request, stream=True, follow_redirects=False)
+
+    async def aclose(self) -> None:
+        await self.client.aclose()
+
+
+def make_network_transport(network: NetworkSettings | None = None) -> httpx2.AsyncBaseTransport:
+    """The innermost transport for a wrapping transport: the corporate CA and the
+    proxy environment variables, exactly as `make_async_client` applies them."""
+    settings = network or NetworkSettings()
+    return _ClientTransport(
+        httpx2.AsyncClient(verify=ssl_context(settings), trust_env=settings.trust_env)
+    )
+
+
 def _allowed(allow: Iterable[str]) -> frozenset[str]:
     if isinstance(allow, str):
         raise ValueError("allow is a set of header names, not one string")

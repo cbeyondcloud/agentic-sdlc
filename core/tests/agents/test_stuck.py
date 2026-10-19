@@ -131,6 +131,15 @@ def test_events_come_from_pydantic_ai_messages():
     assert events[4].error and not events[2].error
 
 
+def test_a_refused_tool_call_counts_as_an_error():  # review I7
+    messages = [
+        ModelResponse(parts=[ToolCallPart("write_file", {"path": ".env"})]),
+        ModelRequest(parts=[ToolReturnPart("write_file", "REFUSED: protected", tool_call_id="1")]),
+    ]
+
+    assert events_from_messages(messages)[1].error
+
+
 def test_a_runner_with_the_detector_stops_a_looping_agent(resolved, tmp_path):
     def look(path: str) -> str:
         """Look at a file."""

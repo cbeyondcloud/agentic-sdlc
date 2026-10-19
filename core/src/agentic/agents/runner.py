@@ -16,11 +16,19 @@ Limits (spec §8.4), each ending the run with a reason:
              budget, the parent decides); a step or run limit is re-raised for
              the engine, which pauses the run for a human
   * stuck  - the stuck check after each model response           -> stopped: stuck
+             (on by default: OpenHands' detector; `detail` names the pattern)
+
+A pause saves the run's state to `state-<agent>.json` in `state_dir`. The state
+is bound to its run and policy version and used once; its digest is in the
+outcome so the engine can ledger it, and `resume` needs that ledgered digest -
+a state rewritten with a fresh fingerprint is refused (review I3).
 """
 
 import asyncio
 import hashlib
 import json
+import os
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,13 +43,15 @@ from pydantic_ai.usage import RunUsage, UsageLimits
 
 from agentic.agents.metering import CostLog
 from agentic.agents.models import model_settings
+from agentic.agents.stuck import StuckDetector
+from agentic.agents.stuck import stuck_check as detector_check
 from agentic.policy import ResolvedAgent
 from agentic.transport import BudgetSlice, LimitHit
 
 Stopped = Literal["budget", "turns", "time", "stuck"]
 StuckCheck = Callable[[list[ModelMessage]], str | None]
 _USAGE = TypeAdapter(RunUsage)
-STATE_FILE = "state.json"
+STUCK_WINDOW = 40  # messages the stuck check looks at (it scans at most 20 events)
 
 
 class ResumeError(Exception):
@@ -64,13 +74,17 @@ class AgentOutcome:
     costs: CostLog
     pending: list[str] = field(default_factory=list)  # tool calls awaiting a human
     state_path: Path | None = None  # where a paused run was saved
+    state_digest: str | None = None  # the saved state's digest: the engine ledgers it
+    detail: str | None = None  # why it stopped, in words (the stuck pattern, the limit)
 
 
 @runtime_checkable
 class AgentRunner(Protocol):
     async def run(self, task: AgentTask) -> AgentOutcome: ...
 
-    async def resume(self, state_path: Path, decisions: dict[str, bool | str]) -> AgentOutcome: ...
+    async def resume(
+        self, state_path: Path, decisions: dict[str, bool | str], expected_digest: str
+    ) -> AgentOutcome: ...
 
 
 class PydanticAIRunner:
@@ -84,11 +98,15 @@ class PydanticAIRunner:
         tools: Sequence[Tool] = (),
         costs: CostLog | None = None,
         is_child: bool = False,
-        stuck_check: StuckCheck | None = None,
+        stuck_check: StuckCheck | None = None,  # None: OpenHands' detector, default thresholds
         time_limit_s: float | None = None,
+        run_id: str | None = None,
+        policy_version: str | None = None,
     ) -> None:
         self.agent, self.model, self.budget, self.state_dir = agent, model, budget, state_dir
-        self.tools, self.is_child, self.stuck_check = list(tools), is_child, stuck_check
+        self.tools, self.is_child = list(tools), is_child
+        self.stuck_check = stuck_check or detector_check(StuckDetector())
+        self.run_id, self.policy_version = run_id, policy_version
         self.costs = costs if costs is not None else CostLog()
         minutes = agent.limits.max_minutes
         self.time_limit_s = (
@@ -99,18 +117,43 @@ class PydanticAIRunner:
         instructions = _instructions(task)
         return await self._drive(self._pydantic_agent(instructions), task.prompt, instructions)
 
-    async def resume(self, state_path: Path, decisions: dict[str, bool | str]) -> AgentOutcome:
+    async def resume(
+        self, state_path: Path, decisions: dict[str, bool | str], expected_digest: str
+    ) -> AgentOutcome:
         """Continue a paused run (perhaps in another process). Everything is checked
-        before any model call: the state's fingerprint, that it belongs to this agent
-        and version, and that there is exactly one decision - True to approve, or a
-        reason to deny - for each pending call."""
+        before any model call: the state is in this runner's state folder, matches the
+        digest the engine ledgered at the pause, belongs to this run, policy version,
+        agent and version, still has every pending tool, and there is exactly one
+        decision - True to approve, or a reason to deny - for each pending call. The
+        state is then used up, so an approval can never run twice."""
+        state_path = Path(state_path)
+        try:
+            state_path.resolve().relative_to(self.state_dir.resolve())
+        except ValueError:
+            raise ResumeError(
+                f"paused run state is not in this run's state folder: {state_path}"
+            ) from None
         state = _load_state(state_path)
+        if state["fingerprint"] != expected_digest:
+            raise ResumeError(
+                f"paused run state does not match the digest in the ledger - it was replaced "
+                f"after the pause: {state_path}"
+            )
+        bound = (state["run_id"], state["policy_version"])
+        if bound != (self.run_id, self.policy_version):
+            raise ResumeError(
+                f"this paused run belongs to run {bound[0]} (policy {bound[1]}), "
+                f"not run {self.run_id} (policy {self.policy_version})"
+            )
         name, version = self.agent.definition.name, self.agent.definition.version
         if (state["agent"], state["agent_version"]) != (name, version):
             raise ResumeError(
                 f"this paused run belongs to agent {state['agent']} version "
                 f"{state['agent_version']}, not {name} version {version}"
             )
+        have = {tool.name for tool in self.tools}
+        if missing := sorted(set(state["pending_tools"].values()) - have):
+            raise ResumeError(f"the paused calls need tools this agent no longer has: {missing}")
         pending = set(state["pending"])
         if set(decisions) != pending:
             raise ResumeError(f"decide every pending call and only those: {sorted(pending)}")
@@ -126,6 +169,7 @@ class PydanticAIRunner:
                 )
         history = ModelMessagesTypeAdapter.validate_python(state["messages"])
         instructions = state["instructions"]
+        _use_up(state_path)
         return await self._drive(
             self._pydantic_agent(instructions),
             None,
@@ -140,7 +184,8 @@ class PydanticAIRunner:
     async def _drive(
         self, agent: Agent, prompt: str | None, instructions: str, **run_kwargs
     ) -> AgentOutcome:
-        seen: dict = {"text": None, "run": None}
+        seen: dict = {"text": None, "run": None, "stuck": None}
+        earlier_hit = self.costs.limit_hit  # a hit from an earlier run was already acted on
 
         async def go():
             async with agent.iter(
@@ -156,7 +201,9 @@ class PydanticAIRunner:
                             p.content for p in node.model_response.parts if isinstance(p, TextPart)
                         )
                         seen["text"] = text or seen["text"]
-                        if self.stuck_check and self.stuck_check(agent_run.all_messages()):
+                        recent = agent_run.all_messages()[-STUCK_WINDOW:]
+                        if stuck := self.stuck_check(recent):
+                            seen["stuck"] = stuck
                             return None
                 return agent_run.result
 
@@ -174,10 +221,10 @@ class PydanticAIRunner:
             if hit is None:
                 raise
             return self._budget(hit, seen)
-        if self.costs.limit_hit is not None:
+        if self.costs.limit_hit is not None and self.costs.limit_hit is not earlier_hit:
             return self._budget(self.costs.limit_hit, seen)
         if result is None:
-            return self._stopped("stuck", seen)
+            return self._stopped("stuck", seen, detail=seen["stuck"])
         if isinstance(result.output, DeferredToolRequests):
             return self._pause(result, instructions, seen)
         return AgentOutcome(
@@ -198,22 +245,28 @@ class PydanticAIRunner:
 
     def _pause(self, result, instructions: str, seen: dict) -> AgentOutcome:
         """Save what a later process needs to continue; the history is sensitive and
-        stays in the git-ignored run folder (the engine ledgers only its digest)."""
-        pending = [call.tool_call_id for call in result.output.approvals]
+        stays in the git-ignored run folder, readable by its owner only (the engine
+        ledgers only its digest)."""
+        calls = result.output.approvals
+        pending = [call.tool_call_id for call in calls]
         payload = {
+            "run_id": self.run_id,
+            "policy_version": self.policy_version,
             "agent": self.agent.definition.name,
             "agent_version": self.agent.definition.version,
             "instructions": instructions,
             "messages": json.loads(ModelMessagesTypeAdapter.dump_json(result.all_messages())),
             "pending": pending,
+            "pending_tools": {call.tool_call_id: call.tool_name for call in calls},
             "usage": _USAGE.dump_python(_usage(seen), mode="json"),
         }
+        digest = _fingerprint(payload)
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        path = self.state_dir / STATE_FILE
-        text = json.dumps(
-            {**payload, "fingerprint": _fingerprint(payload)}, indent=2, ensure_ascii=False
-        )
+        path = self.state_dir / f"state-{self.agent.definition.name}.json"
+        text = json.dumps({**payload, "fingerprint": digest}, indent=2, ensure_ascii=False)
         path.write_text(text + "\n", encoding="utf-8", newline="\n")
+        if os.name != "nt":  # Windows has no owner-only mode bits; the run folder's ACL applies
+            path.chmod(0o600)
         return AgentOutcome(
             status="paused",
             output=seen["text"],
@@ -222,24 +275,26 @@ class PydanticAIRunner:
             costs=self.costs,
             pending=pending,
             state_path=path,
+            state_digest=digest,
         )
 
     def _usage_limits(self) -> UsageLimits | None:
         turns = self.agent.limits.max_turns
         return UsageLimits(request_limit=turns) if turns else None
 
-    def _stopped(self, reason: Stopped, seen: dict) -> AgentOutcome:
+    def _stopped(self, reason: Stopped, seen: dict, detail: str | None = None) -> AgentOutcome:
         return AgentOutcome(
             status="stopped",
             output=seen["text"],
             stopped=reason,
             usage=_usage(seen),
             costs=self.costs,
+            detail=detail,
         )
 
     def _budget(self, hit: LimitHit, seen: dict) -> AgentOutcome:
         if self.is_child and hit.scope == "child":
-            return self._stopped("budget", seen)
+            return self._stopped("budget", seen, detail=str(hit))
         raise hit  # a step or run limit: the engine pauses the run for a human
 
 
@@ -260,7 +315,16 @@ def _load_state(path: Path) -> dict:
         raise ResumeError(
             f"paused run state does not match its fingerprint - it was edited: {path}"
         )
-    return state
+    return {**state, "fingerprint": claimed}
+
+
+def _use_up(path: Path) -> None:
+    """Rename a resumed state so it cannot be resumed again (kept for the record)."""
+    used = path.with_name(f"{path.stem}.used-{time.time_ns()}{path.suffix}")
+    try:
+        path.rename(used)
+    except OSError as error:
+        raise ResumeError(f"paused run state could not be used up: {path} ({error})") from error
 
 
 def _instructions(task: AgentTask) -> str:

@@ -18,6 +18,7 @@ from agentic.agents.tools.context import (
     SkillCatalog,
     ToolConfigError,
     ToolContext,
+    guarded,
     refused,
 )
 from agentic.agents.tools.files import edit_tools, read_tools, search_tools
@@ -30,14 +31,17 @@ def _codeintel_tools(ctx: ToolContext) -> list[Tool]:
         raise ToolConfigError("codeintel is allowed but no code intelligence adapter was given")
     intel = ctx.codeintel
 
+    @guarded
     def dependents(target: str) -> str:
         """Files and symbols that depend on a file or symbol."""
         return "\n".join(intel.dependents(target)) or "(none)"
 
+    @guarded
     def impact(diff: str) -> str:
         """What a unified diff may affect, tests included."""
         return "\n".join(intel.impact(diff)) or "(none)"
 
+    @guarded
     def tests_for(path: str) -> str:
         """The tests that cover a file."""
         return "\n".join(intel.tests_for(path)) or "(none)"

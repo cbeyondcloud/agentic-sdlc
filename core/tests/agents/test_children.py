@@ -19,26 +19,42 @@ D = Decimal
 
 
 class FakeRunner:
-    """Records what the child was given; finishes after `delay`, spending `spend`."""
+    """Records what the child was given; finishes after `delay`, spending `spend`.
+    With `nested`, it first spawns a grandchild through its own spawner."""
 
     active = 0
     peak = 0
 
-    def __init__(self, agent, budget, depth, *, delay=0.0, spend="0.01", stopped=None):
-        self.agent, self.budget, self.depth = agent, budget, depth
+    def __init__(
+        self,
+        agent,
+        budget,
+        spawner,
+        *,
+        delay=0.0,
+        spend="0.01",
+        stopped=None,
+        status=None,
+        nested=None,
+    ):
+        self.agent, self.budget, self.spawner = agent, budget, spawner
+        self.depth = spawner.depth
         self.delay, self.spend, self.stopped = delay, D(spend), stopped
+        self.status, self.nested, self.grandchild = status, nested, None
 
     async def run(self, task: AgentTask) -> AgentOutcome:
         FakeRunner.active += 1
         FakeRunner.peak = max(FakeRunner.peak, FakeRunner.active)
         try:
+            if self.nested:
+                self.grandchild = await self.spawner.spawn(spec(self.nested))
             await asyncio.sleep(self.delay)
             reservation = self.budget.reserve(self.spend)
             reservation._slice._settle(self.spend, self.spend, False)  # charge it
             reservation._done = True
         finally:
             FakeRunner.active -= 1
-        status = "stopped" if self.stopped else "completed"
+        status = self.status or ("stopped" if self.stopped else "completed")
         return AgentOutcome(
             status=status,
             output=f"{self.agent.definition.name} did it",
@@ -47,7 +63,7 @@ class FakeRunner:
             costs=CostLog(),
         )
 
-    async def resume(self, state_path, decisions):  # pragma: no cover - not used here
+    async def resume(self, state_path, decisions, expected_digest):  # pragma: no cover
         raise NotImplementedError
 
 
@@ -70,16 +86,16 @@ def parent(resolved, **child_limits):
     )
 
 
-def spawner(agent, *, budget="5", depth=0, **runner_kwargs) -> tuple[ChildSpawner, list]:
+def spawner(agent, *, budget="5", **runner_kwargs) -> tuple[ChildSpawner, list]:
     made: list[FakeRunner] = []
     step = BudgetLedger(D("10")).run.open("review", "step", D(budget))
 
-    def factory(child, slice_, child_depth):
-        runner = FakeRunner(child, slice_, child_depth, **runner_kwargs)
+    def factory(child, slice_, child_spawner):
+        runner = FakeRunner(child, slice_, child_spawner, **runner_kwargs)
         made.append(runner)
         return runner
 
-    return ChildSpawner(agent, step, factory, depth=depth), made
+    return ChildSpawner(agent, step, factory), made
 
 
 def spec(name="security-review", **changes) -> ChildSpec:
@@ -136,7 +152,7 @@ def test_max_concurrent_is_enforced(resolved):
 
 
 def test_max_depth_is_enforced(resolved):
-    s, made = spawner(parent(resolved, max_depth=1), depth=1)  # already a child
+    s, made = spawner(parent(resolved, max_depth=0))  # no level of children allowed
     result = spawn(s)
 
     assert result.stopped == "refused" and "max_depth" in result.reason and made == []
@@ -212,7 +228,7 @@ def test_a_step_limit_hit_inside_a_child_reaches_the_engine(resolved):
         result = s.spawn(spec())
         return await result
 
-    s.runner_factory = lambda child, slice_, depth: type("R", (), {"run": staticmethod(boom)})()
+    s.runner_factory = lambda child, slice_, spawner: type("R", (), {"run": staticmethod(boom)})()
     with pytest.raises(LimitHit):
         asyncio.run(run())
 
@@ -251,3 +267,62 @@ def test_the_spawn_agent_tool_returns_the_childs_result_to_the_model(resolved):
 
     output = asyncio.run(Agent(FunctionModel(model), tools=s.tools()).run("review")).output
     assert "perf-review did it" in output and "completed" in output
+
+
+# ── review fixes: paused children (I5), failed factories (I5), per-tree caps (M4), names (M12)
+
+
+def test_a_paused_child_is_reported_as_paused_not_completed(resolved):
+    s, _ = spawner(parent(resolved), status="paused")
+    result = spawn(s)
+
+    assert result.stopped == "paused" and "approval" in result.reason
+
+
+def test_a_failing_factory_leaks_no_slice_and_no_spawn(resolved):
+    s, made = spawner(parent(resolved, max_total=1), budget="1")
+    good = s.runner_factory
+
+    def broken(child, slice_, child_spawner):
+        raise RuntimeError("cannot build the child")
+
+    s.runner_factory = broken
+    with pytest.raises(RuntimeError):
+        spawn(s)
+    s.runner_factory = good
+
+    assert spawn(s).stopped is None and len(made) == 1  # the failed spawn did not count
+    s.parent_budget.open("all", "child", D("0.99"))  # and its slice was given back
+
+
+def test_max_total_holds_across_the_whole_tree(resolved):
+    s, made = spawner(parent(resolved, max_total=2, max_depth=2), nested="grand")
+    spawn(s, spec("c0"))  # c0 and its grandchild: two agents in the tree
+
+    assert spawn(s, spec("c1")).stopped == "refused" and len(made) == 2
+
+
+def test_max_depth_holds_for_grandchildren(resolved):
+    s, made = spawner(parent(resolved, max_depth=1), nested="grand")
+    spawn(s)
+
+    assert made[0].grandchild.stopped == "refused" and "max_depth" in made[0].grandchild.reason
+
+
+def test_a_nested_spawn_is_refused_rather_than_waiting_for_a_slot(resolved):
+    s, made = spawner(parent(resolved, max_concurrent=1, max_depth=2), nested="grand")
+
+    async def bounded():
+        return await asyncio.wait_for(s.spawn(spec()), 5)  # waiting would deadlock
+
+    assert asyncio.run(bounded()).stopped is None
+    assert made[0].grandchild.stopped == "refused"
+    assert "max_concurrent" in made[0].grandchild.reason
+
+
+@pytest.mark.parametrize("name", ["../escape", "Security Review", "a" * 41, "", "-lead"])
+def test_the_model_cannot_choose_any_child_name(resolved, name):
+    s, made = spawner(parent(resolved))
+    result = spawn(s, spec(name))
+
+    assert result.stopped == "refused" and "name" in result.reason and made == []

@@ -6,10 +6,16 @@ on the Zyroflo-backed commons package: the engine passes the real
 (M1-34) and the skill catalog (M1-37/38).
 """
 
-from collections.abc import Sequence
+import functools
+import inspect
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+
+# What a bad argument from the model raises inside a tool: a directory where a file
+# was meant, text that cannot be encoded, an unusable glob, a pattern that is too slow.
+TOOL_ERRORS = (OSError, ValueError, NotImplementedError, TimeoutError)
 
 
 class ToolConfigError(Exception):
@@ -38,9 +44,12 @@ class ShellResult:
 
 
 class Sandbox(Protocol):
+    """Runs a command. Async, so that stopping the run (time limit, kill switch)
+    cancels the call and the sandbox stops the command with it."""
+
     isolated: bool  # True only for a real OS sandbox
 
-    def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult: ...
+    async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult: ...
 
 
 class CodeIntel(Protocol):
@@ -70,3 +79,28 @@ def refused(reason: str) -> str:
     """What a refused call returns to the model: it can read the reason and try
     something else (a ModelRetry would count against the run's retry limit)."""
     return f"REFUSED: {reason}"
+
+
+def guarded[F: Callable](tool: F) -> F:
+    """`tool`, returning a refusal instead of raising on a bad argument - an exception
+    would end the whole run, a refusal lets the model read why and try again."""
+
+    if inspect.iscoroutinefunction(tool):
+
+        @functools.wraps(tool)
+        async def run_async(*args, **kwargs):
+            try:
+                return await tool(*args, **kwargs)
+            except TOOL_ERRORS as error:
+                return refused(f"{type(error).__name__}: {error}")
+
+        return run_async  # type: ignore[return-value]
+
+    @functools.wraps(tool)
+    def run(*args, **kwargs):
+        try:
+            return tool(*args, **kwargs)
+        except TOOL_ERRORS as error:
+            return refused(f"{type(error).__name__}: {error}")
+
+    return run  # type: ignore[return-value]

@@ -132,10 +132,21 @@ def test_a_step_budget_hit_is_raised_for_the_engine(resolved, tmp_path):
 
 def test_a_limit_hit_recorded_by_metering_is_honoured_even_if_swallowed(resolved, tmp_path):
     costs = CostLog()
-    costs.limit_hit = LimitHit("child", "reviewer", Decimal("1"), Decimal("1.2"))
 
-    outcome = run(runner(resolved, say("done"), tmp_path, is_child=True, costs=costs))
+    def model(messages, info):  # metering records the hit; the SDK swallows the error
+        costs.limit_hit = LimitHit("child", "reviewer", Decimal("1"), Decimal("1.2"))
+        return ModelResponse(parts=[TextPart("done")])
+
+    outcome = run(runner(resolved, FunctionModel(model), tmp_path, is_child=True, costs=costs))
     assert outcome.stopped == "budget"
+
+
+def test_an_earlier_budget_hit_does_not_spoil_a_later_run(resolved, tmp_path):  # review I4
+    costs = CostLog()
+    costs.limit_hit = LimitHit("step", "build", Decimal("1"), Decimal("1.2"))  # then raised
+
+    outcome = run(runner(resolved, say("done"), tmp_path, costs=costs))
+    assert (outcome.status, outcome.output) == ("completed", "done")
 
 
 def test_a_stuck_check_stops_with_stuck(resolved, tmp_path):
@@ -149,3 +160,11 @@ def test_a_stuck_check_stops_with_stuck(resolved, tmp_path):
 
     outcome = run(r)
     assert (outcome.status, outcome.stopped) == ("stopped", "stuck")
+
+
+def test_stuck_detection_is_on_by_default_and_says_why(resolved, tmp_path):  # review I7
+    r = runner(resolved, FunctionModel(always_calls_the_tool), tmp_path, tools=[busy_tool()])
+
+    outcome = run(r)
+    assert (outcome.status, outcome.stopped) == ("stopped", "stuck")
+    assert outcome.detail is not None and outcome.detail.startswith("repeat")

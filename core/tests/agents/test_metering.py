@@ -197,3 +197,47 @@ def test_a_request_without_max_tokens_assumes_a_large_answer():
 
 def test_a_body_that_is_not_json_reserves_the_fallback():
     assert estimate_request_usd(None, PRICES.get, FALLBACK) == FALLBACK
+
+
+# ── review fixes: a call that may have been billed is charged (M1); a streamed
+#    error is not (M2)
+
+
+def test_a_cancelled_call_is_charged_its_reservation():
+    step = BudgetLedger(D("5")).run.open("build", "step", D("1"))
+    log = CostLog()
+
+    async def hangs(request):
+        await asyncio.sleep(10)
+
+    async def call():
+        async with metered(Upstream(hangs), step, log) as client:
+            await asyncio.wait_for(client.post("/chat/completions", json=REQUEST), 0.2)
+
+    with pytest.raises(TimeoutError):
+        asyncio.run(call())
+    hold = estimate_request_usd(REQUEST, PRICES.get, FALLBACK)
+    assert step.spent() == hold and log.by_source() == {"unavailable": 1}
+
+
+def test_a_read_timeout_is_charged_its_reservation():
+    step = BudgetLedger(D("5")).run.open("build", "step", D("1"))
+
+    def times_out(request):
+        raise httpx2.ReadTimeout("no answer")
+
+    with pytest.raises(httpx2.ReadTimeout):
+        post(metered(Upstream(times_out), step))
+    assert step.spent() == estimate_request_usd(REQUEST, PRICES.get, FALLBACK)
+
+
+def test_a_streamed_error_response_is_not_charged():
+    step = BudgetLedger(D("5")).run.open("build", "step", D("1"))
+    body = b'data: {"error": {"message": "overloaded"}}\n\n'
+    upstream = Upstream(
+        lambda r: httpx2.Response(500, headers={"content-type": "text/event-stream"}, content=body)
+    )
+
+    # read the way an SDK reads an error response, whole (it is no stream to iterate)
+    assert post(metered(upstream, step), {**REQUEST, "stream": True}).status_code == 500
+    assert (step.spent(), step.available()) == (D("0"), D("1"))

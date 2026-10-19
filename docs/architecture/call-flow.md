@@ -97,7 +97,7 @@ sequenceDiagram
     Run->>Run: build prompt = instructions + pre-loaded skills + AGENTS.md + input handoffs 🔲 M1-38 M1-46
     loop agent loop, until done or a limit is hit
         Run->>Sec: scan outgoing content for secrets 🔲 M1-41
-        Run->>TL: model call with X-Agentic-* headers + traceparent ✅ transport/client.py make_client
+        Run->>TL: model call with X-Agentic-* headers + traceparent (network transport → metering → identity client) ✅ agents/models.py metered_model, transport/client.py
         TL->>TL: routing rules (tier → model, team caps), PII and injection guardrails
         TL->>LLM: request
         LLM-->>TL: response
@@ -108,9 +108,9 @@ sequenceDiagram
             WT-->>Run: result (wrapped as untrusted data) 🔲 M1-42
         end
         opt agent spawns a child agent
-            Run->>Run: child gets a budget slice, narrower tools, parent's deny list ✅ agents/children.py ChildSpawner
+            Run->>Run: child gets a budget slice, narrower tools, parent's deny list; count/concurrency/depth capped per tree ✅ agents/children.py ChildSpawner
         end
-        Run->>Run: stuck detector, turn and time limits ✅ agents/stuck.py + runner limits (engine timeouts 🔲 M1-26)
+        Run->>Run: stuck detector (on by default), turn and time limits (a stop kills running shell commands) ✅ agents/stuck.py + runner limits (engine timeouts 🔲 M1-26)
     end
     Run-->>Eng: output document
     Eng->>Eng: parse_handoff(output) ✅ handoffs/parse.py

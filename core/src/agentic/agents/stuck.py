@@ -9,6 +9,7 @@ compared by digest so ids never make two identical steps look different.
 Patterns, over the events since the last user message (at most 20):
   * repeat      - the same action with the same result, `action_observation` times
   * error_loop  - the same action failing, more than `action_error` times in a row
+                  (a retry prompt, or a tool's "REFUSED: ..." reply)
   * monologue   - `monologue` agent messages in a row with no action between
   * ping_pong   - actions and results alternating A, B, A, B over `alternating` steps
 
@@ -134,7 +135,8 @@ def events_from_messages(messages: list[ModelMessage]) -> list[Event]:
                 if isinstance(part, UserPromptPart):
                     events.append(UserMessage(_digest(part.content)))
                 elif isinstance(part, ToolReturnPart):
-                    events.append(Observation(part.tool_name, _digest(part.content)))
+                    failed = isinstance(part.content, str) and part.content.startswith("REFUSED:")
+                    events.append(Observation(part.tool_name, _digest(part.content), failed))
                 elif isinstance(part, RetryPromptPart):
                     events.append(Observation(part.tool_name or "", _digest(part.content), True))
         elif isinstance(message, ModelResponse):
@@ -149,11 +151,11 @@ def events_from_messages(messages: list[ModelMessage]) -> list[Event]:
 
 
 def stuck_check(detector: StuckDetector) -> Callable[[list[ModelMessage]], str | None]:
-    """The runner's stuck check: the pattern's name, or None."""
+    """The runner's stuck check: "<pattern>: <detail>", or None."""
 
     def check(messages: list[ModelMessage]) -> str | None:
         verdict = detector.check(events_from_messages(messages))
-        return verdict.pattern if verdict else None
+        return f"{verdict.pattern}: {verdict.detail}" if verdict else None
 
     return check
 

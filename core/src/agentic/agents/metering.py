@@ -12,8 +12,12 @@ so it sees every request Pydantic AI or a provider SDK makes:
      stream is passed through untouched while its events feed `StreamUsage`,
      and is settled when it is closed - a stream closed before it finished is
      charged its reservation;
-  4. a transport error, or an error response with no usage, releases the
-     reservation: a failed call is never charged.
+  4. an error that proves nothing was sent (no connection, no pool slot, the
+     proxy refused), or an error response with no usage, releases the
+     reservation. A call that failed after it was sent - cancelled by the run's
+     time limit, a read timeout, a broken read - may still be billed by the
+     provider, so it is charged its reservation (`unavailable`). An error status
+     is never treated as a stream.
 
 A settle that overshoots records the spend, then raises `LimitHit`.
 """
@@ -40,6 +44,14 @@ from agentic.transport import (
 #: Output assumed when a request sets no max_tokens (a long answer, so the hold is honest).
 DEFAULT_MAX_OUTPUT = 16_384
 _SMALLEST = Decimal("0.000001")  # a reservation is never zero
+#: Errors raised before the request left this machine: nothing can have been billed.
+NOT_SENT = (
+    httpx2.ConnectError,
+    httpx2.ConnectTimeout,
+    httpx2.PoolTimeout,
+    httpx2.ProxyError,
+    httpx2.UnsupportedProtocol,
+)
 
 
 @dataclass
@@ -101,18 +113,22 @@ class MeteringTransport(httpx2.AsyncBaseTransport):
         reservation = self.budget.reserve(estimate_request_usd(body, self.price_for, self.fallback))
         try:
             response = await self.inner.handle_async_request(request)
-        except BaseException:
+        except NOT_SENT:
             reservation.release()
             raise
-        if response.headers.get("content-type", "").startswith("text/event-stream"):
+        except BaseException as error:
+            self._charge_unknown(reservation, body, error)
+            raise
+        streamed = response.headers.get("content-type", "").startswith("text/event-stream")
+        if streamed and response.is_success:
             metered = _MeteredStream(response, reservation, self)
             return httpx2.Response(
                 response.status_code, headers=response.headers, stream=metered, request=request
             )
         try:
             content = await response.aread()
-        except BaseException:
-            reservation.release()
+        except BaseException as error:
+            self._charge_unknown(reservation, body, error)
             raise
         cost = cost_from_response(response.headers, _json(content), self.price_for)
         if response.is_success or cost.tokens_in is not None:
@@ -125,6 +141,29 @@ class MeteringTransport(httpx2.AsyncBaseTransport):
 
     async def aclose(self) -> None:
         await self.inner.aclose()
+
+    def _charge_unknown(
+        self, reservation: Reservation, body: dict | None, error: BaseException
+    ) -> None:
+        """A call that failed after it was sent: charged its reservation, as the
+        provider may bill it. The original error is what the caller sees."""
+        model = body.get("model") if body else None
+        cost = CallCost(
+            source="unavailable",
+            cost_usd=None,
+            tokens_in=None,
+            tokens_out=None,
+            tokens_cache_read=None,
+            tokens_cache_write=None,
+            model=model if isinstance(model, str) else None,
+            request_id=None,
+            trace_id=None,
+            reason=f"failed after it was sent ({type(error).__name__})",
+        )
+        try:
+            self._settle(reservation, cost)
+        except LimitHit:
+            pass  # recorded in the log; the original error is the one to raise
 
     def _settle(self, reservation: Reservation, cost: CallCost) -> None:
         try:

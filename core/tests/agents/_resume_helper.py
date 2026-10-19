@@ -1,7 +1,7 @@
 """The same agent in two processes: built by the resume tests and by their subprocess.
 
 Run as a script, it resumes a paused run in a fresh interpreter:
-    python _resume_helper.py <fixtures> <state.json> <workdir> <approve|deny reason>
+    python _resume_helper.py <fixtures> <state.json> <workdir> <approve|deny reason> <digest>
 """
 
 import asyncio
@@ -57,11 +57,10 @@ def write_tool(workdir: Path) -> Tool:
     return Tool(write_file, requires_approval=True)
 
 
-def runner(agent, workdir: Path, state_dir: Path, calls: list) -> PydanticAIRunner:
+def runner(agent, workdir: Path, state_dir: Path, calls: list, **kwargs) -> PydanticAIRunner:
     step = BudgetLedger(Decimal("5")).run.open("build", "step", Decimal("1"))
-    return PydanticAIRunner(
-        agent, model(calls), budget=step, state_dir=state_dir, tools=[write_tool(workdir)]
-    )
+    kwargs.setdefault("tools", [write_tool(workdir)])
+    return PydanticAIRunner(agent, model(calls), budget=step, state_dir=state_dir, **kwargs)
 
 
 if __name__ == "__main__":
@@ -69,7 +68,8 @@ if __name__ == "__main__":
     decision: bool | str = True if sys.argv[4] == "approve" else sys.argv[4]
     r = runner(resolve(fixtures), workdir, state.parent, [])
     pending = json.loads(state.read_text(encoding="utf-8"))["pending"]
-    outcome = asyncio.run(r.resume(state, {call_id: decision for call_id in pending}))
+    decisions = {call_id: decision for call_id in pending}
+    outcome = asyncio.run(r.resume(state, decisions, sys.argv[5]))
     print(
         json.dumps(
             {"status": outcome.status, "output": outcome.output, "requests": outcome.usage.requests}
