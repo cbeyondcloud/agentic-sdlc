@@ -50,8 +50,11 @@ def finalise_handoff(
     schema: HandoffSchema,
     stamp: EnvelopeStamp,
     block_on: frozenset[str] = BLOCK_ON_DEFAULT,
+    person: bool = False,
 ) -> tuple[str, Handoff]:
-    """The final document and its parsed handoff, or HandoffError with every problem."""
+    """The final document and its parsed handoff, or HandoffError with every problem.
+    `person`: the text is a person's (an edit at a gate), who may accept a finding at
+    a blocking severity; an agent may not (DF-41, owner 2026-10-20)."""
     check_block_on(block_on)
 
     text = _unwrapped(text)
@@ -77,6 +80,8 @@ def finalise_handoff(
     data = {k: v for k, v in meta.items() if k not in FRAMEWORK_FIELDS and k != "status"}
     if schema.kind == "review":  # by kind: another kind's own open_blocking field is its own
         data["open_blocking"] = count_open_blocking(data.get("findings"), block_on)
+        if not person:
+            problems += _accepted_by_agent(data.get("findings"), block_on, lines)
     envelope = {
         "kind": schema.kind,
         "schema_version": schema.schema_version,
@@ -118,6 +123,21 @@ def check_block_on(block_on: frozenset[str]) -> None:
         raise ValueError(
             f"block_on must keep the floor {sorted(BLOCK_ON_DEFAULT)}; missing {missing}"
         )
+
+
+def _accepted_by_agent(findings: object, block_on: frozenset[str], lines) -> list[str]:
+    """An agent marking a blocking finding `accepted` would remove it from the review
+    loop's exit count: only a person (at a gate) may do that."""
+    if not isinstance(findings, list):
+        return []
+    return [
+        f"findings[{index}]: only a person can accept a finding at a blocking severity "
+        f"({finding.get('severity')}) (line {line_of(lines, ('findings', index))})"
+        for index, finding in enumerate(findings)
+        if isinstance(finding, dict)
+        and finding.get("status") == "accepted"
+        and finding.get("severity") in block_on
+    ]
 
 
 def _unwrapped(text: str) -> str:

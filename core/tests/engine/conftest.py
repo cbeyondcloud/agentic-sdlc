@@ -89,9 +89,11 @@ class FakeGates:
         last = mine[-1]
         if last["verdict"] != "approve":
             return False, f"{gate} rejected by {last['approver']}"
-        changed = [rel for rel, digest in last["artifacts"].items()
-                   if not (self.recorder.run_dir / rel).is_file()
-                   or self.recorder.digest(rel) != digest]  # fmt: skip
+        changed = [
+            rel
+            for rel, digest in last["artifacts"].items()
+            if not (self.recorder.run_dir / rel).is_file() or self.recorder.digest(rel) != digest
+        ]
         if changed:
             return False, f"changed since {gate} approved it: {', '.join(changed)}"
         return True, ""
@@ -167,15 +169,24 @@ def make_harness(tmp_path: Path, fixtures: Path):
     repo.mkdir()
     layer = tmp_path / "layer"
     for name, extra in AGENTS.items():
-        write(layer / "agents" / f"{name}.md",
-              f"---\nname: {name}\n{extra}version: 1.0.0\ndescription: {name}\n---\n"
-              f"You are {name}.\n")  # fmt: skip
+        write(
+            layer / "agents" / f"{name}.md",
+            f"---\nname: {name}\n{extra}version: 1.0.0\ndescription: {name}\n---\n"
+            f"You are {name}.\n",
+        )
 
-    def build(pipeline_yaml: str, script: dict[str, list[Behaviour]], *, clock=None,
-              shared: dict | None = None, **engine_kwargs) -> Harness:  # fmt: skip
+    def build(
+        pipeline_yaml: str,
+        script: dict[str, list[Behaviour]],
+        *,
+        clock=None,
+        shared: dict | None = None,
+        **engine_kwargs,
+    ) -> Harness:
         write(layer / "pipelines" / "test.yaml", pipeline_yaml)
-        definitions = DefinitionSet.discover(org=None, team=None, repo=layer,
-                                             allow_repo_pipelines=True)  # fmt: skip
+        definitions = DefinitionSet.discover(
+            org=None, team=None, repo=layer, allow_repo_pipelines=True
+        )
         state = shared if shared is not None else {"ledgers": {}, "gates": {}}
         clock = clock or FakeClock()
 
@@ -185,10 +196,13 @@ def make_harness(tmp_path: Path, fixtures: Path):
                 if (ledger.folder / "events.jsonl").is_file():
                     ledger.resume()
                 else:
-                    ledger.open(identity=RunIdentity(team="payments",
-                                                     policy_version=policy.version),
-                                kind="feature", project="demo", owner="platform",
-                                criticality="low")  # fmt: skip
+                    ledger.open(
+                        identity=RunIdentity(team="payments", policy_version=policy.version),
+                        kind="feature",
+                        project="demo",
+                        owner="platform",
+                        criticality="low",
+                    )
                 state["ledgers"][run_id] = ledger
             return state["ledgers"][run_id]
 
@@ -222,9 +236,17 @@ def charge(usd: str) -> Callable[[StepContext], None]:
 
     def spend(ctx: StepContext) -> None:
         amount = Decimal(usd)
-        cost = CallCost(source="reported", cost_usd=amount, tokens_in=1, tokens_out=1,
-                        tokens_cache_read=None, tokens_cache_write=None, model="m",
-                        request_id=None, trace_id=None)  # fmt: skip
+        cost = CallCost(
+            source="reported",
+            cost_usd=amount,
+            tokens_in=1,
+            tokens_out=1,
+            tokens_cache_read=None,
+            tokens_cache_write=None,
+            model="m",
+            request_id=None,
+            trace_id=None,
+        )
         ctx.budget.reserve(amount).settle(cost)
 
     return spend

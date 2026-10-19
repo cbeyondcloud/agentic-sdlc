@@ -59,8 +59,9 @@ def run(coro):
 
 
 def start(h, run_id="r-1", inputs=None):
-    return run(h.engine.start("test", inputs or {"request": "Add CSV export"}, "dev@acme.example",
-                              run_id))  # fmt: skip
+    return run(
+        h.engine.start("test", inputs or {"request": "Add CSV export"}, "dev@acme.example", run_id)
+    )
 
 
 def events(h, run_id="r-1") -> list[dict]:
@@ -81,8 +82,10 @@ def test_steps_run_in_order_and_handoffs_are_pinned(make_harness):
     ]
     for record in state.history:
         assert h.ledger("r-1").digest(record.handoff) == record.digest
-    assert state.latest == {"requirements": "handoffs/requirements-1.md",
-                            "design": "handoffs/design-1.md"}  # fmt: skip
+    assert state.latest == {
+        "requirements": "handoffs/requirements-1.md",
+        "design": "handoffs/design-1.md",
+    }
     assert h.ledger("r-1").verify() == []
     kinds = [e["event"] for e in events(h)]
     assert kinds.count("step_started") == 2 and kinds[-1] == "run_closed"
@@ -150,7 +153,7 @@ def test_a_loop_ends_when_until_holds(make_harness):
             "designer": [answer("design")],
             "dev": [answer("dev-report")],
             "reviewer": [review(["no timeout"]), review()],
-        },  # fmt: skip
+        },
     )
 
     state = start(h)
@@ -167,7 +170,7 @@ def test_an_exhausted_loop_escalates_to_a_gate(make_harness):
             "designer": [answer("design")],
             "dev": [answer("dev-report")],
             "reviewer": [review(["first"]), review(["second"])],
-        },  # fmt: skip
+        },
     )
 
     state = start(h)
@@ -185,7 +188,7 @@ def test_an_exhausted_loop_can_fail_the_run(make_harness):
             "designer": [answer("design")],
             "dev": [answer("dev-report")],
             "reviewer": [review(["blocking"])],
-        },  # fmt: skip
+        },
     )
 
     state = start(h)
@@ -200,7 +203,7 @@ def test_an_oscillating_loop_escalates_early(make_harness):  # DF-29
             "designer": [answer("design")],
             "dev": [answer("dev-report")],
             "reviewer": [review(["Missing test for retry"]), review(["missing test for retry "])],
-        },  # fmt: skip
+        },
     )
 
     state = start(h)
@@ -222,8 +225,9 @@ def test_a_gate_stops_the_run_and_pins_what_it_gates(make_harness):
         "design-approval",
     )
     assert state.pending.artefacts == {"handoffs/design-1.md": digest}
-    assert any(e["event"] == "gate_waiting" and e.get("gate") == "design-approval"
-               for e in events(h))  # fmt: skip
+    assert any(
+        e["event"] == "gate_waiting" and e.get("gate") == "design-approval" for e in events(h)
+    )
 
 
 # ── pauses for a person ───────────────────────────────────────────────────────
@@ -263,8 +267,9 @@ def test_the_run_time_limit_pauses_and_resume_can_extend_it(make_harness):  # M1
         return answer("requirements")
 
     pipeline = TWO_STEPS.replace("version: 1.0.0\n", "version: 1.0.0\nmax_minutes: 10\n", 1)
-    h = make_harness(pipeline, {"ba": [slow_requirements], "designer": [answer("design")]},
-                     clock=clock)  # fmt: skip
+    h = make_harness(
+        pipeline, {"ba": [slow_requirements], "designer": [answer("design")]}, clock=clock
+    )
 
     state = start(h)
     assert (state.status, state.pending.id) == ("paused", "run-timeout")
@@ -312,9 +317,12 @@ def test_a_crash_mid_step_reruns_that_step_and_keeps_its_spend(make_harness):  #
         charge("0.10")(ctx)
         return answer("design")
 
-    again = make_harness(TWO_STEPS, {"ba": [answer("requirements")],
-                                     "designer": [spend_then_answer]},
-                         shared=shared, run_budget_usd=Decimal("10"))  # fmt: skip
+    again = make_harness(
+        TWO_STEPS,
+        {"ba": [answer("requirements")], "designer": [spend_then_answer]},
+        shared=shared,
+        run_budget_usd=Decimal("10"),
+    )
     state = run(again.engine.resume("r-1"))
     assert state.status == "completed"
     assert "ba" not in again.runners.calls  # the completed step is not run again

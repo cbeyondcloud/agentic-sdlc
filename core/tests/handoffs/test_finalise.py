@@ -191,3 +191,17 @@ def test_block_on_cannot_drop_below_the_floor():  # review M1
 def test_odd_yaml_is_an_error_not_a_crash(fields):  # review I3
     with pytest.raises(HandoffError):
         finalise_handoff(answer(fields), schema=DESIGN, stamp=STAMP)
+
+
+def test_an_agent_cannot_accept_a_blocking_finding():  # DF-41 (owner 2026-10-20)
+    fields = (
+        "status: complete\nsummary: s\nfindings:\n"
+        "  - {severity: critical, issue: injection, status: accepted}\n"
+    )
+    agent_answer = answer(fields, body_of(REVIEW))
+
+    with pytest.raises(HandoffError, match="only a person can accept"):
+        finalise_handoff(agent_answer, schema=REVIEW, stamp=STAMP)
+    document, handoff = finalise_handoff(agent_answer, schema=REVIEW, stamp=STAMP, person=True)
+    assert handoff.data.open_blocking == 0
+    assert parse_handoff(document).data.findings[0].status == "accepted"
