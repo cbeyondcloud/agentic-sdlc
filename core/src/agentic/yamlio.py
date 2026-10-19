@@ -14,6 +14,8 @@ and in round-trip mode only to learn line numbers. YAML 1.2 rules apply, so
 `yes`/`no` stay strings.
 """
 
+import io
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +50,20 @@ def load_yaml(text: str, first_line: int = 1) -> tuple[Any, dict[Loc, int]]:
     except YAMLError as error:
         raise YamlFileError(_describe_yaml_error(error, first_line)) from error
     return data, _line_map(YAML(typ="rt").load(text), first_line)
+
+
+def dump_yaml(data: Mapping[str, Any]) -> str:
+    """Block-style YAML for documents the framework writes: keys in the given order,
+    UTF-8 text kept, long lines never folded, LF line endings."""
+    yaml = YAML(typ="safe", pure=True)
+    yaml.default_flow_style = False
+    yaml.allow_unicode = True
+    yaml.width = 4096
+    yaml.indent(mapping=2, sequence=4, offset=2)
+    yaml.representer.sort_base_mapping_type_on_output = False
+    out = io.StringIO()
+    yaml.dump(dict(data), out)
+    return out.getvalue()
 
 
 def split_front_matter(text: str) -> tuple[str, str]:

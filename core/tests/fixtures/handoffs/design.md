@@ -6,6 +6,7 @@ step: design
 agent: design@1.4.0
 produced_at: 2026-10-16T10:42:00Z
 status: complete
+summary: Exports move to background jobs.
 decisions:
   - id: D1
     choice: "Add async job queue for exports"

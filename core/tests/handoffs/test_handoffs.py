@@ -15,7 +15,7 @@ from agentic.handoffs import (
 
 ENVELOPE = (
     "schema_version: 1\nrun_id: r-1\nstep: s1\nagent: a@1.0.0\n"
-    "produced_at: 2026-10-16T10:00:00Z\nstatus: complete\n"
+    "produced_at: 2026-10-16T10:00:00Z\nstatus: complete\nsummary: s\n"
 )
 
 
@@ -115,8 +115,8 @@ def test_broken_front_matter_reports_line():
     with pytest.raises(HandoffError) as error:
         parse_handoff(text)
 
-    # Line 1 is "---"; the broken list starts on line 10 of the document.
-    assert "started at line 10" in str(error.value)
+    # Line 1 is "---"; the broken list starts on line 11 of the document.
+    assert "started at line 11" in str(error.value)
 
 
 def test_missing_front_matter_rejected():

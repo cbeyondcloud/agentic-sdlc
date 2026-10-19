@@ -3,15 +3,32 @@
 The front matter holds these fields for machines (pipeline conditions, gates,
 dashboards); the Markdown body below it holds the readable document for people.
 Every model rejects unknown fields, so a misspelt field is caught.
+
+Every kind inherits `HandoffBase` (D37, spec §7.4): a one-line `summary` and the
+`open_questions` every handoff may carry.
 """
 
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class HandoffBase(_Strict):
+    """The fields of the generic base template, inherited by every kind."""
+
+    summary: str  # one line: what this handoff says, for gates and dashboards
+    open_questions: list[str] = []
+
+    @field_validator("summary")
+    @classmethod
+    def summary_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("the summary must not be blank")
+        return value
 
 
 class TestCounts(_Strict):
@@ -32,12 +49,11 @@ class Requirement(_Strict):
     acceptance_criteria: list[str] = Field(min_length=1)
 
 
-class RequirementsData(_Strict):
+class RequirementsData(HandoffBase):
     SCHEMA_VERSION: ClassVar[int] = 1
 
     size: Literal["trivial", "small", "medium", "large"]  # read by `when:` conditions
     items: list[Requirement] = Field(min_length=1)
-    open_questions: list[str] = []
 
 
 # --- design: produced by the Design agent -------------------------------------
@@ -64,7 +80,7 @@ class Impact(_Strict):
     confidence: Literal["candidate", "confirmed"] = "candidate"
 
 
-class DesignData(_Strict):
+class DesignData(HandoffBase):
     SCHEMA_VERSION: ClassVar[int] = 1
 
     decisions: list[Decision] = Field(min_length=1)
@@ -75,7 +91,7 @@ class DesignData(_Strict):
 # --- dev-report: produced by the Developer -------------------------------------
 
 
-class DevReportData(_Strict):
+class DevReportData(HandoffBase):
     SCHEMA_VERSION: ClassVar[int] = 1
 
     commits: list[str] = []
@@ -87,6 +103,7 @@ class DevReportData(_Strict):
 # --- review: produced by Code Review (Zyroflo P6 + review rubric) --------------
 
 Severity = Literal["critical", "high", "medium", "low", "info"]
+SEVERITIES: tuple[str, ...] = get_args(Severity)
 
 
 class Finding(_Strict):
@@ -102,7 +119,7 @@ class PrepassResult(_Strict):
     findings: int = Field(ge=0)
 
 
-class ReviewData(_Strict):
+class ReviewData(HandoffBase):
     SCHEMA_VERSION: ClassVar[int] = 1
 
     findings: list[Finding] = []
@@ -127,7 +144,7 @@ class DependencyScan(_Strict):
     vulnerabilities: list[str] = []
 
 
-class TestReportData(_Strict):
+class TestReportData(HandoffBase):
     __test__ = False  # not a pytest test class, despite the name
     SCHEMA_VERSION: ClassVar[int] = 1
 
@@ -135,6 +152,15 @@ class TestReportData(_Strict):
     tests: TestCounts
     acceptance_results: list[AcceptanceResult] = []
     dependency_scan: DependencyScan | None = None
+
+    @model_validator(mode="after")
+    def a_pass_has_no_failures(self) -> "TestReportData":
+        if self.verdict == "pass":
+            if self.tests.failed:
+                raise ValueError(f"verdict: 'pass' but {self.tests.failed} test(s) failed")
+            if failed := [r.criterion_id for r in self.acceptance_results if not r.passed]:
+                raise ValueError(f"verdict: 'pass' but acceptance criterion {failed[0]} failed")
+        return self
 
 
 # kind name (as written in front matter) -> the model for its fields
