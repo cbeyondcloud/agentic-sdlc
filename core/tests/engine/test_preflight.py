@@ -8,6 +8,7 @@ from _engine_support import AGENTS, write
 from agentic.definitions import DefinitionSet
 from agentic.engine.preflight import preflight
 from agentic.policy import ResolveContext, load_policy
+from agentic.sandbox.readiness import SandboxDecision
 
 CLEAN = """\
 name: test
@@ -45,6 +46,7 @@ def check(tmp_path: Path, fixtures: Path):
         extra_agents: dict[str, str] | None = None,
         actions=(),
         type_produces: dict[str, str] | None = None,
+        sandbox=None,
     ):
         layer = tmp_path / "layer"
         for name, extra in {**AGENTS, **(extra_agents or {})}.items():
@@ -69,6 +71,7 @@ def check(tmp_path: Path, fixtures: Path):
             used,
             ResolveContext(team="payments"),
             actions=actions,
+            sandbox=sandbox,
         )
 
     return run
@@ -178,3 +181,30 @@ def test_unknown_action(check):
     assert check(
         CLEAN + "  - id: publish\n    action: github.open_pr\n", actions={"github.open_pr"}
     ).passed
+
+
+# --- the sandbox decision (M1-33, D38) ---
+
+
+def sandbox_problems(report):
+    return [(p.check, p.severity) for p in report.problems if p.check == "sandbox"]
+
+
+def test_a_sandbox_refusal_fails_preflight(check):
+    assert check(CLEAN).passed
+    decision = SandboxDecision(False, "none", "the 'regulated' regime needs an OS sandbox", None)
+    report = check(CLEAN, sandbox=decision)
+    assert not report.passed
+    assert sandbox_problems(report) == [("sandbox", "error")]
+    assert "regulated" in report.text()
+
+
+def test_a_sandbox_warning_is_reported_but_passes(check):
+    report = check(CLEAN, sandbox=SandboxDecision(False, "none", None, "policy guards only"))
+    assert report.passed
+    assert sandbox_problems(report) == [("sandbox", "warning")]
+
+
+def test_a_ready_sandbox_adds_nothing(check):
+    report = check(CLEAN, sandbox=SandboxDecision(True, "srt 0.0.78", None, None))
+    assert sandbox_problems(report) == []

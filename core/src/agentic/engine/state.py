@@ -74,6 +74,7 @@ class RunState(_Strict):
     pipeline_digest: str
     policy_version: str
     catalog_digest: str  # the merged handoff templates the run was started with (D37)
+    sandbox: str | None = None  # where its commands ran: "srt 0.0.78" or "none" (D38)
     regime: Literal["solo", "team", "regulated"]
     starter: str
     status: RunStatus

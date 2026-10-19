@@ -138,12 +138,14 @@ class Engine:
         clock: Clock,
         actions: Mapping[str, Callable[[RunState], str]] | None = None,
         run_budget_usd: Decimal | None = None,
+        sandbox_label: str = "none",
     ) -> None:
         self.definitions, self.policy, self.context = definitions, policy, context
         self.store, self.recorder_for, self.gates_for = store, recorder_for, gates_for
         self.runner_factory, self.block_on_for, self.clock = runner_factory, block_on_for, clock
         self.actions = dict(actions or {})
         self.run_budget_usd = run_budget_usd
+        self.sandbox_label = sandbox_label  # recorded on every run it starts
 
     async def start(
         self, pipeline: str, inputs: dict[str, str], starter: str, run_id: str
@@ -160,6 +162,7 @@ class Engine:
             pipeline_digest=pipeline_digest(definition),
             policy_version=self.policy.version,
             catalog_digest=self.definitions.handoffs.digest,
+            sandbox=self.sandbox_label,
             regime=definition.regime,
             starter=starter,
             status="running",

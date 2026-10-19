@@ -15,7 +15,7 @@ does not fail preflight.
 
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from agentic.definitions import AgentStep, DefinitionSet, LoopStep, PipelineDefinition
 from agentic.definitions.pipeline import ActionStep, GateStep
@@ -23,6 +23,9 @@ from agentic.engine.expressions import ExpressionError, cel_name, compile_condit
 from agentic.handoffs.compat import CONDITIONAL, check_compatibility
 from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
 from agentic.policy.resolve import kind_violations
+
+if TYPE_CHECKING:
+    from agentic.sandbox.readiness import SandboxDecision
 
 AVAILABLE_BACKENDS = frozenset({"native"})  # claude-code is M1-29, codex M2-40
 
@@ -73,9 +76,14 @@ def preflight(
     policy: OrgPolicy,
     context: ResolveContext,
     actions: Collection[str] = (),
+    sandbox: "SandboxDecision | None" = None,
 ) -> PreflightReport:
     report = PreflightReport(pipeline=pipeline.name, problems=[])
     problems = report.problems
+    if sandbox is not None and sandbox.refusal:  # the regime needs an OS sandbox (D38)
+        problems.append(Problem(None, "sandbox", sandbox.refusal))
+    elif sandbox is not None and sandbox.warning:
+        problems.append(Problem(None, "sandbox", sandbox.warning, severity="warning"))
     produced: set[str] = set(pipeline.inputs)
     earlier_agent_steps: list[str] = []
 

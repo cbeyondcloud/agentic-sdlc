@@ -1,5 +1,6 @@
 """Tests for the run state file: run.json, written atomically (M1-21, spec §8.3)."""
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -121,3 +122,13 @@ def test_an_unsafe_run_id_is_refused(tmp_path, run_id):
 def test_timestamps_must_be_timezone_aware():
     with pytest.raises(ValueError):
         new_state(started_at=datetime(2026, 10, 20, 9, 0))
+
+
+def test_a_run_json_without_a_sandbox_field_still_loads(tmp_path):  # written before M1-33
+    store = RunStore(tmp_path)
+    store.save(new_state())
+    path = next(tmp_path.rglob("run.json"))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("sandbox", None)
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert store.load("r-1").sandbox is None

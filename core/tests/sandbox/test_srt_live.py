@@ -73,3 +73,9 @@ def test_cancel_kills_the_sandboxed_grandchild(tree):  # Review Focus 1, DF-27
     asyncio.run(cancel_soon())
     time.sleep(3)
     assert not (tree / "marker").exists()
+
+
+def test_the_probe_passes_on_this_machine(tmp_path):  # the S6 cases, as a tool (DF-60/61)
+    from agentic.sandbox import probe
+
+    assert probe.main(["--workdir", str(tmp_path / "probe")]) == 0
