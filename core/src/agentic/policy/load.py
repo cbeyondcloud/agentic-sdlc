@@ -47,6 +47,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "allowed_repo_patterns": "allowed_repo_patterns",
         "tool_mirror_url": "tool_mirror_url",
         "allow_repo_pipelines": "allow_repo_pipelines",
+        "sandbox": "sandbox",
     },
 }
 

@@ -62,6 +62,9 @@ class DenyRules(BaseModel):
 
     shell: list[str] = []  # command prefixes, e.g. "git push" also blocks "git push --force"
     paths: list[str] = []  # file globs the agent may never write, e.g. "infra/**"
+    # command prefixes that need a person's approval on every use, e.g. "npm publish";
+    # a restriction too, so merged the same way (forbid beats ask, ask beats allow)
+    ask: list[str] = []
 
 
 class AgentDefinition(BaseModel):

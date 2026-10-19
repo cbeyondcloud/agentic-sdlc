@@ -55,6 +55,7 @@ description: One line saying what this agent does.   # required
 # deny:
 #   shell: ["git push", "git commit --amend"]   # command prefixes, always refused
 #   paths: [".github/**", "infra/**"]           # files it may never write
+#   ask: ["npm publish"]                        # command prefixes a person approves each time
 ---
 Describe the agent's job here in plain English. This text is the agent's
 instructions; it is sent to the model at the start of every run.

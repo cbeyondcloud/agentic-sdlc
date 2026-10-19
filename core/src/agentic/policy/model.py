@@ -5,7 +5,7 @@ resolver (agentic.policy.resolve, M1-04) checks every request against.
 """
 
 from decimal import Decimal
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -101,6 +101,59 @@ class TeamPolicy(_Strict):
     deny: DenyRules = DenyRules()
 
 
+#: Read-denied in every sandbox, whatever policy adds: where credentials live (D38).
+DEFAULT_DENY_READ = (
+    "~/.ssh",
+    "~/.aws",
+    "~/.azure",
+    "~/.config/gcloud",
+    "~/.config/gh",
+    "~/.docker",
+    "~/.kube",
+    "~/.gnupg",
+    "~/.netrc",
+    "~/.git-credentials",
+    "~/.pypirc",
+    "~/.npmrc",
+    "~/.agentic",
+)
+_GLOB = set("*?[")
+
+
+class SandboxPolicy(_Strict):
+    """How agent commands are sandboxed (D38, spike S6): `srt` on every OS."""
+
+    # regimes that refuse to run without a sandbox; the others run on guards, with a warning
+    required_for: list[Literal["solo", "team", "regulated"]] = ["regulated"]
+    allowed_domains: list[str] = []  # package registries a sandboxed command may reach
+    deny_read: list[str] = []  # added to DEFAULT_DENY_READ, never instead of it
+    allow_write: list[str] = []  # writable besides the run's tree, e.g. "~/.cache/uv"
+    srt_version: str = "0.0.78"
+
+    @property
+    def effective_deny_read(self) -> list[str]:
+        return list(dict.fromkeys([*DEFAULT_DENY_READ, *self.deny_read]))
+
+    @model_validator(mode="after")
+    def writes_stay_narrow(self) -> Self:
+        problems = []
+        for entry in self.allow_write:
+            if entry.rstrip("/") in ("", "~"):
+                problems.append(f"allow_write entry {entry!r} may not open the root or home")
+            elif _GLOB & set(entry):
+                problems.append(f"allow_write entry {entry!r} may not be a glob")
+            elif any(_inside(entry, denied) for denied in self.effective_deny_read):
+                problems.append(f"allow_write entry {entry!r} may not open a read-denied path")
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
+
+
+def _inside(path: str, folder: str) -> bool:
+    path, folder = path.rstrip("/"), folder.rstrip("/")
+    return path == folder or path.startswith(folder + "/")
+
+
 class OrgPolicy(_Strict):
     # --- models ---
     tiers: dict[str, TierSpec]
@@ -131,6 +184,7 @@ class OrgPolicy(_Strict):
     allowed_repo_patterns: list[str] = []  # empty = any repo (standalone use only)
     tool_mirror_url: str | None = None
     allow_repo_pipelines: bool = False  # D33: pipelines only from the policy repo
+    sandbox: SandboxPolicy = SandboxPolicy()  # D38
 
     # --- model prices, for estimating costs TokenLean does not report ---
     prices: dict[str, ModelPrice] = {}

@@ -68,6 +68,7 @@ class ResolvedAgent(BaseModel):
     children: ChildLimits
     deny_shell: list[str]  # org + team + agent, in that order (D31)
     deny_paths: list[str]
+    ask_shell: list[str] = []  # need a person's approval each time; minus what a deny covers
 
 
 def resolve_agent(
@@ -196,6 +197,7 @@ def resolve_agent(
         children=_clamp_children(agent.children, agent_type, team_cap),
         deny_shell=deny.shell,
         deny_paths=deny.paths,
+        ask_shell=[cmd for cmd in deny.ask if not any(_covers(d, cmd) for d in deny.shell)],
     )
     return resolved, []
 
@@ -240,19 +242,45 @@ def _covers(prefix: str, command: str) -> bool:
 
     "git push" covers "git push" and "git push origin main", but not "git"
     (allowing "git" while denying "git push" is a valid, narrower combination).
+    Compared word by word: a prefix word may hold alternatives ("git push|fetch",
+    the guard's rule syntax), and the first word is a program name, so "GIT.exe"
+    is "git" (DF-04).
     """
-    return command == prefix or command.startswith(prefix + " ")
+    wanted, words = prefix.split(), command.split()
+    if not wanted or len(words) < len(wanted):
+        return False
+    for position, (alternatives, word) in enumerate(zip(wanted, words, strict=False)):
+        options = alternatives.split("|")
+        if position == 0:
+            options, word = [_program_name(o) for o in options], _program_name(word)
+        if word not in options:
+            return False
+    return True
+
+
+_PROGRAM_SUFFIXES = (".exe", ".cmd", ".bat", ".com", ".ps1", ".sh")
+
+
+def _program_name(word: str) -> str:
+    """A program word as the shell finds it: base name, lower case, no Windows suffix."""
+    name = word.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for suffix in _PROGRAM_SUFFIXES:
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
 
 
 def _merge_deny(*layers: DenyRules | None) -> DenyRules:
     shell: list[str] = []
     paths: list[str] = []
+    ask: list[str] = []
     for layer in layers:
         if layer is None:
             continue
         shell += [cmd for cmd in layer.shell if cmd not in shell]
         paths += [glob for glob in layer.paths if glob not in paths]
-    return DenyRules(shell=shell, paths=paths)
+        ask += [cmd for cmd in layer.ask if cmd not in ask]
+    return DenyRules(shell=shell, paths=paths, ask=ask)
 
 
 def _smallest(*values: float | int | None) -> float | int | None:

@@ -17,7 +17,7 @@ Everything found but not fixed: review minors that were deferred, and notes a la
 | DF-01 | SP1 review | An agent with an explicit `model` can still carry its tier's `effort`/`temperature` | A setting meant for another model is sent, or silently ignored | M1-27 | Open |
 | DF-02 | SP1 review | `policy_version` content hash: CRLF vs LF bytes and the exact set of files hashed | The same policy gets a different version id on Windows and Linux; audit records disagree | M1-81 | Open |
 | DF-03 | SP1 review | Discovery: a file's stem need not equal its `name`; names are not checked unique within a layer | Two files define one agent; which wins is not obvious | M1-81 | Open |
-| DF-04 | SP1 review | Shell allow/deny coverage (`_covers`) compares tokens loosely | A deny entry may fail to drop an allow prefix it covers | M1-31 | Open |
+| DF-04 | SP1 review | Shell allow/deny coverage (`_covers`) compares tokens loosely | A deny entry may fail to drop an allow prefix it covers | M1-31 | Done (SP8 Task 1) |
 | DF-05 | SP1 review | Handoff compatibility ignores `when` (skipped steps) and the first loop iteration | A pipeline passes preflight but a step's input may not exist at run time | M1-25 | Done (9e041a4: conditional producers warn) · loop first iteration Accepted (intended feedback pattern) |
 | DF-06 | SP1 review | A loop with an empty `steps` list is accepted | A loop that does nothing runs until `max_iterations` | M1-24 | Done (9e041a4) |
 | DF-07 | SP1 review | Agent names are not restricted to a slug pattern | Odd names in paths, headers and ledgers | M1-81 | Open |
