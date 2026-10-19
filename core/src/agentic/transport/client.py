@@ -20,6 +20,7 @@ import httpx
 from opentelemetry.propagate import inject
 
 from agentic.transport.identity import CallIdentity
+from agentic.transport.network import NetworkSettings, ssl_context
 
 #: Request headers TokenLean acts on (it caches, routes, adds memory or rewrites
 #: the prompt), read from its source 2026-10-19. Never sent unless allowed.
@@ -44,15 +45,17 @@ def make_client(
     identity: CallIdentity,
     *,
     api_key: str | None = None,
-    network: object | None = None,
+    network: NetworkSettings | None = None,
     allow: Iterable[str] = frozenset(),
     timeout: float = 600.0,
     _transport: httpx.BaseTransport | None = None,
 ) -> httpx.Client:
     """A synchronous client for TokenLean at `base_url`, stamping `identity`."""
     stamp = _stamper(identity, _allowed(allow))
+    settings = network or NetworkSettings()
     return httpx.Client(base_url=base_url, headers=_auth(api_key), timeout=timeout,
-                        event_hooks={"request": [stamp]}, transport=_transport)  # fmt: skip
+                        event_hooks={"request": [stamp]}, transport=_transport,
+                        verify=ssl_context(settings), trust_env=settings.trust_env)  # fmt: skip
 
 
 def make_async_client(
@@ -60,7 +63,7 @@ def make_async_client(
     identity: CallIdentity,
     *,
     api_key: str | None = None,
-    network: object | None = None,
+    network: NetworkSettings | None = None,
     allow: Iterable[str] = frozenset(),
     timeout: float = 600.0,
     _transport: httpx.AsyncBaseTransport | None = None,
@@ -72,8 +75,11 @@ def make_async_client(
         stamp(request)
 
     hooks = {"request": [stamp_async]}
+    settings = network or NetworkSettings()
+    tls = ssl_context(settings)
     return httpx.AsyncClient(base_url=base_url, headers=_auth(api_key), timeout=timeout,
-                             event_hooks=hooks, transport=_transport)  # fmt: skip
+                             event_hooks=hooks, transport=_transport, verify=tls,
+                             trust_env=settings.trust_env)  # fmt: skip
 
 
 def _allowed(allow: Iterable[str]) -> frozenset[str]:
