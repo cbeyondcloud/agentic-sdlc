@@ -1,6 +1,6 @@
 """Corporate networks: proxies and certificate authorities (M1-14, spec §15).
 
-Proxies: httpx reads `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`
+Proxies: httpx2 reads `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`
 when `trust_env` is on, so nothing is re-implemented here.
 
 Certificates: corporate networks re-sign TLS with their own CA, usually

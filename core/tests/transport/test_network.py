@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-import httpx
+import httpx2
 import pytest
 
 from agentic.transport import CallIdentity, NetworkError, NetworkSettings, make_client
@@ -29,7 +29,7 @@ def test_a_custom_ca_bundle_is_trusted(https_server, ca_bundle):
 
 
 def test_without_the_ca_the_server_is_refused(https_server):
-    with pytest.raises(httpx.ConnectError):
+    with pytest.raises(httpx2.ConnectError):
         make_client(https_server, IDENTITY).get("/")
 
 
@@ -47,7 +47,7 @@ def test_environment_ca_files_are_ignored_when_trust_env_is_off(https_server, ca
                                                                 monkeypatch):  # fmt: skip
     monkeypatch.setenv("SSL_CERT_FILE", str(ca_bundle))
 
-    with pytest.raises(httpx.ConnectError):
+    with pytest.raises(httpx2.ConnectError):
         make_client(https_server, IDENTITY, network=NetworkSettings(trust_env=False)).get("/")
 
 

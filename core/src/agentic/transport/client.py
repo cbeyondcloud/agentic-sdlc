@@ -1,7 +1,7 @@
 """The HTTP client every model call goes through (M1-11).
 
-Built on httpx: the provider SDKs and Pydantic AI accept an `httpx.Client` /
-`httpx.AsyncClient`, so a request hook covers every call whichever library
+Built on httpx2: the provider SDKs and Pydantic AI accept an `httpx2.Client` /
+`httpx2.AsyncClient`, so a request hook covers every call whichever library
 makes it. The hook, in order:
 
   1. refuses a request to any host but TokenLean's (scheme, host and port of
@@ -26,7 +26,7 @@ import re
 import secrets
 from collections.abc import Iterable
 
-import httpx
+import httpx2
 from opentelemetry.propagate import inject
 
 from agentic.transport.identity import CallIdentity
@@ -63,13 +63,13 @@ def make_client(
     network: NetworkSettings | None = None,
     allow: Iterable[str] = frozenset(),
     timeout: float = 600.0,
-    _transport: httpx.BaseTransport | None = None,
-) -> httpx.Client:
+    _transport: httpx2.BaseTransport | None = None,
+) -> httpx2.Client:
     """A synchronous client for TokenLean at `base_url`, stamping `identity`."""
     stamp = _stamper(base_url, identity, _allowed(allow))
     settings = network or NetworkSettings()
     tls = ssl_context(settings)
-    return httpx.Client(base_url=base_url, headers=_auth(api_key), timeout=timeout,
+    return httpx2.Client(base_url=base_url, headers=_auth(api_key), timeout=timeout,
                         event_hooks={"request": [stamp]}, transport=_transport, verify=tls,
                         trust_env=settings.trust_env, follow_redirects=False)  # fmt: skip
 
@@ -82,17 +82,17 @@ def make_async_client(
     network: NetworkSettings | None = None,
     allow: Iterable[str] = frozenset(),
     timeout: float = 600.0,
-    _transport: httpx.AsyncBaseTransport | None = None,
-) -> httpx.AsyncClient:
+    _transport: httpx2.AsyncBaseTransport | None = None,
+) -> httpx2.AsyncClient:
     """An asynchronous client for TokenLean at `base_url`, stamping `identity`."""
     stamp = _stamper(base_url, identity, _allowed(allow))
 
-    async def stamp_async(request: httpx.Request) -> None:
+    async def stamp_async(request: httpx2.Request) -> None:
         stamp(request)
 
     settings = network or NetworkSettings()
     tls = ssl_context(settings)
-    return httpx.AsyncClient(base_url=base_url, headers=_auth(api_key), timeout=timeout,
+    return httpx2.AsyncClient(base_url=base_url, headers=_auth(api_key), timeout=timeout,
                              event_hooks={"request": [stamp_async]}, transport=_transport,
                              verify=tls, trust_env=settings.trust_env,
                              follow_redirects=False)  # fmt: skip
@@ -115,17 +115,17 @@ def _normal(name: str) -> str:
     return name.lower().replace("_", "-")
 
 
-def _origin(url: httpx.URL) -> tuple[str, str, int | None]:
+def _origin(url: httpx2.URL) -> tuple[str, str, int | None]:
     default = {"https": 443, "http": 80}.get(url.scheme)
     return url.scheme, url.host, url.port or default
 
 
 def _stamper(base_url: str, identity: CallIdentity, allowed: frozenset[str]):
     expected = {_normal(name): value for name, value in identity.headers().items()}
-    home = _origin(httpx.URL(base_url))
+    home = _origin(httpx2.URL(base_url))
     trace_id = hashlib.sha256(identity.run_id.encode()).hexdigest()[:32]
 
-    def stamp(request: httpx.Request) -> None:
+    def stamp(request: httpx2.Request) -> None:
         if _origin(request.url) != home:
             raise ForeignHostError(f"model calls go only to {home[0]}://{home[1]} - refused a "
                                    f"request to another host")  # fmt: skip

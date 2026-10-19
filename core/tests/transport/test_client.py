@@ -4,7 +4,7 @@ import asyncio
 import re
 from dataclasses import replace
 
-import httpx
+import httpx2
 import pytest
 
 from agentic.transport import (
@@ -44,17 +44,17 @@ EXPECTED = {
 TRACEPARENT = re.compile(r"00-[0-9a-f]{32}-[0-9a-f]{16}-01")
 
 
-def capturing() -> tuple[httpx.MockTransport, list[httpx.Request]]:
-    seen: list[httpx.Request] = []
+def capturing() -> tuple[httpx2.MockTransport, list[httpx2.Request]]:
+    seen: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
-        return httpx.Response(200, json={"ok": True})
+        return httpx2.Response(200, json={"ok": True})
 
-    return httpx.MockTransport(handler), seen
+    return httpx2.MockTransport(handler), seen
 
 
-def client(identity: CallIdentity = IDENTITY, **kwargs) -> tuple[httpx.Client, list]:
+def client(identity: CallIdentity = IDENTITY, **kwargs) -> tuple[httpx2.Client, list]:
     transport, seen = capturing()
     return make_client("https://tl.example/v1", identity, _transport=transport, **kwargs), seen
 
@@ -237,3 +237,8 @@ def test_a_repo_url_carrying_credentials_is_refused(repo):  # review M9
 
 def test_an_scp_style_git_remote_is_fine():
     assert replace(IDENTITY, repo="git@github.com:acme/api.git").repo.startswith("git@")
+
+
+def test_clients_are_httpx2():  # D36: the Anthropic SDK requires httpx2; Pydantic AI drops httpx
+    assert isinstance(make_client("https://tl.example/v1", IDENTITY), httpx2.Client)
+    assert isinstance(make_async_client("https://tl.example/v1", IDENTITY), httpx2.AsyncClient)
