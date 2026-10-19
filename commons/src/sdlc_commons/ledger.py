@@ -142,6 +142,15 @@ class RunLedger:
     def resume(self) -> RunIdentity:
         """Take up a run opened earlier (perhaps by another process): its identity
         is read back from its `run_opened` event."""
+        try:
+            problems = events.verify(self.target, self.run_id)
+        except (events.EventError, ValueError, OSError) as error:
+            problems = [str(error)]
+        if problems:
+            raise LedgerError(
+                f"run {self.run_id}: its events do not verify, so its identity "
+                f"cannot be trusted - {problems[0]}"
+            )
         identity = self._recorded_identity()
         if identity is None:
             raise LedgerError(f"run {self.run_id} has no recorded identity - open() it first")
@@ -191,6 +200,11 @@ class RunLedger:
                               f"resume() it first")  # fmt: skip
         if "at" in fields:
             raise LedgerError("the ledger stamps each event's time - 'at' cannot be passed")
+        if "ext" in fields:
+            raise LedgerError(
+                "the ledger writes each event's ext block from the run and agent "
+                "identities - 'ext' cannot be passed"
+            )
         _check_fields({"phase": phase, **fields} if phase else fields)
         return self._append(event, phase, agent, fields)
 
@@ -238,10 +252,25 @@ class RunLedger:
         recorded = self._recorded_identity()
         if recorded is None:
             return [f"run {self.run_id}: its first event carries no run identity"]
+        # An event with no label was written outside the framework (e.g. the Zyroflo
+        # CLI run by hand): reported as such, apart from a label that differs.
+        # Gates and moves go through the framework (M1-22), which labels them.
         expected = recorded.ext()
-        return [f"event {n} ({e.get('event')}): run identity differs from the run's"
-                for n, e in enumerate(self.events(), 1)
-                if {k: _agentic(e).get(k) for k in expected} != expected]  # fmt: skip
+        problems = []
+        for n, e in enumerate(self.events(), 1):
+            found = {k: _agentic(e).get(k) for k in expected}
+            if found == expected:
+                continue
+            if not any(found.values()):
+                problems.append(
+                    f"event {n} ({e.get('event')}): written without the run "
+                    f"identity - a write outside the framework"
+                )
+            else:
+                problems.append(
+                    f"event {n} ({e.get('event')}): run identity differs from the run's"
+                )
+        return problems
 
     # ── a crash mid-append ────────────────────────────────────────────────────
 
@@ -262,16 +291,19 @@ class RunLedger:
 
 #: A run id: one folder name, safe on Windows too.
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+#: Names Windows reserves for devices, whatever follows the first dot.
+_WINDOWS_DEVICE = re.compile(r"(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?", re.IGNORECASE)
 
 
 def run_id_refusal(run_id: object) -> str:
     """Why `run_id` cannot name a run, or "". Checked before any folder is made:
     a run id can come from a branch name, which anyone opening a PR chooses."""
-    if isinstance(run_id, str) and _RUN_ID.fullmatch(run_id) and not run_id.endswith("."):
+    if (isinstance(run_id, str) and _RUN_ID.fullmatch(run_id) and not run_id.endswith(".")
+            and not _WINDOWS_DEVICE.fullmatch(run_id)):  # fmt: skip
         return ""
     return (
         "a run id is letters, digits, '.', '-' or '_' (starting with a letter or digit, "
-        "not ending with '.', at most 100)"
+        "not ending with '.', not a Windows device name like CON, at most 100)"
     )
 
 

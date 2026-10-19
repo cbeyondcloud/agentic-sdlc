@@ -1,16 +1,18 @@
 """Guard adapter over Zyroflo's walls (M1-08; D31 deny lists; D34: reuse, never rewrite).
 
 May an agent run this command, write these paths, hand over this diff, push
-there? Every match is made by Zyroflo's guard functions (`tools.sdlc.policy`);
-this module decides WHAT is asked of them:
+there? Zyroflo's guard functions (`tools.sdlc.policy`) judge Zyroflo's walls;
+this module adds the framework's rules on top:
 
-  * command - Zyroflo's destructive defaults (`destructive`), the agent's
+  * command - Zyroflo's destructive defaults (`destructive`), plus the agent's
               resolved deny list (org + team + agent, D31) and the framework's
-              own floor (`FRAMEWORK_DENY_SHELL`), each asked of the command as
-              typed AND of the spellings that hide a program from a tokenizer
-              (quotes inside a word, a quoted Windows path, a leading redirect,
-              `then`/`do`/`!`). Any hit refuses: a deny list may over-refuse,
-              never under-refuse;
+              floor (`FRAMEWORK_DENY_SHELL`), matched by where a word stands (a
+              rule's program at a command position, its first word the
+              subcommand - see "how a command is read"). Each is asked of the
+              command as typed AND of the spellings that hide a program from a
+              tokenizer (quotes inside a word, a quoted Windows path, a leading
+              redirect, `then`/`do`/`!`). Any hit refuses. A command longer than
+              MAX_COMMAND is refused unread;
   * writes  - confined to the run's trees (`confinement`), never a path only
               Zyroflo's CLIs write (`protected`), never a framework-protected
               file or a path on the deny list - matched relative to the tree
@@ -39,23 +41,39 @@ from sdlc_commons.worktrees import RunWorktrees, WorktreeError
 
 #: Refused for every agent, whatever org, team or agent policy says.
 FRAMEWORK_DENY_SHELL = (
-    "git -c",  # `git -c alias.x='!cmd'` / `core.sshCommand=…` run arbitrary commands
+    # git options, subcommands and tools that run an arbitrary command
+    "git -c",  # `git -c alias.x='!cmd'`, `core.sshCommand=…`
     "git --config-env",
     "git config",
-    "git push",  # publishing is the framework's job (M1-58), never an agent's
+    "git submodule foreach",
+    "git rebase -x|--exec",
+    "git bisect run",
+    "git difftool",
+    "git mergetool",
+    # publishing is the framework's job (M1-58), never an agent's
+    "git push",
     "git remote",
-    "eval",  # text run as a command cannot be checked
+    # text run as a command cannot be checked
+    "eval",
     "iex",
     "invoke-expression",
     "busybox",
     "powershell -e|-ec|-enc|-encodedcommand",  # base64 hides the command
     "pwsh -e|-ec|-enc|-encodedcommand",
+    # privilege
+    "doas",
+    "su",
+    "pkexec",
+    "runas",
 )
-#: Files inside a tree that steer agents, hooks or CI: never written by an agent.
+#: Files inside a tree that steer agents, hooks, editors or CI: never written by an agent.
 FRAMEWORK_PROTECTED = (
     "**/.git", "**/.git/**", "**/.github/workflows/**", "**/.claude/**", "**/CLAUDE.md",
-    "**/AGENTS.md", "**/.agentic/**", "**/.husky/**",
+    "**/AGENTS.md", "**/.agentic/**", "**/.husky/**", "**/.pre-commit-config.yaml",
+    "**/.gitmodules", "**/.vscode/**", "**/.devcontainer/**",
 )  # fmt: skip
+#: A longer command is refused unread: judging it would cost more than it is worth.
+MAX_COMMAND = 16_384
 #: Zyroflo lists a repository's policy may extend but never shorten.
 _FLOOR_LISTS = ("deny_git", "deny_commands", "protected_paths")
 
@@ -120,19 +138,26 @@ class Guard:
     def command(self, command: str) -> list[Block]:
         """Every reason this shell command is refused. Reasons never quote the
         command, so a credential typed in it does not reach a log."""
+        if len(command) > MAX_COMMAND:
+            return [Block("framework", f"the command is longer than {MAX_COMMAND} characters "
+                                       f"- refused unread (framework floor)")]  # fmt: skip
         blocks: dict[tuple[str, str], Block] = {}
         spellings = _spellings(command)
         for spelling in spellings:
             for reason in policy.destructive(self.policy, spelling):
                 why = scrub(reason.replace(repr(spelling), "the command", 1))
                 blocks.setdefault(("destructive", why), Block("destructive", why))
+        commands = [c for spelling in spellings for c in _commands(spelling)]
         layers = (("denied-command", self.deny_shell, "org, team or agent policy"),
                   ("framework", FRAMEWORK_DENY_SHELL, "framework floor"))  # fmt: skip
         for wall, rules, owner in layers:
             for rule in rules:
-                if any(_denies(rule, spelling) for spelling in spellings):
+                if _rule_hits(rule, commands):
                     why = f"the command matches the deny rule {rule!r} ({owner})"
                     blocks.setdefault((wall, why), Block(wall, why))
+        if any(_GIT_ENV.match(word) for spelling in spellings for word in _words(spelling)):
+            why = "a GIT_* variable can make git run a command (framework floor)"
+            blocks.setdefault(("framework", why), Block("framework", why))
         return list(blocks.values())
 
     # ── writes ────────────────────────────────────────────────────────────────
@@ -210,42 +235,170 @@ def _tighter(base: int, requested: int | None) -> int:
 
 
 # ── how a command is read ─────────────────────────────────────────────────────
+#
+# Zyroflo's `destructive` judges its own defaults. The deny lists and the
+# framework floor are judged here, by WHERE a word stands: a rule's program must
+# be at a command position (a segment's start, after a wrapper like `sudo`, after
+# `-c` or `-exec`), and its first plain word must be that program's subcommand.
+# So `git push` refuses `git -C repo push` and never `git commit -m "add push"`
+# or `git log --grep push`; `eval` refuses `eval …` and never `make eval`.
 
 #: `then`/`do`/`!` and redirects at a segment's start hide the program from a tokenizer.
 _STRUCTURE = re.compile(r"(?:(?<=^)|(?<=[\s;&|(]))(?:then|do|else|elif|!|\d*[<>]+&?[^\s;&|]*)"
                         r"(?=\s|$)")  # fmt: skip
-_QUOTED_PATH = re.compile(r"""(["'])([^"']*[\\/][^"']*)\1""")
-_WORDS = re.compile(r"[\s;&|()<>`'\"{}]+|\$\(")
+_SEPARATORS = frozenset(";|&()<>{}`\n")
+_ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+_GIT_ENV = re.compile(r"GIT_[A-Z0-9_]*=")
+#: Programs that run the command that follows them.
+_WRAPPERS = frozenset({
+    "sudo", "doas", "env", "command", "builtin", "nohup", "time", "exec", "timeout", "stdbuf",
+    "nice", "ionice", "setsid", "xargs", "parallel", "watch", "chroot", "runuser", "su",
+    "pkexec", "runas", "start", "start-process", "call",
+})  # fmt: skip
+#: Options whose value is a command.
+_CARRIERS = frozenset({"-c", "/c", "/k", "-command", "--command", "-exec", "-execdir", "-ok"})
+#: Options that take the next word as their value, so it is not the subcommand.
+_VALUE_OPTIONS = frozenset({
+    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path",
+    "-n", "--context", "--kubeconfig",
+})  # fmt: skip
+_POWERSHELL = frozenset({"powershell", "pwsh"})
 _SUFFIXES = (".exe", ".cmd", ".bat", ".com", ".ps1", ".sh")
 
 
+@dataclass(frozen=True)
+class _Word:
+    text: str  # quotes removed
+    quoted: bool
+
+
+def _tokens(text: str) -> list[_Word | None]:
+    """Words and separators (None), in ONE pass: quoted text belongs to its word
+    (`de""lete` is `delete`, `C:\\"Program Files"\\x` is one word); `;|&(){}<>`,
+    backticks, newlines and `$(` separate commands."""
+    out: list[_Word | None] = []
+    buf: list[str] = []
+    quoted, quote, i = False, "", 0
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == quote:
+                quote = ""
+            else:
+                buf.append(c)
+        elif c in "'\"":
+            quote, quoted = c, True
+        elif c.isspace() or c in _SEPARATORS or (c == "$" and text[i + 1 : i + 2] == "("):
+            if buf or quoted:
+                out.append(_Word("".join(buf), quoted))
+            buf, quoted = [], False
+            if not c.isspace():
+                out.append(None)
+                i += c == "$"
+        else:
+            buf.append(c)
+        i += 1
+    if buf or quoted:
+        out.append(_Word("".join(buf), quoted))
+    return out
+
+
+def _words(text: str) -> list[str]:
+    return [t.text for t in _tokens(text) if t is not None]
+
+
 def _spellings(command: str) -> list[str]:
-    """The command as typed, and as it reads once structure, quotes and quoted
-    paths no longer hide its programs. Every spelling is asked; any hit refuses."""
+    """The command as typed, and as it reads once structure (`then`, `!`,
+    redirects), quotes and quoted program paths no longer hide its programs."""
     structural = _STRUCTURE.sub(";", command)
     out: dict[str, None] = {}
     for base in (command, structural):
-        paths = _QUOTED_PATH.sub(lambda m: _basename(m.group(2)), base)
-        for text in (base, paths):
+        for text in (base, _with_paths_as_programs(base)):
             light = re.sub(r"""['"^`]""", "", text)
             out.update({text: None, light: None, light.replace("\\", ""): None})
     return list(out)
 
 
-def _denies(rule: str, command: str) -> bool:
-    if policy.denied_command({"deny_commands": [rule]}, command):
-        return True
-    # Word by word, too: Zyroflo looks THROUGH wrappers (sudo, env, nohup, …) to
-    # the command they run, and an 8.3 short name (KUBECT~1) is another spelling
-    # of the program. A deny list may over-refuse, never under-refuse.
-    parts = rule.split()
-    if not parts:
-        return False
-    words = [w for w in _WORDS.split(command) if w]
-    lowered = {w.lower() for w in words}
-    if not any(_same_program(_program(w), _program(parts[0])) for w in words):
-        return False
-    return all(any(alt.lower() in lowered for alt in p.split("|")) for p in parts[1:])
+def _with_paths_as_programs(text: str) -> str:
+    """Each quoted word that is a path, as its file name: `"C:\\Program
+    Files\\Git\\usr\\bin\\rm.exe" -rf x` reads `rm.exe -rf x`."""
+    parts = []
+    for token in _tokens(text):
+        if token is None:
+            parts.append(";")
+        elif token.quoted and ("/" in token.text or "\\" in token.text):
+            parts.append(_basename(token.text))
+        elif token.quoted:
+            parts.append('"' + token.text.replace('"', "") + '"')
+        else:
+            parts.append(token.text)
+    return " ".join(parts)
+
+
+def _commands(text: str, depth: int = 0) -> list[tuple[str, list[str]]]:
+    """(program, the words after it in its segment) at every command position."""
+    found: list[tuple[str, list[str]]] = []
+    segment: list[_Word] = []
+    for token in [*_tokens(text), None]:
+        if token is not None:
+            segment.append(token)
+            continue
+        start = 0
+        while start < len(segment) and _ENV_ASSIGNMENT.match(segment[start].text):
+            start += 1  # `FOO=1 git push`: the program comes after the assignments
+        positions = {start} if start < len(segment) else set()
+        if positions and _program(segment[start].text) in _WRAPPERS:
+            positions |= set(range(start + 1, len(segment)))  # `sudo -u root rm …`
+        positions |= {j + 1 for j, w in enumerate(segment[:-1]) if w.text.lower() in _CARRIERS}
+        for j in sorted(positions):
+            word = segment[j]
+            found.append((_program(word.text), [w.text for w in segment[j + 1 :]]))
+            if word.quoted and depth < 3 and any(ch.isspace() for ch in word.text):
+                found += _commands(word.text, depth + 1)  # `bash -c 'kubectl delete …'`
+        segment = []
+    return found
+
+
+def _rule_hits(rule: str, commands: list[tuple[str, list[str]]]) -> bool:
+    """Whether a deny rule (`program [subcommand] [words] [-options]`, `a|b` for
+    alternatives) matches one of the commands."""
+    head, *parts = rule.split()
+    wanted = _program(head)
+    plain = [p.lower().split("|") for p in parts if not p.startswith("-")]
+    options = [p.lower().split("|") for p in parts if p.startswith("-")]
+    for name, args in commands:
+        if not _same_program(name, wanted):
+            continue
+        lowered = [a.lower() for a in args]
+        if plain and (_subcommand(args) or "").lower() not in plain[0]:
+            continue
+        if not all(any(alt in lowered for alt in alts) for alts in plain[1:]):
+            continue
+        prefix = wanted in _POWERSHELL  # PowerShell takes any prefix of a parameter name
+        if all(any(_option_hit(alt, lowered, prefix) for alt in alts) for alts in options):
+            return True
+    return False
+
+
+def _subcommand(args: list[str]) -> str | None:
+    i = 0
+    while i < len(args):
+        if args[i] in _VALUE_OPTIONS:
+            i += 2
+        elif args[i].startswith("-"):
+            i += 1
+        else:
+            return args[i]
+    return None
+
+
+def _option_hit(alt: str, words: list[str], prefix: bool) -> bool:
+    for word in words:
+        if word == alt or word.startswith(alt + "="):
+            return True
+        if prefix and len(word) >= 2 and word.startswith("-") and alt.startswith(word):
+            return True
+    return False
 
 
 def _same_program(name: str, wanted: str) -> bool:

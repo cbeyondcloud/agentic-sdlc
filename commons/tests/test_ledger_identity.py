@@ -178,3 +178,26 @@ def test_a_bad_agent_identity_is_refused_and_nothing_is_appended(tmp_path: Path,
         ledger.record("step_started", phase="build", agent=agent, attempt=1, actor="agent")
 
     assert [e["event"] for e in ledger.events()] == ["run_opened"]
+
+
+def test_an_event_written_outside_the_framework_is_reported_as_unlabelled(tmp_path: Path):
+    ledger = open_ledger(tmp_path)
+    ledger_module._IDENTITIES.clear()  # e.g. a person running the Zyroflo CLI directly
+    events.append(tmp_path, "r-id-1", "run_closed", status="closed")
+
+    problems = ledger.verify()
+    assert any("event 2" in p and "without the run identity" in p for p in problems)
+    assert not any("differs" in p for p in problems)
+
+
+def test_resume_refuses_a_run_whose_events_do_not_verify(tmp_path: Path):
+    ledger = open_ledger(tmp_path)
+    log = ledger.folder / "events.jsonl"
+    record = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
+    record["ext"]["agentic"]["team"] = "evil"  # a hand-edited first event
+    log.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
+    ledger_module._IDENTITIES.clear()
+
+    with pytest.raises(LedgerError, match="verify"):
+        RunLedger(tmp_path, "r-id-1").resume()
+    assert "r-id-1" not in ledger_module._IDENTITIES

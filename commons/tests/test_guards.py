@@ -291,3 +291,67 @@ def test_building_a_guard_does_not_change_zyroflo_defaults(repo: Path):
     Guard(repo, RUN, deny_shell=("curl",), deny_paths=("x/**",)).command("ls")
 
     assert (policy.DEFAULTS["deny_commands"], policy.DEFAULTS["protected_paths"]) == before
+
+
+# ── second SP2 review: no false refusals, no new bypasses (N1-N5) ────────────
+
+
+@pytest.mark.parametrize("command", [
+    'git commit -m "fix: remove eval"', 'git commit -m "feat: add push button"',
+    'git commit -m "docs: git config notes"', "git log --grep push", "git log --grep=push",
+    "grep -rn eval src", "cat docs/eval", "ls src/eval", "python -m pytest tests/eval",
+    "npm run eval", "make eval", 'rg "iex" .', 'pytest -k "not slow"', "npm run build",
+    "uv run ruff check .", "git log --oneline", "git status", "git diff --stat",
+    "powershell -NoProfile -File x.ps1", "powershell -ExecutionPolicy Bypass -File x.ps1",
+    "pwsh -NonInteractive -Command Get-ChildItem", "kubectl get pods -l app=delete",
+    r'"C:\Program Files\Git\bin\git.exe" status',
+])  # fmt: skip
+def test_everyday_developer_commands_are_not_refused(guard, command):
+    assert guard.command(command) == []
+
+
+@pytest.mark.parametrize("command", [
+    r'C:\"Program Files"\Git\usr\bin\rm.exe -rf x',  # a partly quoted path
+    r'& C:\"Program Files"\Git\usr\bin\rm.exe -rf x',
+])  # fmt: skip
+def test_a_partly_quoted_program_path_does_not_hide_a_destructive_command(repo, command):
+    assert "destructive" in walls(Guard(repo, RUN).command(command))
+
+
+@pytest.mark.parametrize("command", [
+    "git submodule foreach 'rm -rf x'", "git rebase -x 'rm -rf x' main",
+    "git rebase --exec='rm -rf x' main", "git bisect run rm -rf x", "git difftool -x rm",
+    "git mergetool -t evil",
+    "GIT_SSH_COMMAND='rm -rf x' git fetch", "GIT_EXTERNAL_DIFF=rm git diff",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.x GIT_CONFIG_VALUE_0='!rm -rf .' git x",
+    "env GIT_SSH_COMMAND='rm -rf x' git fetch",
+    "git -C repo push origin main", "doas rm -rf x", "su -c 'rm -rf x'", "pkexec ls",
+    "runas /user:admin cmd",
+    "powershell -EncodedC ZQB=", "powershell -enc ZQB=",
+])  # fmt: skip
+def test_more_ways_to_run_a_command_through_git_or_privilege_are_refused(repo, command):
+    assert "framework" in walls(Guard(repo, RUN).command(command))
+
+
+def test_a_huge_command_is_refused_quickly_and_fails_closed(guard):
+    import time
+
+    start = time.perf_counter()
+    blocks = guard.command('"' + "a/" * 50_000)  # an unterminated quote, 100 KB
+
+    assert time.perf_counter() - start < 2
+    assert "framework" in walls(blocks)
+
+
+def test_a_long_but_allowed_command_is_still_judged_fast(guard):
+    import time
+
+    start = time.perf_counter()
+    assert guard.command("echo " + "word " * 3000) == []  # about 15 KB
+    assert time.perf_counter() - start < 5
+
+
+@pytest.mark.parametrize("rel", [".pre-commit-config.yaml", ".gitmodules", ".vscode/tasks.json",
+                                 ".devcontainer/devcontainer.json"])  # fmt: skip
+def test_files_that_run_commands_on_commit_or_open_are_framework_protected(guard, tree, rel):
+    assert "framework" in walls(guard.writes([tree / rel]))

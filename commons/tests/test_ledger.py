@@ -222,3 +222,17 @@ def test_a_log_that_is_one_torn_line_recovers_to_empty(tmp_path: Path):
 
     (saved,) = ledger.recover_torn_tail()
     assert log.read_bytes() == b"" and saved.read_bytes() == b'{"event":"run_op'
+
+
+@pytest.mark.parametrize("run_id", ["con", "CON", "aux.txt", "COM1", "lpt1", "nul", "prn.log"])
+def test_windows_device_names_are_refused_as_run_ids(tmp_path: Path, run_id):
+    with pytest.raises(LedgerError, match="run id"):
+        RunLedger(tmp_path, run_id)
+
+
+def test_ext_cannot_be_passed_by_hand(tmp_path: Path):
+    ledger = open_ledger(tmp_path)
+
+    with pytest.raises(LedgerError, match="ext"):
+        ledger.record("step_started", phase="design", attempt=1, actor="agent",
+                      ext={"agentic": {"team": "other"}})  # fmt: skip
