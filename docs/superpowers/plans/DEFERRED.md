@@ -40,7 +40,7 @@ Everything found but not fixed: review minors that were deferred, and notes a la
 | DF-24 | SP4 review M13 | Handoff wrappers are not escaped: a handoff containing `</handoff>` breaks out | Prompt injection from one agent's output into the next agent's instructions | M1-42 | Open |
 | DF-25 | SP4 finding | Pydantic AI silently drops `temperature` for reasoning models (e.g. gpt-5), with only a warning | Policy says temperature X; the model never gets it | M1-27 | Open |
 | DF-26 | SP4 finding | `Limits.budget_usd` is a float; the ledger needs Decimal: convert through `str` when opening run/step slices (as `children._usd` does) | Float rounding in budgets | M1-21 | Done (c87109d) |
-| DF-27 | SP4 review fixes | `Sandbox.run` is async: the OS sandboxes must kill their command when the call is cancelled | A stopped run leaves a sandboxed command running | M1-32, M1-33 | Open |
+| DF-27 | SP4 review fixes | `Sandbox.run` is async: the OS sandboxes must kill their command when the call is cancelled | A stopped run leaves a sandboxed command running | M1-32, M1-33 | Done (SP8 Task 4) |
 | DF-28 | SP4 review fixes | The runner factory receives the child's own `ChildSpawner`; the engine must add `spawner.tools()` to each runner's tools | Children cannot spawn their own children | M1-21 | Done (a2b5833) |
 | DF-29 | SP4 (M1-18) | `oscillation()` exists but is not wired into loops | Review/developer loops that repeat do not end early | M1-24 | Done (c87109d) |
 | DF-30 | SP5 review M2 | An echoed, unfilled template is accepted as a valid answer | Placeholder text reaches a gate (a person sees it) | M1-81 | Open |

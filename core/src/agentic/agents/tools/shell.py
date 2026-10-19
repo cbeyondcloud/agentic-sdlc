@@ -2,49 +2,22 @@
 
 The guard (`command`) refuses destructive, denied and unlisted commands before
 anything runs; a command on the ask list (`asks`) waits for a person's approval
-(the run pauses, M1-31). The command then runs through a `Sandbox`; the real, OS-isolated ones are
-M1-32 (Linux/macOS) and M1-33 (Windows). `LocalProcessSandbox` runs a plain
-subprocess with NO isolation - for tests and development only, which is why
-`build_tools` refuses it unless the caller explicitly allows it.
+(the run pauses, M1-31). The command then runs through a `Sandbox`: the real,
+OS-isolated one is `agentic.sandbox.SrtSandbox` (D38). `LocalProcessSandbox`
+runs a plain subprocess with NO isolation - for tests, development and a regime
+that may run unsandboxed - which is why `build_tools` refuses it unless the
+caller explicitly allows it.
 
 `run_shell` is async: when the run stops (time limit, budget, kill switch) the
 call is cancelled and the sandbox kills the command and everything it started.
 """
 
-import asyncio
-import os
-import re
-import signal
-import subprocess
 from pathlib import Path
 
 from pydantic_ai import ApprovalRequired, RunContext, Tool
 
 from agentic.agents.tools.context import ShellResult, ToolContext, guarded, refused
-
-MAX_OUTPUT = 50_000
-KILL_WAIT_S = 5.0
-# Environment variables a command never sees: API keys, tokens and passwords.
-SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL", re.IGNORECASE)
-
-
-class _Capture:
-    """One output stream, kept up to MAX_OUTPUT bytes; the rest is read and counted,
-    so a chatty command cannot fill memory or block on a full pipe."""
-
-    def __init__(self) -> None:
-        self.kept = bytearray()
-        self.dropped = 0
-
-    async def drain(self, stream: asyncio.StreamReader) -> None:
-        while chunk := await stream.read(65_536):
-            room = MAX_OUTPUT - len(self.kept)
-            self.kept += chunk[:room]
-            self.dropped += max(0, len(chunk) - room)
-
-    def text(self) -> str:
-        text = self.kept.decode("utf-8", errors="replace")
-        return text + (f"\n[... {self.dropped} more bytes]" if self.dropped else "")
+from agentic.sandbox.process import MAX_OUTPUT, run_process
 
 
 class LocalProcessSandbox:
@@ -53,56 +26,7 @@ class LocalProcessSandbox:
     isolated = False
 
     async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
-        group = (
-            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-            if os.name == "nt"
-            else {"start_new_session": True}
-        )
-        process = await asyncio.create_subprocess_shell(
-            command,
-            cwd=cwd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env={k: v for k, v in os.environ.items() if not SECRET_NAME.search(k)},
-            **group,
-        )
-        out, err = _Capture(), _Capture()
-        finished = asyncio.ensure_future(
-            asyncio.gather(out.drain(process.stdout), err.drain(process.stderr), process.wait())
-        )
-        try:
-            done, _ = await asyncio.wait({finished}, timeout=timeout_s)
-        except asyncio.CancelledError:  # the run was stopped: the command goes with it
-            await _stop(process, finished)
-            raise
-        if not done:
-            await _stop(process, finished)
-            return ShellResult(exit_code=None, stdout=out.text(), stderr=err.text(), timed_out=True)
-        return ShellResult(
-            exit_code=process.returncode, stdout=out.text(), stderr=err.text(), timed_out=False
-        )
-
-
-async def _stop(process: asyncio.subprocess.Process, finished: asyncio.Future) -> None:
-    """Kill the command and everything it started, not just the shell, then wait
-    (briefly) for it to exit and its pipes to close."""
-    if process.returncode is None:
-        if os.name == "nt":
-            kill = ["taskkill", "/T", "/F", "/PID", str(process.pid)]
-            killer = await asyncio.create_subprocess_exec(
-                *kill, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            await killer.wait()
-        else:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass  # already gone
-    try:
-        await asyncio.wait_for(asyncio.shield(finished), KILL_WAIT_S)
-    except TimeoutError:
-        finished.cancel()
+        return await run_process(command, cwd, timeout_s)
 
 
 def shell_tools(ctx: ToolContext) -> list[Tool]:

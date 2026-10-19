@@ -12,6 +12,7 @@ Run `--all` before pushing; it is not wired into a git hook.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import os
 import platform
@@ -31,8 +32,32 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("tests", ["uv", "run", "pytest"]),
 ]
 
-# Pinned image: same uv and Python versions as local development.
-LINUX_IMAGE = "ghcr.io/astral-sh/uv:0.12.1-python3.12-trixie-slim"
+# The Linux image: the pinned uv/Python image plus git and the sandbox prerequisites
+# (`srt`, bubblewrap), built from this Dockerfile and tagged by its content hash.
+LINUX_DOCKERFILE = REPO_ROOT / "scripts" / "linux-check.Dockerfile"
+# bubblewrap creates namespaces and mounts /proc, which Docker's defaults forbid (spike S6)
+SANDBOX_OPTS = ["--security-opt", "seccomp=unconfined", "--security-opt", "systempaths=unconfined"]
+
+
+def linux_image() -> str | None:
+    """The check image's tag, built once per Dockerfile version; None if the build fails."""
+    digest = hashlib.sha256(LINUX_DOCKERFILE.read_bytes()).hexdigest()[:12]
+    tag = f"agentic-check-linux:{digest}"
+    found = subprocess.run(["docker", "image", "inspect", tag], capture_output=True)
+    if found.returncode == 0:
+        return tag
+    print(f"[linux] building {tag}", flush=True)
+    build = [
+        "docker",
+        "build",
+        "-q",
+        "-t",
+        tag,
+        "-f",
+        str(LINUX_DOCKERFILE),
+        str(LINUX_DOCKERFILE.parent),
+    ]
+    return tag if subprocess.run(build).returncode == 0 else None
 
 
 def run_native() -> bool:
@@ -75,9 +100,10 @@ def run_linux() -> bool:
         print("[linux] SKIPPED: docker not found")
         return True
     inner = " && ".join(" ".join(cmd) for _, cmd in CHECKS)
-    # git is a framework prerequisite (worktrees, policy versions), so the clean
-    # container gets it too; the slim image does not ship it.
-    install_git = "apt-get update -qq && apt-get install -y -qq git >/dev/null"
+    image = linux_image()
+    if image is None:
+        print("[linux] FAILED: the check image could not be built")
+        return False
     # Zyroflo (sdlc-harness) is a private GitHub dependency. The throwaway container
     # gets the developer's existing `gh` token via an environment variable (never
     # written to the image or the repo) and git uses it for github.com only.
@@ -86,7 +112,7 @@ def run_linux() -> bool:
         'url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"; fi'
     )
     script = (
-        f"{install_git} && {github_auth} && mkdir -p /work && cd /work && tar -xf - "
+        f"{github_auth} && mkdir -p /work && cd /work && tar -xf - "
         f"&& uv sync --locked -q && {inner}"
     )
     token = _github_token()
@@ -97,8 +123,20 @@ def run_linux() -> bool:
         )
         return False
     env = dict(os.environ, GH_TOKEN=token)
-    cmd = ["docker", "run", "--rm", "-i", "-e", "GH_TOKEN", LINUX_IMAGE, "sh", "-c", script]
-    print(f"[linux] running checks in {LINUX_IMAGE}", flush=True)
+    cmd = [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "-e",
+        "GH_TOKEN",
+        *SANDBOX_OPTS,
+        image,
+        "sh",
+        "-c",
+        script,
+    ]
+    print(f"[linux] running checks in {image}", flush=True)
     ok = subprocess.run(cmd, input=tracked_files_tar(), env=env).returncode == 0
     print("[linux] all checks passed" if ok else "[linux] FAILED")
     return ok

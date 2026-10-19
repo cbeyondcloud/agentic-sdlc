@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from agentic.sandbox.process import ShellResult  # re-exported: tools return it
+
 # What a bad argument from the model raises inside a tool: a directory where a file
 # was meant, text that cannot be encoded, an unusable glob, a pattern that is too slow.
 TOOL_ERRORS = (OSError, ValueError, NotImplementedError, TimeoutError)
@@ -37,14 +39,6 @@ class PathGuard(Protocol):
     def asks(self, command: str) -> Sequence[str]:
         """The ask rules a command hits: it runs only once a person approves it."""
         ...
-
-
-@dataclass(frozen=True)
-class ShellResult:
-    exit_code: int | None  # None when the command was stopped (timed out)
-    stdout: str
-    stderr: str
-    timed_out: bool
 
 
 class Sandbox(Protocol):
