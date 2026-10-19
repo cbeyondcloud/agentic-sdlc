@@ -275,3 +275,58 @@ def test_limit_hit_survives_pickling():  # review M4
     hit = pickle.loads(pickle.dumps(LimitHit("step", "build", D("1"), D("1.2"))))
     assert (hit.kind, hit.scope, hit.name, hit.limit_usd, hit.spent_usd) == (
         "budget", "step", "build", D("1"), D("1.2"))  # fmt: skip
+
+
+# ── snapshot and restore: the budget survives a pause or a crash (M1-21, DF-18) ──
+
+
+def test_a_snapshot_round_trips_the_whole_tree():
+    ledger = BudgetLedger(D("5"))
+    step = ledger.run.open("build", "step", D("2"))
+    spend(step, "0.25")
+    child = step.open("security", "child", D("0.5"))
+    spend(child, "0.1")
+    step.raise_limit(D("2.5"))
+
+    again = BudgetLedger.restore(ledger.snapshot())
+    assert again.snapshot() == ledger.snapshot()
+    assert again.run.total_spent() == D("0.35")
+    assert again.open_slice("build").limit_usd == D("2.5")
+
+
+def test_a_restored_ledger_enforces_the_same_limits():
+    ledger = BudgetLedger(D("1"))
+    spend(ledger.run.open("build", "step", D("1")), "0.9")
+
+    again = BudgetLedger.restore(ledger.snapshot())
+    with pytest.raises(LimitHit):
+        again.open_slice("build").reserve(D("0.2"))
+
+
+def test_money_in_flight_at_the_snapshot_counts_as_spent_on_restore():
+    ledger = BudgetLedger(D("5"))
+    step = ledger.run.open("build", "step", D("2"))
+    step.reserve(D("0.4"))  # a call that was cut off: it may still be billed
+
+    again = BudgetLedger.restore(ledger.snapshot())
+    restored = again.open_slice("build")
+    assert restored.total_spent() == D("0.4") and restored.unpriced_calls == 1
+
+
+def test_on_change_is_called_after_each_settle_and_close():
+    ledger = BudgetLedger(D("5"))
+    seen = []
+    ledger.on_change = lambda: seen.append(ledger.run.total_spent())
+    step = ledger.run.open("build", "step", D("1"))
+    spend(step, "0.2")
+    step.close()
+
+    assert seen[-1] == D("0.2") and len(seen) >= 2
+
+
+def test_a_snapshot_is_plain_json():
+    import json
+
+    ledger = BudgetLedger(None)
+    spend(ledger.run.open("build", "step", None), "0.3")
+    assert json.loads(json.dumps(ledger.snapshot())) == ledger.snapshot()

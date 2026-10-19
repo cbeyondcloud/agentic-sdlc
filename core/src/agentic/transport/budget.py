@@ -17,12 +17,19 @@ run, step and child budgets here, from each call's cost (`cost.CallCost`).
   * A human may raise a limit (`raise_limit`), never beyond what the parent has.
 
 Money is `Decimal`. One lock guards the whole tree: children may run on threads.
-Persisting the ledger across a pause or restart belongs with the run state (M1-21).
+
+Persistence (M1-21): `snapshot()` is the whole tree as plain JSON - open slices
+included, so a step interrupted by a crash keeps what it spent - and
+`BudgetLedger.restore` rebuilds it. Money still reserved at the snapshot (a call
+cut off mid-flight) is counted as spent and unpriced on restore: the provider may
+bill it. `on_change` is called after every change, so the engine can save the
+snapshot as calls settle rather than only between steps.
 """
 
 import threading
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from agentic.transport.cost import CallCost
 
@@ -52,7 +59,32 @@ class BudgetLedger:
 
     def __init__(self, run_limit_usd: Decimal | None) -> None:
         self._lock = threading.RLock()
+        self.on_change: Callable[[], None] | None = None  # called after every change
         self.run = BudgetSlice(self._lock, "run", "run", _amount(run_limit_usd, "run limit"), None)
+        self.run._ledger = self
+
+    def snapshot(self) -> dict[str, Any]:
+        """The whole tree as plain JSON (amounts as strings), open slices included."""
+        with self._lock:
+            return _snapshot(self.run)
+
+    @classmethod
+    def restore(cls, snapshot: dict[str, Any]) -> "BudgetLedger":
+        """A ledger rebuilt from `snapshot()`; money in flight then is counted as spent."""
+        ledger = cls(_parse(snapshot.get("limit"), "run limit"))
+        _fill(ledger.run, snapshot, ledger)
+        return ledger
+
+    def open_slice(self, name: str) -> "BudgetSlice | None":
+        """The open slice called `name` anywhere in the tree (a restored step), or None."""
+        with self._lock:
+            pending = list(self.run._open_children)
+            while pending:
+                candidate = pending.pop(0)
+                if candidate.name == name:
+                    return candidate
+                pending.extend(candidate._open_children)
+            return None
 
 
 class BudgetSlice:
@@ -69,6 +101,11 @@ class BudgetSlice:
         self.unpriced_calls = 0
         self.unpriced_usd = Decimal(0)
         self.limit_changes: list[tuple[Decimal, Decimal]] = []  # (old, new), for the audit trail
+        self._ledger: BudgetLedger | None = parent._ledger if parent is not None else None
+
+    def _changed(self) -> None:
+        if self._ledger is not None and self._ledger.on_change is not None:
+            self._ledger.on_change()
 
     @property
     def limit_usd(self) -> Decimal | None:
@@ -87,6 +124,7 @@ class BudgetSlice:
                 limit_usd = left if limit_usd is None else min(limit_usd, left)
             child = BudgetSlice(self._lock, name, scope, limit_usd, self)
             self._open_children.append(child)
+            self._changed()
             return child
 
     def reserve(self, estimate_usd: Decimal) -> "Reservation":
@@ -117,6 +155,7 @@ class BudgetSlice:
                                self.parent.total_spent())  # fmt: skip
             self.limit_changes.append((self._limit, new_limit_usd))
             self._limit = new_limit_usd
+            self._changed()
 
     def available(self) -> Decimal | None:
         """Limit minus spend, open reservations and what open children hold; None if unbounded."""
@@ -147,6 +186,7 @@ class BudgetSlice:
                 raise BudgetError(f"{self.scope} {self.name!r} still has calls in flight - "
                                   f"settle or release them first")  # fmt: skip
             self._close()
+            self._changed()
 
     def _close(self) -> None:
         for child in list(self._open_children):
@@ -174,6 +214,7 @@ class BudgetSlice:
                 if node._limit is not None and node.total_spent() > node._limit:
                     crossed = node
                 node = node.parent
+            self._changed()  # before any LimitHit: the spend is recorded either way
             if crossed is not None:
                 raise LimitHit(crossed.scope, crossed.name, crossed._limit, crossed.total_spent())
 
@@ -181,6 +222,7 @@ class BudgetSlice:
         with self._lock:
             self._reserved -= estimate
             self._open_reservations -= 1
+            self._changed()
 
     def _check_open(self) -> None:
         if self.closed:
@@ -223,3 +265,42 @@ def _amount(value: Decimal | None, what: str) -> Decimal | None:
     if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
         raise BudgetError(f"{what} must be a finite, non-negative Decimal, not {value!r}")
     return value
+
+
+def _snapshot(slice_: BudgetSlice) -> dict[str, Any]:
+    return {
+        "name": slice_.name,
+        "scope": slice_.scope,
+        "limit": None if slice_._limit is None else str(slice_._limit),
+        "spent": str(slice_._spent),
+        "reserved": str(slice_._reserved) if slice_._reserved else "0",
+        "reservations": slice_._open_reservations,
+        "unpriced_calls": slice_.unpriced_calls,
+        "unpriced_usd": str(slice_.unpriced_usd),
+        "limit_changes": [[str(old), str(new)] for old, new in slice_.limit_changes],
+        "children": [_snapshot(child) for child in slice_._open_children],
+    }
+
+
+def _fill(slice_: BudgetSlice, data: dict[str, Any], ledger: BudgetLedger) -> None:
+    """Set `slice_` from its snapshot; money reserved then becomes spent and unpriced."""
+    reserved = _parse(data.get("reserved", "0"), "reserved") or Decimal(0)
+    reservations = int(data.get("reservations", 0))
+    slice_._limit = _parse(data.get("limit"), "limit")
+    slice_._spent = (_parse(data.get("spent", "0"), "spent") or Decimal(0)) + reserved
+    slice_.unpriced_calls = int(data.get("unpriced_calls", 0)) + reservations
+    slice_.unpriced_usd = (
+        _parse(data.get("unpriced_usd", "0"), "unpriced") or Decimal(0)
+    ) + reserved
+    slice_.limit_changes = [
+        (Decimal(old), Decimal(new)) for old, new in data.get("limit_changes", [])
+    ]
+    slice_._ledger = ledger
+    for child_data in data.get("children", []):
+        child = BudgetSlice(slice_._lock, child_data["name"], child_data["scope"], None, slice_)
+        slice_._open_children.append(child)
+        _fill(child, child_data, ledger)
+
+
+def _parse(value: object, what: str) -> Decimal | None:
+    return None if value is None else _amount(Decimal(str(value)), what)
