@@ -853,12 +853,12 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "sdlc-harness", git = "https://github.com/cbeyondcloud/sdlc-harness?rev=e4364754e03e9c01f74fec379d0efd9fedc58931" }]
+requires-dist = [{ name = "sdlc-harness", git = "https://github.com/cbeyondcloud/sdlc-harness?rev=560ad8155e0ff319ad775744b0f79af79f44a6bc" }]
 
 [[package]]
 name = "sdlc-harness"
 version = "0.1.0"
-source = { git = "https://github.com/cbeyondcloud/sdlc-harness?rev=e4364754e03e9c01f74fec379d0efd9fedc58931#e4364754e03e9c01f74fec379d0efd9fedc58931" }
+source = { git = "https://github.com/cbeyondcloud/sdlc-harness?rev=560ad8155e0ff319ad775744b0f79af79f44a6bc#560ad8155e0ff319ad775744b0f79af79f44a6bc" }
 dependencies = [
     { name = "neo4j" },
     { name = "python-dotenv" },
