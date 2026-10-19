@@ -12,6 +12,8 @@ from agentic.handoffs import (
     check_compatibility,
     parse_handoff,
 )
+from agentic.handoffs.schema import BUILTIN_CATALOG, render_template
+from agentic.yamlio import split_front_matter
 
 ENVELOPE = (
     "schema_version: 1\nrun_id: r-1\nstep: s1\nagent: a@1.0.0\n"
@@ -19,8 +21,14 @@ ENVELOPE = (
 )
 
 
-def handoff(kind: str, fields: str, body: str = "Body.") -> str:
-    """Build a handoff document: envelope + kind fields in front matter, then the body."""
+def handoff(kind: str, fields: str, body: str | None = None) -> str:
+    """Build a handoff document: envelope + kind fields in front matter, then the body
+    (by default the kind's template body, so every required section is present)."""
+    if body is None:
+        known = kind in BUILTIN_CATALOG.schemas
+        body = (
+            split_front_matter(render_template(BUILTIN_CATALOG.schema(kind)))[1] if known else "B."
+        )
     return f"---\nkind: {kind}\n{ENVELOPE}{fields}---\n{body}\n"
 
 
@@ -37,7 +45,7 @@ def test_parses_design_example(fixtures: Path):
     assert isinstance(result.data, DesignData)
     assert result.data.decisions[0].rationale == "Export latency exceeds API timeout"
     assert result.data.impact.confidence == "candidate"
-    assert result.body.startswith("## Design: async exports")
+    assert result.body.startswith("# Design: async exports")
 
 
 SAMPLES = {

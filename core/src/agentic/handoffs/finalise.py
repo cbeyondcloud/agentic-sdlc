@@ -1,0 +1,133 @@
+"""Turning an agent's answer into the final handoff document (spec §7.1, §7.4).
+
+The agent writes `status`, its kind's fields and the Markdown body. The
+framework owns the envelope - kind, schema_version, run_id, step, agent,
+produced_at - and writes it, whatever the agent put there. It also counts a
+review's `open_blocking` itself, from the findings and the run's `block_on`
+severities: the review loop ends on that number, so the model never decides it.
+
+Errors carry line numbers in the agent's own text, so the retry message (M1-20)
+can point at the exact line to fix.
+"""
+
+from dataclasses import dataclass
+from datetime import UTC, datetime
+
+from pydantic import ValidationError
+
+from agentic.definitions import describe_validation_error
+from agentic.handoffs.kinds import SEVERITIES
+from agentic.handoffs.model import Handoff, HandoffEnvelope, HandoffError
+from agentic.handoffs.parse import missing_sections, parse_handoff
+from agentic.handoffs.schema import HandoffCatalog, HandoffSchema
+from agentic.yamlio import YamlFileError, dump_yaml, line_of, load_yaml, split_front_matter
+
+BLOCK_ON_DEFAULT = frozenset({"critical", "high"})  # Zyroflo's default and floor
+FRAMEWORK_FIELDS = ("kind", "schema_version", "run_id", "step", "agent", "produced_at")
+NO_DOCUMENT = (
+    "the answer must be one handoff document: a line '---', the YAML fields, "
+    "a line '---', then the Markdown body"
+)
+
+
+@dataclass(frozen=True)
+class EnvelopeStamp:
+    """What the framework writes into every handoff's envelope."""
+
+    run_id: str
+    step: str
+    agent: str  # name@version
+    produced_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.produced_at.tzinfo is None or self.produced_at.utcoffset() is None:
+            raise ValueError("produced_at must be timezone-aware")
+
+
+def finalise_handoff(
+    text: str,
+    *,
+    schema: HandoffSchema,
+    stamp: EnvelopeStamp,
+    block_on: frozenset[str] = BLOCK_ON_DEFAULT,
+) -> tuple[str, Handoff]:
+    """The final document and its parsed handoff, or HandoffError with every problem."""
+    if unknown := sorted(set(block_on) - set(SEVERITIES)):
+        raise ValueError(f"unknown severities in block_on: {unknown} (known: {SEVERITIES})")
+
+    text = _unwrapped(text)
+    try:
+        header, body = split_front_matter(text)
+    except YamlFileError as error:
+        raise HandoffError([NO_DOCUMENT]) from error
+    try:
+        meta, lines = load_yaml(header, first_line=2)
+    except YamlFileError as error:
+        raise HandoffError([f"front matter: {error}"]) from error
+    meta = {} if meta is None else meta
+    if not isinstance(meta, dict):
+        raise HandoffError(["front matter must contain key: value fields"])
+
+    problems: list[str] = []
+    given = meta.get("kind")
+    if given is not None and given != schema.kind:
+        problems.append(
+            f"kind: this step produces '{schema.kind}', not '{given}' "
+            f"(line {line_of(lines, ('kind',))})"
+        )
+    data = {k: v for k, v in meta.items() if k not in FRAMEWORK_FIELDS and k != "status"}
+    if "open_blocking" in schema.model.model_fields:
+        data["open_blocking"] = _open_blocking(data.get("findings"), block_on)
+    envelope = {
+        "kind": schema.kind,
+        "schema_version": schema.schema_version,
+        "run_id": stamp.run_id,
+        "step": stamp.step,
+        "agent": stamp.agent,
+    }
+
+    try:
+        HandoffEnvelope.model_validate(
+            {**envelope, "produced_at": stamp.produced_at, "status": meta.get("status")}
+        )
+    except ValidationError as error:
+        problems += describe_validation_error(error, "handoff", lines=lines)
+    try:
+        schema.model.model_validate(data)
+    except ValidationError as error:
+        problems += describe_validation_error(error, schema.kind, lines=lines)
+    if not body.strip():
+        problems.append("body: the Markdown document after the front matter is empty")
+    else:
+        problems += missing_sections(body, schema)
+    if problems:
+        raise HandoffError(problems)
+
+    produced = stamp.produced_at.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    document = (
+        f"---\n{dump_yaml(envelope)}produced_at: {produced}\n"
+        f"{dump_yaml({'status': meta['status'], **data})}---\n{body}\n"
+    )
+    return document, parse_handoff(document, HandoffCatalog({schema.kind: schema}))
+
+
+def _unwrapped(text: str) -> str:
+    """LF line endings, no byte-order mark, and one outer code fence removed."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n").removeprefix("\ufeff").strip()
+    lines = text.split("\n")
+    if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+        text = "\n".join(lines[1:-1]).strip()
+    return text
+
+
+def _open_blocking(findings: object, block_on: frozenset[str]) -> int:
+    """Open findings at a blocking severity (a finding's status defaults to open)."""
+    if not isinstance(findings, list):
+        return 0
+    return sum(
+        1
+        for finding in findings
+        if isinstance(finding, dict)
+        and finding.get("status", "open") == "open"
+        and finding.get("severity") in block_on
+    )
