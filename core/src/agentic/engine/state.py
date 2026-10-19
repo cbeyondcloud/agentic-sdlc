@@ -46,6 +46,8 @@ class StepRecord(_Strict):
     outcome: Literal["completed", "skipped", "paused", "invalid", "stopped", "failed"]
     handoff: str | None = None  # relative to the run folder
     digest: str | None = None
+    base: dict[str, str] | None = None  # the commit each component started from (M1-30)
+    commit: dict[str, str] | None = None  # its checkpoint after the step; None = none made
     cost_usd: str = "0"  # Decimal, as text
     started_at: AwareDatetime
     ended_at: AwareDatetime

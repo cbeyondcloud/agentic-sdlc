@@ -123,6 +123,20 @@ class StepRunnerFactory(Protocol):
     def __call__(self, step: StepContext) -> AgentRunner: ...
 
 
+class StepTrees(Protocol):
+    """The run's git trees, checkpointed per step (`sdlc_commons.worktrees.StepCheckpoints`,
+    M1-30): each agent step starts at the previous step's commit and ends in its own
+    checkpoint; a rejection rolls the code back to the target step's base."""
+
+    def prepare(self) -> Path: ...
+
+    def begin(self, *, fresh: bool) -> dict[str, str]: ...
+
+    def finish(self, message: str) -> dict[str, str]: ...
+
+    def rollback(self, to: dict[str, str]) -> None: ...
+
+
 class Engine:
     def __init__(
         self,
@@ -139,6 +153,7 @@ class Engine:
         actions: Mapping[str, Callable[[RunState], str]] | None = None,
         run_budget_usd: Decimal | None = None,
         sandbox_label: str = "none",
+        trees_for: Callable[[str], StepTrees] | None = None,
     ) -> None:
         self.definitions, self.policy, self.context = definitions, policy, context
         self.store, self.recorder_for, self.gates_for = store, recorder_for, gates_for
@@ -146,6 +161,7 @@ class Engine:
         self.actions = dict(actions or {})
         self.run_budget_usd = run_budget_usd
         self.sandbox_label = sandbox_label  # recorded on every run it starts
+        self.trees_for = trees_for  # None: steps get no tree (tests, pipelines without code)
 
     async def start(
         self, pipeline: str, inputs: dict[str, str], starter: str, run_id: str
@@ -280,6 +296,8 @@ class _Run:
             else BudgetLedger(engine.run_budget_usd)
         )
         self.budget.on_change = self._save_budget
+        self._tree_handle: StepTrees | None = None
+        self._marks: tuple | None = None  # (step, iteration, base, commit) of the attempt
 
     # ── the walk ─────────────────────────────────────────────────────────────
 
@@ -546,6 +564,15 @@ class _Run:
 
     async def _reject(self, decision: Reject, gate: GateStep | None) -> RunState:
         state, pending = self.state, self.state.pending
+        if pending.id in ("invalid-output", "blocked-output"):
+            target, cursor = pending.step, state.cursor
+        elif gate is None:  # an exhausted loop: run it again from its first step
+            loop = self.pipeline.steps[state.cursor.index].loop
+            target = loop.steps[0].id
+            cursor = Cursor(index=state.cursor.index, loop_iteration=1, loop_index=0)
+        else:
+            target, cursor = self._reject_target(gate)
+        self._rollback_for(target, cursor.loop_iteration or 1)  # the code goes back too
         self.gates.record(
             pending.id,
             "reject",
@@ -555,14 +582,6 @@ class _Run:
             notes=decision.feedback,
             extra={"regime": state.regime},
         )
-        if pending.id in ("invalid-output", "blocked-output"):
-            target, cursor = pending.step, state.cursor
-        elif gate is None:  # an exhausted loop: run it again from its first step
-            loop = self.pipeline.steps[state.cursor.index].loop
-            target = loop.steps[0].id
-            cursor = Cursor(index=state.cursor.index, loop_iteration=1, loop_index=0)
-        else:
-            target, cursor = self._reject_target(gate)
         if cursor.loop_iteration == 1 and cursor is not state.cursor:
             state.loop_pass_start = len(state.history)  # a new pass of the loop (I9)
         state.feedback[target] = decision.feedback
@@ -592,6 +611,46 @@ class _Run:
             if isinstance(step, LoopStep):
                 return step.loop.steps[0].id, Cursor(index=position, loop_iteration=1)
         raise GateRefused(f"{gate.gate}: there is no step before the gate to send the work back to")
+
+    # ── the run's trees (M1-30) ─────────────────────────────────────────────
+
+    def _trees(self) -> StepTrees | None:
+        """The run's trees, made (or found) once per process."""
+        if self.e.trees_for is None:
+            return None
+        if self._tree_handle is None:
+            handle = self.e.trees_for(self.state.run_id)
+            handle.prepare()
+            self._tree_handle = handle
+        return self._tree_handle
+
+    def _tree_begin(self, *, fresh: bool) -> dict[str, str] | None:
+        trees = self._trees()
+        return trees.begin(fresh=fresh) if trees else None
+
+    def _tree_finish(self, message: str) -> dict[str, str] | None:
+        trees = self._trees()
+        return trees.finish(message) if trees else None
+
+    def _rollback_for(self, step: str, iteration: int) -> None:
+        """Roll the trees back to where the newest attempt of `step` at `iteration`
+        started; nothing to do when there are no trees or no such attempt."""
+        if self.e.trees_for is None:
+            return
+        record = next(
+            (
+                r
+                for r in reversed(self.state.history)
+                if r.step == step and r.iteration == iteration and r.base is not None
+            ),
+            None,
+        )
+        if record is None:
+            return
+        try:
+            self._trees().rollback(record.base)
+        except Exception as error:
+            raise GateRefused(f"the code cannot be rolled back for {step}: {error}") from error
 
     def _resolved(self, step: AgentStep) -> ResolvedAgent:
         agent, violations = resolve_agent(
@@ -732,6 +791,12 @@ class _Run:
             return False
         name = f"{step.id}-{iteration}"
         try:
+            base = self._tree_begin(fresh=resume is None)  # a resumed step keeps its work
+        except Exception as error:  # a git failure: the step does not run
+            self._pause("worktree", f"{type(error).__name__}: {error}", step=step.id)
+            return False
+        self._marks = (step.id, iteration, base, None)
+        try:
             budget = self.budget.open_slice(name) or self.budget.run.open(
                 name, "step", _usd(agent.limits.budget_usd)
             )
@@ -788,6 +853,14 @@ class _Run:
             return False
         cost = budget.total_spent()
         closing = self._close_slice(budget)
+        if outcome.status != "paused":  # a tool-approval pause keeps working in the tree
+            message = f"agentic: {step.id} #{iteration} ({self.state.run_id})"
+            try:
+                commit = self._tree_finish(message)
+            except Exception as error:
+                self._pause("worktree", f"{type(error).__name__}: {error}", step=step.id)
+                return False
+            self._marks = (step.id, iteration, base, commit)
         return self._outcome(step.id, iteration, attempt, outcome, started, cost, closing, agent)
 
     def _outcome(
@@ -971,6 +1044,7 @@ class _Run:
         cost: Decimal = Decimal(0),
         detail: str = "",
     ) -> None:
+        marks = self._marks if self._marks and self._marks[:2] == (step, iteration) else None
         self.state.history.append(
             StepRecord(
                 step=step,
@@ -978,6 +1052,8 @@ class _Run:
                 outcome=outcome,
                 handoff=handoff,
                 digest=digest,
+                base=marks[2] if marks else None,
+                commit=marks[3] if marks else None,
                 cost_usd=str(cost),
                 started_at=started,
                 ended_at=self.e.clock.now(),

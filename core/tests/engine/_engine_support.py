@@ -253,3 +253,31 @@ def charge(usd: str) -> Callable[[StepContext], None]:
         ctx.budget.reserve(amount).settle(cost)
 
     return spend
+
+
+class FakeTrees:
+    """A StepTrees that records what the engine asks: each begin/finish returns a new
+    commit name ("c1", "c2", ...) for the one component "app"."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+        self.n = 0
+
+    def _next(self) -> dict[str, str]:
+        self.n += 1
+        return {"app": f"c{self.n}"}
+
+    def prepare(self) -> Path:
+        self.calls.append(("prepare",))
+        return Path("tree")
+
+    def begin(self, *, fresh: bool) -> dict[str, str]:
+        self.calls.append(("begin", fresh))
+        return self._next()
+
+    def finish(self, message: str) -> dict[str, str]:
+        self.calls.append(("finish", message))
+        return self._next()
+
+    def rollback(self, to: dict[str, str]) -> None:
+        self.calls.append(("rollback", dict(to)))
