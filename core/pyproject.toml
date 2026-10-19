@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Core library: definitions, policy, engine, agents"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "httpx>=0.28,<0.29",
+    "opentelemetry-api>=1.45,<2",
     "pydantic>=2.9",
     "ruamel-yaml>=0.18",
 ]
