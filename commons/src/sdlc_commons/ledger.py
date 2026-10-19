@@ -119,6 +119,48 @@ class RunLedger:
         archived = state.archive_dir(self.target) / self.run_id
         return archived if archived.is_dir() and not active.is_dir() else active
 
+    @property
+    def run_dir(self) -> Path:
+        """The run folder (the engine's `RunRecorder.run_dir`)."""
+        return self.folder
+
+    # ── artefacts the engine pins (handoffs, gated diffs) ─────────────────────
+
+    def write_artifact(self, rel: str, text: str) -> str:
+        """Write `text` (LF line endings) at `rel` inside the run folder, atomically,
+        and return its digest. Approvals pin these bytes, so a path outside the run
+        folder is refused and a crash mid-write leaves the previous file whole."""
+        path = self._inside(rel)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+        temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        try:
+            with temporary.open("wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(temporary, path)
+        except BaseException:
+            temporary.unlink(missing_ok=True)
+            raise
+        return digest(path)
+
+    def digest(self, rel: str) -> str:
+        """The digest Zyroflo pins for the artefact at `rel` inside the run folder."""
+        return digest(self._inside(rel))
+
+    def _inside(self, rel: str) -> Path:
+        try:
+            key = state.artifact_key(rel)  # refuses absolute paths, '..', '' and NUL
+        except ValueError as error:
+            raise LedgerError(str(error)) from error
+        path = self.folder / key
+        try:
+            path.resolve().relative_to(self.folder.resolve())
+        except ValueError:
+            raise LedgerError(f"artefact path {rel!r} leaves the run folder") from None
+        return path
+
     # ── identity ──────────────────────────────────────────────────────────────
 
     def open(self, *, identity: RunIdentity, kind: str, project: str, owner: str,
@@ -348,10 +390,12 @@ def _torn(data: bytes) -> bytes | None:
         return None
     last = data.rsplit(b"\n", 1)[-1]
     try:
-        json.loads(last)
-        return None  # a complete record that only lacks its newline
+        value = json.loads(last)
     except ValueError:
         return last
+    # A complete record that only lacks its newline is kept; JSON that is not a
+    # record (`12`, a number cut short) never was one, so it is torn (DF-12).
+    return None if isinstance(value, dict) else last
 
 
 def _recover(log: Path) -> Path | None:

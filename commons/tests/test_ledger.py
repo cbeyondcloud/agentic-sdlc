@@ -236,3 +236,50 @@ def test_ext_cannot_be_passed_by_hand(tmp_path: Path):
     with pytest.raises(LedgerError, match="ext"):
         ledger.record("step_started", phase="design", attempt=1, actor="agent",
                       ext={"agentic": {"team": "other"}})  # fmt: skip
+
+
+# ── artefacts the engine pins (SP6, DF-09) and a non-record tail (DF-12) ───────
+
+
+def test_an_artefact_is_written_inside_the_run_folder_and_digested(tmp_path: Path):
+    ledger = open_ledger(tmp_path)
+
+    digest_value = ledger.write_artifact("handoffs/design-1.md", "# Design\r\nText\r\n")
+    path = ledger.run_dir / "handoffs" / "design-1.md"
+    assert path.read_bytes() == b"# Design\nText\n"
+    assert digest_value == ledger.digest("handoffs/design-1.md") == digest(path)
+
+
+@pytest.mark.parametrize("rel", ["../escape.md", "/abs.md", "C:/abs.md", "", "a/../../b.md"])
+def test_an_artefact_outside_the_run_folder_is_refused(tmp_path: Path, rel):
+    ledger = open_ledger(tmp_path)
+
+    with pytest.raises(LedgerError):
+        ledger.write_artifact(rel, "x")
+    assert not (tmp_path / "escape.md").exists()
+
+
+def test_an_artefact_write_is_atomic(tmp_path: Path, monkeypatch):
+    ledger = open_ledger(tmp_path)
+    ledger.write_artifact("handoffs/design-1.md", "first")
+
+    def power_cut(src, dst):
+        raise OSError("power cut")
+
+    monkeypatch.setattr(ledger_module.os, "replace", power_cut)
+    with pytest.raises(OSError):
+        ledger.write_artifact("handoffs/design-1.md", "second")
+    folder = ledger.run_dir / "handoffs"
+    assert (folder / "design-1.md").read_text(encoding="utf-8") == "first"
+    assert [p.name for p in folder.iterdir()] == ["design-1.md"]
+
+
+def test_a_json_tail_that_is_not_a_record_counts_as_torn(tmp_path: Path):  # DF-12
+    ledger = open_ledger(tmp_path)
+    ledger.record("step_started", "design")
+    log = ledger.folder / "events.jsonl"
+    tear(log, "12")  # a number cut short: valid JSON, not a record
+
+    kept = ledger.recover_torn_tail()
+    assert len(kept) == 1 and kept[0].read_bytes() == b"12"
+    assert ledger.verify() == []
