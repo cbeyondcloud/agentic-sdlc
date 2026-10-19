@@ -136,7 +136,7 @@ Roles are simple RBAC (spec §12.3): a role is a named permission set; admins as
 
 ### Prerequisites (checked automatically by `agentic init`)
 
-Python 3.12 (or the bundled installer), git ≥ 2.40, uv or pipx; access to the internal package index; GitHub access to the repo; on Windows: WSL2 **or** Codex CLI for sandboxing (S6 decides the default); optional: Claude Code / Codex CLI if the team uses those backends.
+Python 3.12 (or the bundled installer), git ≥ 2.40, uv or pipx; access to the internal package index; GitHub access to the repo; Node.js ≥ 20.11 and `srt` for sandboxing (macOS: + `ripgrep`; Linux: + `bubblewrap`, `socat`, `ripgrep`); on Windows: WSL2 with those Linux packages, the CLI and repos inside WSL (S6, D38); optional: Claude Code / Codex CLI if the team uses those backends.
 
 ### First-time setup (about 15 minutes)
 

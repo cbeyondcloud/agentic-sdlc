@@ -6,7 +6,7 @@
 | Date | 2026-10-16 |
 | Owner | Sumit Gupta |
 | Supporting research | [OSS reuse report](../../../reports/Agentic%20SDLC%20OSS%20reuse.md) · [research notes](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/) · [Zyroflo comparison](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/sdlc_harness_comparison.md) |
-| Revision | r3 (2026-10-18): decisions D26-D35 folded in; new §23 Users and roles, §24 Developer onboarding (init, skills, custom skills, learning loop), §25 Deployment landscape (incl. TokenLean LITE), §26 Executive cost breakdown, §27 Enterprise coverage; §5 agent types and deny lists; §19 milestones. Since r3: D36 (httpx2), D37 (handoff templates inherit a base, extend-only layering, §7.4) |
+| Revision | r3 (2026-10-18): decisions D26-D35 folded in; new §23 Users and roles, §24 Developer onboarding (init, skills, custom skills, learning loop), §25 Deployment landscape (incl. TokenLean LITE), §26 Executive cost breakdown, §27 Enterprise coverage; §5 agent types and deny lists; §19 milestones. Since r3: D36 (httpx2), D37 (handoff templates inherit a base, extend-only layering, §7.4), D38 (sandbox: `srt` on every OS, Windows via WSL2, spike S6) |
 | Earlier | r2 (2026-10-17): Zyroflo (sdlc-harness) artefacts folded in — §1.4, D16, D25, §6, §7, §9.2, §10, §14.5, §16, §18–§21 |
 
 ---
@@ -108,6 +108,7 @@ Decisions agreed during requirements clarification (2026-10-16).
 | D35 | Agent types | Every agent declares an org-defined type; the type (not the name) sets caps, ceilings and defaults; agents inherit and may only narrow; teams lower caps (§5.5) |
 | D36 | HTTP client | `agentic.transport` is built on **httpx2** (the Pydantic team's maintained successor to httpx, BSD-3): the Anthropic SDK requires it and Pydantic AI drops plain httpx in v3; cost capture is a wrapping transport under the identity client (spike S1) |
 | D37 | Handoff templates | Every handoff kind inherits one **generic base template** (fields and body sections). Org, team and repo layers may **add** fields and sections and **tighten** existing ones (optional → required, fewer choices), never remove, rename, loosen or retype them; new kinds (inheriting the base) only at org and team level; repo extensions are changed by PR approved by the repo maintainers (§7.4) |
+| D38 | Sandbox | Anthropic `srt` (sandbox-runtime, Apache-2.0, pinned) on every OS behind one `agentic` sandbox interface: macOS Seatbelt, Linux bubblewrap, **Windows = `srt` Linux mode inside WSL2**. No unsigned binary is installed on developer machines, so native `srt-win` is excluded unless the org builds and signs it; a container backend is the later Windows alternative. With no sandbox, org policy decides per regime (default: regulated refuses). Engine, gates, ledger, model calls, commits and pushes stay outside the sandbox (spike S6) |
 
 **Confirmed assumptions**: agents request a **capability tier** by default (exact model optional, admins can override); **preflight** validates every step before a run starts; **child agents inherit and can only narrow** their parent's tools, budget and limits.
 
@@ -491,7 +492,7 @@ Each handoff schema is built from layers, top to bottom; every layer may only ad
 creates `.agentic/config.yaml`, `AGENTS.md` (from a scan of the repo), codeintel config, `.gitattributes`, the nightly index workflow, and the first index build.
 
 **`agentic init`** (each developer, once per repo; nothing committed):
-1. Check prerequisites: Python, git (worktree support), sandbox availability (Linux/macOS: `srt`; Windows: Codex sandbox or WSL2), installed backend CLIs, network/proxy/TLS settings.
+1. Check prerequisites: Python, git (worktree support), sandbox availability (`srt` + Node.js on macOS/Linux; on Windows `srt` inside WSL2, D38), installed backend CLIs, network/proxy/TLS settings.
 2. Authenticate: validate proxy key with TokenLean; register with the control plane (org mode); check minimum CLI version.
 3. Fetch org policy; cache it locally with expiry.
 4. Install the approved skills used by the agents in this repo's pipelines into `.agentic/local/skills/` (pinned by hash).
@@ -557,7 +558,7 @@ Each backend has **contract tests** pinned to a tool version; flags change fast 
 ### 9.2 Sandbox
 
 - **Isolation**: one git worktree per code-editing step; the step's diff is the reviewable artefact; rollback = discard worktree.
-- **OS enforcement**: Linux/macOS → Anthropic `sandbox-runtime` (`srt`, Apache-2.0); Windows → Codex native sandbox, or WSL2; CI → Docker/Podman containers; optional self-hosted E2B pool later.
+- **OS enforcement**: Anthropic `sandbox-runtime` (`srt`, Apache-2.0) on every OS: macOS Seatbelt, Linux bubblewrap, Windows via WSL2 (D38; native `srt-win` only if org-signed, container backend later); CI → Docker/Podman containers; optional self-hosted E2B pool later.
 - **Worktree manager**: ported from Zyroflo `worktree.py`.
 - **Shell policy**: one rule format (modelled on Codex execpolicy: prefix → allow / prompt / forbid) compiled into each backend's native permission format, **plus Zyroflo `guard.py` walls**: the `deny_commands` destructive-command matcher, protected paths, and diff budget. The OS/container sandbox is the real boundary; prefix rules and guards are a convenience layer.
 - Repos where raw git is unsafe can set a commit-command override (Zyroflo feature).
@@ -967,7 +968,7 @@ Roles are simple RBAC (spec §12.3): a role is a named permission set; admins as
 
 ### Prerequisites (checked automatically by `agentic init`)
 
-Python 3.12 (or the bundled installer), git ≥ 2.40, uv or pipx; access to the internal package index; GitHub access to the repo; on Windows: WSL2 **or** Codex CLI for sandboxing (S6 decides the default); optional: Claude Code / Codex CLI if the team uses those backends.
+Python 3.12 (or the bundled installer), git ≥ 2.40, uv or pipx; access to the internal package index; GitHub access to the repo; Node.js ≥ 20.11 and `srt` for sandboxing (macOS: + `ripgrep`; Linux: + `bubblewrap`, `socat`, `ripgrep`); on Windows: WSL2 with those Linux packages, the CLI and repos inside WSL (S6, D38); optional: Claude Code / Codex CLI if the team uses those backends.
 
 ### First-time setup (about 15 minutes)
 
