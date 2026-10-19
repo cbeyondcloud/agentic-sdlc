@@ -4,6 +4,7 @@ Agent and pipeline files only *request*; this model is the authority that the
 resolver (agentic.policy.resolve, M1-04) checks every request against.
 """
 
+from decimal import Decimal
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -13,6 +14,17 @@ from agentic.definitions import ChildLimits, DenyRules, Limits
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")  # typos in policy files are errors
+
+
+class ModelPrice(_Strict):
+    """What one model costs, in USD per million tokens - for client-side cost
+    ESTIMATES where TokenLean reports none (live streams, the Anthropic route).
+    Kept in line with TokenLean's own pricing table, so both sides estimate alike."""
+
+    input_per_mtok: Decimal = Field(ge=0, allow_inf_nan=False)
+    output_per_mtok: Decimal = Field(ge=0, allow_inf_nan=False)
+    cache_read_per_mtok: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    cache_write_per_mtok: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class TierSpec(_Strict):
@@ -120,8 +132,20 @@ class OrgPolicy(_Strict):
     tool_mirror_url: str | None = None
     allow_repo_pipelines: bool = False  # D33: pipelines only from the policy repo
 
+    # --- model prices, for estimating costs TokenLean does not report ---
+    prices: dict[str, ModelPrice] = {}
+
     # --- which policy this is (git commit or content hash), recorded on every run ---
     version: str
+
+    def price_for(self, model: str) -> ModelPrice | None:
+        """The price of `model`: an exact name wins, otherwise the longest priced name
+        contained in it, case-insensitively (TokenLean's rule). Never a default."""
+        if model in self.prices:
+            return self.prices[model]
+        lowered = model.lower()
+        matches = [name for name in self.prices if name.lower() in lowered]
+        return self.prices[max(matches, key=len)] if matches else None
 
     @model_validator(mode="after")
     def references_are_consistent(self) -> Self:

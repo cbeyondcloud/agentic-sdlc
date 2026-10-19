@@ -4,6 +4,7 @@ from agentic.policy.load import PolicyError, load_policy, policy_version
 from agentic.policy.model import (
     AgentType,
     ClassificationRule,
+    ModelPrice,
     OrgPolicy,
     RoleLimits,
     TeamPolicy,
@@ -14,6 +15,7 @@ from agentic.policy.resolve import ResolveContext, ResolvedAgent, Violation, res
 __all__ = [
     "AgentType",
     "ClassificationRule",
+    "ModelPrice",
     "OrgPolicy",
     "PolicyError",
     "ResolveContext",

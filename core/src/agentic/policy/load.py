@@ -42,6 +42,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
     "limits.yaml": {"concurrency": "concurrency"},
     "licences.yaml": {"blocked": "blocked_licences", "scan": "licence_scan"},
     "retention.yaml": {"days": "retention_days"},
+    "prices.yaml": {"prices": "prices"},
     "org.yaml": {
         "allowed_repo_patterns": "allowed_repo_patterns",
         "tool_mirror_url": "tool_mirror_url",
