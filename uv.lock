@@ -15,6 +15,16 @@ members = [
 name = "agentic-cli"
 version = "0.1.0"
 source = { editable = "cli" }
+dependencies = [
+    { name = "agentic-core" },
+    { name = "sdlc-commons" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "agentic-core", editable = "core" },
+    { name = "sdlc-commons", editable = "commons" },
+]
 
 [[package]]
 name = "agentic-control-plane"

@@ -3,7 +3,10 @@ name = "agentic-cli"
 version = "0.1.0"
 description = "The agentic command-line tool"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "agentic-core",
+    "sdlc-commons",
+]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]
