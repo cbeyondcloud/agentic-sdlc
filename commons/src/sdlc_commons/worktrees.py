@@ -145,21 +145,25 @@ class StepCheckpoints:
         heads = {}
         for name, path in self._trees().items():
             if fresh:
-                worktree_git(path, "reset", "-q", "--hard", "HEAD")
-                worktree_git(path, "clean", "-q", "-fd")
-            heads[name] = worktree_git(path, "rev-parse", "HEAD")
+                _git(path, "reset", "-q", "--hard", "HEAD")
+                _git(path, "clean", "-q", "-ffd")  # -ff: nested repositories too (review I4)
+            heads[name] = _git(path, "rev-parse", "HEAD")
         return heads
 
     def finish(self, message: str) -> dict[str, str]:
         """Commit the step's work in every tree that changed; returns each HEAD."""
         heads = {}
         for name, path in self._trees().items():
-            worktree_git(path, "add", "-A")
-            if worktree_git(path, "diff", "--cached", "--name-only"):
-                worktree_git(
-                    path, *self._commit_config(path), "commit", "-q", "--no-verify", "-m", message
+            if nested := _nested_repositories(path):
+                raise WorktreeError(
+                    f"{name}: an agent left a git repository inside the tree "
+                    f"({', '.join(nested)}); it cannot be checkpointed - the next fresh "
+                    f"attempt removes it"
                 )
-            heads[name] = worktree_git(path, "rev-parse", "HEAD")
+            _git(path, "add", "-A")
+            if _git(path, "diff", "--cached", "--name-only"):
+                _git(path, *self._commit_config(path), "commit", "-q", "--no-verify", "-m", message)
+            heads[name] = _git(path, "rev-parse", "HEAD")
         return heads
 
     def rollback(self, to: Mapping[str, str]) -> None:
@@ -170,11 +174,11 @@ class StepCheckpoints:
             if name not in trees:
                 raise WorktreeError(f"rollback names {name!r}, which has no tree in this run")
             path = trees[name]
-            if worktree_git(path, "merge-base", commit, "HEAD", check=False) != commit:
+            if _git(path, "merge-base", commit, "HEAD", check=False) != commit:
                 raise WorktreeError(f"{commit} is not part of this run's branch in {name}")
         for name, commit in to.items():
-            worktree_git(trees[name], "reset", "-q", "--hard", commit)
-            worktree_git(trees[name], "clean", "-q", "-fd")
+            _git(trees[name], "reset", "-q", "--hard", commit)
+            _git(trees[name], "clean", "-q", "-ffd")
 
     def _trees(self) -> dict[str, Path]:
         return {
@@ -189,9 +193,27 @@ class StepCheckpoints:
         hooks = state.runs_dir(self.target) / self.run_id / "no-hooks"
         hooks.mkdir(parents=True, exist_ok=True)
         config = ["-c", f"core.hooksPath={hooks.as_posix()}", "-c", "commit.gpgsign=false"]
-        if not worktree_git(path, "config", "user.email", check=False):
+        if not _git(path, "config", "user.email", check=False):
             config += ["-c", "user.name=agentic", "-c", "user.email=agentic@localhost"]
         return config
+
+
+def _git(where: Path, *args: str, check: bool = True) -> str:
+    """A checkpoint git call: never runs an fsmonitor command the tree's or the
+    repository's config names (agent-reachable without a sandbox, review I5)."""
+    return worktree_git(where, "-c", "core.fsmonitor=false", *args, check=check)
+
+
+def _nested_repositories(tree: Path) -> list[str]:
+    """Untracked folders in `tree` that hold a git repository of their own."""
+    listing = _git(tree, "ls-files", "--others", "--exclude-standard", "--directory")
+    found = []
+    for entry in listing.splitlines():
+        folder = tree / entry.rstrip("/")
+        if entry.endswith("/") and folder.is_dir():
+            if (folder / ".git").exists() or any(folder.rglob(".git")):
+                found.append(entry.rstrip("/"))
+    return found
 
 
 def worktree_git(where: Path, *args: str, check: bool = True) -> str:

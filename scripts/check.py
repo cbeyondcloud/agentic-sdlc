@@ -80,8 +80,10 @@ def tracked_files_tar() -> bytes:
     """
     listing = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-        cwd=REPO_ROOT, capture_output=True, check=True,
-    ).stdout  # fmt: skip
+        cwd=REPO_ROOT,
+        capture_output=True,
+        check=True,
+    ).stdout
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
         for name in filter(None, listing.decode().split("\0")):

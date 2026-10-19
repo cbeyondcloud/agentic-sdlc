@@ -66,8 +66,9 @@ def load_policy(root: Path) -> OrgPolicy:
                 problems.append(f"{path.name}/: unexpected folder (only teams/ is allowed)")
             continue
         if path.name not in FILE_FIELDS:
-            problems.append(f"{path.name}: unknown policy file (expected one of: "
-                            f"{', '.join(FILE_FIELDS)})")  # fmt: skip
+            problems.append(
+                f"{path.name}: unknown policy file (expected one of: {', '.join(FILE_FIELDS)})"
+            )
             continue
         content = _read_yaml(path, problems)
         for key, value in content.items():

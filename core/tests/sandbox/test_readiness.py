@@ -156,3 +156,8 @@ def test_other_regimes_run_unsandboxed_with_a_warning(regime):
 def test_policy_can_require_the_sandbox_for_team():
     d = decide_sandbox(UNAVAILABLE, "team", SandboxPolicy(required_for=["team", "regulated"]))
     assert d.refusal
+
+
+def test_windows_guidance_installs_a_node_new_enough():  # review: apt's nodejs is too old
+    assert "20.11" in WINDOWS_GUIDANCE
+    assert "apt install -y bubblewrap socat ripgrep nodejs" not in WINDOWS_GUIDANCE

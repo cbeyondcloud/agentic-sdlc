@@ -23,10 +23,23 @@ def test_srt_is_called_with_separate_arguments(tmp_path):
 
     argv = json.loads((tmp_path / "argv.json").read_text(encoding="utf-8"))
     settings = tmp_path / "s" / "srt-settings.json"
-    assert argv == ["--settings", str(settings), "--", "bash", "-c", "echo hi"]
+    tmp = str(tmp_path / "s" / "tmp")
+    assert argv == [
+        "--settings",
+        str(settings),
+        "--",
+        "env",
+        f"TMPDIR={tmp}",
+        f"TMP={tmp}",
+        f"TEMP={tmp}",
+        "bash",
+        "-c",
+        "echo hi",
+    ]
     assert result.exit_code == 0 and "hi" in result.stdout
     assert json.loads(settings.read_text(encoding="utf-8"))["filesystem"]["allowWrite"] == [
-        tmp_path.as_posix()
+        tmp_path.as_posix(),
+        Path(tmp).as_posix(),
     ]
 
 
@@ -63,3 +76,12 @@ def test_cancelling_the_call_stops_the_command(tmp_path):
 
 def test_the_sandbox_is_isolated(tmp_path):
     assert sandbox(tmp_path).isolated is True
+
+
+def test_temp_files_go_to_a_folder_outside_the_tree(tmp_path):  # review I3
+    rules = SandboxRules(write=(tmp_path / "tree",))
+    box = SrtSandbox(rules, tmp_path / "s", srt=(sys.executable, FAKE_SRT))
+    asyncio.run(box.run("echo hi", tmp_path, 30))
+    written = json.loads(box.settings.read_text(encoding="utf-8"))["filesystem"]["allowWrite"]
+    assert (tmp_path / "s" / "tmp").as_posix() in written
+    assert (tmp_path / "s" / "tmp").is_dir()

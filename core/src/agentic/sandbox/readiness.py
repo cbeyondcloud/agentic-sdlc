@@ -31,10 +31,14 @@ NODE_MIN = (20, 11)
 WINDOWS_GUIDANCE = """\
 Native Windows has no supported sandbox (D38). Run agentic inside WSL2:
   1. In PowerShell: wsl --install -d Ubuntu-24.04
-  2. In Ubuntu: sudo apt update && sudo apt install -y bubblewrap socat ripgrep nodejs npm
-  3. In Ubuntu: sudo npm install -g @anthropic-ai/sandbox-runtime@0.0.78
-  4. Ubuntu 24.04+: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-  5. Install agentic inside Ubuntu and clone repos to the WSL disk (~/src), not /mnt/c"""
+  2. In Ubuntu: sudo apt update && sudo apt install -y bubblewrap socat ripgrep
+  3. In Ubuntu: install Node.js 20.11 or later from nodejs.org or your org's mirror
+     (Ubuntu's own nodejs package is older)
+  4. In Ubuntu: sudo npm install -g @anthropic-ai/sandbox-runtime@0.0.78
+  5. Ubuntu 24.04+: allow unprivileged user namespaces, and keep it after a restart:
+     echo kernel.apparmor_restrict_unprivileged_userns=0 | sudo tee /etc/sysctl.d/60-srt.conf
+     sudo sysctl --system
+  6. Install agentic inside Ubuntu and clone repos to the WSL disk (~/src), not /mnt/c"""
 
 USERNS_FIX = (
     "srt could not start a sandbox. On Ubuntu 24.04+ allow unprivileged user namespaces: "

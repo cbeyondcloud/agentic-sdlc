@@ -48,6 +48,7 @@ class StepRecord(_Strict):
     digest: str | None = None
     base: dict[str, str] | None = None  # the commit each component started from (M1-30)
     commit: dict[str, str] | None = None  # its checkpoint after the step; None = none made
+    sandbox: str | None = None  # where its commands ran: "srt 0.0.78" or "none" (D38)
     cost_usd: str = "0"  # Decimal, as text
     started_at: AwareDatetime
     ended_at: AwareDatetime

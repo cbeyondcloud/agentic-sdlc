@@ -89,12 +89,20 @@ def resolve_agent(
     class_name = ctx.repo_classification or policy.default_classification
     rule = policy.classifications.get(class_name)
     if rule is None:
-        refuse("classification", class_name, sorted(policy.classifications),
-               "the repo's classification is not defined in org policy")  # fmt: skip
+        refuse(
+            "classification",
+            class_name,
+            sorted(policy.classifications),
+            "the repo's classification is not defined in org policy",
+        )
     agent_type = policy.agent_types.get(agent.type)
     if agent_type is None:
-        refuse("type", agent.type, sorted(policy.agent_types),
-               "the agent type is not defined in org policy")  # fmt: skip
+        refuse(
+            "type",
+            agent.type,
+            sorted(policy.agent_types),
+            "the agent type is not defined in org policy",
+        )
     if violations:
         return None, violations
     assert rule is not None and agent_type is not None  # narrowed by the checks above
@@ -140,8 +148,9 @@ def resolve_agent(
         if tool not in policy.tools_catalog:
             refuse("tools", tool, policy.tools_catalog, "not in the org tool catalog")
         elif tool in policy.forbidden_tools:
-            refuse("tools", tool, "not " + ", ".join(policy.forbidden_tools),
-                   "forbidden by org policy")  # fmt: skip
+            refuse(
+                "tools", tool, "not " + ", ".join(policy.forbidden_tools), "forbidden by org policy"
+            )
         elif tool not in agent_type.tools:
             refuse("tools", tool, agent_type.tools, f"beyond the '{agent.type}' type")
 
@@ -162,8 +171,12 @@ def resolve_agent(
             refuse("consumes", kind, agent_type.consumes, f"beyond the '{agent.type}' type")
     produces = agent.produces or agent_type.produces
     if agent_type.produces and produces != agent_type.produces:
-        refuse("produces", produces, agent_type.produces,
-               f"the '{agent.type}' type always produces '{agent_type.produces}'")  # fmt: skip
+        refuse(
+            "produces",
+            produces,
+            agent_type.produces,
+            f"the '{agent.type}' type always produces '{agent_type.produces}'",
+        )
 
     if violations:
         return None, violations
@@ -290,11 +303,16 @@ def _smallest(*values: float | int | None) -> float | int | None:
 
 def _clamp_one(requested: Limits, type_cap: object, team_cap: Limits | None) -> Limits:
     """Each field = min(request, type cap, team cap). The type cap is always set (D35)."""
-    return Limits(**{
-        name: _smallest(getattr(requested, name), getattr(type_cap, name),
-                        getattr(team_cap, name) if team_cap else None)
-        for name in Limits.model_fields
-    })  # fmt: skip
+    return Limits(
+        **{
+            name: _smallest(
+                getattr(requested, name),
+                getattr(type_cap, name),
+                getattr(team_cap, name) if team_cap else None,
+            )
+            for name in Limits.model_fields
+        }
+    )
 
 
 def _clamp_limits(requested: Limits, agent_type: AgentType, team_cap: RoleLimits | None) -> Limits:
@@ -307,10 +325,13 @@ def _clamp_children(
     type_children = agent_type.limits.children_max
     team_children = team_cap.children_max if team_cap else None
     counts = {
-        name: _smallest(getattr(requested, name), getattr(type_children, name),
-                        getattr(team_children, name) if team_children else None)
+        name: _smallest(
+            getattr(requested, name),
+            getattr(type_children, name),
+            getattr(team_children, name) if team_children else None,
+        )
         for name in ("max_total", "max_concurrent", "max_depth")
-    }  # fmt: skip
+    }
     per_child = _clamp_one(
         requested.per_child,
         type_children.per_child,

@@ -197,11 +197,9 @@ class Guard:
                 if _rule_hits(rule, commands):
                     why = f"the command matches the deny rule {rule!r} ({owner})"
                     blocks.setdefault((wall, why), Block(wall, why))
-        if self.allow_shell is not None:  # every program must be allowed (DF-16)
-            for program, args in commands:
-                if program and not any(_allow_hits(r, program, args) for r in self.allow_shell):
-                    why = f"{program!r} used this way is not on the allow list (agent policy)"
-                    blocks.setdefault(("not-allowed", why), Block("not-allowed", why))
+        if self.allow_shell is not None:  # every command must be allowed (DF-16)
+            for block in self._allow_refusals(command):
+                blocks.setdefault((block.wall, block.why), block)
         if _ANSI_QUOTING.search(command):
             why = "$'...' and $\"...\" quoting can hide a program (framework floor)"
             blocks.setdefault(("framework", why), Block("framework", why))
@@ -210,6 +208,37 @@ class Guard:
             blocks.setdefault(("framework", why), Block("framework", why))
         return list(blocks.values())
 
+    def _allow_refusals(self, command: str) -> list[Block]:
+        """Every command in `command` that no allow rule covers.
+
+        An allow rule is a word prefix of one command ("uv run pytest" covers
+        "uv run pytest -q", never "uv run curl"). Every command counts: each segment
+        between `; | & && ||` and newlines, and what an interpreter is told to run
+        (`bash -c "..."`, `find -exec ...`). Text the reader cannot follow - command
+        substitution, `${...}` expansion, process substitution, comments - is refused
+        whole: it can hide a program (review C1)."""
+        if _UNREADABLE.search(command):
+            why = (
+                "command substitution, ${...} expansion and # comments cannot be checked "
+                "against the allow list - write the command without them (framework floor)"
+            )
+            return [Block("not-allowed", why)]
+        text = _FD_REDIRECT.sub(" ", _BOTH_PIPE.sub("|", _BOTH_REDIRECT.sub(">", command)))
+        rules = (*self.allow_shell, *ALWAYS_ALLOWED)
+        refused: dict[str, None] = {}
+        for spelling in dict.fromkeys(
+            (text, text.replace("\\", ""), _with_paths_as_programs(text))
+        ):
+            for words in _allow_segments(spelling):
+                if not any(_prefix_hits(rule, words) for rule in rules):
+                    refused[_program(words[0]) if words else "?"] = None
+        return [
+            Block(
+                "not-allowed", f"{program!r} used this way is not on the allow list (agent policy)"
+            )
+            for program in refused
+        ]
+
     def asks(self, command: str) -> list[str]:
         """The ask rules this command hits: it runs only after a person approves it.
         Matched like the deny rules (asking too often is the safe side)."""
@@ -217,7 +246,7 @@ class Guard:
             commands = [c for spelling in _rule_spellings(command) for c in _commands(spelling)]
         except _TooComplex:
             return list(self.ask_shell)
-        return [rule for rule in self.ask_shell if _rule_hits(rule, commands)]
+        return [rule for rule in self.ask_shell if _ask_hits(rule, commands)]
 
     # ── writes ────────────────────────────────────────────────────────────────
 
@@ -653,20 +682,74 @@ def _rule_hits(rule: str, commands: list[tuple[str, list[str]]]) -> bool:
     return False
 
 
-def _allow_hits(rule: str, program: str, args: list[str]) -> bool:
-    """Whether an allow rule covers one command: the same program, and the rule's
-    plain words are the command's FIRST plain words, in order (stricter than a deny
-    rule: `git status` allows `git status -s`, never `git log status`)."""
-    head, *parts = rule.split()
-    if not _same_program(program, _program(head)):
+#: Shell builtins that run nothing and write nothing: allowed without listing them.
+ALWAYS_ALLOWED = ("cd", "pwd", "true", "false", "exit", "set", "export", "unset", "test", "[", ":")
+#: Text the allow-list reader cannot follow: it is refused whole (review C1).
+_UNREADABLE = re.compile(r"`|\$\(|\$\{|<\(|>\(|(?:^|\s)#")
+_BOTH_PIPE = re.compile(r"\|&")  # `a |& b` pipes both streams: still a pipe
+_BOTH_REDIRECT = re.compile(r"&>>?")  # `&> file` is a redirect
+_FD_REDIRECT = re.compile(r"\d*[<>]&\d*-?")  # `2>&1`, `>&2`: no file, no program
+_MAX_DEPTH = 3
+
+
+def _allow_segments(text: str, depth: int = 0) -> list[list[str]]:
+    """The words of every command in `text`, from its program onward: one list per
+    segment, plus what an interpreter in it is told to run."""
+    if depth > _MAX_DEPTH:
+        return [["(nested too deep)"]]
+    found: list[list[str]] = []
+    segment: list[_Word] = []
+    after = ""
+    for token in [*_tokens(text), _Word(";", sep=True)]:
+        if not token.sep:
+            segment.append(token)
+            continue
+        start = 1 if after in "<>" and after else 0  # a redirect's target is not a command
+        while start < len(segment) and (
+            _ENV_ASSIGNMENT.match(segment[start].text) or segment[start].text in _TRANSPARENT
+        ):
+            start += 1
+        if start < len(segment):
+            found.append([w.text for w in segment[start:]])
+            carried = _carried(segment, start, _program(segment[start].text))
+            if carried is not None:
+                word = segment[carried]
+                if word.quoted and any(ch.isspace() for ch in word.text):
+                    found += _allow_segments(word.text, depth + 1)
+                else:
+                    found.append([w.text for w in segment[carried:]])
+        segment, after = [], token.text
+    return found
+
+
+def _prefix_hits(rule: str, words: list[str]) -> bool:
+    """Whether an allow rule is a word prefix of one command: the same program (exact
+    name, no 8.3 leniency), then the rule's words in order; `a|b` are alternatives."""
+    wanted = rule.split()
+    if not words or len(words) < len(wanted):
         return False
+    if _program(words[0]) not in {_program(o) for o in wanted[0].split("|")}:
+        return False
+    return all(word in alts.split("|") for alts, word in zip(wanted[1:], words[1:], strict=False))
+
+
+def _ask_hits(rule: str, commands: list[tuple[str, list[str]]]) -> bool:
+    """Whether an ask rule matches a command: the same program and each of the rule's
+    words ANYWHERE among its arguments - options before a subcommand cannot hide it
+    (review I1); asking once too often is the safe side."""
+    head, *parts = rule.split()
+    wanted = _program(head)
     plain = [p.lower().split("|") for p in parts if not p.startswith("-")]
     options = [p.lower().split("|") for p in parts if p.startswith("-")]
-    subs = [s.lower() for s in _subcommands(args)]
-    if len(subs) < len(plain) or any(w not in alts for w, alts in zip(subs, plain, strict=False)):
-        return False
-    lowered = [a.lower() for a in args]
-    return all(any(_option_hit(alt, lowered, False) for alt in alts) for alts in options)
+    for name, args in commands:
+        if not _same_program(name, wanted):
+            continue
+        lowered = [a.lower() for a in args]
+        if all(any(alt in lowered for alt in alts) for alts in plain) and all(
+            any(_option_hit(alt, lowered, False) for alt in alts) for alts in options
+        ):
+            return True
+    return False
 
 
 def _before_subcommand(args: list[str]) -> list[str]:

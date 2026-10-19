@@ -8,11 +8,16 @@ tool, pinned at SRT_VERSION, called as a subprocess:
 
 The command goes as separate arguments: one string would be read as a program name
 (spike S6). Stopping the call stops `srt` and everything under it (`run_process`).
+
+Each sandbox has its own temp folder beside its settings, writable inside the
+sandbox and named in TMPDIR/TMP/TEMP: srt's default temp folder may not exist, and
+temp files must never land in the run's tree, where a checkpoint would commit them.
 """
 
 import json
 import os
 from collections.abc import Sequence
+from dataclasses import replace
 from pathlib import Path
 
 from agentic.sandbox.process import ShellResult, run_process
@@ -32,13 +37,15 @@ class SrtSandbox:
     ) -> None:
         self.rules = rules
         self.settings = Path(settings_dir) / SETTINGS_FILE
+        self.tmp = Path(settings_dir) / "tmp"
         self.srt = tuple(srt)
         self._written = False
 
     def _write_settings(self) -> None:
         """Written once, atomically: a half-written file must never be read by srt."""
-        text = json.dumps(srt_settings(self.rules), indent=2) + "\n"
-        self.settings.parent.mkdir(parents=True, exist_ok=True)
+        rules = replace(self.rules, write=(*self.rules.write, self.tmp))
+        text = json.dumps(srt_settings(rules), indent=2) + "\n"
+        self.tmp.mkdir(parents=True, exist_ok=True)
         temp = self.settings.with_name(f"{SETTINGS_FILE}.{os.getpid()}.tmp")
         temp.write_bytes(text.encode("utf-8"))
         os.replace(temp, self.settings)
@@ -47,5 +54,7 @@ class SrtSandbox:
     async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
         if not self._written:
             self._write_settings()
-        argv = [*self.srt, "--settings", str(self.settings), "--", "bash", "-c", command]
+        temp = [f"{name}={self.tmp}" for name in ("TMPDIR", "TMP", "TEMP")]
+        argv = [*self.srt, "--settings", str(self.settings), "--", "env", *temp]
+        argv += ["bash", "-c", command]
         return await run_process(argv, cwd, timeout_s)

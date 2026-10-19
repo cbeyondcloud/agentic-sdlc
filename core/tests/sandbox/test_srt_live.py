@@ -79,3 +79,10 @@ def test_the_probe_passes_on_this_machine(tmp_path):  # the S6 cases, as a tool 
     from agentic.sandbox import probe
 
     assert probe.main(["--workdir", str(tmp_path / "probe")]) == 0
+
+
+def test_temp_files_never_land_in_the_tree(tree):  # review I3
+    result = run(tree, "mktemp && python3 -c 'import tempfile; print(tempfile.mkdtemp())'")
+    assert result.exit_code == 0, result.stderr
+    assert all(str(tree) not in line for line in result.stdout.splitlines())
+    assert list(tree.iterdir()) == []

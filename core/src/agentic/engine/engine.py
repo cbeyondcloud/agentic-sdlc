@@ -853,7 +853,10 @@ class _Run:
             return False
         cost = budget.total_spent()
         closing = self._close_slice(budget)
-        if outcome.status != "paused":  # a tool-approval pause keeps working in the tree
+        # Only an answer is checkpointed: a stopped attempt's partial work is discarded by
+        # the retry's fresh begin, so a later reject returns to the step's real base (I7);
+        # a tool-approval pause keeps working in the tree.
+        if outcome.status in ("completed", "invalid"):
             message = f"agentic: {step.id} #{iteration} ({self.state.run_id})"
             try:
                 commit = self._tree_finish(message)
@@ -1054,6 +1057,7 @@ class _Run:
                 digest=digest,
                 base=marks[2] if marks else None,
                 commit=marks[3] if marks else None,
+                sandbox=self.e.sandbox_label,  # per step: a resume may run elsewhere (I6)
                 cost_usd=str(cost),
                 started_at=started,
                 ended_at=self.e.clock.now(),
