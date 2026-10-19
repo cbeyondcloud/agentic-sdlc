@@ -4,6 +4,7 @@ Every layer folder has the same shape:
 
     <layer>/agents/<name>.md
     <layer>/pipelines/<name>.yaml
+    <layer>/handoffs/<kind>.yaml   (handoff template extensions, D37)
 
     org layer  = root of the org policy repo
     team layer = teams/<team>/ inside the policy repo
@@ -15,17 +16,30 @@ restricted settings are still checked against org policy by the resolver.
 
 Pipelines are admin-controlled (D33): repo-layer pipelines are ignored unless
 org policy sets `allow_repo_pipelines: true`.
+
+Handoff extensions do not replace each other: they stack, org then team then
+repo, each only adding or tightening (D37). An agent that produces or consumes
+a kind missing from the merged catalog is refused here.
 """
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from agentic.definitions.agent import AgentDefinition, load_agent
 from agentic.definitions.errors import DefinitionError
 from agentic.definitions.pipeline import PipelineDefinition, load_pipeline
 
+if TYPE_CHECKING:
+    from agentic.handoffs.schema import HandoffCatalog
+
 Layer = Literal["org", "team", "repo"]
+
+
+def _builtin_handoffs() -> "HandoffCatalog":
+    from agentic.handoffs.schema import BUILTIN_CATALOG  # imported late: handoffs imports us
+
+    return BUILTIN_CATALOG
 
 
 class UnknownDefinitionError(LookupError):
@@ -39,6 +53,7 @@ class DefinitionSet:
     agents: dict[str, tuple[AgentDefinition, Layer]] = field(default_factory=dict)
     pipelines: dict[str, tuple[PipelineDefinition, Layer]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    handoffs: "HandoffCatalog" = field(default_factory=_builtin_handoffs)
 
     @classmethod
     def discover(
@@ -48,7 +63,11 @@ class DefinitionSet:
         repo: Path | None,
         allow_repo_pipelines: bool = False,
     ) -> "DefinitionSet":
+        from agentic.handoffs.extensions import extend_catalog, load_extension
+
         found = cls()
+        agent_files: dict[str, Path] = {}
+        extensions = []
         # Load farthest first, so nearer layers overwrite: org, then team, then repo.
         for layer, root in (("org", org), ("team", team), ("repo", repo)):
             if root is None:
@@ -56,6 +75,9 @@ class DefinitionSet:
             for path in _files(root / "agents", ".md"):
                 agent = load_agent(path)
                 found.agents[agent.name] = (agent, layer)
+                agent_files[agent.name] = path
+            for path in _files(root / "handoffs", ".yaml"):
+                extensions.append(load_extension(path, layer))
             for path in _files(root / "pipelines", ".yaml"):
                 if layer == "repo" and not allow_repo_pipelines:
                     found.warnings.append(
@@ -65,6 +87,10 @@ class DefinitionSet:
                     continue
                 pipeline = load_pipeline(path)
                 found.pipelines[pipeline.name] = (pipeline, layer)
+        found.handoffs = extend_catalog(found.handoffs, extensions)
+        for name, (agent, _) in found.agents.items():
+            if problems := _unknown_kinds(agent, found.handoffs):
+                raise DefinitionError(agent_files[name], problems)
         return found
 
     def agent(self, name: str) -> AgentDefinition:
@@ -88,6 +114,16 @@ class DefinitionSet:
             known = ", ".join(sorted(table)) or "none"
             raise UnknownDefinitionError(f"no {kind} named '{name}' (known: {known})")
         return table[name]
+
+
+def _unknown_kinds(agent: AgentDefinition, catalog: "HandoffCatalog") -> list[str]:
+    known = ", ".join(catalog.kinds())
+    wanted = [("produces", agent.produces)] + [("consumes", kind) for kind in agent.consumes or ()]
+    return [
+        f"{field_name}: unknown handoff kind '{kind}' (known: {known})"
+        for field_name, kind in wanted
+        if kind is not None and kind not in catalog.schemas
+    ]
 
 
 def _files(folder: Path, suffix: str) -> list[Path]:

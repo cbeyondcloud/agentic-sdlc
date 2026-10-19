@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 
 from agentic.definitions import AgentDefinition, load_agent
+from agentic.handoffs.schema import BUILTIN_CATALOG
 from agentic.policy import OrgPolicy, ResolveContext, load_policy, resolve_agent
+from agentic.policy.resolve import kind_violations
 
 
 @pytest.fixture
@@ -329,3 +331,12 @@ def test_all_violations_reported_together(policy, developer):
     assert resolved is None
     assert {"tier", "tools", "backend"} <= violation_fields(violations)
     assert all(violation.reason for violation in violations)
+
+
+def test_kind_violations_cover_kinds_from_the_type(policy, developer):  # D37
+    resolved, _ = resolve_agent(developer, policy, ResolveContext(team="payments"))
+    agent = resolved.model_copy(update={"produces": "threat-model", "consumes": ["design", "poem"]})
+
+    found = [(v.field, v.requested) for v in kind_violations(agent, BUILTIN_CATALOG)]
+    assert found == [("produces", "threat-model"), ("consumes", "poem")]
+    assert kind_violations(resolved, BUILTIN_CATALOG) == []

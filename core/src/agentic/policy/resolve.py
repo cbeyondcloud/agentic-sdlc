@@ -17,11 +17,15 @@ Two kinds of outcome:
 """
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
 from agentic.definitions import AgentDefinition, ChildLimits, DenyRules, Limits
 from agentic.policy.model import AgentType, ClassificationRule, OrgPolicy, RoleLimits, TeamPolicy
+
+if TYPE_CHECKING:
+    from agentic.handoffs.schema import HandoffCatalog
 
 
 @dataclass(frozen=True)
@@ -285,3 +289,15 @@ def _clamp_children(
         team_children.per_child if team_children else None,
     )
     return ChildLimits(**counts, per_child=per_child)
+
+
+def kind_violations(agent: ResolvedAgent, catalog: "HandoffCatalog") -> list[Violation]:
+    """Handoff kinds the resolved agent produces or consumes that the run's catalog
+    lacks - including kinds inherited from its agent type (D37). Preflight calls it."""
+    known = catalog.kinds()
+    wanted = [("produces", agent.produces)] + [("consumes", kind) for kind in agent.consumes]
+    return [
+        Violation(field_name, kind, known, "unknown handoff kind")
+        for field_name, kind in wanted
+        if kind is not None and kind not in catalog.schemas
+    ]
