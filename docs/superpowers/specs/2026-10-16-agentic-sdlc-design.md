@@ -106,6 +106,7 @@ Decisions agreed during requirements clarification (2026-10-16).
 | D33 | Pipelines | Only org admins and team leads change pipelines (policy repo + CODEOWNERS); repo pipelines off by default in org mode; runs use the approved, hash-matched version (§6) |
 | D34 | Zyroflo dependency | Zyroflo (`sdlc-harness`) is a pinned git dependency used unchanged behind thin adapters in `sdlc_commons`; gaps closed by small backward-compatible Zyroflo PRs (§1.4, spike S14) |
 | D35 | Agent types | Every agent declares an org-defined type; the type (not the name) sets caps, ceilings and defaults; agents inherit and may only narrow; teams lower caps (§5.5) |
+| D36 | HTTP client | `agentic.transport` is built on **httpx2** (the Pydantic team's maintained successor to httpx, BSD-3): the Anthropic SDK requires it and Pydantic AI drops plain httpx in v3; cost capture is a wrapping transport under the identity client (spike S1) |
 
 **Confirmed assumptions**: agents request a **capability tier** by default (exact model optional, admins can override); **preflight** validates every step before a run starts; **child agents inherit and can only narrow** their parent's tools, budget and limits.
 

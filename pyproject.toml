@@ -37,7 +37,8 @@ addopts = "-q"
 line-length = 100
 target-version = "py312"
 # Documentation folders contain Markdown with code snippets; never lint them.
-extend-exclude = ["docs", "reports", "research_notes"]
+extend-exclude = ["docs", "reports", "research_notes", "spikes"]
+force-exclude = true  # honour the excludes when pre-commit passes file names
 
 [tool.ruff.lint]
 # E/F: pyflakes + pycodestyle errors, I: import order, B: common bugs, UP: modern syntax
