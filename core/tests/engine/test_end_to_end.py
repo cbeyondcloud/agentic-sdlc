@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from conftest import AGENTS, FakeClock, answer, review, write
+from _engine_support import AGENTS, FakeClock, answer, review, write
 from pydantic_ai.messages import ModelResponse, TextPart
 from pydantic_ai.models.function import FunctionModel
 
@@ -159,7 +159,7 @@ def test_feature_delivery_runs_end_to_end(tmp_path: Path, fixtures: Path):
     )
     assert (state.status, state.pending.id) == ("awaiting_gate", "design-approval")
 
-    state = decide(Approve("lead@acme.example"))
+    state = decide(Approve("design-approval", "lead@acme.example"))
     assert (state.status, state.pending.id) == ("awaiting_gate", "review-approval")
     assert [r.step for r in state.history] == [
         "requirements",
@@ -170,7 +170,7 @@ def test_feature_delivery_runs_end_to_end(tmp_path: Path, fixtures: Path):
         "review",
     ]
 
-    state = decide(Approve("reviewer@acme.example"))
+    state = decide(Approve("review-approval", "reviewer@acme.example"))
     assert state.status == "completed"
 
     ledger = ledgers["r-e2e"]

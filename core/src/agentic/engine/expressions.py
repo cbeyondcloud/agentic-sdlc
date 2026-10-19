@@ -27,6 +27,26 @@ from celpy import celtypes
 _STRINGS = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")
 _ROOT_NAME = re.compile(r"(?<![.\w])([A-Za-z_]\w*)(?!\w)(?!\s*\()")
 _NOT_NAMES = frozenset({"true", "false", "null", "in"})
+#: A macro's loop variable (`findings.exists(f, f.status == 'open')`) is not a kind.
+_MACRO_VARIABLE = re.compile(r"\.(?:exists_one|exists|all|map|filter)\(\s*([A-Za-z_]\w*)\s*,")
+#: CEL's type names, usable as bare identifiers (`type(x) == double`).
+_CEL_TYPES = frozenset(
+    {
+        "int",
+        "uint",
+        "double",
+        "bool",
+        "string",
+        "bytes",
+        "list",
+        "map",
+        "null_type",
+        "type",
+        "dyn",
+        "duration",
+        "timestamp",
+    }
+)
 _ENV = celpy.Environment()
 
 
@@ -72,8 +92,10 @@ def compile_condition(text: str) -> Condition:
         raise ExpressionError(text, f"not a valid condition: {_first_line(error)}") from error
     except RecursionError as error:
         raise ExpressionError(text, "the condition is nested too deeply") from error
-    kinds = {name for name in _ROOT_NAME.findall(_STRINGS.sub("''", text))}
-    return Condition(text=text, kinds=frozenset(kinds - _NOT_NAMES), _program=program)
+    plain = _STRINGS.sub("''", text)
+    bound = set(_MACRO_VARIABLE.findall(plain))
+    kinds = set(_ROOT_NAME.findall(plain)) - _NOT_NAMES - _CEL_TYPES - bound
+    return Condition(text=text, kinds=frozenset(kinds), _program=program)
 
 
 def cel_name(kind: str) -> str:

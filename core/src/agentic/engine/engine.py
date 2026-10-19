@@ -25,14 +25,22 @@ gate ledger are protocols, wired by the CLI (and the tests).
 
 import hashlib
 import json
+import os
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Protocol
 
-from agentic.agents.runner import AgentOutcome, AgentRunner, AgentTask, OutputContract
+from agentic.agents.runner import (
+    AgentOutcome,
+    AgentRunner,
+    AgentTask,
+    OutputContract,
+    ResumeError,
+)
 from agentic.agents.stuck import oscillation
 from agentic.definitions import DefinitionSet
 from agentic.definitions.pipeline import (
@@ -162,13 +170,50 @@ class Engine:
             max_minutes=definition.max_minutes,
             budget=BudgetLedger(self.run_budget_usd).snapshot(),
         )
-        self.recorder_for(run_id)  # opens the run's ledger
-        self.store.save(state)
-        return await self.advance(run_id)
+        with self._lock(run_id):
+            self.recorder_for(run_id)  # opens the run's ledger
+            self.store.save(state)
+            return await _Run(self, state).go()
 
     async def advance(self, run_id: str) -> RunState:
         """Run from the cursor until a gate, a pause, the end or a failure."""
-        return await _Run(self, self.store.load(run_id)).go()
+        with self._lock(run_id):
+            return await _Run(self, self.store.load(run_id)).go()
+
+    async def stop(self, run_id: str, who: str, reason: str) -> RunState:
+        """End a run that is not finished, from any pause or gate (spec §8.4: "or stop").
+        It works even when the pipeline or templates changed since the run started."""
+        with self._lock(run_id):
+            state = self.store.load(run_id)
+            if state.status in ("completed", "failed", "stopped"):
+                raise EngineError(f"run {run_id} is already {state.status}")
+            state.status, state.pending = "stopped", None
+            state.ended_by, state.end_reason = who, reason
+            self.recorder_for(run_id).record("run_closed", "", status="stopped")
+            state.updated_at = self.clock.now()
+            self.store.save(state)
+            return state
+
+    @contextmanager
+    def _lock(self, run_id: str):
+        """One caller at a time per run: an OS lock on `run.lock` in the run folder,
+        released by the OS if the process dies."""
+        path = self.store.path(run_id).with_name("run.lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(path, "a+b")
+        try:
+            try:
+                _lock_file(handle)
+            except OSError:
+                raise EngineError(
+                    f"run {run_id} is busy: another process or call is working on it"
+                ) from None
+            try:
+                yield
+            finally:
+                _unlock_file(handle)
+        finally:
+            handle.close()
 
     async def resume(
         self,
@@ -180,8 +225,9 @@ class Engine:
     ) -> RunState:
         """Continue a paused run: grant more time or budget, or answer pending tool
         calls (`decisions`), then advance. A run waiting at a gate is decided instead."""
-        run = _Run(self, self.store.load(run_id))
-        return await run.resume(extra_minutes, extra_budget_usd, decisions)
+        with self._lock(run_id):
+            run = _Run(self, self.store.load(run_id))
+            return await run.resume(extra_minutes, extra_budget_usd, decisions)
 
     async def decide(
         self,
@@ -194,8 +240,9 @@ class Engine:
         """A person's decision at the gate the run waits on, then advance (M1-22).
         `self_approval(approver, starter)` returns why a person may not approve their
         own run, or None (`sdlc_commons.gates.self_approval_refusal`)."""
-        run = _Run(self, self.store.load(run_id))
-        return await run.decide(decision, authorizer, self_approval)
+        with self._lock(run_id):
+            run = _Run(self, self.store.load(run_id))
+            return await run.decide(decision, authorizer, self_approval)
 
 
 def pipeline_digest(pipeline: PipelineDefinition) -> str:
@@ -262,22 +309,44 @@ class _Run:
             raise EngineError(
                 f"run {state.run_id} waits at {pending.id}: approve, reject or edit it"
             )
+        if pending is not None and pending.kind == "approval":
+            if decisions is None or set(decisions) != set(pending.calls):
+                raise EngineError(
+                    f"run {state.run_id} waits for a decision on each of these tool calls, "
+                    f"and only these: {pending.calls}"
+                )
         state.extra_minutes += extra_minutes
         if extra_budget > 0 and self.budget.run.limit_usd is not None:
             self.budget.run.raise_limit(self.budget.run.limit_usd + extra_budget)
         if pending is not None and pending.kind == "approval":
-            if decisions is None:
-                raise EngineError(f"run {state.run_id} waits for tool decisions: {pending.calls}")
             step = self._step_at_cursor()
             iteration = state.cursor.loop_iteration or 1
-            state.pending, state.status = None, "running"
+            state.status = "running"  # the pause stays recorded until the step settles
             resumed = (Path(pending.state_path), decisions, pending.state_digest)
-            if not await self._step(step, iteration, resume=resumed):
+            try:
+                finished = await self._step(step, iteration, resume=resumed)
+            except ResumeError as error:
+                state.status = "paused"
+                self.save()
+                raise EngineError(f"the paused tool calls cannot be resumed: {error}") from error
+            if state.pending is pending:
+                self._clear_pending()
+            if not finished:
                 return state
             self._after_step()
             return await self.go()
-        state.pending = None
+        self._clear_pending()
         return await self.go()
+
+    def _clear_pending(self) -> None:
+        """The person answered: the wait ends, and its time is not run time (I6)."""
+        pending = self.state.pending
+        if pending is not None:
+            waited = (self.e.clock.now() - pending.since).total_seconds()
+            self.state.waited_seconds += max(waited, 0)
+        self.state.pending = None
+        if self.state.status in ("paused", "awaiting_gate"):
+            self.state.status = "running"
 
     def _step_at_cursor(self) -> AgentStep | ActionStep:
         step = self.pipeline.steps[self.state.cursor.index]
@@ -302,12 +371,15 @@ class _Run:
 
     def _pass_gate(self, gate: GateStep) -> bool:
         satisfied, why = self.gates.state(gate.gate)
-        if satisfied:
+        covers = set(self.state.approved.get(gate.gate, {})) == set(self.state.unpinned)
+        if satisfied and covers:
             self.state.unpinned = {}
             self._next()
             return True
         reason = f"waiting for approval by {gate.approver_role}"
-        if why and "no entry" not in why:
+        if satisfied and not covers:
+            reason += " (new work since its last approval)"
+        elif why and "no entry" not in why:
             reason += f" ({why})"
         self._wait(gate.gate, reason, gate.gate, dict(self.state.unpinned))
         return False
@@ -331,6 +403,11 @@ class _Run:
         state, pending = self.state, self.state.pending
         if pending is None or pending.kind != "gate":
             raise GateRefused(f"run {state.run_id} is not waiting at a gate")
+        if decision.gate != pending.id:
+            raise GateRefused(
+                f"run {state.run_id} waits at {pending.id}, not {decision.gate} - "
+                "a decision names the gate the person saw"
+            )
         gate = self._gate_step(pending.id)
         role = gate.approver_role if gate is not None else "approver"
         approver = decision.approver.strip()
@@ -341,13 +418,11 @@ class _Run:
                 raise GateRefused(
                     f"{approver} does not hold the role {role!r} that {pending.id} needs"
                 )
+        if isinstance(decision, Reject):  # sending work back is never four-eyes bound
+            return await self._reject(decision, gate)
         if state.regime == "regulated" or (gate is not None and gate.four_eyes):
             if refusal := self_approval(approver, state.starter):
-                raise GateRefused(
-                    f"four-eyes: {refusal} (someone else must decide on your own run)"
-                )
-        if isinstance(decision, Reject):
-            return await self._reject(decision, gate)
+                raise GateRefused(f"four-eyes: {refusal} (someone else must approve your own run)")
         edited = self._edit(decision) if isinstance(decision, Edit) else None
         if edited is None and pending.id == "invalid-output":
             raise GateRefused(
@@ -402,27 +477,33 @@ class _Run:
             self.state.latest[kind] = rel
         self.state.unpinned.pop(decision.path, None)
         self.state.unpinned[rel] = digest
+        self.state.digests[rel] = digest
         self.save()
         return rel, digest, kind
 
     async def _approve(self, decision: Approve | Edit, edited: tuple | None) -> RunState:
         state, pending = self.state, self.state.pending
-        changed = []
+        changed, invalid = [], []
         for rel, digest in list(pending.artefacts.items()):
             try:
                 current = self.recorder.digest(rel)
             except OSError:
                 current = None
-            if current != digest:
-                changed.append(rel)
-                if current is not None:
-                    pending.artefacts[rel] = current
+            if current == digest:
+                continue
+            changed.append(rel)
+            problems = self._validate(rel) if current is not None else ["the file is missing"]
+            if problems:
+                invalid.append(f"{rel}: " + "; ".join(problems))
+            else:
+                pending.artefacts[rel] = current  # the next decision is about these bytes
+                self.state.digests[rel] = current
         if changed:
             self.save()
-            raise GateRefused(
-                f"changed since the gate opened: {', '.join(changed)} - review "
-                f"them and decide again"
-            )
+            message = f"changed since the gate opened: {', '.join(changed)}"
+            if invalid:
+                message += " - not a valid handoff:\n" + "\n".join(invalid)
+            raise GateRefused(message + " - review them and decide again")
         self.gates.record(
             pending.id,
             "approve",
@@ -432,8 +513,12 @@ class _Run:
             notes=decision.notes,
             extra={"regime": state.regime},
         )
-        state.pending, state.status = None, "running"
-        if pending.id == "invalid-output" and edited is not None:
+        if self._gate_step(pending.id) is not None:
+            state.approved[pending.id] = dict(pending.artefacts)
+        self._clear_pending()
+        if pending.id == "blocked-output":
+            self._after_step()  # the person accepted (or edited) the blocked handoff
+        elif pending.id == "invalid-output" and edited is not None:
             rel, digest, _ = edited
             step, iteration = pending.step, state.cursor.loop_iteration or 1
             self._history(
@@ -467,7 +552,7 @@ class _Run:
             notes=decision.feedback,
             extra={"regime": state.regime},
         )
-        if pending.id == "invalid-output":
+        if pending.id in ("invalid-output", "blocked-output"):
             target, cursor = pending.step, state.cursor
         elif gate is None:  # an exhausted loop: run it again from its first step
             loop = self.pipeline.steps[state.cursor.index].loop
@@ -475,8 +560,11 @@ class _Run:
             cursor = Cursor(index=state.cursor.index, loop_iteration=1, loop_index=0)
         else:
             target, cursor = self._reject_target(gate)
+        if cursor.loop_iteration == 1 and cursor is not state.cursor:
+            state.loop_pass_start = len(state.history)  # a new pass of the loop (I9)
         state.feedback[target] = decision.feedback
-        state.cursor, state.pending, state.status = cursor, None, "running"
+        self._clear_pending()
+        state.cursor = cursor
         self.save()
         return await self.go()
 
@@ -516,6 +604,7 @@ class _Run:
         cursor = self.state.cursor
         if cursor.loop_iteration == 0:
             cursor.loop_iteration, cursor.loop_index = 1, 0
+            self.state.loop_pass_start = len(self.state.history)
         while True:
             while cursor.loop_index < len(loop.steps):
                 if self._timed_out():
@@ -529,6 +618,9 @@ class _Run:
                 done = compile_condition(loop.until).evaluate(self._context())
             except ExpressionError as error:
                 self._pause("condition", str(error), step=loop.id)
+                return False
+            except _Unusable as problem:
+                self._pause(problem.pause_id, problem.reason, step=loop.id)
                 return False
             if done:
                 self._next()
@@ -556,7 +648,7 @@ class _Run:
         """An open finding of this iteration that repeats one of the last two (§8.5)."""
         body = {step.id for step in loop.steps}
         by_iteration: dict[int, list[str]] = {}
-        for record in self.state.history:
+        for record in self.state.history[self.state.loop_pass_start :]:
             if record.step in body and record.outcome == "completed" and record.handoff:
                 issues = self._open_issues(record.handoff)
                 if issues is not None:
@@ -569,8 +661,11 @@ class _Run:
         return None
 
     def _open_issues(self, rel: str) -> list[str] | None:
-        handoff = self._read(rel)
-        if handoff is None or handoff.envelope.kind != "review":
+        try:
+            handoff = self._read(rel)
+        except (OSError, HandoffError):
+            return None
+        if handoff.envelope.kind != "review":
             return None
         return [f.issue for f in handoff.data.findings if f.status == "open"]  # type: ignore[attr-defined]
 
@@ -586,12 +681,14 @@ class _Run:
             except ExpressionError as error:
                 self._pause("condition", str(error), step=step.id)
                 return False
+            except _Unusable as problem:
+                self._pause(problem.pause_id, problem.reason, step=step.id)
+                return False
             if not wanted:
                 now = self.e.clock.now()
                 self._history(step.id, iteration, "skipped", started=now)
                 self.recorder.record("step_finished", step.id, outcome="skipped")
-                self.save()
-                return True
+                return True  # saved with the cursor move
         if isinstance(step, ActionStep):
             return self._action(step, iteration)
         return await self._agent(step, iteration, resume)
@@ -610,11 +707,17 @@ class _Run:
             self._close("failed")
             return False
         self.recorder.record("step_started", step.id, attempt=self._attempt(step.id, iteration))
-        detail = action(self.state)
+        try:
+            detail = action(self.state)
+        except Exception as error:
+            reason = f"{type(error).__name__}: {error}"
+            self._history(step.id, iteration, "failed", started=started, detail=reason)
+            self.recorder.record("step_finished", step.id, outcome="error")
+            self._pause("step-error", reason, step=step.id)
+            return False
         self._history(step.id, iteration, "completed", started=started, detail=str(detail))
         self.recorder.record("step_finished", step.id, outcome="completed")
-        self.save()
-        return True
+        return True  # saved with the cursor move
 
     async def _agent(self, step: AgentStep, iteration: int, resume: tuple | None) -> bool:
         agent, violations = resolve_agent(
@@ -659,11 +762,26 @@ class _Run:
                 outcome = await runner.run(task)
             else:
                 outcome = await runner.resume(*resume)
+        except _Unusable as problem:
+            self._close_slice(budget)
+            self._pause(problem.pause_id, problem.reason, step=step.id)
+            return False
+        except ResumeError:
+            self._close_slice(budget)
+            raise
         except LimitHit as hit:
             self._close_slice(budget)
             self._history(step.id, iteration, "stopped", started=started, detail=str(hit))
             self.recorder.record("step_finished", step.id, outcome="budget")
             self._pause("budget", str(hit), step=step.id)
+            return False
+        except Exception as error:  # a provider, network or tool failure: a person decides
+            cost = budget.total_spent()
+            self._close_slice(budget)
+            reason = f"{type(error).__name__}: {error}"
+            self._history(step.id, iteration, "failed", started=started, cost=cost, detail=reason)
+            self.recorder.record("step_finished", step.id, outcome="error")
+            self._pause("step-error", reason, step=step.id)
             return False
         cost = budget.total_spent()
         closing = self._close_slice(budget)
@@ -685,6 +803,7 @@ class _Run:
         if outcome.status == "completed":
             rel = f"{base}.md"
             digest = self.recorder.write_artifact(rel, outcome.output or "")
+            self.state.digests[rel] = digest
             if agent.produces:
                 self.state.latest[agent.produces] = rel
             self.state.unpinned[rel] = digest
@@ -702,11 +821,19 @@ class _Run:
             self.recorder.record(
                 "step_finished", step, outcome="completed", artifacts={rel: digest}, cost=usd
             )
-            self.save()
-            return True
+            if blocked := self._blocked(rel):
+                self._wait(
+                    "blocked-output",
+                    f"the agent reports it is blocked: {blocked}",
+                    step,
+                    {rel: digest},
+                )
+                return False
+            return True  # saved with the cursor move
         if outcome.status == "invalid":
             rel = f"{base}.invalid.md"
             digest = self.recorder.write_artifact(rel, outcome.output or "")
+            self.state.digests[rel] = digest
             reason = "the answer is not a valid handoff after one retry: " + "; ".join(
                 outcome.errors
             )
@@ -749,28 +876,71 @@ class _Run:
     # ── helpers ──────────────────────────────────────────────────────────────
 
     def _context(self) -> dict[str, dict]:
-        """The front-matter fields of the newest handoff of each kind, for conditions."""
+        """The front-matter fields of the newest handoff of each kind, for conditions.
+        A handoff that changed on disk, or no longer parses, pauses the run (I7)."""
         context = {}
         for kind, rel in self.state.latest.items():
-            handoff = self._read(rel)
-            if handoff is not None:
-                fields = handoff.data.model_dump(mode="json")
-                context[kind] = {**fields, "status": handoff.envelope.status}
+            self._check_unchanged(rel)
+            try:
+                handoff = self._read(rel)
+            except (OSError, HandoffError) as error:
+                raise _Unusable("handoff-invalid", f"{rel} cannot be read: {error}") from error
+            fields = handoff.data.model_dump(mode="json")
+            context[kind] = {**fields, "status": handoff.envelope.status}
         return context
 
     def _read(self, rel: str):
+        text = (self.recorder.run_dir / rel).read_text(encoding="utf-8")
+        return parse_handoff(text.replace("\r\n", "\n").replace("\r", "\n"), self.catalog)
+
+    def _check_unchanged(self, rel: str) -> None:
+        recorded = self.state.digests.get(rel)
+        if recorded is None:
+            return
+        try:
+            current = self.recorder.digest(rel)
+        except OSError:
+            current = None
+        if current != recorded:
+            raise _Unusable(
+                "handoff-changed",
+                f"{rel} changed on disk after it was recorded - restore it, or stop the run",
+            )
+
+    def _validate(self, rel: str) -> list[str]:
+        """Why the file at `rel` is not a valid handoff for this run, or []."""
+        if rel.endswith(".invalid.md"):
+            return []  # an invalid answer is settled by an edit, never approved as it is
         try:
             text = (self.recorder.run_dir / rel).read_text(encoding="utf-8")
-            return parse_handoff(text, self.catalog)
+            parse_handoff(
+                text.replace("\r\n", "\n"),
+                self.catalog,
+                block_on=self.e.block_on_for(self.state.regime),
+            )
+        except HandoffError as error:
+            return list(error.errors)
+        except OSError as error:
+            return [str(error)]
+        return []
+
+    def _blocked(self, rel: str) -> str | None:
+        """The summary of a handoff whose envelope says `blocked`, else None."""
+        try:
+            handoff = self._read(rel)
         except (OSError, HandoffError):
             return None
+        if handoff.envelope.status != "blocked":
+            return None
+        return getattr(handoff.data, "summary", "") or "no summary given"
 
     def _inputs(self, consumes: list[str]) -> dict[str, str]:
         inputs = {}
         for kind in consumes:
             if kind in self.state.latest:
-                path = self.recorder.run_dir / self.state.latest[kind]
-                inputs[kind] = path.read_text(encoding="utf-8")
+                rel = self.state.latest[kind]
+                self._check_unchanged(rel)
+                inputs[kind] = (self.recorder.run_dir / rel).read_text(encoding="utf-8")
         return inputs
 
     def _prompt(self, step: str, iteration: int) -> str:
@@ -823,7 +993,8 @@ class _Run:
         if self.state.max_minutes is None:
             return False
         limit = timedelta(minutes=self.state.max_minutes + self.state.extra_minutes)
-        return self.e.clock.now() - self.state.started_at > limit
+        active = self.e.clock.now() - self.state.started_at
+        return active - timedelta(seconds=self.state.waited_seconds) > limit
 
     def _timeout_reason(self) -> str:
         minutes = self.state.max_minutes + self.state.extra_minutes  # type: ignore[operator]
@@ -850,6 +1021,38 @@ class _Run:
     def save(self) -> None:
         self.state.updated_at = self.e.clock.now()
         self.e.store.save(self.state)
+
+
+class _Unusable(Exception):
+    """A recorded handoff that cannot be used as it is: the run pauses for a person."""
+
+    def __init__(self, pause_id: str, reason: str) -> None:
+        super().__init__(reason)
+        self.pause_id, self.reason = pause_id, reason
+
+
+def _lock_file(handle) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(handle) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _name(agent: ResolvedAgent) -> str:

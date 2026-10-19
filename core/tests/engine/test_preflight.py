@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from conftest import AGENTS, write
+from _engine_support import AGENTS, write
 
 from agentic.definitions import DefinitionSet
 from agentic.engine.preflight import preflight

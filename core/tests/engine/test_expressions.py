@@ -76,3 +76,9 @@ def test_kinds_with_dashes_are_read_with_underscores():
     assert compile_condition("test_report.verdict == 'pass'").evaluate(context) is True
     assert compile_condition("dev_report.commits == []").kinds == frozenset({"dev_report"})
     assert cel_name("dev-report") == "dev_report"
+
+
+def test_macro_variables_and_type_names_are_not_kinds():  # SP6 review I8
+    assert compile_condition("review.findings.exists(f, f.status == 'open')").kinds == {"review"}
+    assert compile_condition("review.findings.all(x, x.severity != 'critical')").kinds == {"review"}
+    assert compile_condition("type(review.score) == double").kinds == {"review"}

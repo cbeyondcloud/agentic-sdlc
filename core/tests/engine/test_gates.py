@@ -4,7 +4,7 @@ four-eyes; digest pinning (M1-22; spec §6, §6.1, §7.3)."""
 import asyncio
 
 import pytest
-from conftest import FakeGates, answer, review
+from _engine_support import FakeGates, answer, review
 
 from agentic.engine.gates import Approve, Edit, GateRefused, Reject, StandaloneAuthorizer
 
@@ -62,7 +62,7 @@ def test_approve_pins_records_and_continues(make_harness):
     h, state = at_gate(make_harness)
     pinned = dict(state.pending.artefacts)
 
-    done = decide(h, Approve(LEAD))
+    done = decide(h, Approve("design-approval", LEAD))
     assert done.status == "completed" and [r.step for r in done.history][-1] == "develop"
     entries = h.gates["r-1"].entries
     assert len(entries) == 1 and entries[0]["artifacts"] == pinned
@@ -74,7 +74,7 @@ def test_a_handoff_changed_before_the_decision_is_refused(make_harness):  # RF 3
     (h.ledger("r-1").run_dir / "handoffs" / "design-1.md").write_text("changed", encoding="utf-8")
 
     with pytest.raises(GateRefused, match="design-1.md"):
-        decide(h, Approve(LEAD))
+        decide(h, Approve("design-approval", LEAD))
     assert h.store.load("r-1").status == "awaiting_gate"
     assert h.gates["r-1"].entries == []
 
@@ -90,7 +90,7 @@ def test_a_change_after_approval_reopens_the_gate(make_harness):  # RF 3
         return result
 
     gates.record = record_then_tamper.__get__(gates)
-    state = decide(h, Approve(LEAD))
+    state = decide(h, Approve("design-approval", LEAD))
     assert (state.status, state.pending.id) == ("awaiting_gate", "design-approval")
     assert "changed since" in state.pending.reason
 
@@ -105,7 +105,7 @@ def test_a_broken_edit_is_refused_and_the_original_kept(make_harness):  # RF 4
     broken = before.decode("utf-8").replace("risks:\n", "risks: [unclosed\n", 1)
 
     with pytest.raises(GateRefused, match="line"):
-        decide(h, Edit(LEAD, "handoffs/design-1.md", broken))
+        decide(h, Edit("design-approval", LEAD, "handoffs/design-1.md", broken))
     assert path.read_bytes() == before
     assert not any(p.name.startswith("design-1.md.edited") for p in path.parent.iterdir())
 
@@ -117,7 +117,7 @@ def test_an_edit_is_repinned_then_approved(make_harness):
         "summary: One line saying what this handoff concludes.", "summary: Use the existing queue."
     )
 
-    done = decide(h, Edit(LEAD, "handoffs/design-1.md", edited))
+    done = decide(h, Edit("design-approval", LEAD, "handoffs/design-1.md", edited))
     entry = h.gates["r-1"].entries[0]
     assert list(entry["artifacts"]) == ["handoffs/design-1.md.edited-1.md"]
     assert done.latest["design"] == "handoffs/design-1.md.edited-1.md"
@@ -128,7 +128,7 @@ def test_an_edit_must_name_a_pinned_file(make_harness):
     h, _ = at_gate(make_harness)
 
     with pytest.raises(GateRefused, match="not one of"):
-        decide(h, Edit(LEAD, "handoffs/other.md", "x"))
+        decide(h, Edit("design-approval", LEAD, "handoffs/other.md", "x"))
 
 
 def test_an_edit_cannot_change_open_blocking_by_hand(make_harness):  # DF-42
@@ -149,7 +149,10 @@ steps:
         decide(
             h,
             Edit(
-                LEAD, "handoffs/review-1.md", text.replace("open_blocking: 1", "open_blocking: 0")
+                "review-approval",
+                LEAD,
+                "handoffs/review-1.md",
+                text.replace("open_blocking: 1", "open_blocking: 0"),
             ),
         )
 
@@ -163,7 +166,7 @@ def test_reject_routes_back_with_feedback(make_harness):
         script={"designer": [answer("design"), answer("design")], "dev": [answer("dev-report")]},
     )
 
-    state = decide(h, Reject(LEAD, "use the existing queue"))
+    state = decide(h, Reject("design-approval", LEAD, "use the existing queue"))
     assert "use the existing queue" in h.runners.prompts["designer"][-1]
     assert (state.status, state.pending.id) == ("awaiting_gate", "design-approval")
     assert h.gates["r-1"].entries[0]["verdict"] == "reject"
@@ -187,9 +190,12 @@ def test_four_eyes(make_harness, regime, four_eyes, refused):
 
     if refused:
         with pytest.raises(GateRefused, match="own run"):
-            decide(h, Approve(STARTER), self_approval=four_eyes_rule)
+            decide(h, Approve("design-approval", STARTER), self_approval=four_eyes_rule)
     else:
-        assert decide(h, Approve(STARTER), self_approval=four_eyes_rule).status == "completed"
+        assert (
+            decide(h, Approve("design-approval", STARTER), self_approval=four_eyes_rule).status
+            == "completed"
+        )
 
 
 class NoRoles:
@@ -201,21 +207,23 @@ def test_a_role_is_required_outside_solo(make_harness):
     h, _ = at_gate(make_harness, regime="team")
 
     with pytest.raises(GateRefused, match="team-lead"):
-        decide(h, Approve(LEAD), authorizer=NoRoles())
+        decide(h, Approve("design-approval", LEAD), authorizer=NoRoles())
 
 
 def test_the_starter_may_approve_under_solo_without_the_role(make_harness):
     h, _ = at_gate(make_harness, regime="solo")
 
-    assert decide(h, Approve(STARTER), authorizer=NoRoles()).status == "completed"
+    assert (
+        decide(h, Approve("design-approval", STARTER), authorizer=NoRoles()).status == "completed"
+    )
 
 
 def test_a_run_not_at_a_gate_is_refused(make_harness):
     h, _ = at_gate(make_harness)
-    decide(h, Approve(LEAD))
+    decide(h, Approve("design-approval", LEAD))
 
     with pytest.raises(GateRefused, match="not waiting at a gate"):
-        decide(h, Approve(LEAD))
+        decide(h, Approve("design-approval", LEAD))
 
 
 # ── the other things a person settles at a gate ───────────────────────────────
@@ -238,8 +246,8 @@ def test_invalid_output_is_settled_by_an_edit(make_harness):
     assert state.pending.id == "invalid-output"
 
     with pytest.raises(GateRefused, match="cannot be approved as it is"):
-        decide(h, Approve(LEAD))
-    done = decide(h, Edit(LEAD, "handoffs/design-1.invalid.md", answer("design")))
+        decide(h, Approve("invalid-output", LEAD))
+    done = decide(h, Edit("invalid-output", LEAD, "handoffs/design-1.invalid.md", answer("design")))
     assert done.status == "completed"
     assert done.latest["design"] == "handoffs/design-1.invalid.md.edited-1.md"
 
@@ -250,6 +258,6 @@ def test_invalid_output_can_be_rejected_back_to_the_step(make_harness):
     )
     run(h.engine.start("test", {}, STARTER, "r-1"))
 
-    done = decide(h, Reject(LEAD, "write the handoff format"))
+    done = decide(h, Reject("invalid-output", LEAD, "write the handoff format"))
     assert done.status == "completed"
     assert "write the handoff format" in h.runners.prompts["designer"][-1]

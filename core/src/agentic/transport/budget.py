@@ -140,6 +140,7 @@ class BudgetSlice:
                 raise LimitHit(self.scope, self.name, self._limit, self.total_spent())
             self._reserved += estimate_usd
             self._open_reservations += 1
+            self._changed()  # saved now: a crash while the call is in flight still counts it
             return Reservation(self, estimate_usd)
 
     def raise_limit(self, new_limit_usd: Decimal) -> None:

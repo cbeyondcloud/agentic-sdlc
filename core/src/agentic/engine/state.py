@@ -89,6 +89,12 @@ class RunState(_Strict):
     max_minutes: int | None = Field(default=None, ge=1)
     extra_minutes: int = Field(default=0, ge=0)  # granted by a person on resume
     unpinned: dict[str, str] = {}  # artefacts written since the last gate: path -> digest
+    approved: dict[str, dict[str, str]] = {}  # gate -> what its latest approval pinned
+    digests: dict[str, str] = {}  # every handoff the run wrote: path -> digest when recorded
+    waited_seconds: float = Field(default=0, ge=0)  # time spent waiting for a person
+    loop_pass_start: int = Field(default=0, ge=0)  # history index where this loop pass began
+    ended_by: str | None = None  # who stopped the run
+    end_reason: str | None = None
 
 
 class RunStore:

@@ -38,18 +38,21 @@ class StandaloneAuthorizer:
 
 @dataclass(frozen=True)
 class Approve:
+    gate: str  # the gate the person decided: refused if the run waits elsewhere
     approver: str
     notes: str = ""
 
 
 @dataclass(frozen=True)
 class Reject:
+    gate: str
     approver: str
     feedback: str
 
 
 @dataclass(frozen=True)
 class Edit:
+    gate: str
     approver: str
     path: str  # one of the files the gate pins, relative to the run folder
     text: str

@@ -5,11 +5,11 @@ import asyncio
 from decimal import Decimal
 
 import pytest
-from conftest import FakeClock, answer, charge, review
+from _engine_support import FakeClock, answer, charge, review
 from pydantic_ai import Tool
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 
-from agentic.engine.engine import StepContext
+from agentic.engine.engine import EngineError, StepContext
 from agentic.handoffs import parse_handoff
 from agentic.transport import LimitHit
 
@@ -368,6 +368,11 @@ def test_a_tool_approval_pause_resumes_with_decisions(make_harness, tmp_path):
     assert (state.status, state.pending.kind) == ("paused", "approval")
     pending_call = h.runners.state_root  # the runner's state lives under the agent-state root
     assert pending_call.is_dir() and state.pending.state_digest
+
+    with pytest.raises(EngineError, match="only these"):  # SP6 review I3
+        run(h.engine.resume("r-1", decisions={"wrong-id": True}))
+    kept = h.store.load("r-1")
+    assert (kept.status, kept.pending.kind) == ("paused", "approval")
 
     decisions = {call: True for call in state.pending.calls}
     resumed = run(h.engine.resume("r-1", decisions=decisions))

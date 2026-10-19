@@ -330,3 +330,13 @@ def test_a_snapshot_is_plain_json():
     ledger = BudgetLedger(None)
     spend(ledger.run.open("build", "step", None), "0.3")
     assert json.loads(json.dumps(ledger.snapshot())) == ledger.snapshot()
+
+
+def test_a_reservation_is_in_the_snapshot_at_once():  # SP6 review I5
+    ledger = BudgetLedger(D("5"))
+    step = ledger.run.open("build", "step", D("2"))
+    seen = []
+    ledger.on_change = lambda: seen.append(ledger.snapshot())
+    step.reserve(D("0.4"))  # the process may die while the call is in flight
+
+    assert seen and seen[-1]["children"][0]["reserved"] == "0.4"
