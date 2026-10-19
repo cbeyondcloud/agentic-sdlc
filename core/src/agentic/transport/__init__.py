@@ -1,5 +1,6 @@
 """Transport: the one HTTP client every model call uses (identity, network, cost, budget)."""
 
+from agentic.transport.budget import BudgetError, BudgetLedger, BudgetSlice, LimitHit, Reservation
 from agentic.transport.client import (
     BEHAVIOUR_HEADERS,
     ForbiddenHeaderError,
@@ -19,6 +20,11 @@ from agentic.transport.identity import CallIdentity, IdentityError
 from agentic.transport.network import NetworkError, NetworkSettings, ssl_context
 
 __all__ = [
+    "BudgetError",
+    "BudgetLedger",
+    "BudgetSlice",
+    "LimitHit",
+    "Reservation",
     "BEHAVIOUR_HEADERS",
     "CallCost",
     "Pricer",
