@@ -45,7 +45,7 @@ class FieldSpec:
 
     name: str
     type: FieldType | None
-    required: bool
+    required: bool | None  # None: not stated (an existing field keeps its own)
     values: tuple[str, ...] | None
     description: str
     example: object
@@ -122,7 +122,7 @@ def _template_file(name: str) -> tuple[dict, str, tuple[Section, ...]]:
 
 
 def _builtin_catalog() -> HandoffCatalog:
-    base_examples, _, (summary, open_questions) = _template_file("base")
+    summary, open_questions = BASE_SECTIONS
     schemas = {}
     for kind, model in HANDOFF_KINDS.items():
         examples, title, sections = _template_file(kind)
@@ -132,9 +132,9 @@ def _builtin_catalog() -> HandoffCatalog:
             model=model,
             sections=(summary, *sections, open_questions),
             examples={
-                "summary": base_examples["summary"],
+                "summary": BASE_EXAMPLES["summary"],
                 **examples,
-                "open_questions": base_examples["open_questions"],
+                "open_questions": BASE_EXAMPLES["open_questions"],
             },
             schema_version=model.SCHEMA_VERSION,  # type: ignore[attr-defined]
         )
@@ -146,9 +146,13 @@ def _sha256(content: object) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+_base_examples, _, BASE_SECTIONS = _template_file("base")
+BASE_EXAMPLES: Mapping[str, object] = dict(_base_examples)  # summary, open_questions
 BUILTIN_CATALOG = _builtin_catalog()
 
 __all__ = [
+    "BASE_EXAMPLES",
+    "BASE_SECTIONS",
     "BUILTIN_CATALOG",
     "FieldSpec",
     "FieldType",
