@@ -26,7 +26,7 @@ Status for every row: **Pending** at plan approval. Columns: `PW` = estimated pe
 | S10 | Spike | Skill and agent A/B method (judging protocol, blinding, sample size) | P0-01 | Record + eval harness sketch used by M1-63 | 1 | Pending | |
 | S11 | Spike | Serena (GPL) as separate process — legal (only if multilspy insufficient) | S5 | Record (may be `Dropped`) | 0.25 | Pending | |
 | S12 | Spike | Docker Desktop licensing at 1000 seats; Podman alternative | — | Record with recommendation | 0.25 | Pending | |
-| S13 | Spike | Safe expression evaluator: cel-python vs simpleeval | P0-01 | Record naming the choice with licence | 0.5 | Pending | |
+| S13 | Spike | Safe expression evaluator: cel-python vs simpleeval | P0-01 | Record naming the choice with licence | 0.5 | Done | `docs/spikes/S13-expression-evaluator.md`: CEL via cel-python 0.5.0 (Apache-2.0), compiled at pipeline load, behind one wrapper module; simpleeval and the Rust CEL package also passed every escape/bomb case |
 | S14 | Spike | Zyroflo reuse packaging (D34) | P0-01 | Record `docs/spikes/S14-zyroflo-reuse.md`: direct pinned dependency + adapters, gaps Z1–Z4 | 1.5 | Done | Owner decision 2026-10-18: depend on Zyroflo unchanged, small backward-compatible PRs for gaps |
 | P0-04 | SP0 | Spike review: go/no-go, re-estimate M1, spec amendments if any decision changed | S1–S14 | Decisions recorded in spec revision line; M1 rows re-estimated; owner sign-off | 0.5 | Pending | |
 
