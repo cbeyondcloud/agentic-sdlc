@@ -29,6 +29,8 @@ The allow-list (M1-31: an unknown program is refused) and the OS sandbox
 (M1-32/33) are the controls for those; this guard is defence in depth.
 """
 
+import itertools
+import os
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -68,10 +70,19 @@ FRAMEWORK_DENY_SHELL = (
 )
 #: Files inside a tree that steer agents, hooks, editors or CI: never written by an agent.
 FRAMEWORK_PROTECTED = (
-    "**/.git", "**/.git/**", "**/.github/workflows/**", "**/.claude/**", "**/CLAUDE.md",
-    "**/AGENTS.md", "**/.agentic/**", "**/.husky/**", "**/.pre-commit-config.yaml",
-    "**/.gitmodules", "**/.vscode/**", "**/.devcontainer/**",
-)  # fmt: skip
+    "**/.git",
+    "**/.git/**",
+    "**/.github/workflows/**",
+    "**/.claude/**",
+    "**/CLAUDE.md",
+    "**/AGENTS.md",
+    "**/.agentic/**",
+    "**/.husky/**",
+    "**/.pre-commit-config.yaml",
+    "**/.gitmodules",
+    "**/.vscode/**",
+    "**/.devcontainer/**",
+)
 #: A longer command is refused unread: judging it would cost more than it is worth.
 MAX_COMMAND = 16_384
 #: Zyroflo lists a repository's policy may extend but never shorten.
@@ -104,11 +115,16 @@ class Guard:
         deny_paths: Iterable[str] = (),
         max_files: int | None = None,
         max_lines: int | None = None,
+        allow_shell: Iterable[str] | None = None,
+        ask_shell: Iterable[str] = (),
     ) -> None:
         self.target = Path(target)
         self.run_id = run_id
         self.deny_shell = _rules("deny_shell", deny_shell)
         self.deny_paths = _rules("deny_paths", deny_paths)
+        # None = no allow-list check (adapter-level use); () = nothing is allowed
+        self.allow_shell = None if allow_shell is None else _rules("allow_shell", allow_shell)
+        self.ask_shell = _rules("ask_shell", ask_shell)
         try:
             repo = policy.load(self.target)  # the repo's policy, or Zyroflo's defaults
         except policy.PolicyError as error:
@@ -117,16 +133,26 @@ class Guard:
         self.policy = {**repo}
         for key in _FLOOR_LISTS:
             self.policy[key] = list(dict.fromkeys([*policy.DEFAULTS[key], *repo[key]]))
-        for key, requested in (("max_files_per_batch", max_files),
-                               ("max_lines_per_batch", max_lines)):  # fmt: skip
+        for key, requested in (
+            ("max_files_per_batch", max_files),
+            ("max_lines_per_batch", max_lines),
+        ):
             floor = _tighter(policy.DEFAULTS[key], repo[key] or None)
             self.policy[key] = _tighter(floor, _budget(key, requested))
 
     @classmethod
     def for_agent(cls, target: Path, run_id: str, agent: object, **budget: int) -> "Guard":
-        """A guard for a resolved agent (its `deny_shell` / `deny_paths`, D31)."""
-        return cls(target, run_id, deny_shell=agent.deny_shell, deny_paths=agent.deny_paths,
-                   **budget)  # fmt: skip
+        """A guard for a resolved agent: its deny lists (D31), its allowed command
+        prefixes (`shell`) and the prefixes a person approves each time (`ask_shell`)."""
+        return cls(
+            target,
+            run_id,
+            deny_shell=agent.deny_shell,
+            deny_paths=agent.deny_paths,
+            allow_shell=agent.shell,
+            ask_shell=agent.ask_shell,
+            **budget,
+        )
 
     @property
     def trees_root(self) -> Path:
@@ -139,8 +165,13 @@ class Guard:
         """Every reason this shell command is refused. Reasons never quote the
         command, so a credential typed in it does not reach a log."""
         if len(command) > MAX_COMMAND:
-            return [Block("framework", f"the command is longer than {MAX_COMMAND} characters "
-                                       f"- refused unread (framework floor)")]  # fmt: skip
+            return [
+                Block(
+                    "framework",
+                    f"the command is longer than {MAX_COMMAND} characters "
+                    f"- refused unread (framework floor)",
+                )
+            ]
         blocks: dict[tuple[str, str], Block] = {}
         spellings = _spellings(command)
         for spelling in spellings:
@@ -157,13 +188,20 @@ class Guard:
                     f"in one segment - refused unread (framework floor)",
                 )
             ]
-        layers = (("denied-command", self.deny_shell, "org, team or agent policy"),
-                  ("framework", FRAMEWORK_DENY_SHELL, "framework floor"))  # fmt: skip
+        layers = (
+            ("denied-command", self.deny_shell, "org, team or agent policy"),
+            ("framework", FRAMEWORK_DENY_SHELL, "framework floor"),
+        )
         for wall, rules, owner in layers:
             for rule in rules:
                 if _rule_hits(rule, commands):
                     why = f"the command matches the deny rule {rule!r} ({owner})"
                     blocks.setdefault((wall, why), Block(wall, why))
+        if self.allow_shell is not None:  # every program must be allowed (DF-16)
+            for program, args in commands:
+                if program and not any(_allow_hits(r, program, args) for r in self.allow_shell):
+                    why = f"{program!r} used this way is not on the allow list (agent policy)"
+                    blocks.setdefault(("not-allowed", why), Block("not-allowed", why))
         if _ANSI_QUOTING.search(command):
             why = "$'...' and $\"...\" quoting can hide a program (framework floor)"
             blocks.setdefault(("framework", why), Block("framework", why))
@@ -171,6 +209,15 @@ class Guard:
             why = "a GIT_* variable can make git run a command (framework floor)"
             blocks.setdefault(("framework", why), Block("framework", why))
         return list(blocks.values())
+
+    def asks(self, command: str) -> list[str]:
+        """The ask rules this command hits: it runs only after a person approves it.
+        Matched like the deny rules (asking too often is the safe side)."""
+        try:
+            commands = [c for spelling in _rule_spellings(command) for c in _commands(spelling)]
+        except _TooComplex:
+            return list(self.ask_shell)
+        return [rule for rule in self.ask_shell if _rule_hits(rule, commands)]
 
     # ── writes ────────────────────────────────────────────────────────────────
 
@@ -187,13 +234,62 @@ class Guard:
             # Globs are written relative to a repository ("infra/prod/**"); an agent
             # writes inside a component's tree, so match from that tree's top.
             root = next((h for h in homes if _inside(Path(raw), h)), self.target)
-            for wall, globs, owner in (("framework", FRAMEWORK_PROTECTED, "framework floor"),
-                                       ("denied-path", self.deny_paths, "paths")):  # fmt: skip
+            if _case_insensitive(root):  # macOS: `Infra/x` IS `infra/x` (DF-10)
+                rel = _shown(Path(raw), root).lower()
+                folded = [p.lower() for p in self.policy["protected_paths"]]
+                if policy.matches(rel, folded) and not any(b.wall == "protected" for b in blocks):
+                    why = f"{rel}: a protected path - the CLIs write it, agents do not"
+                    blocks.append(Block("protected", why))
+            for wall, globs, owner in (
+                ("framework", FRAMEWORK_PROTECTED, "framework floor"),
+                ("denied-path", self.deny_paths, "paths"),
+            ):
                 for glob in globs:
-                    if policy.protected({"protected_paths": [glob]}, root, [raw]):
-                        blocks.append(Block(wall, f"{_shown(Path(raw), root)}: matches the deny "
-                                                  f"rule {glob!r} ({owner})"))  # fmt: skip
+                    hit = policy.protected({"protected_paths": [glob]}, root, [raw])
+                    if not hit and _case_insensitive(root):
+                        hit = policy.matches(_shown(Path(raw), root).lower(), [glob.lower()])
+                    if hit:
+                        why = f"{_shown(Path(raw), root)}: matches the deny rule {glob!r} ({owner})"
+                        blocks.append(Block(wall, why))
         return blocks
+
+    # ── compiled for the OS sandbox and other backends (M1-31) ─────────────────
+
+    def write_denials(self, tree: Path) -> "WriteDenials":
+        """The write denials `srt` can enforce in `tree`: literal paths only (Linux
+        binds concrete paths). `x` and `x/**` become `tree/x`; `**/x` also denies
+        `tree/x` but stays listed as unenforced, because a deeper `x` is not covered;
+        any other glob is unenforced - the file tools still refuse it."""
+        tree = Path(tree)
+        paths: dict[Path, None] = {}
+        unenforced: dict[str, None] = {}
+        for pattern in self._path_rules():
+            rest = pattern[3:] if pattern.startswith("**/") else pattern
+            if rest.endswith("/**"):
+                rest = rest[:-3]
+            if rest and not _GLOB_CHARS & set(rest):
+                paths[tree / rest] = None
+            if rest != pattern.removesuffix("/**") or _GLOB_CHARS & set(rest) or not rest:
+                unenforced[pattern] = None
+        return WriteDenials(paths=tuple(paths), unenforced=tuple(unenforced))
+
+    def claude_permissions(self) -> dict:
+        """The shell policy in Claude Code's settings format (`permissions`): allow,
+        ask and deny prefixes as `Bash(prefix:*)`, denied paths as `Edit(glob)`."""
+        deny = [*_bash_rules([*self.deny_shell, *FRAMEWORK_DENY_SHELL])]
+        deny += [f"Edit({pattern})" for pattern in self._path_rules()]
+        return {
+            "permissions": {
+                "allow": _bash_rules(self.allow_shell or ()),
+                "ask": _bash_rules(self.ask_shell),
+                "deny": list(dict.fromkeys(deny)),
+            }
+        }
+
+    def _path_rules(self) -> list[str]:
+        """Every write-deny pattern: Zyroflo's protected paths, the framework's, policy's."""
+        sources = (self.policy["protected_paths"], FRAMEWORK_PROTECTED, self.deny_paths)
+        return list(dict.fromkeys(pattern for source in sources for pattern in source))
 
     def _homes(self) -> list[Path]:
         """The run's component trees, deepest first (Zyroflo's record)."""
@@ -214,8 +310,42 @@ class Guard:
         """Whether this push goes to the run's own branch on an approved remote."""
         if not remote:
             return [Block("push", "a push must name its remote")]
-        return [Block("push", r)
-                for r in policy.push_target(self.policy, remote, branch, self.run_id)]  # fmt: skip
+        return [
+            Block("push", r) for r in policy.push_target(self.policy, remote, branch, self.run_id)
+        ]
+
+
+@dataclass(frozen=True)
+class WriteDenials:
+    """What `srt` can deny writing in a tree, and the patterns it cannot express."""
+
+    paths: tuple[Path, ...]
+    unenforced: tuple[str, ...]
+
+
+_GLOB_CHARS = set("*?[")
+
+
+def _bash_rules(rules: Iterable[str]) -> list[str]:
+    """`Bash(prefix:*)` for each prefix, with `a|b` alternatives spelled out."""
+    out: dict[str, None] = {}
+    for rule in rules:
+        words = [word.split("|") for word in rule.split()]
+        for combination in itertools.product(*words):
+            out[f"Bash({' '.join(combination)}:*)"] = None
+    return list(out)
+
+
+def _case_insensitive(path: Path) -> bool:
+    """Whether the file system holding `path` ignores case (macOS, Windows)."""
+    text = str(path)
+    swapped = text.swapcase()
+    if swapped == text:
+        return False
+    try:
+        return Path(swapped).exists() and os.path.samefile(text, swapped)
+    except OSError:
+        return False
 
 
 # ── inputs ────────────────────────────────────────────────────────────────────
@@ -270,25 +400,78 @@ _ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _GIT_ENV = re.compile(r"GIT_[A-Z0-9_]*=")
 _ANSI_QUOTING = re.compile(r"""\$['"]""")
 #: Words skipped at a segment's start: they are not the program.
-_TRANSPARENT = frozenset({"if", "while", "until", "select", "elif", "then", "do", "else", "!",
-                          "{", "time", "coproc"})  # fmt: skip
+_TRANSPARENT = frozenset(
+    {"if", "while", "until", "select", "elif", "then", "do", "else", "!", "{", "time", "coproc"}
+)
 #: Programs that run a command given among their first few arguments.
-_WRAPPERS = frozenset({
-    "sudo", "doas", "env", "command", "builtin", "nohup", "exec", "timeout", "stdbuf",
-    "nice", "ionice", "setsid", "xargs", "parallel", "watch", "chroot", "runuser", "su",
-    "pkexec", "runas", "start", "start-process", "call", "ssh", "wsl", "npx", "uv", "uvx",
-    "pipx", "bunx", "strace", "ltrace", "flock", "docker", "podman",
-})  # fmt: skip
+_WRAPPERS = frozenset(
+    {
+        "sudo",
+        "doas",
+        "env",
+        "command",
+        "builtin",
+        "nohup",
+        "exec",
+        "timeout",
+        "stdbuf",
+        "nice",
+        "ionice",
+        "setsid",
+        "xargs",
+        "parallel",
+        "watch",
+        "chroot",
+        "runuser",
+        "su",
+        "pkexec",
+        "runas",
+        "start",
+        "start-process",
+        "call",
+        "ssh",
+        "wsl",
+        "npx",
+        "uv",
+        "uvx",
+        "pipx",
+        "bunx",
+        "strace",
+        "ltrace",
+        "flock",
+        "docker",
+        "podman",
+    }
+)
 _WRAPPER_REACH = 3  # how many plain words after a wrapper may be the command
 _MAX_POSITIONS = 32  # more programs nested in one segment is refused unread
 _SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash", "fish"})
 _SHELL_RUN = re.compile(r"-[A-Za-z]*c[A-Za-z]*")  # -c, -lc, -ec, -xc …
 #: Options whose value is a plain word that is not a subcommand.
-_VALUE_OPTIONS = frozenset({
-    "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env", "--exec-path",
-    "-n", "--context", "--kubeconfig", "-m", "--message", "-F", "--file", "--grep", "-S",
-    "-G", "--author", "-e", "--regexp",
-})  # fmt: skip
+_VALUE_OPTIONS = frozenset(
+    {
+        "-C",
+        "-c",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--config-env",
+        "--exec-path",
+        "-n",
+        "--context",
+        "--kubeconfig",
+        "-m",
+        "--message",
+        "-F",
+        "--file",
+        "--grep",
+        "-S",
+        "-G",
+        "--author",
+        "-e",
+        "--regexp",
+    }
+)
 _SUBCOMMAND_REACH = 3  # how many plain words after the program may be the subcommand
 _POWERSHELL = frozenset({"powershell", "pwsh"})
 _SUFFIXES = (".exe", ".cmd", ".bat", ".com", ".ps1", ".sh")
@@ -391,8 +574,9 @@ def _commands(text: str, depth: int = 0) -> list[tuple[str, list[str]]]:
             segment.append(token)
             continue
         start = 1 if after in "<>" and after else 0  # a redirect's target is not a command
-        while start < len(segment) and (_ENV_ASSIGNMENT.match(segment[start].text)
-                                        or segment[start].text in _TRANSPARENT):  # fmt: skip
+        while start < len(segment) and (
+            _ENV_ASSIGNMENT.match(segment[start].text) or segment[start].text in _TRANSPARENT
+        ):
             start += 1
         for j in _positions(segment, start):
             word = segment[j]
@@ -413,9 +597,12 @@ def _positions(segment: list[_Word], start: int) -> list[int]:
         program = _program(segment[j].text)
         later = []
         if program in _WRAPPERS:  # `sudo -u root X`, `ssh host X`, `docker run --rm img X`
-            plain = [k for k in range(j + 1, len(segment))
-                     if not segment[k].text.startswith("-")
-                     and not _ENV_ASSIGNMENT.match(segment[k].text)]  # fmt: skip
+            plain = [
+                k
+                for k in range(j + 1, len(segment))
+                if not segment[k].text.startswith("-")
+                and not _ENV_ASSIGNMENT.match(segment[k].text)
+            ]
             later = plain[:_WRAPPER_REACH]
         if (k := _carried(segment, j, program)) is not None:
             later.append(k)
@@ -464,6 +651,22 @@ def _rule_hits(rule: str, commands: list[tuple[str, list[str]]]) -> bool:
         if all(any(_option_hit(alt, where, prefix) for alt in alts) for alts in options):
             return True
     return False
+
+
+def _allow_hits(rule: str, program: str, args: list[str]) -> bool:
+    """Whether an allow rule covers one command: the same program, and the rule's
+    plain words are the command's FIRST plain words, in order (stricter than a deny
+    rule: `git status` allows `git status -s`, never `git log status`)."""
+    head, *parts = rule.split()
+    if not _same_program(program, _program(head)):
+        return False
+    plain = [p.lower().split("|") for p in parts if not p.startswith("-")]
+    options = [p.lower().split("|") for p in parts if p.startswith("-")]
+    subs = [s.lower() for s in _subcommands(args)]
+    if len(subs) < len(plain) or any(w not in alts for w, alts in zip(subs, plain, strict=False)):
+        return False
+    lowered = [a.lower() for a in args]
+    return all(any(_option_hit(alt, lowered, False) for alt in alts) for alts in options)
 
 
 def _before_subcommand(args: list[str]) -> list[str]:

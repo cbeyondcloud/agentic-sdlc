@@ -150,7 +150,12 @@ def test_reasons_never_carry_a_credential_or_the_command(guard):
 
 
 def test_for_agent_reads_the_resolved_deny_lists(repo, tree):
-    resolved = SimpleNamespace(deny_shell=["terraform destroy"], deny_paths=["**/*.tfstate"])
+    resolved = SimpleNamespace(
+        deny_shell=["terraform destroy"],
+        deny_paths=["**/*.tfstate"],
+        shell=["terraform"],
+        ask_shell=[],
+    )
     guard = Guard.for_agent(repo, RUN, resolved)
 
     assert walls(guard.command("terraform destroy -auto-approve")) == {"denied-command"}

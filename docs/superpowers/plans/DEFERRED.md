@@ -23,13 +23,13 @@ Everything found but not fixed: review minors that were deferred, and notes a la
 | DF-07 | SP1 review | Agent names are not restricted to a slug pattern | Odd names in paths, headers and ledgers | M1-81 | Open |
 | DF-08 | SP1 review | Loaded definitions and results are mutable objects | A caller can change a definition after it was checked | M1-81 | Open |
 | DF-09 | SP2 review | `write_artifact`: containment, atomic write and `record_artifact` | A crash mid-write leaves a partial artifact; a path could escape the run folder | M1-21 | Done (4968cdf) |
-| DF-10 | SP2 review | Path globs on macOS's case-insensitive file system | `Infra/**` vs `infra/**` deny rule mismatch on macOS | M1-31 | Open |
+| DF-10 | SP2 review | Path globs on macOS's case-insensitive file system | `Infra/**` vs `infra/**` deny rule mismatch on macOS | M1-31 | Done (SP8 Task 2) |
 | DF-11 | SP2 review | Ledger identities (`_IDENTITIES`) are keyed by run id only | Two ledgers for one run id in one process could share identity | M1-21 | Accepted (Zyroflo's default-ext provider gets only the run id; one process serves one repository) |
 | DF-12 | SP2 review | A ledger whose last line is JSON but not a record (e.g. `12`) is neither torn nor recoverable | A rare corrupt tail blocks a run with an unclear error | M1-21 | Done (4968cdf) |
 | DF-13 | SP2 review | `budget_exempt` in the diff budget is not floored by org policy | A repo could exempt paths from the diff-size budget | M2-24 | Open |
 | DF-14 | SP2 rulings | Zyroflo tokenizer gaps: control keywords, leading redirects, quoted paths, `deny_git` gaps | Covered meanwhile by adapter variants in `sdlc_commons.guards`; the fix belongs upstream | M2-58 | Open |
 | DF-15 | SP2 rulings | A deny rule naming a wrapper (`sudo`, `env`, `nohup`) is refused by word, so `echo sudo` is over-refused | Harmless commands refused | M2-58 | Open |
-| DF-16 | SP2 rulings | Allow-list (shell prefixes) enforcement is not in the guard yet | Until M1-31, an unlisted, non-denied command is not refused | M1-31 | Open |
+| DF-16 | SP2 rulings | Allow-list (shell prefixes) enforcement is not in the guard yet | Until M1-31, an unlisted, non-denied command is not refused | M1-31 | Done (SP8 Task 2) |
 | DF-17 | SP2 rulings | Indirection (`\| bash`, `$VAR`, `python -c`, docker/ssh/wsl/npx) is not caught by deny lists | Deny lists must not be mistaken for enforcement; the allow-list and sandbox are the controls | M1-31, M1-32, M1-33 | Open |
 | DF-18 | SP3 rulings | Budget ledger snapshot/restore across pause and restart | Budgets reset after a crash or resume | M1-21 | Done (e9dd3c4) |
 | DF-19 | SP3 review | Cost capture for the OpenAI Responses API | Codex/Responses calls priced as unavailable | M2-40 | Open |
