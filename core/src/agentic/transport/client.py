@@ -1,18 +1,28 @@
 """The HTTP client every model call goes through (M1-11).
 
 Built on httpx: the provider SDKs and Pydantic AI accept an `httpx.Client` /
-`httpx.AsyncClient`, so stamping identity in a request hook covers every call
-whichever library makes it. The hook, in order:
+`httpx.AsyncClient`, so a request hook covers every call whichever library
+makes it. The hook, in order:
 
-  1. refuses TokenLean's behaviour headers (they switch on caching, routing,
+  1. refuses a request to any host but TokenLean's (scheme, host and port of
+     `base_url`), so the API key and identity never leave for another server;
+     redirects are not followed;
+  2. refuses TokenLean's behaviour headers (they switch on caching, routing,
      memory or prompt changes - spec §14.2) unless the caller allows one on
-     purpose;
-  2. refuses an `X-Agentic-*` header that disagrees with the run's identity, so
+     purpose, and any header in TokenLean's own `x-tokenlean-*` namespace;
+     `_` and `-` are the same here, as front proxies often treat them;
+  3. refuses an `X-Agentic-*` header that disagrees with the run's identity, so
      agent code cannot re-label its own calls;
-  3. stamps the identity headers and a W3C `traceparent` (the active span's when
-     there is one, otherwise a fresh one).
+  4. stamps the identity headers and a W3C `traceparent`: the active span's, or
+     one whose trace id is derived from the run id - so all calls of a run join
+     into one trace - with a fresh span id per call.
+
+The hook guards what goes through the client; it is not a sandbox against code
+that builds its own client. The OS sandbox and egress rules (M1-32, M2-42) are.
 """
 
+import hashlib
+import re
 import secrets
 from collections.abc import Iterable
 
@@ -30,6 +40,7 @@ BEHAVIOUR_HEADERS = frozenset({
     "x-prefix-profile", "x-template-id", "x-echo-prompt", "x-confidence-score", "x-user-id",
     "x-tenant-id", "x-rag-collection",
 })  # fmt: skip
+_TRACEPARENT = re.compile(r"00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}")
 
 
 class ForbiddenHeaderError(ValueError):
@@ -38,6 +49,10 @@ class ForbiddenHeaderError(ValueError):
 
 class IdentityHeaderError(ValueError):
     """An `X-Agentic-*` header that disagrees with the run's identity."""
+
+
+class ForeignHostError(ValueError):
+    """A request to a host other than TokenLean's."""
 
 
 def make_client(
@@ -51,11 +66,12 @@ def make_client(
     _transport: httpx.BaseTransport | None = None,
 ) -> httpx.Client:
     """A synchronous client for TokenLean at `base_url`, stamping `identity`."""
-    stamp = _stamper(identity, _allowed(allow))
+    stamp = _stamper(base_url, identity, _allowed(allow))
     settings = network or NetworkSettings()
+    tls = ssl_context(settings)
     return httpx.Client(base_url=base_url, headers=_auth(api_key), timeout=timeout,
-                        event_hooks={"request": [stamp]}, transport=_transport,
-                        verify=ssl_context(settings), trust_env=settings.trust_env)  # fmt: skip
+                        event_hooks={"request": [stamp]}, transport=_transport, verify=tls,
+                        trust_env=settings.trust_env, follow_redirects=False)  # fmt: skip
 
 
 def make_async_client(
@@ -69,23 +85,23 @@ def make_async_client(
     _transport: httpx.AsyncBaseTransport | None = None,
 ) -> httpx.AsyncClient:
     """An asynchronous client for TokenLean at `base_url`, stamping `identity`."""
-    stamp = _stamper(identity, _allowed(allow))
+    stamp = _stamper(base_url, identity, _allowed(allow))
 
     async def stamp_async(request: httpx.Request) -> None:
         stamp(request)
 
-    hooks = {"request": [stamp_async]}
     settings = network or NetworkSettings()
     tls = ssl_context(settings)
     return httpx.AsyncClient(base_url=base_url, headers=_auth(api_key), timeout=timeout,
-                             event_hooks=hooks, transport=_transport, verify=tls,
-                             trust_env=settings.trust_env)  # fmt: skip
+                             event_hooks={"request": [stamp_async]}, transport=_transport,
+                             verify=tls, trust_env=settings.trust_env,
+                             follow_redirects=False)  # fmt: skip
 
 
 def _allowed(allow: Iterable[str]) -> frozenset[str]:
     if isinstance(allow, str):
         raise ValueError("allow is a set of header names, not one string")
-    names = frozenset(name.lower() for name in allow)
+    names = frozenset(_normal(name) for name in allow)
     if unknown := sorted(names - BEHAVIOUR_HEADERS):
         raise ValueError(f"only TokenLean behaviour headers can be allowed, not {unknown}")
     return names
@@ -95,29 +111,45 @@ def _auth(api_key: str | None) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
 
-def _stamper(identity: CallIdentity, allowed: frozenset[str]):
-    expected = {name.lower(): value for name, value in identity.headers().items()}
+def _normal(name: str) -> str:
+    return name.lower().replace("_", "-")
+
+
+def _origin(url: httpx.URL) -> tuple[str, str, int | None]:
+    default = {"https": 443, "http": 80}.get(url.scheme)
+    return url.scheme, url.host, url.port or default
+
+
+def _stamper(base_url: str, identity: CallIdentity, allowed: frozenset[str]):
+    expected = {_normal(name): value for name, value in identity.headers().items()}
+    home = _origin(httpx.URL(base_url))
+    trace_id = hashlib.sha256(identity.run_id.encode()).hexdigest()[:32]
 
     def stamp(request: httpx.Request) -> None:
+        if _origin(request.url) != home:
+            raise ForeignHostError(f"model calls go only to {home[0]}://{home[1]} - refused a "
+                                   f"request to another host")  # fmt: skip
         for name in request.headers:
-            lowered = name.lower()
-            if lowered in BEHAVIOUR_HEADERS and lowered not in allowed:
+            normal = _normal(name)
+            if normal.startswith("x-tokenlean-") or (
+                normal in BEHAVIOUR_HEADERS and normal not in allowed
+            ):
                 why = "switches on TokenLean behaviour and was not allowed for this call"
-                raise ForbiddenHeaderError(f"request header {lowered!r} {why}")
-            if lowered.startswith("x-agentic-") and request.headers[name] != expected.get(lowered):
+                raise ForbiddenHeaderError(f"request header {normal!r} {why}")
+            if normal.startswith("x-agentic-") and request.headers[name] != expected.get(normal):
                 why = "disagrees with the run's identity - calls cannot be re-labelled"
-                raise IdentityHeaderError(f"request header {lowered!r} {why}")
+                raise IdentityHeaderError(f"request header {normal!r} {why}")
         request.headers.update(identity.headers())
-        if "traceparent" not in request.headers:
-            request.headers["traceparent"] = _traceparent()
+        if not _TRACEPARENT.fullmatch(request.headers.get("traceparent", "")):
+            request.headers["traceparent"] = _traceparent(trace_id)
 
     return stamp
 
 
-def _traceparent() -> str:
-    """The active span's W3C traceparent, or a fresh sampled one."""
+def _traceparent(trace_id: str) -> str:
+    """The active span's W3C traceparent, or one in the run's trace with a fresh span."""
     carrier: dict[str, str] = {}
     inject(carrier)
-    if "traceparent" in carrier:
+    if _TRACEPARENT.fullmatch(carrier.get("traceparent", "")):
         return carrier["traceparent"]
-    return f"00-{secrets.token_hex(16)}-{secrets.token_hex(8)}-01"
+    return f"00-{trace_id}-{secrets.token_hex(8)}-01"

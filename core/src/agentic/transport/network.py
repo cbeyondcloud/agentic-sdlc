@@ -41,12 +41,19 @@ def ssl_context(settings: NetworkSettings) -> ssl.SSLContext:
     else:
         context = ssl.create_default_context()
     if settings.ca_bundle is not None:
-        if not Path(settings.ca_bundle).is_file():
-            raise NetworkError(f"CA bundle not found: {settings.ca_bundle}")
-        context.load_verify_locations(cafile=str(settings.ca_bundle))
+        _trust(context, Path(settings.ca_bundle), "CA bundle")
     if settings.trust_env:
         for name in CA_ENV_VARS:
-            path = os.environ.get(name, "")
-            if path and Path(path).is_file():
-                context.load_verify_locations(cafile=path)
+            if path := os.environ.get(name, ""):
+                _trust(context, Path(path), f"{name} names a CA file that")
     return context
+
+
+def _trust(context: ssl.SSLContext, path: Path, what: str) -> None:
+    if not path.is_file():
+        raise NetworkError(f"{what} does not exist: {path}")
+    try:
+        context.load_verify_locations(cafile=str(path))
+    except (ssl.SSLError, OSError, ValueError) as error:
+        raise NetworkError(f"{what} is not a readable PEM certificate file: {path} "
+                           f"({error})") from error  # fmt: skip

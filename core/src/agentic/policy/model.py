@@ -151,6 +151,10 @@ class OrgPolicy(_Strict):
     def references_are_consistent(self) -> Self:
         """Every tier, class and tool named anywhere must exist."""
         problems: list[str] = []
+        if any(not name.strip() for name in self.prices):
+            problems.append(
+                "prices: a price needs a model name (an empty one would match every model)"
+            )
         known_tiers = set(self.tiers)
 
         def check_tiers(where: str, names: list[str] | None) -> None:

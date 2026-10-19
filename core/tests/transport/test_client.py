@@ -178,3 +178,62 @@ def test_the_async_client_stamps_the_same_headers():
     assert {name: seen[0].headers[name] for name in EXPECTED} == EXPECTED
     assert TRACEPARENT.fullmatch(seen[0].headers["traceparent"])
     assert len(seen) == 1
+
+
+# ── SP3 review fixes ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("url", ["https://evil.example/steal", "http://tl.example/v1/models",
+                                 "https://tl.example:8443/v1/models"])  # fmt: skip
+def test_a_request_to_any_other_host_is_refused_before_it_is_sent(url):  # review I7
+    from agentic.transport import ForeignHostError
+
+    c, seen = client(api_key="SECRET")
+    with pytest.raises(ForeignHostError):
+        c.get(url)
+    assert seen == []
+
+
+def test_redirects_are_not_followed():  # review I7
+    c, _ = client()
+
+    assert c.follow_redirects is False
+
+
+@pytest.mark.parametrize("header", ["X_No_Cache", "x_step_name", "X-TokenLean-Anything"])
+def test_underscore_spellings_and_tokenlean_namespace_headers_are_refused(header):  # review M5
+    c, seen = client()
+
+    with pytest.raises(ForbiddenHeaderError):
+        c.get("/models", headers={header: "1"})
+    assert seen == []
+
+
+def test_all_calls_of_a_run_share_one_trace(monkeypatch):  # review M8
+    c, seen = client()
+    c.get("/models")
+    c.get("/models")
+    other, other_seen = client(replace(IDENTITY, run_id="r-other"))
+    other.get("/models")
+
+    trace = [s.headers["traceparent"].split("-")[1] for s in (*seen, *other_seen)]
+    assert trace[0] == trace[1] != trace[2]
+    assert seen[0].headers["traceparent"] != seen[1].headers["traceparent"]  # fresh span ids
+
+
+def test_a_malformed_caller_traceparent_is_replaced():  # review M8
+    c, seen = client()
+    c.get("/models", headers={"traceparent": "garbage\x7f"})
+
+    assert TRACEPARENT.fullmatch(seen[0].headers["traceparent"])
+
+
+@pytest.mark.parametrize("repo", ["https://token@github.com/acme/api",
+                                  "https://user:pass@gitlab.example/acme/api"])  # fmt: skip
+def test_a_repo_url_carrying_credentials_is_refused(repo):  # review M9
+    with pytest.raises(IdentityError, match="repo"):
+        replace(IDENTITY, repo=repo)
+
+
+def test_an_scp_style_git_remote_is_fine():
+    assert replace(IDENTITY, repo="git@github.com:acme/api.git").repo.startswith("git@")

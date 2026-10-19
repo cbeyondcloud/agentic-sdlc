@@ -56,6 +56,8 @@ class CallIdentity:
                     f"identity field {field.name!r} must be 1-256 printable ASCII "
                     f"characters with no line breaks"
                 )
+        if "://" in self.repo and "@" in self.repo.split("://", 1)[1].split("/", 1)[0]:
+            raise IdentityError("identity field 'repo' must not carry credentials (user@host)")
 
     def headers(self) -> dict[str, str]:
         """The identity headers; the optional tier and parent agent only when set."""

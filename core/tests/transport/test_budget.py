@@ -194,3 +194,84 @@ def test_totals_reconcile_under_concurrent_children():
 
     assert ledger.run.total_spent() == sum(charged)
     assert len(charged) == 800
+
+
+# ── SP3 review fixes ──────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("estimate", ["0", "-1"])
+def test_an_estimate_must_be_above_zero(estimate):  # review I4
+    with pytest.raises(BudgetError):
+        BudgetLedger(D("5")).run.reserve(D(estimate))
+
+
+def test_a_child_overshoot_raises_at_the_outermost_limit_it_breaks():  # review I5
+    run = BudgetLedger(D("1")).run
+    step = run.open("build", "step", D("1"))
+    child = step.open("a", "child", D("1"))
+
+    with pytest.raises(LimitHit) as hit:
+        child.reserve(D("0.5")).settle(cost(D("3")))
+    assert hit.value.scope == "run"  # the run pause outranks the child stop
+    assert run.total_spent() == D("3")
+
+
+def test_a_child_overshoot_within_the_step_raises_for_the_step():
+    run = BudgetLedger(D("10")).run
+    step = run.open("build", "step", D("1"))
+    child = step.open("a", "child", D("0.5"))
+
+    with pytest.raises(LimitHit) as hit:
+        child.reserve(D("0.4")).settle(cost(D("2")))
+    assert hit.value.scope == "step"
+
+
+def test_the_limit_cannot_be_changed_by_assignment():  # review I6
+    child = BudgetLedger(D("5")).run.open("a", "child", D("1"))
+
+    with pytest.raises(AttributeError):
+        child.limit_usd = D("100")
+
+
+def test_a_human_can_raise_a_limit_within_what_the_parent_has():  # review I6
+    run = BudgetLedger(D("5")).run
+    step = run.open("build", "step", D("1"))
+    spend(step, "1")
+
+    step.raise_limit(D("3"))
+    assert step.limit_usd == D("3") and step.available() == D("2")
+    with pytest.raises(LimitHit):
+        step.raise_limit(D("10"))  # the run has only 5
+    with pytest.raises(BudgetError):
+        step.raise_limit(D("2"))  # lowering is not raising
+
+
+def test_unpriced_calls_and_dollars_roll_up_on_close():  # review I6
+    step = BudgetLedger(D("5")).run.open("build", "step", D("2"))
+    child = step.open("a", "child", D("1"))
+    child.reserve(D("0.2")).settle(cost(None))
+    child.close()
+
+    assert (step.unpriced_calls, step.unpriced_usd) == (1, D("0.2"))
+
+
+def test_closing_with_a_call_in_flight_changes_nothing():  # review M3
+    step = BudgetLedger(D("5")).run.open("build", "step", D("2"))
+    first = step.open("a", "child", D("1"))
+    second = step.open("b", "child", D("0.5"))
+    in_flight = second.reserve(D("0.1"))
+
+    with pytest.raises(BudgetError):
+        step.close()
+    assert not (step.closed or first.closed or second.closed)
+    in_flight.release()
+    step.close()
+    assert step.closed and first.closed and second.closed
+
+
+def test_limit_hit_survives_pickling():  # review M4
+    import pickle
+
+    hit = pickle.loads(pickle.dumps(LimitHit("step", "build", D("1"), D("1.2"))))
+    assert (hit.kind, hit.scope, hit.name, hit.limit_usd, hit.spent_usd) == (
+        "budget", "step", "build", D("1"), D("1.2"))  # fmt: skip

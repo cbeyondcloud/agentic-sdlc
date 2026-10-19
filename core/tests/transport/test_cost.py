@@ -193,3 +193,105 @@ def test_a_call_cost_must_be_consistent():
         CallCost(source="estimated", cost_usd=Decimal("1"), tokens_in=1, tokens_out=1,
                  tokens_cache_read=None, tokens_cache_write=None, model="m", request_id=None,
                  trace_id=None)  # fmt: skip
+
+
+# ── SP3 review fixes ──────────────────────────────────────────────────────────
+
+
+def anthropic_events(*events: dict) -> StreamUsage:
+    usage = StreamUsage()
+    for event in events:
+        usage.observe(event)
+    return usage
+
+
+START = {
+    "type": "message_start",
+    "message": {"model": "claude-sonnet-5-5", "usage": {"input_tokens": 0, "output_tokens": 1}},
+}
+
+
+def test_an_anthropic_stream_cut_after_message_start_is_unavailable():  # review C1
+    cost = anthropic_events(START).result({}, price_for)
+
+    assert (cost.source, cost.cost_usd) == ("unavailable", None)
+    assert "finish" in cost.reason
+
+
+def test_an_anthropic_stream_whose_input_is_unknown_is_unavailable():  # review C1
+    delta = {"type": "message_delta", "usage": {"output_tokens": 95}}
+    cost = anthropic_events(START, delta).result({}, price_for)
+
+    assert (cost.source, cost.cost_usd, cost.tokens_out) == ("unavailable", None, 95)
+
+
+def test_real_anthropic_input_from_message_start_counts_once_finished():
+    start = {
+        "type": "message_start",
+        "message": {
+            "model": "claude-sonnet-5-5",
+            "usage": {"input_tokens": 1000, "output_tokens": 1},
+        },
+    }
+    delta = {"type": "message_delta", "usage": {"output_tokens": 200}}
+    cost = anthropic_events(start, delta).result({}, price_for)
+
+    assert (cost.source, cost.tokens_in, cost.tokens_out, cost.cost_usd) == (
+        "estimated", 1000, 200, Decimal("0.006"))  # fmt: skip
+
+
+def test_anthropic_cache_tokens_are_added_to_input_not_subtracted():  # review I1
+    priced = {"claude-sonnet-5-5": ModelPrice(input_per_mtok=Decimal("3"),
+                                              output_per_mtok=Decimal("15"),
+                                              cache_read_per_mtok=Decimal("0.3"))}  # fmt: skip
+    body = {"model": "claude-sonnet-5-5",
+            "usage": {"input_tokens": 100, "output_tokens": 10,
+                      "cache_read_input_tokens": 100000}}  # fmt: skip
+    cost = cost_from_response({}, body, priced.get)
+
+    assert (cost.tokens_in, cost.tokens_cache_read) == (100100, 100000)
+    assert cost.cost_usd == Decimal("0.03045")  # 100x3 + 100000x0.3 + 10x15 per million
+
+
+def test_a_reported_zero_with_billed_tokens_is_not_trusted(fixtures):  # review I2
+    data = fixture(fixtures, "openai_nonstream.json")
+    data["body"]["_token_opt"]["cost_actual_usd"] = 0.0
+
+    cost = cost_from_response(data["headers"], data["body"], price_for)
+    assert (cost.source, cost.cost_usd) == ("estimated", Decimal("0.0009"))
+
+
+@pytest.mark.parametrize("bad", ["1_0", "1e999999", "100001"])
+def test_absurd_cost_values_are_not_evidence(fixtures, bad):  # review I2
+    data = fixture(fixtures, "openai_nonstream.json")
+    data["body"]["_token_opt"]["cost_actual_usd"] = bad
+
+    assert cost_from_response(data["headers"], data["body"], price_for).source == "estimated"
+
+
+@pytest.mark.parametrize("usd", [Decimal("-3"), Decimal("NaN"), Decimal("Infinity")])
+def test_a_call_cost_must_be_finite_and_not_negative(usd):  # review I3
+    with pytest.raises(ValueError):
+        CallCost(source="reported", cost_usd=usd, tokens_in=1, tokens_out=1,
+                 tokens_cache_read=None, tokens_cache_write=None, model="m", request_id=None,
+                 trace_id=None)  # fmt: skip
+
+
+def test_a_strange_digit_in_a_header_is_ignored_not_a_crash(fixtures):  # review M1
+    data = fixture(fixtures, "anthropic_nonstream.json")
+    headers = {**data["headers"], "x-tokenlean-cache-read-tokens": "²"}
+
+    assert cost_from_response(headers, data["body"], price_for).tokens_cache_read is None
+
+
+def test_ensure_stream_usage_is_for_the_openai_route_only():  # review I8 note
+    body = {"model": "claude-sonnet-5-5", "stream": True}
+
+    assert ensure_stream_usage(body, route="anthropic") == body
+    assert ensure_stream_usage(body)["stream_options"] == {"include_usage": True}
+
+
+def test_ensure_stream_usage_replaces_a_broken_stream_options():
+    fixed = ensure_stream_usage({"stream": True, "stream_options": "yes"})
+
+    assert fixed["stream_options"] == {"include_usage": True}

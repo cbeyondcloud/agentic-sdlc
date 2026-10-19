@@ -98,3 +98,21 @@ def test_the_async_client_uses_the_same_settings(https_server, ca_bundle):
             return (await client.get("/")).text
 
     assert asyncio.run(call()) == "ok"
+
+
+# ── SP3 review fixes (M7) ─────────────────────────────────────────────────────
+
+
+def test_a_ca_bundle_that_is_not_pem_is_a_clear_error(tmp_path: Path):
+    junk = tmp_path / "not-a-cert.pem"
+    junk.write_bytes(b"\x30\x82\x01\x0a not pem")
+
+    with pytest.raises(NetworkError, match="not-a-cert.pem"):
+        make_client("https://tl.example", IDENTITY, network=NetworkSettings(ca_bundle=junk))
+
+
+def test_an_environment_ca_file_that_is_missing_is_a_clear_error(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(tmp_path / "gone.pem"))
+
+    with pytest.raises(NetworkError, match="REQUESTS_CA_BUNDLE"):
+        make_client("https://tl.example", IDENTITY)

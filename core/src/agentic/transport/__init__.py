@@ -4,6 +4,7 @@ from agentic.transport.budget import BudgetError, BudgetLedger, BudgetSlice, Lim
 from agentic.transport.client import (
     BEHAVIOUR_HEADERS,
     ForbiddenHeaderError,
+    ForeignHostError,
     IdentityHeaderError,
     make_async_client,
     make_client,
@@ -34,6 +35,7 @@ __all__ = [
     "estimate_usd",
     "CallIdentity",
     "ForbiddenHeaderError",
+    "ForeignHostError",
     "IdentityError",
     "IdentityHeaderError",
     "make_async_client",

@@ -59,3 +59,12 @@ def test_a_bad_price_is_refused(policy_dir: Path, entry: str):
 
     with pytest.raises(PolicyError, match="bad-model"):
         load_policy(policy_dir)
+
+
+def test_an_empty_price_name_is_refused(policy_dir: Path):  # review M11
+    (policy_dir / "prices.yaml").write_text(
+        "prices:\n  '': { input_per_mtok: 1, output_per_mtok: 2 }\n", encoding="utf-8"
+    )
+
+    with pytest.raises(PolicyError, match="price"):
+        load_policy(policy_dir)
