@@ -18,6 +18,12 @@ Limits (spec §8.4), each ending the run with a reason:
   * stuck  - the stuck check after each model response           -> stopped: stuck
              (on by default: OpenHands' detector; `detail` names the pattern)
 
+Output contract (M1-20): with a `contract`, the agent is shown the document it
+must write, and each answer is checked. Errors go back to the model once
+(Pydantic AI's output retry); a second invalid answer ends the run `invalid`,
+keeping the last answer and its errors for a human gate. A pause for approval
+is never checked.
+
 A pause saves the run's state to `state-<agent>.json` in `state_dir`. The state
 is bound to its run and policy version and used once; its digest is in the
 outcome so the engine can ledger it, and `resume` needs that ledgered digest -
@@ -35,8 +41,15 @@ from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import TypeAdapter
-from pydantic_ai import Agent, DeferredToolRequests, DeferredToolResults, Tool, ToolDenied
-from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai import (
+    Agent,
+    DeferredToolRequests,
+    DeferredToolResults,
+    ModelRetry,
+    Tool,
+    ToolDenied,
+)
+from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, TextPart
 from pydantic_ai.models import Model
 from pydantic_ai.usage import RunUsage, UsageLimits
@@ -52,6 +65,25 @@ Stopped = Literal["budget", "turns", "time", "stuck"]
 StuckCheck = Callable[[list[ModelMessage]], str | None]
 _USAGE = TypeAdapter(RunUsage)
 STUCK_WINDOW = 40  # messages the stuck check looks at (it scans at most 20 events)
+OUTPUT_RETRIES = 1  # an invalid answer goes back once with its errors, then the run is invalid
+RETRY_MESSAGE = """\
+Your handoff document is not valid:
+{bullets}
+Answer again with the whole document, corrected: a line '---', the YAML fields, \
+a line '---', then the Markdown body."""
+
+
+class OutputContract(Protocol):
+    """What the agent must hand over (agentic.handoffs.HandoffContract)."""
+
+    @property
+    def instructions(self) -> str: ...
+
+    def check(self, text: str) -> tuple[str | None, list[str]]: ...
+
+
+def retry_message(errors: list[str]) -> str:
+    return RETRY_MESSAGE.format(bullets="\n".join(f"- {error}" for error in errors))
 
 
 class ResumeError(Exception):
@@ -67,7 +99,7 @@ class AgentTask:
 
 @dataclass
 class AgentOutcome:
-    status: Literal["completed", "stopped", "paused"]
+    status: Literal["completed", "stopped", "paused", "invalid"]
     output: str | None
     stopped: Stopped | None
     usage: RunUsage
@@ -76,6 +108,7 @@ class AgentOutcome:
     state_path: Path | None = None  # where a paused run was saved
     state_digest: str | None = None  # the saved state's digest: the engine ledgers it
     detail: str | None = None  # why it stopped, in words (the stuck pattern, the limit)
+    errors: list[str] = field(default_factory=list)  # why an invalid answer was refused
 
 
 @runtime_checkable
@@ -102,8 +135,11 @@ class PydanticAIRunner:
         time_limit_s: float | None = None,
         run_id: str | None = None,
         policy_version: str | None = None,
+        contract: OutputContract | None = None,
     ) -> None:
         self.agent, self.model, self.budget, self.state_dir = agent, model, budget, state_dir
+        self.contract = contract
+        self._invalid: tuple[str, list[str]] | None = None  # the last refused answer
         self.tools, self.is_child = list(tools), is_child
         self.stuck_check = stuck_check or detector_check(StuckDetector())
         self.run_id, self.policy_version = run_id, policy_version
@@ -114,7 +150,7 @@ class PydanticAIRunner:
         )
 
     async def run(self, task: AgentTask) -> AgentOutcome:
-        instructions = _instructions(task)
+        instructions = _instructions(task, self.contract)
         return await self._drive(self._pydantic_agent(instructions), task.prompt, instructions)
 
     async def resume(
@@ -185,6 +221,7 @@ class PydanticAIRunner:
         self, agent: Agent, prompt: str | None, instructions: str, **run_kwargs
     ) -> AgentOutcome:
         seen: dict = {"text": None, "run": None, "stuck": None}
+        self._invalid = None
         earlier_hit = self.costs.limit_hit  # a hit from an earlier run was already acted on
 
         async def go():
@@ -216,6 +253,18 @@ class PydanticAIRunner:
             return self._stopped("time", seen)
         except UsageLimitExceeded:
             return self._stopped("turns", seen)
+        except UnexpectedModelBehavior:
+            if self._invalid is None:
+                raise
+            text, errors = self._invalid
+            return AgentOutcome(
+                status="invalid",
+                output=text,
+                stopped=None,
+                usage=_usage(seen),
+                costs=self.costs,
+                errors=errors,
+            )
         except BaseException as error:
             hit = _limit_hit(error)
             if hit is None:
@@ -236,12 +285,27 @@ class PydanticAIRunner:
         )
 
     def _pydantic_agent(self, instructions: str) -> Agent:
-        return Agent(
+        agent = Agent(
             self.model,
             instructions=instructions,
             tools=self.tools,
             output_type=[str, DeferredToolRequests],
+            retries={"tools": 1, "output": OUTPUT_RETRIES},
         )
+        contract = self.contract
+        if contract is not None:
+
+            @agent.output_validator
+            def validate(output: str | DeferredToolRequests) -> str | DeferredToolRequests:
+                if not isinstance(output, str):
+                    return output  # a pause for approval: nothing to check yet
+                document, errors = contract.check(output)
+                if errors:
+                    self._invalid = (output, errors)
+                    raise ModelRetry(retry_message(errors))
+                return document
+
+        return agent
 
     def _pause(self, result, instructions: str, seen: dict) -> AgentOutcome:
         """Save what a later process needs to continue; the history is sensitive and
@@ -327,10 +391,12 @@ def _use_up(path: Path) -> None:
         raise ResumeError(f"paused run state could not be used up: {path} ({error})") from error
 
 
-def _instructions(task: AgentTask) -> str:
+def _instructions(task: AgentTask, contract: OutputContract | None = None) -> str:
     parts = [task.instructions.strip()]
     for kind, text in task.inputs.items():
         parts.append(f'<handoff kind="{kind}">\n{text.strip()}\n</handoff>')
+    if contract is not None:
+        parts.append(contract.instructions)
     return "\n\n".join(parts)
 
 

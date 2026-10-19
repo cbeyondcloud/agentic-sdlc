@@ -112,11 +112,12 @@ sequenceDiagram
         end
         Run->>Run: stuck detector (on by default), turn and time limits (a stop kills running shell commands) ✅ agents/stuck.py + runner limits (engine timeouts 🔲 M1-26)
     end
-    Run-->>Eng: output document
-    Eng->>Eng: parse_handoff(output) ✅ handoffs/parse.py
+    Run->>Run: answer checked against the kind's merged template (base + kind + org/team/repo extensions); framework stamps the envelope and counts open_blocking ✅ handoffs/contract.py HandoffContract, handoffs/finalise.py
     alt invalid handoff
-        Eng->>Run: retry once with the validation errors 🔲 M1-20
+        Run->>LLM: retry once with the validation errors (Pydantic AI output retry) ✅ agents/runner.py
+        Run-->>Eng: still invalid: status invalid, last answer + errors kept → human gate 🔲 M1-22
     end
+    Run-->>Eng: final handoff document
     Eng->>Led: event step_finished (digest of handoff, cost, tokens) ✅ sdlc_commons/ledger.py RunLedger.record
     Eng->>CP: ingest events + structured step log 🔲 M2-20 M1-47
 ```
@@ -197,7 +198,7 @@ sequenceDiagram
 | 5 | Preflight | Every step receives the handoffs it consumes | `core/src/agentic/handoffs/compat.py` · `check_compatibility` | ✅ M1-05 |
 | 6 | Preflight | RBAC, kill switch, CLI version, concurrency, pipeline integrity, skills, backends, sandbox | engine preflight | 🔲 M1-25 M2-21 |
 | 7 | Every step | Kill switch check, `when` evaluation | engine | 🔲 M2-19 M1-23 |
-| 8 | Every step | Agent loop: prompt, model calls via TokenLean (metered), tools, child agents, limits, pause/resume | `agentic.agents` (runner, metering, models, tools, children, stuck) | ✅ M1-15…M1-18 · 🔲 sandbox M1-32/33 |
+| 8 | Every step | Agent loop: prompt with the output template, model calls via TokenLean (metered), tools, child agents, limits, pause/resume; answer validated and retried once | `agentic.agents` (runner, metering, models, tools, children, stuck), `agentic.handoffs` (schema, extensions, finalise, contract) | ✅ M1-15…M1-20, M1-79 · 🔲 sandbox M1-32/33 |
 | 9 | Every model call | Identity headers, corporate network, cost capture, budget ledger; secret scan, OTel | `agentic.transport` (client, network, cost, budget), `agentic.security` | ✅ M1-11…M1-14 · 🔲 M1-41 M1-43 |
 | 10 | Every step end | Validate the agent's output as a handoff | `core/src/agentic/handoffs/parse.py` · `parse_handoff` | ✅ M1-05 |
 | 11 | Every step end | Ledger entry with handoff digest; events to control plane | `sdlc_commons.ledger`, telemetry sinks | 🔲 M1-06 M2-20 |
@@ -207,4 +208,4 @@ sequenceDiagram
 | 15 | End | Open PR, seal ledger, cost summary | GitHub adapter, engine | 🔲 M1-58 M1-06 M1-57 |
 | 16 | Background | Heartbeat, kill-switch polling, budget alerts, auto-trip | control plane + CLI | 🔲 M3-07 M2-19 M2-16 M2-11 |
 
-**Built so far:** steps 1–5 and 10; the commons adapters (SP2); transport (SP3); and the agent runtime (SP4): a resolved agent runs on Pydantic AI through TokenLean, every call metered against the budget, with guarded tools, child agents, stuck detection and pause/resume. **Next to build:** handoff templates and output validation (SP5), then the engine (SP6) that drives runners step by step.
+**Built so far:** steps 1–5 and 10; the commons adapters (SP2); transport (SP3); the agent runtime (SP4): a resolved agent runs on Pydantic AI through TokenLean, every call metered against the budget, with guarded tools, child agents, stuck detection and pause/resume; and handoffs (SP5): every kind inherits a base template that org, team and repo layers may extend but never reduce (D37), and an agent's answer is validated, stamped and retried once. **Next to build:** the engine (SP6) that drives runners step by step.
