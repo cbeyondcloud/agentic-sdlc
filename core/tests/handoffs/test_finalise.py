@@ -5,7 +5,9 @@ from datetime import UTC, datetime
 import pytest
 
 from agentic.handoffs import HandoffError, parse_handoff
-from agentic.handoffs.finalise import EnvelopeStamp, finalise_handoff
+from agentic.handoffs.extensions import extend_catalog, load_extension
+from agentic.handoffs.finalise import BLOCK_ON_DEFAULT, EnvelopeStamp, finalise_handoff
+from agentic.handoffs.kinds import count_open_blocking
 from agentic.handoffs.schema import BUILTIN_CATALOG, render_template
 from agentic.yamlio import split_front_matter
 
@@ -123,3 +125,69 @@ def test_caller_errors_are_value_errors():
         finalise_handoff(
             answer(DESIGN_FIELDS), schema=DESIGN, stamp=STAMP, block_on=frozenset({"urgent"})
         )
+
+
+# ── final review fixes (I2, I3, I5, M1) ───────────────────────────────────────
+
+REVIEW_FIELDS = (
+    "status: complete\nsummary: s\nfindings:\n"
+    "  - {severity: critical, issue: injection, status: open}\n"
+)
+
+
+def test_parse_can_verify_open_blocking_after_a_human_edit():  # review I2
+    document, _ = finalise_handoff(
+        answer(REVIEW_FIELDS, body_of(REVIEW)), schema=REVIEW, stamp=STAMP
+    )
+    edited = document.replace("open_blocking: 1", "open_blocking: 0")  # the exit rule, by hand
+
+    assert parse_handoff(edited).data.open_blocking == 0  # without block_on: as written
+    with pytest.raises(HandoffError, match="open_blocking: 0 but the findings show 1"):
+        parse_handoff(edited, block_on=BLOCK_ON_DEFAULT)
+    assert parse_handoff(document, block_on=BLOCK_ON_DEFAULT).data.open_blocking == 1
+
+
+def test_count_open_blocking_reads_dicts_and_models():  # review I2
+    _, handoff = finalise_handoff(
+        answer(REVIEW_FIELDS, body_of(REVIEW)), schema=REVIEW, stamp=STAMP
+    )
+
+    assert count_open_blocking(handoff.data.findings, BLOCK_ON_DEFAULT) == 1
+    assert count_open_blocking([{"severity": "high"}], BLOCK_ON_DEFAULT) == 1  # open by default
+
+
+def test_open_blocking_is_only_computed_for_reviews(tmp_path):  # review I5
+    path = tmp_path / "handoffs" / "audit.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(
+        b"new_kind: true\ntitle: Audit\nfields:\n  open_blocking:\n    type: integer\n"
+        b"    description: d\n    example: 0\n"
+    )
+    audit = extend_catalog(BUILTIN_CATALOG, [load_extension(path, "team")]).schema("audit")
+    body = body_of(audit)
+
+    _, handoff = finalise_handoff(
+        answer("status: complete\nsummary: s\nopen_blocking: 5\n", body), schema=audit, stamp=STAMP
+    )
+    assert handoff.data.open_blocking == 5
+
+
+def test_block_on_cannot_drop_below_the_floor():  # review M1
+    with pytest.raises(ValueError, match="floor"):
+        finalise_handoff(answer(DESIGN_FIELDS), schema=DESIGN, stamp=STAMP, block_on=frozenset())
+    with pytest.raises(ValueError, match="floor"):
+        finalise_handoff(
+            answer(DESIGN_FIELDS), schema=DESIGN, stamp=STAMP, block_on=frozenset({"critical"})
+        )
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        "status: complete\ndefaults: &d\n  summary: s\n<<: *d\n",  # a YAML merge key
+        "status: complete\nsummary: s\nrisks: " + "[" * 3000 + "]" * 3000 + "\n",  # deep
+    ],
+)
+def test_odd_yaml_is_an_error_not_a_crash(fields):  # review I3
+    with pytest.raises(HandoffError):
+        finalise_handoff(answer(fields), schema=DESIGN, stamp=STAMP)

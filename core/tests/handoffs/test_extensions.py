@@ -169,3 +169,33 @@ def test_the_digest_changes_only_for_the_extended_kind(tmp_path):
     assert catalog.digest != BUILTIN_CATALOG.digest
     assert catalog.schema("design").digest == BUILTIN_CATALOG.schema("design").digest
     assert BUILTIN_CATALOG.schema("review").model.model_fields.get("jira_ticket") is None
+
+
+# ── final review fixes (I1, M5) ───────────────────────────────────────────────
+
+
+def test_tightening_keeps_the_fields_constraints(tmp_path):  # review I1
+    text = "fields:\n  score:\n    required: true\n"
+    model = extend_catalog(BUILTIN_CATALOG, [ext(tmp_path, "review", text)]).schema("review").model
+
+    with pytest.raises(ValidationError):  # score is 0..10 in the built-in model
+        model.model_validate({"summary": "s", "open_blocking": 0, "score": 11})
+
+
+def test_narrowing_keeps_an_optional_fields_constraints(tmp_path):  # review I1
+    org = ext(tmp_path / "org", "review", RISK_ENUM, layer="org")
+    team = ext(tmp_path / "team", "review", "fields:\n  risk:\n    required: true\n")
+
+    model = extend_catalog(BUILTIN_CATALOG, [org, team]).schema("review").model
+    with pytest.raises(ValidationError):
+        model.model_validate({"summary": "s", "open_blocking": 0})
+
+
+def test_values_only_apply_to_an_enum(tmp_path):  # review M5
+    text = (
+        "fields:\n  code:\n    type: string\n    values: [a, b]\n"
+        "    description: d\n    example: a\n"
+    )
+
+    with pytest.raises(DefinitionError, match="enum"):
+        extend_catalog(BUILTIN_CATALOG, [ext(tmp_path, "review", text)])

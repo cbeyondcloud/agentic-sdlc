@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pydantic import ValidationError
 
 from agentic.definitions import describe_validation_error
-from agentic.handoffs.kinds import SEVERITIES
+from agentic.handoffs.kinds import SEVERITIES, count_open_blocking
 from agentic.handoffs.model import Handoff, HandoffEnvelope, HandoffError
 from agentic.handoffs.parse import missing_sections, parse_handoff
 from agentic.handoffs.schema import HandoffCatalog, HandoffSchema
@@ -52,8 +52,7 @@ def finalise_handoff(
     block_on: frozenset[str] = BLOCK_ON_DEFAULT,
 ) -> tuple[str, Handoff]:
     """The final document and its parsed handoff, or HandoffError with every problem."""
-    if unknown := sorted(set(block_on) - set(SEVERITIES)):
-        raise ValueError(f"unknown severities in block_on: {unknown} (known: {SEVERITIES})")
+    check_block_on(block_on)
 
     text = _unwrapped(text)
     try:
@@ -76,8 +75,8 @@ def finalise_handoff(
             f"(line {line_of(lines, ('kind',))})"
         )
     data = {k: v for k, v in meta.items() if k not in FRAMEWORK_FIELDS and k != "status"}
-    if "open_blocking" in schema.model.model_fields:
-        data["open_blocking"] = _open_blocking(data.get("findings"), block_on)
+    if schema.kind == "review":  # by kind: another kind's own open_blocking field is its own
+        data["open_blocking"] = count_open_blocking(data.get("findings"), block_on)
     envelope = {
         "kind": schema.kind,
         "schema_version": schema.schema_version,
@@ -111,6 +110,16 @@ def finalise_handoff(
     return document, parse_handoff(document, HandoffCatalog({schema.kind: schema}))
 
 
+def check_block_on(block_on: frozenset[str]) -> None:
+    """A caller's block_on must name known severities and keep the floor (critical, high)."""
+    if unknown := sorted(set(block_on) - set(SEVERITIES)):
+        raise ValueError(f"unknown severities in block_on: {unknown} (known: {SEVERITIES})")
+    if missing := sorted(BLOCK_ON_DEFAULT - set(block_on)):
+        raise ValueError(
+            f"block_on must keep the floor {sorted(BLOCK_ON_DEFAULT)}; missing {missing}"
+        )
+
+
 def _unwrapped(text: str) -> str:
     """LF line endings, no byte-order mark, and one outer code fence removed."""
     text = text.replace("\r\n", "\n").replace("\r", "\n").removeprefix("\ufeff").strip()
@@ -118,16 +127,3 @@ def _unwrapped(text: str) -> str:
     if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
         text = "\n".join(lines[1:-1]).strip()
     return text
-
-
-def _open_blocking(findings: object, block_on: frozenset[str]) -> int:
-    """Open findings at a blocking severity (a finding's status defaults to open)."""
-    if not isinstance(findings, list):
-        return 0
-    return sum(
-        1
-        for finding in findings
-        if isinstance(finding, dict)
-        and finding.get("status", "open") == "open"
-        and finding.get("severity") in block_on
-    )

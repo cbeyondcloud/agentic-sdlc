@@ -8,6 +8,7 @@ Every kind inherits `HandoffBase` (D37, spec §7.4): a one-line `summary` and th
 `open_questions` every handoff may carry.
 """
 
+from collections.abc import Iterable
 from typing import ClassVar, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -112,6 +113,22 @@ class Finding(_Strict):
     line: int | None = None
     issue: str
     status: Literal["open", "resolved", "accepted"] = "open"
+
+
+def count_open_blocking(findings: Iterable[object] | None, block_on: Iterable[str]) -> int:
+    """Open findings at a blocking severity - the review loop's exit number (Zyroflo P6).
+    Reads `Finding` models or the raw dicts of an agent's answer (status defaults to open)."""
+    blocking = set(block_on)
+    count = 0
+    for finding in findings or []:
+        if isinstance(finding, Finding):
+            severity, status = finding.severity, finding.status
+        elif isinstance(finding, dict):
+            severity, status = finding.get("severity"), finding.get("status", "open")
+        else:
+            continue
+        count += status == "open" and severity in blocking
+    return count
 
 
 class PrepassResult(_Strict):

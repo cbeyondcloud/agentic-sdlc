@@ -1,10 +1,12 @@
 """Tests for the handoff validation retry: errors fed back once, then invalid (M1-20, spec §7.2)."""
 
 import asyncio
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
 from _resume_helper import write_tool
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -14,6 +16,7 @@ from agentic.agents.runner import (
     AgentOutcome,
     AgentTask,
     PydanticAIRunner,
+    ResumeError,
     retry_message,
 )
 from agentic.handoffs.contract import HandoffContract
@@ -118,3 +121,40 @@ def test_the_contract_instructions_wrap_the_template():
 
     assert text.startswith('<output-format kind="design">\n')
     assert text.endswith("</output-format>") and render_template(DESIGN) in text
+
+
+# ── final review fixes (I3, I4, M1) ───────────────────────────────────────────
+
+
+def test_an_unreadable_answer_is_fed_back_not_raised(resolved, tmp_path, monkeypatch):  # I3
+    import agentic.handoffs.contract as contract_module
+
+    def explode(*args, **kwargs):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(contract_module, "finalise_handoff", explode)
+    outcome = run(runner(resolved, answers(PROSE), tmp_path, contract=CONTRACT))
+
+    assert outcome.status == "invalid" and "could not be read" in outcome.errors[0]
+
+
+def test_resume_needs_the_contract_the_run_paused_with(resolved, tmp_path):  # review I4
+    calls = FunctionModel(
+        lambda m, i: ModelResponse(parts=[ToolCallPart("write_file", {"path": "out.txt"})])
+    )
+    tools = [write_tool(tmp_path)]
+    paused = run(runner(resolved, calls, tmp_path, contract=CONTRACT, tools=tools))
+    decisions = {paused.pending[0]: True}
+
+    without = runner(resolved, answers(PROSE), tmp_path, tools=tools)
+    with pytest.raises(ResumeError, match="contract"):
+        asyncio.run(without.resume(paused.state_path, decisions, paused.state_digest))
+    state = json.loads(paused.state_path.read_text(encoding="utf-8"))
+    assert state["contract"] == CONTRACT.digest
+
+
+def test_a_contract_checks_block_on_and_clock_at_once():  # review M1
+    with pytest.raises(ValueError, match="floor"):
+        HandoffContract(DESIGN, "r", "s", "a@1", block_on=frozenset(), clock=lambda: FIXED)
+    with pytest.raises(ValueError, match="timezone"):
+        HandoffContract(DESIGN, "r", "s", "a@1", clock=lambda: datetime(2026, 10, 19))

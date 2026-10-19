@@ -11,7 +11,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from agentic.handoffs.finalise import BLOCK_ON_DEFAULT, EnvelopeStamp, finalise_handoff
+from agentic.handoffs.finalise import (
+    BLOCK_ON_DEFAULT,
+    EnvelopeStamp,
+    check_block_on,
+    finalise_handoff,
+)
 from agentic.handoffs.model import HandoffError
 from agentic.handoffs.schema import HandoffSchema, render_template
 
@@ -40,6 +45,16 @@ class HandoffContract:
     block_on: frozenset[str] = BLOCK_ON_DEFAULT
     clock: Callable[[], datetime] = field(default=_utc_now)
 
+    def __post_init__(self) -> None:
+        # Caller mistakes surface here, not on the agent's first answer.
+        check_block_on(self.block_on)
+        EnvelopeStamp(self.run_id, self.step, self.agent, self.clock())
+
+    @property
+    def digest(self) -> str:
+        """What a paused run was checked against: the schema and the blocking severities."""
+        return f"{self.schema.digest}|block_on={','.join(sorted(self.block_on))}"
+
     @property
     def instructions(self) -> str:
         return INSTRUCTIONS.format(kind=self.schema.kind, template=render_template(self.schema))
@@ -53,4 +68,9 @@ class HandoffContract:
             )
         except HandoffError as error:
             return None, list(error.errors)
+        except Exception as error:  # an answer odd enough to break a parser: still feedback
+            return None, [
+                f"the answer could not be read ({type(error).__name__}); send plain YAML "
+                "front matter between '---' lines, then the Markdown body"
+            ]
         return document, []

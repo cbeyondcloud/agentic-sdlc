@@ -79,6 +79,9 @@ class OutputContract(Protocol):
     @property
     def instructions(self) -> str: ...
 
+    @property
+    def digest(self) -> str: ...  # recorded in a paused state; resume needs the same
+
     def check(self, text: str) -> tuple[str | None, list[str]]: ...
 
 
@@ -186,6 +189,12 @@ class PydanticAIRunner:
             raise ResumeError(
                 f"this paused run belongs to agent {state['agent']} version "
                 f"{state['agent_version']}, not {name} version {version}"
+            )
+        expected = self.contract.digest if self.contract is not None else None
+        if state.get("contract") != expected:
+            raise ResumeError(
+                f"this paused run was checked against handoff contract {state.get('contract')}; "
+                f"resume it with the same contract, not {expected}"
             )
         have = {tool.name for tool in self.tools}
         if missing := sorted(set(state["pending_tools"].values()) - have):
@@ -322,6 +331,7 @@ class PydanticAIRunner:
             "messages": json.loads(ModelMessagesTypeAdapter.dump_json(result.all_messages())),
             "pending": pending,
             "pending_tools": {call.tool_call_id: call.tool_name for call in calls},
+            "contract": self.contract.digest if self.contract is not None else None,
             "usage": _USAGE.dump_python(_usage(seen), mode="json"),
         }
         digest = _fingerprint(payload)

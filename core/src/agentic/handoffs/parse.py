@@ -13,6 +13,7 @@ section heading of the kind's template.
 from pydantic import ValidationError
 
 from agentic.definitions import describe_validation_error
+from agentic.handoffs.kinds import count_open_blocking
 from agentic.handoffs.model import Handoff, HandoffEnvelope, HandoffError
 from agentic.handoffs.schema import BUILTIN_CATALOG, HandoffCatalog, HandoffSchema
 from agentic.yamlio import YamlFileError, line_of, load_yaml, split_front_matter
@@ -20,7 +21,15 @@ from agentic.yamlio import YamlFileError, line_of, load_yaml, split_front_matter
 ENVELOPE_FIELDS = set(HandoffEnvelope.model_fields)
 
 
-def parse_handoff(text: str, catalog: HandoffCatalog = BUILTIN_CATALOG) -> Handoff:
+def parse_handoff(
+    text: str,
+    catalog: HandoffCatalog = BUILTIN_CATALOG,
+    *,
+    block_on: frozenset[str] | None = None,
+) -> Handoff:
+    """With `block_on` (the run's blocking severities), a review's `open_blocking` must
+    match its findings - so a person's edit at a gate cannot change the loop's exit
+    number without changing the findings."""
     try:
         header, body = split_front_matter(text.removeprefix("\ufeff"))
         meta, lines = load_yaml(header, first_line=2)  # line 1 is the opening '---'
@@ -58,6 +67,14 @@ def parse_handoff(text: str, catalog: HandoffCatalog = BUILTIN_CATALOG) -> Hando
             f"'{kind}' (supported: {schema.schema_version}) (line {line})"
         )
     problems += missing_sections(body, schema)
+    if block_on is not None and kind == "review" and data is not None:
+        counted = count_open_blocking(data.findings, block_on)  # type: ignore[attr-defined]
+        if data.open_blocking != counted:  # type: ignore[attr-defined]
+            problems.append(
+                f"open_blocking: {data.open_blocking} but the findings show {counted} open at "  # type: ignore[attr-defined]
+                f"a blocking severity ({', '.join(sorted(block_on))}) "
+                f"(line {line_of(lines, ('open_blocking',))})"
+            )
     if problems:
         raise HandoffError(problems)
     return Handoff(envelope=envelope, data=data, body=body)  # type: ignore[arg-type]

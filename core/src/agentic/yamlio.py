@@ -47,9 +47,11 @@ def load_yaml(text: str, first_line: int = 1) -> tuple[Any, dict[Loc, int]]:
     """
     try:
         data = YAML(typ="safe", pure=True).load(text)
+        return data, _line_map(YAML(typ="rt").load(text), first_line)
     except YAMLError as error:
         raise YamlFileError(_describe_yaml_error(error, first_line)) from error
-    return data, _line_map(YAML(typ="rt").load(text), first_line)
+    except RecursionError as error:
+        raise YamlFileError("the YAML is nested too deeply") from error
 
 
 def dump_yaml(data: Mapping[str, Any]) -> str:
@@ -106,7 +108,10 @@ def _line_map(node: Any, first_line: int, prefix: Loc = ()) -> dict[Loc, int]:
     lines: dict[Loc, int] = {}
     if isinstance(node, CommentedMap):
         for key in node:
-            lines[prefix + (key,)] = node.lc.key(key)[0] + first_line
+            try:
+                lines[prefix + (key,)] = node.lc.key(key)[0] + first_line
+            except KeyError:
+                continue  # a key merged in by '<<: *alias' has no position of its own
             lines.update(_line_map(node[key], first_line, prefix + (key,)))
     elif isinstance(node, CommentedSeq):
         for index, item in enumerate(node):

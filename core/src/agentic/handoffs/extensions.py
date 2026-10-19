@@ -16,9 +16,9 @@ import typing
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import TypeAdapter, ValidationError, create_model
+from pydantic import Field, TypeAdapter, ValidationError, create_model
 
 from agentic.definitions import DefinitionError
 from agentic.handoffs.finalise import FRAMEWORK_FIELDS
@@ -241,9 +241,12 @@ def _tighten(spec: FieldSpec, current, where: str, problems: list[str]):
     becomes_required = optional and spec.required is True
     if spec.values is None and not becomes_required:
         return None
+    # Keep the field's constraints (ge, le, min_length, ...): Pydantic holds them in
+    # the FieldInfo's metadata, not in the annotation, so they travel with it here.
+    kept = Annotated[inner, *current.metadata] if current.metadata else inner
     if optional and not becomes_required:
-        return (inner | None, current.default)
-    return (inner, ...)
+        return (kept | None, Field(default=current.default, description=current.description))
+    return (kept, Field(description=current.description))
 
 
 def _add(spec: FieldSpec, where: str, problems: list[str]):
@@ -251,6 +254,9 @@ def _add(spec: FieldSpec, where: str, problems: list[str]):
     missing = [k for k in ("type", "description", "example") if not _given(spec, k)]
     if missing:
         problems.append(f"{spec.name}: a new field needs {', '.join(missing)}{where}")
+        return None
+    if spec.values is not None and spec.type != "enum":
+        problems.append(f"{spec.name}: values apply only to an enum (type: enum){where}")
         return None
     if spec.type == "enum":
         if not spec.values:
