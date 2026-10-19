@@ -63,6 +63,7 @@ class Pending(_Strict):
     step: str | None = None
     state_path: str | None = None  # a paused tool approval: the runner's saved state
     state_digest: str | None = None
+    calls: list[str] = []  # tool calls awaiting a person's decision
 
 
 class RunState(_Strict):
@@ -87,6 +88,7 @@ class RunState(_Strict):
     updated_at: AwareDatetime
     max_minutes: int | None = Field(default=None, ge=1)
     extra_minutes: int = Field(default=0, ge=0)  # granted by a person on resume
+    unpinned: dict[str, str] = {}  # artefacts written since the last gate: path -> digest
 
 
 class RunStore:

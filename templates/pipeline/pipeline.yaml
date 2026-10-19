@@ -16,6 +16,7 @@
 name: my-pipeline                         # required; lowercase-with-hyphens, unique in the repo
 version: 0.1.0                            # required; MAJOR.MINOR.PATCH
 # regime: team                            # solo | team | regulated: how strict gates are   [team]
+# max_minutes: 240                        # wall-clock limit; then the run pauses for a person   [no limit]
 # inputs:                                 # what a run starts from
 #   request: { from: [text, file, jira] }   # e.g. agentic run my-pipeline --from-jira PROJ-1
 
@@ -33,6 +34,7 @@ steps:                                    # required; at least one step
   # - gate: design-approval               # unique gate name
   #   approver_role: team-lead            # role allowed to approve: team-lead | approver | repo-maintainer | org-admin
   #   four_eyes: false                    # true = approver must not be the person who started the run   [false]
+  #   on_reject: design                   # step a rejection sends the work back to   [the agent step before the gate]
 
   # --- loop step: repeats its steps until a condition holds ---------------------
   # - loop:

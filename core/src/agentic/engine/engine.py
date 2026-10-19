@@ -1,0 +1,604 @@
+"""The pipeline engine (M1-21, M1-24, M1-26; spec §6, §8.3, §8.4, §8.7).
+
+A state machine over a `PipelineDefinition`. `advance` runs from the run's cursor
+until something needs a person - a gate, a pause - or the run ends:
+
+  * agent step  - `when` checked over the latest handoffs; the agent resolved
+                  against policy; a step budget slice opened from the run's; its
+                  answer validated against the kind's merged template; the final
+                  handoff written into the run folder and pinned by digest
+  * action step - a built-in action by name
+  * loop        - its body repeated until `until` holds; an oscillating or
+                  exhausted loop escalates to a gate (or fails the run)
+  * gate        - the run stops until the gate ledger reports it satisfied:
+                  an approval over the exact bytes it pinned (spec §7.3)
+
+Each completed step is a checkpoint: `run.json` is saved before the next step
+starts, and the budget snapshot is saved as calls settle, so a crash re-runs only
+the step that was in progress and its spend still counts. A limit, a timeout, an
+invalid answer, a stuck agent or a condition that cannot be evaluated pauses the
+run with the reason; nothing is decided silently.
+
+The engine imports neither `sdlc_commons` nor Zyroflo: the run ledger and the
+gate ledger are protocols, wired by the CLI (and the tests).
+"""
+
+import hashlib
+import json
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from decimal import Decimal
+from pathlib import Path
+from typing import Literal, Protocol
+
+from agentic.agents.runner import AgentOutcome, AgentRunner, AgentTask, OutputContract
+from agentic.agents.stuck import oscillation
+from agentic.definitions import DefinitionSet
+from agentic.definitions.pipeline import (
+    ActionStep,
+    AgentStep,
+    GateStep,
+    LoopSpec,
+    LoopStep,
+    PipelineDefinition,
+)
+from agentic.engine.expressions import ExpressionError, compile_condition
+from agentic.engine.state import Cursor, Pending, RunState, RunStore, StepRecord
+from agentic.handoffs import HandoffContract, HandoffError, parse_handoff
+from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
+from agentic.transport import BudgetLedger, BudgetSlice, LimitHit
+from agentic.transport.budget import BudgetError
+
+PROMPT_HEAD = "Pipeline: {pipeline} · step: {step} · iteration: {iteration}"
+
+
+class EngineError(Exception):
+    """A request the engine refuses (an unknown run, a run waiting at a gate, ...)."""
+
+
+class RunRecorder(Protocol):
+    """The run's hash-chained ledger (`sdlc_commons.ledger.RunLedger`)."""
+
+    @property
+    def run_dir(self) -> Path: ...
+
+    def record(self, event: str, phase: str = "", **fields: object) -> object: ...
+
+    def write_artifact(self, rel: str, text: str) -> str: ...
+
+    def digest(self, rel: str) -> str: ...
+
+
+class GateLedger(Protocol):
+    """Approval entries pinned to artefact digests (`sdlc_commons.gates.ZyrofloGates`)."""
+
+    def record(self, gate: str, verdict: Literal["approve", "reject"], approver: str,
+               artefacts: dict[str, str], *, step: str, notes: str = "",
+               extra: dict | None = None) -> str: ...  # fmt: skip
+
+    def state(self, gate: str) -> tuple[bool, str]: ...
+
+    def waiting(self, gate: str, step: str) -> None: ...
+
+
+class Clock(Protocol):
+    def now(self) -> datetime: ...  # timezone-aware
+
+
+@dataclass(frozen=True)
+class StepContext:
+    run_id: str
+    step: str
+    iteration: int
+    agent: ResolvedAgent
+    budget: BudgetSlice
+    contract: OutputContract | None
+
+
+class StepRunnerFactory(Protocol):
+    def __call__(self, step: StepContext) -> AgentRunner: ...
+
+
+class Engine:
+    def __init__(
+        self,
+        *,
+        definitions: DefinitionSet,
+        policy: OrgPolicy,
+        context: ResolveContext,
+        store: RunStore,
+        recorder_for: Callable[[str], RunRecorder],
+        gates_for: Callable[[str], GateLedger],
+        runner_factory: StepRunnerFactory,
+        block_on_for: Callable[[str], frozenset[str]],
+        clock: Clock,
+        actions: Mapping[str, Callable[[RunState], str]] | None = None,
+        run_budget_usd: Decimal | None = None,
+    ) -> None:
+        self.definitions, self.policy, self.context = definitions, policy, context
+        self.store, self.recorder_for, self.gates_for = store, recorder_for, gates_for
+        self.runner_factory, self.block_on_for, self.clock = runner_factory, block_on_for, clock
+        self.actions = dict(actions or {})
+        self.run_budget_usd = run_budget_usd
+
+    async def start(
+        self, pipeline: str, inputs: dict[str, str], starter: str, run_id: str
+    ) -> RunState:
+        """Create the run (its ledger, its run.json) and advance it."""
+        if self.store.exists(run_id):
+            raise EngineError(f"run {run_id} already exists - resume it instead")
+        definition = self.definitions.pipeline(pipeline)
+        now = self.clock.now()
+        state = RunState(
+            run_id=run_id,
+            pipeline=pipeline,
+            pipeline_version=definition.version,
+            pipeline_digest=pipeline_digest(definition),
+            policy_version=self.policy.version,
+            catalog_digest=self.definitions.handoffs.digest,
+            regime=definition.regime,
+            starter=starter,
+            status="running",
+            cursor=Cursor(index=0),
+            inputs=dict(inputs),
+            started_at=now,
+            updated_at=now,
+            max_minutes=definition.max_minutes,
+            budget=BudgetLedger(self.run_budget_usd).snapshot(),
+        )
+        self.recorder_for(run_id)  # opens the run's ledger
+        self.store.save(state)
+        return await self.advance(run_id)
+
+    async def advance(self, run_id: str) -> RunState:
+        """Run from the cursor until a gate, a pause, the end or a failure."""
+        return await _Run(self, self.store.load(run_id)).go()
+
+    async def resume(
+        self,
+        run_id: str,
+        *,
+        extra_minutes: int = 0,
+        extra_budget_usd: Decimal = Decimal(0),
+        decisions: dict[str, bool | str] | None = None,
+    ) -> RunState:
+        """Continue a paused run: grant more time or budget, or answer pending tool
+        calls (`decisions`), then advance. A run waiting at a gate is decided instead."""
+        run = _Run(self, self.store.load(run_id))
+        return await run.resume(extra_minutes, extra_budget_usd, decisions)
+
+
+def pipeline_digest(pipeline: PipelineDefinition) -> str:
+    canonical = json.dumps(pipeline.model_dump(mode="json"), sort_keys=True,
+                           separators=(",", ":"), ensure_ascii=False)  # fmt: skip
+    return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class _Run:
+    """One run being advanced: its state, budget, ledgers and pipeline."""
+
+    def __init__(self, engine: Engine, state: RunState) -> None:
+        self.e, self.state = engine, state
+        self.pipeline = engine.definitions.pipeline(state.pipeline)
+        if pipeline_digest(self.pipeline) != state.pipeline_digest:
+            raise EngineError(
+                f"pipeline {state.pipeline} changed since run {state.run_id} started "
+                "(a run uses only the version it was started with)"
+            )
+        if engine.definitions.handoffs.digest != state.catalog_digest:
+            raise EngineError(
+                f"the handoff templates changed since run {state.run_id} started "
+                "(a run validates against the templates it was started with)"
+            )
+        self.recorder = engine.recorder_for(state.run_id)
+        self.gates = engine.gates_for(state.run_id)
+        self.catalog = engine.definitions.handoffs
+        self.budget = (
+            BudgetLedger.restore(state.budget)
+            if state.budget
+            else BudgetLedger(engine.run_budget_usd)
+        )
+        self.budget.on_change = self._save_budget
+
+    # ── the walk ─────────────────────────────────────────────────────────────
+
+    async def go(self) -> RunState:
+        state = self.state
+        if state.status in ("completed", "failed", "stopped") or state.pending is not None:
+            return state
+        state.status = "running"
+        while state.cursor.index < len(self.pipeline.steps):
+            if self._timed_out():
+                return self._pause("run-timeout", self._timeout_reason())
+            step = self.pipeline.steps[state.cursor.index]
+            if isinstance(step, GateStep):
+                if not self._pass_gate(step):
+                    return state
+            elif isinstance(step, LoopStep):
+                if not await self._loop(step.loop):
+                    return state
+            else:
+                if not await self._step(step, 1):
+                    return state
+                self._next()
+        return self._close("completed")
+
+    async def resume(
+        self, extra_minutes: int, extra_budget: Decimal, decisions: dict | None
+    ) -> RunState:
+        state, pending = self.state, self.state.pending
+        if pending is not None and pending.kind == "gate":
+            raise EngineError(
+                f"run {state.run_id} waits at {pending.id}: approve, reject or edit it"
+            )
+        state.extra_minutes += extra_minutes
+        if extra_budget > 0 and self.budget.run.limit_usd is not None:
+            self.budget.run.raise_limit(self.budget.run.limit_usd + extra_budget)
+        if pending is not None and pending.kind == "approval":
+            if decisions is None:
+                raise EngineError(f"run {state.run_id} waits for tool decisions: {pending.calls}")
+            step = self._step_at_cursor()
+            iteration = state.cursor.loop_iteration or 1
+            state.pending, state.status = None, "running"
+            resumed = (Path(pending.state_path), decisions, pending.state_digest)
+            if not await self._step(step, iteration, resume=resumed):
+                return state
+            self._after_step()
+            return await self.go()
+        state.pending = None
+        return await self.go()
+
+    def _step_at_cursor(self) -> AgentStep | ActionStep:
+        step = self.pipeline.steps[self.state.cursor.index]
+        if isinstance(step, LoopStep):
+            return step.loop.steps[self.state.cursor.loop_index]
+        return step
+
+    def _after_step(self) -> None:
+        """Move past the step at the cursor (inside a loop: to the next body step)."""
+        step = self.pipeline.steps[self.state.cursor.index]
+        if isinstance(step, LoopStep):
+            self.state.cursor.loop_index += 1
+            self.save()
+        else:
+            self._next()
+
+    def _next(self) -> None:
+        self.state.cursor = Cursor(index=self.state.cursor.index + 1)
+        self.save()
+
+    # ── gates ────────────────────────────────────────────────────────────────
+
+    def _pass_gate(self, gate: GateStep) -> bool:
+        satisfied, why = self.gates.state(gate.gate)
+        if satisfied:
+            self.state.unpinned = {}
+            self._next()
+            return True
+        reason = f"waiting for approval by {gate.approver_role}"
+        if why and "no entry" not in why:
+            reason += f" ({why})"
+        self._wait(gate.gate, reason, gate.gate, dict(self.state.unpinned))
+        return False
+
+    def _wait(self, gate: str, reason: str, step: str, artefacts: dict[str, str]) -> None:
+        self.state.pending = Pending(kind="gate", id=gate, reason=reason, artefacts=artefacts,
+                                     since=self.e.clock.now(), step=step)  # fmt: skip
+        self.state.status = "awaiting_gate"
+        self.gates.waiting(gate, step)
+        self.save()
+
+    # ── loops ────────────────────────────────────────────────────────────────
+
+    async def _loop(self, loop: LoopSpec) -> bool:
+        cursor = self.state.cursor
+        if cursor.loop_iteration == 0:
+            cursor.loop_iteration, cursor.loop_index = 1, 0
+        while True:
+            while cursor.loop_index < len(loop.steps):
+                if self._timed_out():
+                    self._pause("run-timeout", self._timeout_reason())
+                    return False
+                if not await self._step(loop.steps[cursor.loop_index], cursor.loop_iteration):
+                    return False
+                cursor.loop_index += 1
+                self.save()
+            try:
+                done = compile_condition(loop.until).evaluate(self._context())
+            except ExpressionError as error:
+                self._pause("condition", str(error), step=loop.id)
+                return False
+            if done:
+                self._next()
+                return True
+            repeating = self._oscillating(loop)
+            if repeating or cursor.loop_iteration >= loop.max_iterations:
+                reason = (
+                    f"the loop is oscillating: '{repeating}' repeats an earlier iteration"
+                    if repeating
+                    else f"max_iterations {loop.max_iterations} reached and {loop.until!r} "
+                    "is still false"
+                )
+                if loop.on_exhausted == "fail":
+                    self._close("failed")
+                else:
+                    self._wait(f"{loop.id}-exhausted", reason, loop.id, dict(self.state.unpinned))
+                return False
+            self.recorder.record("loop_back", loop.id,
+                                 **{"from": loop.steps[-1].id, "to": loop.steps[0].id})  # fmt: skip
+            cursor.loop_iteration, cursor.loop_index = cursor.loop_iteration + 1, 0
+            self.save()
+
+    def _oscillating(self, loop: LoopSpec) -> str | None:
+        """An open finding of this iteration that repeats one of the last two (§8.5)."""
+        body = {step.id for step in loop.steps}
+        by_iteration: dict[int, list[str]] = {}
+        for record in self.state.history:
+            if record.step in body and record.outcome == "completed" and record.handoff:
+                issues = self._open_issues(record.handoff)
+                if issues is not None:
+                    by_iteration.setdefault(record.iteration, []).extend(issues)
+        current = self.state.cursor.loop_iteration
+        earlier = [issue for i in (current - 2, current - 1) for issue in by_iteration.get(i, [])]
+        for issue in by_iteration.get(current, []):
+            if earlier and oscillation(earlier, issue, window=len(earlier)):
+                return issue
+        return None
+
+    def _open_issues(self, rel: str) -> list[str] | None:
+        handoff = self._read(rel)
+        if handoff is None or handoff.envelope.kind != "review":
+            return None
+        return [f.issue for f in handoff.data.findings if f.status == "open"]  # type: ignore[attr-defined]
+
+    # ── one step ─────────────────────────────────────────────────────────────
+
+    async def _step(
+        self, step: AgentStep | ActionStep, iteration: int, *, resume: tuple | None = None
+    ) -> bool:
+        """Run one step. True when it completed or was skipped (the caller moves on)."""
+        if resume is None and step.when:
+            try:
+                wanted = compile_condition(step.when).evaluate(self._context())
+            except ExpressionError as error:
+                self._pause("condition", str(error), step=step.id)
+                return False
+            if not wanted:
+                now = self.e.clock.now()
+                self._history(step.id, iteration, "skipped", started=now)
+                self.recorder.record("step_finished", step.id, outcome="skipped")
+                self.save()
+                return True
+        if isinstance(step, ActionStep):
+            return self._action(step, iteration)
+        return await self._agent(step, iteration, resume)
+
+    def _action(self, step: ActionStep, iteration: int) -> bool:
+        started = self.e.clock.now()
+        action = self.e.actions.get(step.action)
+        if action is None:
+            self._history(step.id, iteration, "failed", started=started,
+                          detail=f"unknown action {step.action!r}")  # fmt: skip
+            self._close("failed")
+            return False
+        self.recorder.record("step_started", step.id, attempt=self._attempt(step.id, iteration))
+        detail = action(self.state)
+        self._history(step.id, iteration, "completed", started=started, detail=str(detail))
+        self.recorder.record("step_finished", step.id, outcome="completed")
+        self.save()
+        return True
+
+    async def _agent(self, step: AgentStep, iteration: int, resume: tuple | None) -> bool:
+        agent, violations = resolve_agent(
+            self.e.definitions.agent(step.agent), self.e.policy, self.e.context
+        )
+        if agent is None:
+            reason = "; ".join(f"{v.field}: {v.reason}" for v in violations)
+            self._pause("policy", reason, step=step.id)
+            return False
+        name = f"{step.id}-{iteration}"
+        try:
+            budget = self.budget.open_slice(name) or self.budget.run.open(
+                name, "step", _usd(agent.limits.budget_usd)
+            )
+        except LimitHit as hit:
+            self._pause("budget", str(hit), step=step.id)
+            return False
+        contract = None
+        if agent.produces:
+            contract = HandoffContract(
+                schema=self.catalog.schema(agent.produces),
+                run_id=self.state.run_id,
+                step=step.id,
+                agent=f"{agent.definition.name}@{agent.definition.version}",
+                block_on=self.e.block_on_for(self.state.regime),
+                clock=self.e.clock.now,
+            )
+        started = self.e.clock.now()
+        attempt = self._attempt(step.id, iteration)
+        if resume is None:
+            self.recorder.record("step_started", step.id, attempt=attempt)
+        runner = self.e.runner_factory(
+            StepContext(self.state.run_id, step.id, iteration, agent, budget, contract)
+        )
+        try:
+            if resume is None:
+                task = AgentTask(
+                    instructions=agent.definition.instructions,
+                    inputs=self._inputs(agent.consumes),
+                    prompt=self._prompt(step.id, iteration),
+                )
+                outcome = await runner.run(task)
+            else:
+                outcome = await runner.resume(*resume)
+        except LimitHit as hit:
+            self._close_slice(budget)
+            self._history(step.id, iteration, "stopped", started=started, detail=str(hit))
+            self.recorder.record("step_finished", step.id, outcome="budget")
+            self._pause("budget", str(hit), step=step.id)
+            return False
+        cost = budget.total_spent()
+        closing = self._close_slice(budget)
+        return self._outcome(step.id, iteration, attempt, outcome, started, cost, closing, agent)
+
+    def _outcome(self, step: str, iteration: int, attempt: int, outcome: AgentOutcome,
+                 started: datetime, cost: Decimal, closing: str,
+                 agent: ResolvedAgent) -> bool:  # fmt: skip
+        base = f"handoffs/{step}-{iteration}" + (f"-attempt{attempt}" if attempt > 1 else "")
+        usd = {"usd": str(cost)}
+        if outcome.status == "completed":
+            rel = f"{base}.md"
+            digest = self.recorder.write_artifact(rel, outcome.output or "")
+            if agent.produces:
+                self.state.latest[agent.produces] = rel
+            self.state.unpinned[rel] = digest
+            self.state.feedback.pop(step, None)
+            self._history(step, iteration, "completed", started=started, handoff=rel,
+                          digest=digest, cost=cost, detail=closing)  # fmt: skip
+            self.recorder.record("step_finished", step, outcome="completed",
+                                 artifacts={rel: digest}, cost=usd)  # fmt: skip
+            self.save()
+            return True
+        if outcome.status == "invalid":
+            rel = f"{base}.invalid.md"
+            digest = self.recorder.write_artifact(rel, outcome.output or "")
+            reason = "the answer is not a valid handoff after one retry: " + "; ".join(
+                outcome.errors
+            )
+            self._history(step, iteration, "invalid", started=started, handoff=rel,
+                          digest=digest, cost=cost, detail=closing)  # fmt: skip
+            self.recorder.record("step_finished", step, outcome="invalid", cost=usd)
+            self._wait("invalid-output", reason, step, {rel: digest})
+            return False
+        if outcome.status == "paused":
+            self._history(step, iteration, "paused", started=started, cost=cost)
+            self.recorder.record("step_finished", step, outcome="paused", cost=usd)
+            self.state.pending = Pending(
+                kind="approval", id="tool-approval", step=step, since=self.e.clock.now(),
+                reason=f"{len(outcome.pending)} tool call(s) need a person's decision",
+                state_path=str(outcome.state_path), state_digest=outcome.state_digest,
+                calls=list(outcome.pending),
+            )  # fmt: skip
+            self.state.status = "paused"
+            self.save()
+            return False
+        # stopped: budget, turns, time (the step's time limit), stuck
+        reason = outcome.detail or f"the step stopped: {outcome.stopped}"
+        self._history(step, iteration, "stopped", started=started, cost=cost, detail=reason)
+        self.recorder.record("step_finished", step, outcome=f"stopped-{outcome.stopped}",
+                             cost=usd)  # fmt: skip
+        self._pause(f"step-{outcome.stopped}", reason, step=step)
+        return False
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+
+    def _context(self) -> dict[str, dict]:
+        """The front-matter fields of the newest handoff of each kind, for conditions."""
+        context = {}
+        for kind, rel in self.state.latest.items():
+            handoff = self._read(rel)
+            if handoff is not None:
+                fields = handoff.data.model_dump(mode="json")
+                context[kind] = {**fields, "status": handoff.envelope.status}
+        return context
+
+    def _read(self, rel: str):
+        try:
+            text = (self.recorder.run_dir / rel).read_text(encoding="utf-8")
+            return parse_handoff(text, self.catalog)
+        except (OSError, HandoffError):
+            return None
+
+    def _inputs(self, consumes: list[str]) -> dict[str, str]:
+        inputs = {}
+        for kind in consumes:
+            if kind in self.state.latest:
+                path = self.recorder.run_dir / self.state.latest[kind]
+                inputs[kind] = path.read_text(encoding="utf-8")
+        return inputs
+
+    def _prompt(self, step: str, iteration: int) -> str:
+        parts = [PROMPT_HEAD.format(pipeline=self.state.pipeline, step=step, iteration=iteration)]
+        if self.state.inputs:
+            lines = "\n".join(f"{key}: {value}" for key, value in self.state.inputs.items())
+            parts.append(f"Request:\n{lines}")
+        if feedback := self.state.feedback.get(step):
+            parts.append(f"Feedback from the last review of this step:\n{feedback}")
+        return "\n\n".join(parts)
+
+    def _attempt(self, step: str, iteration: int) -> int:
+        tried = [r for r in self.state.history if r.step == step and r.iteration == iteration]
+        return len([r for r in tried if r.outcome != "skipped"]) + 1
+
+    def _history(self, step: str, iteration: int, outcome: str, *, started: datetime,
+                 handoff: str | None = None, digest: str | None = None,
+                 cost: Decimal = Decimal(0), detail: str = "") -> None:  # fmt: skip
+        self.state.history.append(
+            StepRecord(
+                step=step,
+                iteration=iteration,
+                outcome=outcome,
+                handoff=handoff,
+                digest=digest,
+                cost_usd=str(cost),
+                started_at=started,
+                ended_at=self.e.clock.now(),
+                detail=detail,
+            )  # fmt: skip
+        )
+
+    def _close_slice(self, budget: BudgetSlice) -> str:
+        try:
+            budget.close()
+        except BudgetError as error:  # calls still in flight (DF-22): kept open, recorded
+            return str(error)
+        return ""
+
+    def _timed_out(self) -> bool:
+        if self.state.max_minutes is None:
+            return False
+        limit = timedelta(minutes=self.state.max_minutes + self.state.extra_minutes)
+        return self.e.clock.now() - self.state.started_at > limit
+
+    def _timeout_reason(self) -> str:
+        minutes = self.state.max_minutes + self.state.extra_minutes  # type: ignore[operator]
+        return f"run time limit of {minutes} min reached"
+
+    def _pause(self, pause_id: str, reason: str, *, step: str | None = None) -> RunState:
+        self.state.pending = Pending(kind="pause", id=pause_id, reason=reason,
+                                     since=self.e.clock.now(), step=step)  # fmt: skip
+        self.state.status = "paused"
+        self.save()
+        return self.state
+
+    def _close(self, status: Literal["completed", "failed", "stopped"]) -> RunState:
+        self.state.status, self.state.pending = status, None
+        self.recorder.record("run_closed", "", status=status)
+        self.save()
+        return self.state
+
+    def _save_budget(self) -> None:
+        self.state.budget = self.budget.snapshot()
+        self.save()
+
+    def save(self) -> None:
+        self.state.updated_at = self.e.clock.now()
+        self.e.store.save(self.state)
+
+
+def _usd(amount: float | None) -> Decimal | None:
+    """A policy amount (a float in the definitions) as Decimal, through its text (DF-26)."""
+    return None if amount is None else Decimal(str(amount))
+
+
+__all__ = [
+    "Clock",
+    "Engine",
+    "EngineError",
+    "GateLedger",
+    "RunRecorder",
+    "StepContext",
+    "StepRunnerFactory",
+    "pipeline_digest",
+]

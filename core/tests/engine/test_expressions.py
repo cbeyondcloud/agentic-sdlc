@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from agentic.engine.expressions import Condition, ExpressionError, compile_condition
+from agentic.engine.expressions import Condition, ExpressionError, cel_name, compile_condition
 
 CTX = {
     "requirements": {"size": "small", "items": [{"id": "REQ-1"}]},
@@ -67,3 +67,12 @@ def test_the_error_names_the_expression():
 
     assert caught.value.expression == "review.missing == 0"
     assert str(caught.value).startswith("review.missing == 0: ")
+
+
+def test_kinds_with_dashes_are_read_with_underscores():
+    context = {**CTX, "dev-report": {"commits": ["3f2a9c1"]}, "test-report": {"verdict": "pass"}}
+
+    assert compile_condition("size(dev_report.commits) == 1").evaluate(context) is True
+    assert compile_condition("test_report.verdict == 'pass'").evaluate(context) is True
+    assert compile_condition("dev_report.commits == []").kinds == frozenset({"dev_report"})
+    assert cel_name("dev-report") == "dev_report"

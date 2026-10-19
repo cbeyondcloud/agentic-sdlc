@@ -7,6 +7,9 @@ front-matter fields of the handoffs produced so far, by kind:
     when:  "requirements.size != 'trivial'"
     until: "review.open_blocking == 0"
 
+CEL names cannot hold '-', so a kind with a dash is read with an underscore:
+`dev_report.tests_run.failed == 0` (see `cel_name`).
+
 A condition is compiled when the pipeline is loaded, so preflight reports bad
 syntax before any spend; it is evaluated with the run's handoffs. A missing kind
 or field is an error, never silently false - conditions test optional fields
@@ -43,8 +46,9 @@ class Condition:
 
     def evaluate(self, context: Mapping[str, Mapping[str, object]]) -> bool:
         """True or False over `{kind: front-matter fields}`; ExpressionError otherwise."""
+        variables = {cel_name(kind): fields for kind, fields in context.items()}
         try:
-            result = self._program.evaluate(celpy.json_to_cel(dict(context)))
+            result = self._program.evaluate(celpy.json_to_cel(variables))
         except celpy.CELEvalError as error:
             raise ExpressionError(self.text, _reason(error)) from error
         except (RecursionError, TypeError, ValueError) as error:
@@ -70,6 +74,12 @@ def compile_condition(text: str) -> Condition:
         raise ExpressionError(text, "the condition is nested too deeply") from error
     kinds = {name for name in _ROOT_NAME.findall(_STRINGS.sub("''", text))}
     return Condition(text=text, kinds=frozenset(kinds - _NOT_NAMES), _program=program)
+
+
+def cel_name(kind: str) -> str:
+    """How a condition names a handoff kind: CEL names cannot hold '-', so
+    `dev-report` is read as `dev_report` (and `test-report` as `test_report`)."""
+    return kind.replace("-", "_")
 
 
 def _reason(error: Exception) -> str:

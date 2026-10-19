@@ -60,6 +60,7 @@ class GateStep(BaseModel):
     gate: str
     approver_role: str
     four_eyes: bool = False  # True: the approver must not be the person who started the run
+    on_reject: str | None = None  # the step a rejection routes back to (default: the one before)
 
 
 class LoopSpec(BaseModel):
@@ -139,6 +140,7 @@ class PipelineDefinition(BaseModel):
     name: str
     version: str
     regime: Literal["solo", "team", "regulated"] = "team"  # gate regime (spec §6.1)
+    max_minutes: int | None = Field(default=None, ge=1)  # run wall-clock limit (M1-26)
     inputs: dict[str, dict[str, Any]] = {}
     steps: list[Step] = Field(min_length=1)
 
