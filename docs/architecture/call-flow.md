@@ -93,7 +93,7 @@ sequenceDiagram
     Eng->>Eng: evaluate `when` over earlier handoffs 🔲 M1-23
     Eng->>CP: kill switch / pause for this team, user, agent, model? 🔲 M2-19
     Eng->>Led: event step_started 🔲 M1-06 M1-07
-    Eng->>Run: run(ResolvedAgent, input handoffs) 🔲 M1-15
+    Eng->>Run: run(ResolvedAgent, input handoffs) ✅ agents/runner.py PydanticAIRunner.run
     Run->>Run: build prompt = instructions + pre-loaded skills + AGENTS.md + input handoffs 🔲 M1-38 M1-46
     loop agent loop, until done or a limit is hit
         Run->>Sec: scan outgoing content for secrets 🔲 M1-41
@@ -104,13 +104,13 @@ sequenceDiagram
         TL-->>Run: response; cost read from body _token_opt or usage x policy price ✅ transport/cost.py cost_from_response (cost header: 🔲 ST-3)
         Run->>Run: budget ledger reserve/settle ✅ transport/budget.py, OTel span 🔲 M1-43
         opt model asks for a tool
-            Run->>WT: read / search / edit / shell (allow-list, deny list, guards) 🔲 M1-16 M1-31 M1-08
+            Run->>WT: read / search / edit / shell (allow-list, deny list, guards) ✅ agents/tools build_tools + commons Guard (sandbox 🔲 M1-32/33)
             WT-->>Run: result (wrapped as untrusted data) 🔲 M1-42
         end
         opt agent spawns a child agent
-            Run->>Run: child gets a budget slice, narrower tools, parent's deny list 🔲 M1-17
+            Run->>Run: child gets a budget slice, narrower tools, parent's deny list ✅ agents/children.py ChildSpawner
         end
-        Run->>Run: stuck detector, turn and time limits 🔲 M1-18 M1-26
+        Run->>Run: stuck detector, turn and time limits ✅ agents/stuck.py + runner limits (engine timeouts 🔲 M1-26)
     end
     Run-->>Eng: output document
     Eng->>Eng: parse_handoff(output) ✅ handoffs/parse.py
@@ -197,7 +197,7 @@ sequenceDiagram
 | 5 | Preflight | Every step receives the handoffs it consumes | `core/src/agentic/handoffs/compat.py` · `check_compatibility` | ✅ M1-05 |
 | 6 | Preflight | RBAC, kill switch, CLI version, concurrency, pipeline integrity, skills, backends, sandbox | engine preflight | 🔲 M1-25 M2-21 |
 | 7 | Every step | Kill switch check, `when` evaluation | engine | 🔲 M2-19 M1-23 |
-| 8 | Every step | Agent loop: prompt, model calls via TokenLean, tools, child agents, limits | `agentic.agents` runner | 🔲 M1-15…M1-18 |
+| 8 | Every step | Agent loop: prompt, model calls via TokenLean (metered), tools, child agents, limits, pause/resume | `agentic.agents` (runner, metering, models, tools, children, stuck) | ✅ M1-15…M1-18 · 🔲 sandbox M1-32/33 |
 | 9 | Every model call | Identity headers, corporate network, cost capture, budget ledger; secret scan, OTel | `agentic.transport` (client, network, cost, budget), `agentic.security` | ✅ M1-11…M1-14 · 🔲 M1-41 M1-43 |
 | 10 | Every step end | Validate the agent's output as a handoff | `core/src/agentic/handoffs/parse.py` · `parse_handoff` | ✅ M1-05 |
 | 11 | Every step end | Ledger entry with handoff digest; events to control plane | `sdlc_commons.ledger`, telemetry sinks | 🔲 M1-06 M2-20 |
@@ -207,4 +207,4 @@ sequenceDiagram
 | 15 | End | Open PR, seal ledger, cost summary | GitHub adapter, engine | 🔲 M1-58 M1-06 M1-57 |
 | 16 | Background | Heartbeat, kill-switch polling, budget alerts, auto-trip | control plane + CLI | 🔲 M3-07 M2-19 M2-16 M2-11 |
 
-**Built so far:** steps 1–5 and 10, plus the commons adapters (ledger, guards, worktrees, lifecycle — SP2) and transport (identity headers, corporate network, cost capture, budget ledger — SP3). **Next to build:** the agent runner (M1-15), which turns the ✅ ResolvedAgent into a live agent loop that calls TokenLean through `make_client` and charges every call to the budget ledger.
+**Built so far:** steps 1–5 and 10; the commons adapters (SP2); transport (SP3); and the agent runtime (SP4): a resolved agent runs on Pydantic AI through TokenLean, every call metered against the budget, with guarded tools, child agents, stuck detection and pause/resume. **Next to build:** handoff templates and output validation (SP5), then the engine (SP6) that drives runners step by step.
