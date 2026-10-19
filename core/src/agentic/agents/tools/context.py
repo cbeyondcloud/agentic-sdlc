@@ -34,6 +34,10 @@ class PathGuard(Protocol):
 
     def command(self, command: str) -> Sequence[Block]: ...
 
+    def asks(self, command: str) -> Sequence[str]:
+        """The ask rules a command hits: it runs only once a person approves it."""
+        ...
+
 
 @dataclass(frozen=True)
 class ShellResult:

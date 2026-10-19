@@ -1,7 +1,8 @@
 """Running shell commands for an agent: guard first, then a sandbox.
 
-The guard (`command`) refuses destructive and denied commands before anything
-runs. The command then runs through a `Sandbox`; the real, OS-isolated ones are
+The guard (`command`) refuses destructive, denied and unlisted commands before
+anything runs; a command on the ask list (`asks`) waits for a person's approval
+(the run pauses, M1-31). The command then runs through a `Sandbox`; the real, OS-isolated ones are
 M1-32 (Linux/macOS) and M1-33 (Windows). `LocalProcessSandbox` runs a plain
 subprocess with NO isolation - for tests and development only, which is why
 `build_tools` refuses it unless the caller explicitly allows it.
@@ -17,7 +18,7 @@ import signal
 import subprocess
 from pathlib import Path
 
-from pydantic_ai import Tool
+from pydantic_ai import ApprovalRequired, RunContext, Tool
 
 from agentic.agents.tools.context import ShellResult, ToolContext, guarded, refused
 
@@ -106,16 +107,19 @@ async def _stop(process: asyncio.subprocess.Process, finished: asyncio.Future) -
 
 def shell_tools(ctx: ToolContext) -> list[Tool]:
     @guarded
-    async def run_shell(command: str) -> str:
+    async def run_shell(run: RunContext, command: str) -> str:
         """Run a shell command in the working tree; returns the exit code and output."""
         blocks = list(ctx.guard.command(command))
         if blocks:
             return refused("; ".join(b.why for b in blocks))
+        asks = list(ctx.guard.asks(command))
+        if asks and not run.tool_call_approved:  # a person approves this command first
+            raise ApprovalRequired(metadata={"ask_rules": asks})
         result = await ctx.sandbox.run(command, ctx.tree, ctx.shell_timeout_s)
         status = "timed out" if result.timed_out else f"exit {result.exit_code}"
         return f"{status}\nstdout:\n{_cap(result.stdout)}\nstderr:\n{_cap(result.stderr)}"
 
-    return [Tool(run_shell)]
+    return [Tool(run_shell, takes_ctx=True)]
 
 
 def _cap(text: str) -> str:
