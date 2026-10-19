@@ -25,8 +25,9 @@ def fresh_identities(monkeypatch):
 
 
 def open_ledger(target: Path, run_id: str = "r-id-1", identity=PAYMENTS) -> RunLedger:
-    ledger = RunLedger(target, run_id, identity=identity)
-    ledger.open(kind="feature", project="demo", owner="platform", criticality="low")
+    ledger = RunLedger(target, run_id)
+    ledger.open(identity=identity, kind="feature", project="demo", owner="platform",
+                criticality="low")  # fmt: skip
     return ledger
 
 
@@ -93,10 +94,54 @@ def test_each_run_gets_its_own_identity(tmp_path: Path):
     assert agentic(RunLedger(tmp_path, "r-pay").events()[0])["team"] == "payments"
 
 
-def test_a_ledger_without_identity_writes_plain_events(tmp_path: Path):
-    ledger = open_ledger(tmp_path, identity=None)
+# ── the identity is required, kept and never changed (I4) ─────────────────────
 
-    assert "ext" not in ledger.events()[0]
+
+def test_nothing_is_recorded_for_a_run_that_was_neither_opened_nor_resumed(tmp_path: Path):
+    open_ledger(tmp_path)
+    ledger_module._IDENTITIES.clear()  # a new process
+
+    with pytest.raises(LedgerError, match="resume"):
+        RunLedger(tmp_path, "r-id-1").record("step_started", phase="x", attempt=1, actor="agent")
+
+
+def test_a_run_resumed_in_a_new_process_keeps_its_identity(tmp_path: Path):
+    open_ledger(tmp_path)
+    ledger_module._IDENTITIES.clear()  # a new process
+
+    resumed = RunLedger(tmp_path, "r-id-1")
+    assert resumed.resume() == PAYMENTS
+    resumed.record("step_started", phase="build", attempt=1, actor="agent")
+    assert agentic(resumed.events()[-1])["team"] == "payments"
+    assert resumed.verify() == []
+
+
+def test_a_different_identity_for_a_run_is_refused(tmp_path: Path):
+    open_ledger(tmp_path)
+    ledger_module._IDENTITIES.clear()
+    platform = RunIdentity(team="platform", policy_version=POLICY)
+
+    with pytest.raises(LedgerError, match="already belongs"):
+        RunLedger(tmp_path, "r-id-1").open(identity=platform, kind="feature", project="demo",
+                                           owner="platform", criticality="low")  # fmt: skip
+
+
+def test_verify_flags_events_whose_identity_differs_from_the_run(tmp_path: Path):
+    ledger = open_ledger(tmp_path)
+    ledger_module._IDENTITIES["r-id-1"] = RunIdentity(team="platform", policy_version=POLICY)
+    events.append(tmp_path, "r-id-1", "run_closed", status="closed")  # written as another team
+
+    assert any("event 2" in p and "identity" in p for p in ledger.verify())
+
+
+def test_release_forgets_the_identity_once_the_run_is_done(tmp_path: Path):
+    ledger = open_ledger(tmp_path)
+    ledger.release()
+
+    assert "r-id-1" not in ledger_module._IDENTITIES
+
+
+# ── bad ids are refused before anything is written ───────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -110,9 +155,10 @@ def test_a_ledger_without_identity_writes_plain_events(tmp_path: Path):
 )
 def test_a_bad_run_identity_is_refused_before_anything_is_written(tmp_path: Path, identity):
     with pytest.raises(LedgerError):
-        RunLedger(tmp_path, "r-bad", identity=identity)
+        open_ledger(tmp_path, "r-bad", identity=identity)
 
-    assert not (tmp_path / ".sdlc" / "runs" / "r-bad").exists()
+    assert not (tmp_path / ".agentic" / "local" / "runs" / "r-bad").exists()
+    assert "r-bad" not in ledger_module._IDENTITIES
 
 
 @pytest.mark.parametrize(

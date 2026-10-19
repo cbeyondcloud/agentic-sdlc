@@ -89,7 +89,14 @@ def run_linux() -> bool:
         f"{install_git} && {github_auth} && mkdir -p /work && cd /work && tar -xf - "
         f"&& uv sync --locked -q && {inner}"
     )
-    env = dict(os.environ, GH_TOKEN=_github_token())
+    token = _github_token()
+    if not token:
+        print(
+            "[linux] FAILED: no GitHub token - the container must fetch the private Zyroflo "
+            "dependency. Set GH_TOKEN, or log in with `gh auth login`."
+        )
+        return False
+    env = dict(os.environ, GH_TOKEN=token)
     cmd = ["docker", "run", "--rm", "-i", "-e", "GH_TOKEN", LINUX_IMAGE, "sh", "-c", script]
     print(f"[linux] running checks in {LINUX_IMAGE}", flush=True)
     ok = subprocess.run(cmd, input=tracked_files_tar(), env=env).returncode == 0

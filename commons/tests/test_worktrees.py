@@ -7,8 +7,10 @@ import pytest
 from tools.sdlc import worktree as zyroflo_worktree
 
 from sdlc_commons.guards import Guard
-from sdlc_commons.ledger import RunLedger
+from sdlc_commons.ledger import RunIdentity, RunLedger
 from sdlc_commons.worktrees import RunWorktrees, WorktreeError
+
+IDENTITY = RunIdentity(team="platform", policy_version="git:" + "a" * 40)
 
 GIT_USER = ["-c", "user.email=dev@example.invalid", "-c", "user.name=Dev"]
 ESTATE = """scope: estate
@@ -38,18 +40,14 @@ def make_repo(path: Path) -> Path:
 
 
 def open_run(target: Path, run_id: str = "r1") -> RunWorktrees:
-    RunLedger(target, run_id).open(kind="feature", project="demo", owner="platform",
-                                   criticality="low")  # fmt: skip
+    RunLedger(target, run_id).open(identity=IDENTITY, kind="feature", project="demo",
+                                   owner="platform", criticality="low")  # fmt: skip
     return RunWorktrees(target, run_id)
 
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    # The run folder is git-ignored, as it will be under .agentic/local/runs/ once
-    # Zyroflo Z3 lands (M1-10); see the test for an untracked run folder below.
-    root = make_repo(tmp_path / "repo")
-    (root / ".git" / "info" / "exclude").write_text(".sdlc/runs/\n", encoding="utf-8")
-    return root
+    return make_repo(tmp_path / "repo")
 
 
 @pytest.fixture
@@ -133,16 +131,20 @@ def test_a_run_must_be_open_before_its_trees_are_made(repo: Path):
         RunWorktrees(repo, "r-never-opened").create()
 
 
-def test_an_untracked_run_folder_in_the_checkout_is_refused_clearly(tmp_path: Path):
-    # Zyroflo exempts `.sdlc/runs/...` from its clean-checkout check, but git
-    # reports a wholly untracked `.sdlc/` as one entry, which the exemption
-    # misses. Until run folders move to a git-ignored root (Z3, M1-10) the
-    # refusal is clear and nothing is made.
-    worktrees = open_run(make_repo(tmp_path / "repo"))
+def test_an_untracked_run_folder_in_the_checkout_does_not_block_trees(repo: Path):
+    # The run folder (.agentic/local/runs/r1) is untracked in the developer's
+    # checkout; Zyroflo's clean-checkout check exempts it wherever it lives (Z3).
+    trees = open_run(repo).create()
+
+    assert sorted(trees) == ["repo"]
+    assert git(repo, "status", "--short", "--untracked-files=all").startswith("?? .agentic/")
+
+
+def test_other_uncommitted_work_still_blocks_trees(repo: Path):
+    (repo / "app.py").write_text("x = 2  # the developer's own edit\n", encoding="utf-8")
 
     with pytest.raises(WorktreeError, match="uncommitted"):
-        worktrees.create()
-    assert worktrees.trees() == {}
+        open_run(repo).create()
 
 
 def test_plan_names_the_trees_without_making_them(estate: Path):
@@ -200,3 +202,42 @@ def test_remove_refuses_to_lose_uncommitted_work_unless_forced(repo: Path):
 
     worktrees.remove(force=True)
     assert not tree.path.exists()
+
+
+# ── inputs and in-place components (SP2 review I7) ────────────────────────────
+
+IN_PLACE = """scope: estate
+components:
+  - name: "api"
+    path: "api"
+    role: authoritative
+    vcs:
+      deny_raw_git: true
+      notes: "two git dirs"
+  - name: "lib"
+    path: "lib"
+    role: authoritative
+"""
+
+
+def test_an_in_place_component_is_planned_and_made_without_a_tree(estate: Path):
+    (estate / ".sdlc" / "profile.yml").write_text(IN_PLACE, encoding="utf-8")
+    worktrees = open_run(estate)
+
+    planned = worktrees.plan()
+    made = worktrees.create()
+
+    assert planned["api"].mode == made["api"].mode == "in-place"
+    assert made["api"].path == estate / "api"  # the component's own checkout
+    assert made["lib"].mode == "worktree"
+
+
+def test_one_component_name_as_a_string_is_refused(estate: Path):
+    with pytest.raises(WorktreeError, match="list"):
+        open_run(estate).create("api")
+
+
+@pytest.mark.parametrize("run_id", ["../evil", "r1:x", "r 1"])
+def test_a_bad_run_id_is_a_worktree_error(repo: Path, run_id):
+    with pytest.raises(WorktreeError, match="run id"):
+        RunWorktrees(repo, run_id)

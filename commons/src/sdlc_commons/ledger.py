@@ -16,15 +16,14 @@ This module only adds what the framework needs around it:
 """
 
 import json
+import os
+import re
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
 from tools.sdlc import approve, events, state
-
-EVENTS_FILE = "events.jsonl"
-APPROVALS_FILE = "approvals.jsonl"
 
 #: Our namespace in Zyroflo's `ext` block.
 NAMESPACE = "agentic"
@@ -99,109 +98,264 @@ def _install() -> None:
 
 
 class RunLedger:
-    """The append-only, hash-chained record of one run."""
+    """The append-only, hash-chained record of one run.
 
-    def __init__(self, target: Path, run_id: str, identity: RunIdentity | None = None) -> None:
-        self.target = target
+    A run has ONE identity (team, policy version) for its whole life: given to
+    `open`, read back by `resume` in a later process, refused if another is
+    offered. Nothing is recorded for a run whose identity this process does not
+    hold, so no event is ever written unlabelled."""
+
+    def __init__(self, target: Path, run_id: str) -> None:
+        if why := run_id_refusal(run_id):
+            raise LedgerError(why)
+        self.target = Path(target)
         self.run_id = run_id
-        if identity is not None:
-            self._bind(identity)
+
+    @property
+    def folder(self) -> Path:
+        """The run's folder (Zyroflo layout, under `.agentic/local/runs/`): the active
+        one, or the archived one if the run was archived."""
+        active = state.runs_dir(self.target) / self.run_id
+        archived = state.archive_dir(self.target) / self.run_id
+        return archived if archived.is_dir() and not active.is_dir() else active
+
+    # ── identity ──────────────────────────────────────────────────────────────
+
+    def open(self, *, identity: RunIdentity, kind: str, project: str, owner: str,
+             criticality: str) -> dict:  # fmt: skip
+        """Start the run under `identity` and record `run_opened`. Every input is
+        checked before the run folder exists."""
+        if self._has_events():
+            recorded = self._recorded_identity()
+            if recorded is not None and recorded != identity:
+                raise LedgerError(f"run {self.run_id} already belongs to another team or "
+                                  f"policy version - its identity never changes")  # fmt: skip
+            raise LedgerError(f"run {self.run_id} is already open - resume() it instead")
+        fields = {"kind": kind, "project": project, "owner": owner, "criticality": criticality}
+        _check_fields(fields)
+        self._bind(identity)
+        self.folder.mkdir(
+            parents=True, exist_ok=True
+        )  # Zyroflo appends only into an existing folder
+        return self._append("run_opened", "", None, fields)
+
+    def resume(self) -> RunIdentity:
+        """Take up a run opened earlier (perhaps by another process): its identity
+        is read back from its `run_opened` event."""
+        identity = self._recorded_identity()
+        if identity is None:
+            raise LedgerError(f"run {self.run_id} has no recorded identity - open() it first")
+        self._bind(identity)
+        return identity
+
+    def release(self) -> None:
+        """Forget the run's identity in this process (call once the run is closed)."""
+        with _LOCK:
+            _IDENTITIES.pop(self.run_id, None)
 
     def _bind(self, identity: RunIdentity) -> None:
-        """Register the run's identity, refusing a bad one before anything is written."""
+        """Hold the run's identity for this process, refusing a bad or different one
+        before anything is written."""
         _install()
         with _LOCK:
-            previous = _IDENTITIES.get(self.run_id)
+            held = _IDENTITIES.get(self.run_id)
+            if held is not None and held != identity:
+                raise LedgerError(f"run {self.run_id} already belongs to another team or "
+                                  f"policy version in this process")  # fmt: skip
             _IDENTITIES[self.run_id] = identity
         try:
             events.check_default_ext(self.run_id)
         except events.EventError as error:
-            with _LOCK:
-                if previous is None:
+            if held is None:
+                with _LOCK:
                     _IDENTITIES.pop(self.run_id, None)
-                else:
-                    _IDENTITIES[self.run_id] = previous
             raise LedgerError(str(error)) from error
 
-    @property
-    def folder(self) -> Path:
-        """The run's active folder: `<target>/.sdlc/runs/<run_id>/` (Zyroflo layout)."""
-        return state.runs_dir(self.target) / self.run_id
+    def _recorded_identity(self) -> RunIdentity | None:
+        first = next(iter(self.events()), None)
+        ids = _agentic(first) if first else {}
+        if "team" not in ids or "policy_version" not in ids:
+            return None
+        return RunIdentity(team=ids["team"], policy_version=ids["policy_version"])
 
-    def open(self, *, kind: str, project: str, owner: str, criticality: str) -> dict:
-        """Create the run folder and record `run_opened`."""
-        # Zyroflo writes to the active folder only if it already exists.
-        self.folder.mkdir(parents=True, exist_ok=True)
-        return self.record("run_opened", kind=kind, project=project, owner=owner,
-                           criticality=criticality)  # fmt: skip
+    # ── events ────────────────────────────────────────────────────────────────
 
     def record(
         self, event: str, phase: str = "", agent: AgentIdentity | None = None, **fields: object
     ) -> dict:
-        """Append one event to the chain (Zyroflo validates the event and its fields).
-        `agent` adds that agent's ids to this event; the run's identity is added by
-        the provider."""
+        """Append one event to the chain. Every value is an id - no free text, no
+        emails - and the ledger stamps the time. `agent` adds that agent's ids to
+        this event; the run's identity is added to every event."""
+        if self.run_id not in _IDENTITIES:
+            raise LedgerError(f"run {self.run_id} has no identity in this process - open() or "
+                              f"resume() it first")  # fmt: skip
+        if "at" in fields:
+            raise LedgerError("the ledger stamps each event's time - 'at' cannot be passed")
+        _check_fields({"phase": phase, **fields} if phase else fields)
+        return self._append(event, phase, agent, fields)
+
+    def _append(self, event: str, phase: str, agent: AgentIdentity | None, fields: dict) -> dict:
         ext = None
         if agent is not None:
             _install()
             ext = {NAMESPACE: agent.ext()}
         try:
             return events.append(self.target, self.run_id, event, phase=phase, ext=ext, **fields)
-        except events.EventError as error:
+        except (events.EventError, ValueError, OSError) as error:
             raise LedgerError(str(error)) from error
 
     def events(self) -> list[dict]:
         try:
             return events.read(self.target, self.run_id)
-        except events.EventError as error:
+        except (events.EventError, ValueError, OSError) as error:
             raise LedgerError(str(error)) from error
 
+    def _has_events(self) -> bool:
+        log = events.events_path(self.target, self.run_id)
+        return log.is_file() and log.stat().st_size > 0
+
     def verify(self) -> list[str]:
-        """Every problem found in the events and approvals chains ([] = intact)."""
+        """Every problem found in the events and approvals chains ([] = intact),
+        including an event whose identity is not the run's."""
         problems: list[str] = []
-        if self._torn_fragment() is not None:
-            problems.append(f"{EVENTS_FILE}: torn last line (an interrupted write); "
-                            "recover it with recover_torn_tail()")  # fmt: skip
+        for log in self._logs():
+            if log.is_file() and _torn(log.read_bytes()) is not None:
+                problems.append(f"{log.name}: torn last line (an interrupted write); "
+                                "recover it with recover_torn_tail()")  # fmt: skip
         try:
             problems += events.verify(self.target, self.run_id)
-        except events.EventError as error:
+            problems += self._identity_problems()
+        except (events.EventError, LedgerError, ValueError) as error:
             problems.append(str(error))
-        if (self.folder / APPROVALS_FILE).is_file():
-            problems += approve.verify_chain(self.target, self.run_id)
+        if approve.approvals_path(self.target, self.run_id).is_file():
+            try:
+                problems += approve.verify_chain(self.target, self.run_id)
+            except (ValueError, OSError) as error:
+                problems.append(f"approvals: {error}")
         return problems
 
-    def recover_torn_tail(self) -> Path | None:
-        """Move a half-written last line aside so the chain is whole again.
+    def _identity_problems(self) -> list[str]:
+        recorded = self._recorded_identity()
+        if recorded is None:
+            return [f"run {self.run_id}: its first event carries no run identity"]
+        expected = recorded.ext()
+        return [f"event {n} ({e.get('event')}): run identity differs from the run's"
+                for n, e in enumerate(self.events(), 1)
+                if {k: _agentic(e).get(k) for k in expected} != expected]  # fmt: skip
+
+    # ── a crash mid-append ────────────────────────────────────────────────────
+
+    def recover_torn_tail(self) -> list[Path]:
+        """Move a half-written last line aside, in the events and approvals logs,
+        so each chain is whole again; returns the files the fragments were saved to.
 
         Only a final line that is not valid JSON and has no newline counts as torn:
-        it was never a complete record, so it was never part of the chain. It is
-        preserved next to the log, never deleted. Returns the preserved file, or
-        None when there was nothing to recover.
-        """
-        fragment = self._torn_fragment()
-        if fragment is None:
-            return None
-        log = self.folder / EVENTS_FILE
-        data = log.read_bytes()
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-        saved = self.folder / f"{EVENTS_FILE}.torn-{stamp}"
-        saved.write_bytes(fragment)
-        log.write_bytes(data[: len(data) - len(fragment)])
-        return saved
+        it was never a complete record, so it was never part of the chain. The
+        fragment is saved (and flushed to disk) BEFORE the log is truncated in
+        place, and the log is left alone if it changed meanwhile."""
+        return [kept for log in self._logs() if (kept := _recover(log)) is not None]
 
-    def _torn_fragment(self) -> bytes | None:
-        log = self.folder / EVENTS_FILE
-        if not log.is_file():
-            return None
-        data = log.read_bytes()
-        if not data or data.endswith(b"\n"):
-            return None
-        last = data.rsplit(b"\n", 1)[-1]
-        try:
-            json.loads(last)
-            return None  # a complete record that only lacks its newline
-        except ValueError:
-            return last
+    def _logs(self) -> list[Path]:
+        return [events.events_path(self.target, self.run_id),
+                approve.approvals_path(self.target, self.run_id)]  # fmt: skip
+
+
+#: A run id: one folder name, safe on Windows too.
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+
+
+def run_id_refusal(run_id: object) -> str:
+    """Why `run_id` cannot name a run, or "". Checked before any folder is made:
+    a run id can come from a branch name, which anyone opening a PR chooses."""
+    if isinstance(run_id, str) and _RUN_ID.fullmatch(run_id) and not run_id.endswith("."):
+        return ""
+    return (
+        "a run id is letters, digits, '.', '-' or '_' (starting with a letter or digit, "
+        "not ending with '.', at most 100)"
+    )
+
+
+#: An event value: an id, name, version, path or digest - never prose or an email.
+_EVENT_VALUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/+=-]{0,127}")
+_CRITICALITY = ("low", "medium", "high")
+
+
+def _check_fields(fields: dict) -> None:
+    """Refuse a value that is not an id. The message names the field, never the value."""
+    for name, value in fields.items():
+        if name == "criticality":
+            if value not in _CRITICALITY:
+                raise LedgerError(f"criticality must be one of {', '.join(_CRITICALITY)}")
+            continue
+        _check_value(name, value)
+
+
+def _check_value(name: str, value: object) -> None:
+    if isinstance(value, str):
+        if not _EVENT_VALUE.fullmatch(value):
+            raise LedgerError(f"event field {name!r} must be an id (letters, digits and "
+                              f"._:/+=-; no spaces, no '@', at most 128) - events carry no "
+                              f"free text")  # fmt: skip
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _check_value(f"{name} key", key)
+            _check_value(name, item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _check_value(name, item)
+
+
+def _agentic(event: dict) -> dict:
+    ext = event.get("ext")
+    return ext.get(NAMESPACE, {}) if isinstance(ext, dict) else {}
+
+
+def _torn(data: bytes) -> bytes | None:
+    """The half-written last line of a log, or None."""
+    if not data or data.endswith(b"\n"):
+        return None
+    last = data.rsplit(b"\n", 1)[-1]
+    try:
+        json.loads(last)
+        return None  # a complete record that only lacks its newline
+    except ValueError:
+        return last
+
+
+def _recover(log: Path) -> Path | None:
+    if not log.is_file():
+        return None
+    data = log.read_bytes()
+    fragment = _torn(data)
+    if fragment is None:
+        return None
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    kept = log.with_name(f"{log.name}.torn-{stamp}")
+    try:
+        _save_durably(kept, fragment)
+    except OSError as error:
+        raise LedgerError(f"{log.name}: the torn line could not be preserved ({error}) - "
+                          f"nothing was changed") from error  # fmt: skip
+    try:
+        with log.open("r+b") as fh:
+            if fh.seek(0, os.SEEK_END) != len(data):
+                raise LedgerError(f"{log.name} changed while it was being recovered - "
+                                  f"nothing was truncated; retry")  # fmt: skip
+            fh.truncate(len(data) - len(fragment))
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError as error:
+        raise LedgerError(f"{log.name}: could not truncate the torn line ({error}); it is "
+                          f"preserved in {kept.name}") from error  # fmt: skip
+    return kept
+
+
+def _save_durably(path: Path, data: bytes) -> None:
+    """Write a new file and flush it to disk before anything depends on it."""
+    with path.open("xb") as fh:
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 def write_artifact(path: Path, text: str) -> str:

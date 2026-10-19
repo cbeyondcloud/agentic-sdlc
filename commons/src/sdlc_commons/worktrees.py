@@ -23,6 +23,8 @@ from pathlib import Path
 from tools.sdlc import policy, state
 from tools.sdlc import worktree as zyroflo
 
+from sdlc_commons.ledger import run_id_refusal
+
 
 class WorktreeError(Exception):
     """A worktree operation was refused or failed; the message says what is left on disk."""
@@ -43,6 +45,8 @@ class RunWorktrees:
     """The trees of one run."""
 
     def __init__(self, target: Path, run_id: str) -> None:
+        if why := run_id_refusal(run_id):
+            raise WorktreeError(why)
         self.target = Path(target)
         self.run_id = run_id
 
@@ -74,19 +78,24 @@ class RunWorktrees:
 
 
 def _names(components: Sequence[str] | None) -> list[str] | None:
+    """A list of component names - never one name read letter by letter."""
+    if isinstance(components, str):
+        raise WorktreeError(f"components is a list of names, not one string ({components!r})")
     return None if components is None else list(components)
 
 
 def _call(function, *args):
     try:
         return function(*args)
-    except (zyroflo.WorktreeError, policy.PolicyError) as error:
+    except (zyroflo.WorktreeError, policy.PolicyError, ValueError, OSError) as error:
         raise WorktreeError(str(error)) from error
 
 
 def _tree(name: str, row: dict) -> Tree:
-    return Tree(component=name, path=Path(row["home"]), branch=row.get("branch", ""),
-                base=row.get("base", ""), mode=row["mode"])  # fmt: skip
+    # An in-place component has no tree; before it is made, its checkout is `where`.
+    home = row.get("home") or row.get("where")
+    return Tree(component=name, path=Path(home), branch=row.get("branch") or "",
+                base=row.get("base") or "", mode=row["mode"])  # fmt: skip
 
 
 def _live(record: dict) -> dict[str, Tree]:
