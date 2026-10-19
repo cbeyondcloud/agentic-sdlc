@@ -97,12 +97,12 @@ sequenceDiagram
     Run->>Run: build prompt = instructions + pre-loaded skills + AGENTS.md + input handoffs 🔲 M1-38 M1-46
     loop agent loop, until done or a limit is hit
         Run->>Sec: scan outgoing content for secrets 🔲 M1-41
-        Run->>TL: model call with X-Agentic-* headers + traceparent 🔲 M1-11
+        Run->>TL: model call with X-Agentic-* headers + traceparent ✅ transport/client.py make_client
         TL->>TL: routing rules (tier → model, team caps), PII and injection guardrails
         TL->>LLM: request
         LLM-->>TL: response
-        TL-->>Run: response + x-tokenlean cost headers 🔲 M1-12 (ST-3)
-        Run->>Run: budget ledger update, OTel span 🔲 M1-13 M1-43
+        TL-->>Run: response; cost read from body _token_opt or usage x policy price ✅ transport/cost.py cost_from_response (cost header: 🔲 ST-3)
+        Run->>Run: budget ledger reserve/settle ✅ transport/budget.py, OTel span 🔲 M1-43
         opt model asks for a tool
             Run->>WT: read / search / edit / shell (allow-list, deny list, guards) 🔲 M1-16 M1-31 M1-08
             WT-->>Run: result (wrapped as untrusted data) 🔲 M1-42
@@ -117,7 +117,7 @@ sequenceDiagram
     alt invalid handoff
         Eng->>Run: retry once with the validation errors 🔲 M1-20
     end
-    Eng->>Led: event step_finished (digest of handoff, cost, tokens) 🔲 M1-06
+    Eng->>Led: event step_finished (digest of handoff, cost, tokens) ✅ sdlc_commons/ledger.py RunLedger.record
     Eng->>CP: ingest events + structured step log 🔲 M2-20 M1-47
 ```
 
@@ -198,7 +198,7 @@ sequenceDiagram
 | 6 | Preflight | RBAC, kill switch, CLI version, concurrency, pipeline integrity, skills, backends, sandbox | engine preflight | 🔲 M1-25 M2-21 |
 | 7 | Every step | Kill switch check, `when` evaluation | engine | 🔲 M2-19 M1-23 |
 | 8 | Every step | Agent loop: prompt, model calls via TokenLean, tools, child agents, limits | `agentic.agents` runner | 🔲 M1-15…M1-18 |
-| 9 | Every model call | Identity headers, secret scan, cost capture, budget ledger, OTel | `agentic.transport`, `agentic.security` | 🔲 M1-11…M1-13 M1-41 M1-43 |
+| 9 | Every model call | Identity headers, corporate network, cost capture, budget ledger; secret scan, OTel | `agentic.transport` (client, network, cost, budget), `agentic.security` | ✅ M1-11…M1-14 · 🔲 M1-41 M1-43 |
 | 10 | Every step end | Validate the agent's output as a handoff | `core/src/agentic/handoffs/parse.py` · `parse_handoff` | ✅ M1-05 |
 | 11 | Every step end | Ledger entry with handoff digest; events to control plane | `sdlc_commons.ledger`, telemetry sinks | 🔲 M1-06 M2-20 |
 | 12 | Gates | Pause, notify, approve / reject / edit with RBAC and four-eyes, digest-pinned approval | engine + CLI + control plane | 🔲 M1-22 M1-55 M2-03 M2-07 |
@@ -207,4 +207,4 @@ sequenceDiagram
 | 15 | End | Open PR, seal ledger, cost summary | GitHub adapter, engine | 🔲 M1-58 M1-06 M1-57 |
 | 16 | Background | Heartbeat, kill-switch polling, budget alerts, auto-trip | control plane + CLI | 🔲 M3-07 M2-19 M2-16 M2-11 |
 
-**Built so far:** steps 1–5 and 10 — everything that reads, validates and checks *before* or *after* an agent runs. **Next to build:** the commons ledger (M1-06), transport and budget (M1-11…M1-13), then the agent runner (M1-15), which turns the ✅ ResolvedAgent into a live agent loop.
+**Built so far:** steps 1–5 and 10, plus the commons adapters (ledger, guards, worktrees, lifecycle — SP2) and transport (identity headers, corporate network, cost capture, budget ledger — SP3). **Next to build:** the agent runner (M1-15), which turns the ✅ ResolvedAgent into a live agent loop that calls TokenLean through `make_client` and charges every call to the budget ledger.
