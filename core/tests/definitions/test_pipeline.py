@@ -52,7 +52,9 @@ def test_duplicate_ids_rejected(tmp_path: Path):
 
 
 def test_nested_loop_rejected(tmp_path: Path):
-    inner = "          - loop: {id: inner, max_iterations: 2, until: 'x', steps: []}\n"
+    inner = (
+        "          - loop: {id: inner, max_iterations: 2, until: 'x', steps: [{id: s, agent: a}]}\n"
+    )
     path = write_pipeline(
         tmp_path,
         "  - loop:\n      id: outer\n      max_iterations: 2\n      until: 'x'\n"
@@ -141,3 +143,15 @@ def test_duplicate_key_rejected(tmp_path: Path):
         load_pipeline(path)
 
     assert "duplicate" in str(error.value).lower()
+
+
+def test_a_loop_with_no_steps_is_refused(tmp_path):  # DF-06
+    path = tmp_path / "empty-loop.yaml"
+    path.write_text(
+        "name: p\nversion: 1.0.0\nsteps:\n  - loop:\n      id: spin\n      max_iterations: 2\n"
+        '      until: "review.open_blocking == 0"\n      steps: []\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DefinitionError, match="steps"):
+        load_pipeline(path)

@@ -72,7 +72,7 @@ class LoopSpec(BaseModel):
     max_iterations: int = Field(ge=1)
     until: str
     on_exhausted: Literal["gate", "fail"] = "gate"  # what happens if the limit is reached
-    steps: list["Step"]
+    steps: list["Step"] = Field(min_length=1)  # an empty loop would spin until max_iterations
 
     @field_validator("steps")
     @classmethod
