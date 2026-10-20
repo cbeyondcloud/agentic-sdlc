@@ -4,9 +4,17 @@
 is open, every record of the `agentic` loggers goes to
 `<run_dir>/logs/<step>-<iteration>.jsonl`, one JSON object per line:
 
-    {"at", "level", "logger", "run_id", "step", "iteration", "message", "fields", "error"}
+    {"at", "seq", "level", "logger", "run_id", "step", "iteration", "message", "fields",
+     "error"}
 
 `fields` comes from `extra={"fields": {...}}`; `error` is the formatted exception.
+`seq` counts the process's records, so records written within one clock tick still
+read back in the order they were written.
+
+A step id that is not a plain file name (letters, digits, `.`, `_`, `-`, at most 100
+characters, not starting with `.`) gets no log file: the step runs, nothing is written
+outside `<run_dir>/logs`, and a warning says why.
+
 Every string written - message, field values, exception text - goes through the
 redactor first, and a `StepLogs` cannot be made without one (`sdlc_commons.redaction`
 composes Zyroflo's masking; core does not import it). If the redactor itself fails,
@@ -19,6 +27,7 @@ never write into each other's logs.
 `read_logs` / `render_logs` read them back for `agentic logs <run> [--step]` (M1-54).
 """
 
+import itertools
 import json
 import logging
 import re
@@ -39,6 +48,9 @@ LEVELS = {
     "critical": logging.CRITICAL,
 }
 UNREDACTABLE = "<not written: redaction failed>"
+_LOG = logging.getLogger(__name__)
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}")
+_SEQ = itertools.count(1)  # next() is atomic under the GIL
 _CURRENT: ContextVar[tuple[str, str, int] | None] = ContextVar("agentic_step_log", default=None)
 _LEVEL_LOCK = threading.Lock()
 _OPEN: list[int] = []  # the levels of the step logs now open
@@ -53,10 +65,15 @@ class StepLogs:
         self.level = LEVELS[level.lower()] if isinstance(level, str) else int(level)
 
     @contextmanager
-    def step(self, run_dir: Path, run_id: str, step: str, iteration: int) -> Iterator[Path]:
-        """Log this step's records to its own file while the context is open."""
+    def step(self, run_dir: Path, run_id: str, step: str, iteration: int) -> Iterator[Path | None]:
+        """Log this step's records to its own file while the context is open (yields
+        None, and logs nothing, for a step id that is not a plain file name)."""
+        if not _PLAIN_NAME.fullmatch(step):
+            _LOG.warning("no step log: step id %r is not a plain file name", step[:120])
+            yield None
+            return
         key = (run_id, step, iteration)
-        path = Path(run_dir) / "logs" / f"{step}-{iteration}.jsonl"
+        path = Path(run_dir) / "logs" / f"{step}-{int(iteration)}.jsonl"
         handler = _StepHandler(path, key, self.redact, self.level)
         logger = logging.getLogger(ROOT_LOGGER)
         token = _CURRENT.set(key)
@@ -98,7 +115,8 @@ class _StepHandler(logging.Handler):
             error = self._clean("".join(traceback.format_exception(*record.exc_info)))
         fields = getattr(record, "fields", None)
         return {
-            "at": datetime.fromtimestamp(record.created, UTC).isoformat(),
+            "at": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="microseconds"),
+            "seq": next(_SEQ),
             "level": record.levelname.lower(),
             "logger": record.name,
             "run_id": run_id,
@@ -127,8 +145,9 @@ class _StepHandler(logging.Handler):
 
 
 def read_logs(run_dir: Path, step: str | None = None, min_level: str | None = None) -> list[dict]:
-    """A run's step logs, oldest first. `step` is a step id (every iteration) or
-    `<step>-<iteration>`; `min_level` drops records below it."""
+    """A run's step logs, oldest first (by time, then by write order within a process).
+    `step` is a step id (every iteration) or `<step>-<iteration>`; `min_level` drops
+    records below it."""
     folder = Path(run_dir) / "logs"
     if not folder.is_dir():
         return []
@@ -144,7 +163,12 @@ def read_logs(run_dir: Path, step: str | None = None, min_level: str | None = No
                 record = {"level": "error", "message": f"{path.name}:{number}: not JSON", "at": ""}
             if LEVELS.get(str(record.get("level")), logging.ERROR) >= floor:
                 records.append(record)
-    return sorted(records, key=lambda record: str(record.get("at", "")))
+    return sorted(records, key=_order)
+
+
+def _order(record: dict) -> tuple[str, int]:
+    seq = record.get("seq")
+    return str(record.get("at", "")), seq if isinstance(seq, int) else 0
 
 
 def render_logs(records: list[dict]) -> str:

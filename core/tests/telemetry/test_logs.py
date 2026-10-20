@@ -99,6 +99,45 @@ def test_read_logs_by_step_and_iteration(tmp_path: Path):
     assert read_logs(tmp_path / "no-such-run") == []
 
 
+def test_read_logs_keeps_write_order_when_the_clock_does_not_move(tmp_path: Path):
+    """A coarse clock (Windows ticks about once a millisecond) gives records of different
+    steps the same time; they still come back in the order they were written."""
+
+    def frozen(record: logging.LogRecord) -> bool:
+        record.created = 1_800_000_000.0
+        return True
+
+    logs = StepLogs(lambda text: text)
+    LOG.addFilter(frozen)
+    try:
+        for step, iteration in [("review", 1), ("develop", 1), ("review", 2), ("develop", 2)]:
+            with logs.step(tmp_path, "r-1", step, iteration):
+                LOG.info(f"{step} #{iteration} a")
+                LOG.info(f"{step} #{iteration} b")
+    finally:
+        LOG.removeFilter(frozen)
+    assert [r["message"] for r in read_logs(tmp_path)] == [
+        "review #1 a",
+        "review #1 b",
+        "develop #1 a",
+        "develop #1 b",
+        "review #2 a",
+        "review #2 b",
+        "develop #2 a",
+        "develop #2 b",
+    ]
+
+
+@pytest.mark.parametrize("step", ["../../../escape", "..", "a/b:c*", "a\\b", "", "x" * 200])
+def test_a_step_id_that_is_not_a_plain_name_writes_no_log(tmp_path: Path, step: str):
+    run_dir = tmp_path / "a" / "b" / "c" / "run"
+    run_dir.mkdir(parents=True)
+    with StepLogs(lambda text: text).step(run_dir, "r-1", step, 1):
+        LOG.warning("step started")
+    assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
+    assert read_logs(run_dir) == []
+
+
 def test_two_runs_in_one_process_keep_their_logs_apart(tmp_path: Path):  # review focus 6
     logs = StepLogs(lambda text: text)
 
