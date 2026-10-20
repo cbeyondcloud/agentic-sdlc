@@ -1,0 +1,15 @@
+{
+ "key": "ba-bulk-tagging/X/1/judge",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:eec3c1a91bf8b0bc11aac91ec2cbbfcc0c8f297d1774544ce7f6fe43f4160642",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"judge-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_ba-bulk-tagging_0\", \"type\": \"function\", \"function\": {\"name\": \"final_result\", \"arguments\": \"{\\\"scores\\\": [{\\\"criterion\\\": \\\"problem\\\", \\\"score\\\": 1, \\\"evidence\\\": \\\"# Requirements: bulk tagging\\\"}, {\\\"criterion\\\": \\\"acceptance\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Requirements: bulk tagging\\\"}, {\\\"criterion\\\": \\\"scope\\\", \\\"score\\\": 1, \\\"evidence\\\": \\\"# Requirements: bulk tagging\\\"}, {\\\"criterion\\\": \\\"coverage\\\", \\\"score\\\": 1, \\\"evidence\\\": \\\"# Requirements: bulk tagging\\\"}, {\\\"criterion\\\": \\\"consistency\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Requirements: bulk tagging\\\"}]}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

@@ -1,0 +1,6 @@
+# Fixture policy for CI fixture mode (M1-63). Model ids are placeholders: no model is
+# ever called, every response is replayed from fixtures/cassettes/.
+tiers:
+  balanced: { model: family-a/agent-model }
+  # The eval judge: an admin maps it to a model from a different family than the agents.
+  eval-judge: { model: family-b/judge-model }

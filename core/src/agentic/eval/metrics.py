@@ -35,6 +35,8 @@ from agentic.eval.cases import EvalCase, SeededDefect
 from agentic.eval.judge import RubricJudge
 from agentic.eval.records import RunRecord, RunRequest
 from agentic.handoffs import BLOCK_ON_DEFAULT, Handoff, HandoffError, parse_handoff
+from agentic.handoffs.finalise import FRAMEWORK_FIELDS
+from agentic.yamlio import YamlFileError, dump_yaml, load_yaml, split_front_matter
 
 TOLERANCE = 3  # lines either side of a seeded range (S10)
 # The agent answered, or failed on its own (turns, time, stuck): scored. An error, a skip,
@@ -71,26 +73,31 @@ def schema_valid(status: str, output: str | None, kind: str) -> bool:
 def match_findings(
     findings: Sequence[object], seeded: Sequence[SeededDefect], *, tolerance: int = TOLERANCE
 ) -> Matching:
+    """One-to-one, in finding order: each finding claims the nearest seeded defect not yet
+    claimed (inside the range is distance 0), so one finding never counts twice and a
+    duplicate finding claims nothing."""
     caught: set[int] = set()
     unmatched = []
     for index, raw in enumerate(findings):
         found = _as_dict(raw)
         file, line = found.get("file"), found.get("line")
-        hits = set()
+        best: tuple[int, int] | None = None  # (distance, defect index)
         if isinstance(file, str) and isinstance(line, int):
             path = _posix(file)
             category = found.get("category")
             for d_index, defect in enumerate(seeded):
+                if d_index in caught or _posix(defect.file) != path:
+                    continue
+                if category and str(category).casefold() != defect.category.casefold():
+                    continue
                 start, end = defect.lines
-                same_place = (
-                    _posix(defect.file) == path and start - tolerance <= line <= end + tolerance
-                )
-                same_kind = not category or str(category).casefold() == defect.category.casefold()
-                if same_place and same_kind:
-                    hits.add(d_index)
-        caught |= hits
-        if not hits:
+                distance = max(start - line, line - end, 0)
+                if distance <= tolerance and (best is None or distance < best[0]):
+                    best = (distance, d_index)
+        if best is None:
             unmatched.append(index)
+        else:
+            caught.add(best[1])
     return Matching(frozenset(caught), tuple(unmatched))
 
 
@@ -171,9 +178,12 @@ class ObjectiveMetrics(Evaluator[RunRequest, RunRecord, None]):
 @dataclass
 class RubricMetric(Evaluator[RunRequest, RunRecord, None]):
     """The rubric score of a scoping case's output, judged blind. The judge's result is
-    attached to the record (per criterion, evidence) for the report and calibration."""
+    attached to the record (per criterion, evidence) for the report and calibration.
 
-    judges: Mapping[str, RubricJudge] = field(default_factory=dict)  # rubric id -> judge
+    `judge_for` gives the judge for one run (None: the case is not rubric-judged), so
+    each run's judge calls can be keyed to that run (its cassette, its cost)."""
+
+    judge_for: Callable[[RunRequest], RubricJudge | None] = lambda request: None
     scrubber: Scrubber = field(default_factory=Scrubber)
     reference: Callable[[EvalCase], str | None] = lambda case: None
 
@@ -181,12 +191,12 @@ class RubricMetric(Evaluator[RunRequest, RunRecord, None]):
         self, ctx: EvaluatorContext[RunRequest, RunRecord, None]
     ) -> dict[str, float]:
         case, record = ctx.inputs.case, ctx.output
-        judge = self.judges.get(case.rubric or "")
+        judge = self.judge_for(ctx.inputs) if case.rubric else None
         if judge is None or not scored(record):
             return {}
         if parse_document(record.output, ctx.inputs.kind) is None or record.status != "completed":
             return {"rubric": 0.0}  # an invalid document delivers nothing to grade
-        record.judged = self.scrubber.scrub(record.output or "")  # what the judge sees
+        record.judged = self.scrubber.scrub(judge_view(record.output or ""))  # what it sees
         result = await judge.score(
             record.judged,
             reference=self.reference(case),
@@ -194,6 +204,20 @@ class RubricMetric(Evaluator[RunRequest, RunRecord, None]):
         )
         record.judge = result
         return {} if result.total is None else {"rubric": result.total}
+
+
+def judge_view(document: str) -> str:
+    """The document without the framework's envelope (run id, agent@version, time): those
+    are not the agent's work, and an agent version is exactly what an A/B varies."""
+    try:
+        header, body = split_front_matter(document)
+        meta, _ = load_yaml(header)
+    except YamlFileError:
+        return document
+    if not isinstance(meta, dict):
+        return document
+    kept = {k: v for k, v in meta.items() if k not in FRAMEWORK_FIELDS}
+    return f"---\n{dump_yaml(kept)}---\n{body}"
 
 
 def _as_dict(item: object) -> dict:

@@ -1,0 +1,15 @@
+{
+ "key": "rev-reset-limits/X/0/agent",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:38840f1949011fd37c605fad50bf5f7de374d690ef46baa89f16ec9f15bb4b19",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"agent-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nkind: review\\nschema_version: 1\\nrun_id: golden-02\\nstep: review\\nagent: code-review@1.0.0\\nproduced_at: 2026-10-21T12:10:00Z\\nstatus: complete\\nsummary: The limits work, but two responses reveal whether an account exists, and refusals are not audited.\\nfindings:\\n  - severity: high\\n    file: auth/password_reset.py\\n    line: 12\\n    issue: Unknown emails now get 404 \\\"no such account\\\", which reveals whether an account exists; REQ-1 requires the same confirmation either way.\\n    status: open\\n  - severity: high\\n    file: auth/password_reset.py\\n    line: 15\\n    issue: Over the per-account limit the response is a 429 naming the account, unlike the normal confirmation; this also leaks existence.\\n    status: open\\n  - severity: medium\\n    file: auth/password_reset.py\\n    line: 9\\n    issue: Refused requests write no audit event, so REQ-3 is not met.\\n    status: open\\nopen_blocking: 2\\nscore: 5\\nprepass_results:\\n  - {tool: gitleaks, findings: 0}\\nopen_questions: []\\n---\\n# Review: password reset rate limits\\n\\n## Summary\\nThe sliding-window limits are wired correctly, but the responses break the \\\"no account probing\\\" requirement and refusals are not audited.\\n\\n## Findings\\n- **high** `auth/password_reset.py:12` - return the normal confirmation for unknown emails (and do the dummy hash from the design).\\n- **high** `auth/password_reset.py:15` - over the account limit, return the normal confirmation and send nothing.\\n- **medium** `auth/password_reset.py:9` - add the `password_reset.refused` audit event for both limits.\\n\\n## Category breakdown\\n- Security: 2 (account enumeration)\\n- Requirements: 1 (missing audit)\\n\\n## Pre-pass results\\ngitleaks found nothing.\\n\\n## Verdict\\nChanges requested.\\n\\n## Open questions\\nNone.\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

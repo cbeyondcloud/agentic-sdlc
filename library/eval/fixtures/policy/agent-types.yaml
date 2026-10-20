@@ -1,0 +1,47 @@
+# One type per built-in agent kind; no tools, since fixture runs only answer from their inputs.
+types:
+  business-analyst:
+    description: Turns a request into requirements.
+    tier: balanced
+    backends: [native]
+    consumes: []
+    produces: requirements
+    limits:
+      max: { budget_usd: 1, max_turns: 10, max_minutes: 10 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0, per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }
+  design:
+    description: Turns requirements into a design.
+    tier: balanced
+    backends: [native]
+    consumes: [requirements]
+    produces: design
+    limits:
+      max: { budget_usd: 1, max_turns: 10, max_minutes: 10 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0, per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }
+  developer:
+    description: Implements a design.
+    tier: balanced
+    backends: [native]
+    consumes: [design, review]
+    produces: dev-report
+    limits:
+      max: { budget_usd: 1, max_turns: 10, max_minutes: 10 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0, per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }
+  code-review:
+    description: Reviews a change.
+    tier: balanced
+    backends: [native]
+    consumes: [requirements, design, dev-report]
+    produces: review
+    limits:
+      max: { budget_usd: 1, max_turns: 10, max_minutes: 10 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0, per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }
+  qa:
+    description: Checks work against its acceptance criteria.
+    tier: balanced
+    backends: [native]
+    consumes: [requirements, dev-report]
+    produces: test-report
+    limits:
+      max: { budget_usd: 1, max_turns: 10, max_minutes: 10 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0, per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }

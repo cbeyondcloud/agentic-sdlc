@@ -19,6 +19,7 @@ import random
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -139,9 +140,11 @@ class AgentCaseRunner:
         state_root: Path,
         budget: BudgetLedger,
         step: str = "eval",
+        clock: Callable[[], datetime] | None = None,  # replay: a fixed time, so output is stable
     ) -> None:
         self.resolved, self.model_for, self.schema = resolved, model_for, schema
         self.state_root, self.budget, self.step = Path(state_root), budget, step
+        self.clock = clock
 
     async def __call__(self, request: RunRequest) -> RunRecord:
         definition = self.resolved.definition
@@ -161,7 +164,7 @@ class AgentCaseRunner:
                 state_dir=self.state_root / request.run_id,
                 costs=costs,
                 run_id=request.run_id,
-                contract=HandoffContract(self.schema, request.run_id, self.step, agent),
+                contract=self._contract(request.run_id, agent),
             )
             outcome = await runner.run(task_for(request.case, definition.instructions))
         except LimitHit:
@@ -172,6 +175,11 @@ class AgentCaseRunner:
         if outcome.stopped == "budget":
             record.error = BUDGET_STOP
         return _record(record, costs, started)
+
+    def _contract(self, run_id: str, agent: str) -> HandoffContract:
+        if self.clock is None:
+            return HandoffContract(self.schema, run_id, self.step, agent)
+        return HandoffContract(self.schema, run_id, self.step, agent, clock=self.clock)
 
 
 def task_for(case: EvalCase, instructions: str) -> AgentTask:

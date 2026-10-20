@@ -1,0 +1,15 @@
+{
+ "key": "ba-webhook-retries/X/1/judge",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:6b180aef16563f61b02770f02453521f693c95a368c6f981e09a452047ed6485",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"judge-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_ba-webhook-retries_0\", \"type\": \"function\", \"function\": {\"name\": \"final_result\", \"arguments\": \"{\\\"scores\\\": [{\\\"criterion\\\": \\\"problem\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Requirements: webhook delivery retries\\\"}, {\\\"criterion\\\": \\\"acceptance\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Requirements: webhook delivery retries\\\"}, {\\\"criterion\\\": \\\"scope\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Requirements: webhook delivery retries\\\"}, {\\\"criterion\\\": \\\"coverage\\\", \\\"score\\\": 1, \\\"evidence\\\": \\\"# Requirements: webhook delivery retries\\\"}, {\\\"criterion\\\": \\\"consistency\\\", \\\"score\\\": 1, \\\"evidence\\\": \\\"# Requirements: webhook delivery retries\\\"}]}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

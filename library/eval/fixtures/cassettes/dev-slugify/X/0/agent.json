@@ -1,0 +1,15 @@
+{
+ "key": "dev-slugify/X/0/agent",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:eda783e7112c79fa20eb9c85d10094fefd0bbbc5071ef576117160866b23e272",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"agent-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: slugify() now folds accented letters to their plain form before splitting into words.\\ncommits: [\\\"d1e2f3a fix(textutil): fold accents in slugify\\\"]\\nfiles_changed: [textutil.py]\\ntests_run: {passed: 2, failed: 0, skipped: 0}\\ndeviations_from_design: []\\nopen_questions: []\\n---\\n# Development report: slugify accents\\n\\n## Summary\\nAccented letters are folded with Unicode NFKD normalisation and combining marks dropped.\\n\\n## What changed\\n`textutil.py`: `slugify` normalises with `unicodedata.normalize(\\\"NFKD\\\", ...)` and drops combining characters before matching words.\\n\\n## Tests run\\n2 passed, 0 failed.\\n\\n## Deviations from the design\\nNone.\\n\\n## Notes for review\\nNon-Latin scripts without a plain form still drop out, as before.\\n\\n## Open questions\\nNone.\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

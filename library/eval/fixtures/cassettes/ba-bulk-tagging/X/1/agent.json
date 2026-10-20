@@ -1,0 +1,25 @@
+{
+ "key": "ba-bulk-tagging/X/1/agent",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:425475017854f0fdaaf11d690a2e893872779e2d50423db4ff79523245ec9547",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"agent-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Editors can tag many products at once.\\nsize: small\\nitems:\\n  - id: REQ-1\\n    statement: An editor can add a tag to many selected products at once.\\n    acceptance_criteria:\\n      - WHEN an editor applies a tag to selected products THE system SHALL tag each of them.\\n---\\n# Requirements: bulk tagging\\n\\n## Summary\\nEditors tag many products in one action.\\n\\n## User scenarios\\nP1: an editor tags a season's products.\\n\\n## Open questions\\nNone.\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:4fc5f7bd96e487c26c52bea4ef96ea9eb3eae32d840a6525e83c6d422d6c6449",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"agent-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Catalogue editors can add or remove one tag on up to 500 selected products in one action.\\nsize: small\\nitems:\\n  - id: REQ-1\\n    statement: An editor can add or remove one tag on up to 500 selected products at once.\\n    acceptance_criteria:\\n      - WHEN an editor applies a tag to selected products THE system SHALL tag each of them.\\n      - WHEN more than 500 products are selected THE system SHALL refuse the action.\\n  - id: REQ-2\\n    statement: Products that could not be changed are listed with the reason.\\n    acceptance_criteria:\\n      - WHEN some products fail THE system SHALL list each failed product and its reason.\\nopen_questions: []\\n---\\n# Requirements: bulk tagging\\n\\n## Summary\\nCatalogue editors tag products one at a time today. Bulk tagging lets them add or remove a tag on up to 500 selected products in one action.\\n\\n## User scenarios\\n- P1 - Seasonal tagging: an editor selects a season's products and adds the tag \\\"summer\\\".\\n  - WHEN an editor applies a tag to selected products THE system SHALL tag each of them.\\n- P2 - Clean-up: an editor removes an obsolete tag from many products.\\n\\n## Edge cases\\n- More than 500 products selected: refused (REQ-1).\\n- A product deleted while the action runs: listed as failed with the reason (REQ-2).\\n\\n## Functional requirements\\n- REQ-1: The system MUST apply or remove one tag on up to 500 selected products.\\n- REQ-2: The system MUST list each product it could not change, with the reason.\\n\\n## Success criteria\\nTagging 500 products takes under 30 seconds.\\n\\n## Assumptions\\nOnly catalogue editors may bulk-tag, as for single tagging today.\\n\\n## Open questions\\nNone.\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

@@ -51,6 +51,18 @@ def test_category_is_compared_only_when_the_finding_has_one():
     }
 
 
+def test_one_finding_claims_one_defect_the_nearest():
+    close = [
+        SeededDefect(file="a.py", lines=(2, 3), category="logic"),
+        SeededDefect(file="a.py", lines=(4, 4), category="logic"),
+    ]
+    assert match_findings([finding("a.py", 4)], close).caught == {1}  # not both
+    both = match_findings([finding("a.py", 4), finding("a.py", 2)], close)
+    assert both.caught == {0, 1} and both.unmatched == ()
+    taken = match_findings([finding("a.py", 4), finding("a.py", 4)], close[1:])
+    assert taken.caught == {0} and taken.unmatched == (1,)  # a duplicate finding claims nothing
+
+
 def test_unmatched_blocking_counts_open_blocking_findings_only():
     findings = [
         finding("billing/export.py", 41),  # matches
@@ -134,6 +146,15 @@ def test_objective_metrics_for_a_review_run():
     assert metrics["defects_caught"] == 1 and metrics["defects_total"] == 2
     assert metrics["defect_recall"] == 0.5 and metrics["unmatched_blocking"] == 1
     assert metrics["cost_usd"] == 0.01
+
+
+def test_the_judge_never_sees_the_envelope():
+    from agentic.eval.metrics import judge_view
+
+    shown = judge_view(REVIEW_DOC)
+    assert "code-review@1.0.0" not in shown and "produced_at" not in shown
+    assert "run_id" not in shown and "summary: One issue." in shown and "## Verdict" in shown
+    assert judge_view("no front matter") == "no front matter"
 
 
 def test_an_invalid_output_scores_zero_and_an_errored_run_is_unmeasured():

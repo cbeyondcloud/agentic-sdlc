@@ -120,6 +120,7 @@ class EvalReport(_Model):
     leaks: list[str]
     budget_usd: float | None
     budget_hit: bool
+    judge_cost_usd: float | None = None  # the judge's calls, also charged to the budget
     verbosity_r: dict[str, float | None]  # label -> Pearson r(rubric, output length)
     verdict: Verdict
     problems: list[str]
@@ -145,6 +146,7 @@ def build_report(
     leaks: Sequence[str] = (),
     stale_cassettes: int = 0,
     problems: Sequence[str] = (),
+    judge_cost_usd: float | None = None,
 ) -> EvalReport:
     runs = [_eval_run(r) for r in runset.runs]
     cases = sorted({r.case_id for r in runs})
@@ -192,6 +194,7 @@ def build_report(
         leaks=list(leaks),
         budget_usd=runset.budget_usd,
         budget_hit=runset.budget_hit,
+        judge_cost_usd=judge_cost_usd,
         verbosity_r={label: _verbosity(items, runset) for label, items in sorted(by_label.items())},
         verdict=verdict,
         problems=list(problems),

@@ -1,0 +1,243 @@
+{
+  "agent": "qa",
+  "agent_version": "0.1.0",
+  "aggregates": {
+    "X": {
+      "cost_usd": {
+        "ci_high": 0.0021,
+        "ci_low": 0.0021,
+        "median": 0.0021,
+        "n_scored": 3,
+        "unscored": [],
+        "value": 0.0021
+      },
+      "qa_catch": {
+        "ci_high": 1.0,
+        "ci_low": 0.5,
+        "median": null,
+        "n_scored": 3,
+        "unscored": [],
+        "value": 0.8
+      },
+      "schema_valid": {
+        "ci_high": 1.0,
+        "ci_low": 1.0,
+        "median": 1.0,
+        "n_scored": 3,
+        "unscored": [],
+        "value": 1.0
+      },
+      "tokens": {
+        "ci_high": 1400.0,
+        "ci_low": 1400.0,
+        "median": 1400.0,
+        "n_scored": 3,
+        "unscored": [],
+        "value": 1400.0
+      }
+    }
+  },
+  "budget_hit": false,
+  "budget_usd": 5.0,
+  "cases": [
+    "qa-invoice-export",
+    "qa-reset-limits",
+    "qa-webhook-retries"
+  ],
+  "corpus_manifest_sha": "sha256:e06ee048dc597ae36e27fb0b0b6cace0e34547bae33ca121cc524d5323ac9bc0",
+  "cost_total_usd": 0.0126,
+  "cost_unmeasured_runs": 0,
+  "judge": null,
+  "judge_cost_usd": null,
+  "k": 2,
+  "kind": "test-report",
+  "labels": {
+    "X": "qa@0.1.0"
+  },
+  "leaks": [],
+  "mode": "replay",
+  "model_changed": false,
+  "model_ids": [
+    "agent-model"
+  ],
+  "problems": [],
+  "runs": [
+    {
+      "case_id": "qa-invoice-export",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "criteria_caught": 1.0,
+        "criteria_total": 2.0,
+        "qa_catch": 0.5,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:fbf014874cda7bc20468d258d000a840c82b8cd43a9e6e6af7e75ef98c022fba",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "qa-invoice-export.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "qa-invoice-export",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "criteria_caught": 1.0,
+        "criteria_total": 2.0,
+        "qa_catch": 0.5,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:36b6498d373c6db487d5aece7fe55d15765530ce510217091638cdaedd40491b",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "qa-invoice-export.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "qa-reset-limits",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "criteria_caught": 2.0,
+        "criteria_total": 2.0,
+        "qa_catch": 1.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:239c7ce1ae43f53b16a9661b0c61000257ecfde1adc1da50b45a8880c69f8844",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "qa-reset-limits.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "qa-reset-limits",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "criteria_caught": 2.0,
+        "criteria_total": 2.0,
+        "qa_catch": 1.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:0e99b2e789899a2dbad51fe2527387b6329f0d1975e8888829fe4aa3165e4f71",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "qa-reset-limits.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "qa-webhook-retries",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "criteria_caught": 1.0,
+        "criteria_total": 1.0,
+        "qa_catch": 1.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:b8d585046f338673512a7e5ea999a58a7e81835cfe5ac3781e43c71175e63fbf",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "qa-webhook-retries.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "qa-webhook-retries",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "criteria_caught": 1.0,
+        "criteria_total": 1.0,
+        "qa_catch": 1.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:f7c7c07834ced193f3aed84601b35f702c3db34088f19d7a0e0844a88dd1e1b4",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "qa-webhook-retries.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    }
+  ],
+  "schema_version": 1,
+  "seed": 0,
+  "split": "all",
+  "stale_cassettes": 0,
+  "unscored_runs": [],
+  "verbosity_r": {
+    "X": null
+  },
+  "verdict": "MEASURED"
+}
