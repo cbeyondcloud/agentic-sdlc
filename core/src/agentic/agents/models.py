@@ -93,9 +93,12 @@ def metered_model(
 
 
 def model_settings(agent: ResolvedAgent) -> ModelSettings:
-    """The sampling settings policy resolved for the agent. Effort and other
-    backend-specific settings are mapped with the capability matrix (M1-27)."""
+    """The sampling settings policy resolved for the agent: temperature, and effort as
+    Pydantic AI's provider-neutral `thinking` level (M1-28). What a model cannot honour
+    is reported before the run by the capability matrix (M1-27)."""
     settings = ModelSettings()
     if agent.temperature is not None:
         settings["temperature"] = agent.temperature
+    if agent.effort is not None:
+        settings["thinking"] = agent.effort
     return settings

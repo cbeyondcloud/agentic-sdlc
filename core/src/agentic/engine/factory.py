@@ -1,52 +1,47 @@
 """The production step-runner factory: what the engine runs each agent step on.
 
-For each step it builds a `PydanticAIRunner` with:
-  * the agent's metered model (every call through TokenLean, charged to the
-    step's budget slice) - or `model_for`, for tests;
-  * the agent's tools (`build_tools`) when the step has a tool context
-    (worktree, guard, sandbox - M1-30), plus `spawn_agent` from a ChildSpawner
-    whose children are built by this same factory (DF-28);
-  * the step's output contract (children get none: their output goes back to
-    the parent, not into the pipeline);
-  * the run id, so a paused run's state is bound to it.
+`StepRunners` sends each step to the backend its resolved agent names (`native`, or
+an agent-CLI backend; M1-28) with:
+  * the step's tool context (worktree, guard, sandbox - M1-30), or none;
+  * a `spawn_agent` spawner when the backend can run child agents; the children
+    are built by this same factory (DF-28);
+  * the step's state folder.
+
+`PydanticStepRunners` is the native-only form kept for existing callers.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from decimal import Decimal
 from pathlib import Path
 
 from pydantic_ai.models import Model
 
 from agentic.agents.children import ChildSpawner
-from agentic.agents.metering import CostLog
-from agentic.agents.models import GatewaySettings, metered_model
-from agentic.agents.runner import PydanticAIRunner
-from agentic.agents.tools import ToolContext, build_tools
-from agentic.engine.engine import StepContext
+from agentic.agents.models import GatewaySettings
+from agentic.agents.runner import AgentRunner
+from agentic.agents.tools import ToolContext
+from agentic.backends.base import Backend
+from agentic.backends.capabilities import CAPABILITIES
+from agentic.backends.native import NativeBackend
+from agentic.engine.engine import EngineError, StepContext
 from agentic.policy import ResolvedAgent
 from agentic.transport import BudgetSlice, CallIdentity, Pricer
 
 
-class PydanticStepRunners:
+class StepRunners:
     def __init__(
         self,
+        backends: Mapping[str, Backend],
         *,
-        identity_for: Callable[[StepContext], CallIdentity],
-        gateway: GatewaySettings,
-        prices: Pricer,
-        fallback_estimate_usd: Decimal,
         tools_for: Callable[[StepContext], ToolContext | None],
         state_dir_for: Callable[[StepContext], Path],
-        model_for: Callable[[StepContext], Model] | None = None,
-        policy_version: str | None = None,
     ) -> None:
-        self.identity_for, self.gateway, self.prices = identity_for, gateway, prices
-        self.fallback_estimate_usd = fallback_estimate_usd
-        self.tools_for, self.state_dir_for, self.model_for = tools_for, state_dir_for, model_for
-        self.policy_version = policy_version
+        self.backends = dict(backends)
+        self.tools_for, self.state_dir_for = tools_for, state_dir_for
 
-    def __call__(self, step: StepContext) -> PydanticAIRunner:
-        return self._runner(step, self.root_spawner(step.agent, step), self.state_dir_for(step))
+    def __call__(self, step: StepContext) -> AgentRunner:
+        spawner = self.root_spawner(step.agent, step) if self._has_children(step.agent) else None
+        return self._runner(step, spawner, self.state_dir_for(step))
 
     def root_spawner(self, agent: ResolvedAgent, step: StepContext) -> ChildSpawner:
         """The step's own spawner: the root of its child tree (caps are per tree)."""
@@ -58,7 +53,7 @@ class PydanticStepRunners:
 
     def child_runner(
         self, child: ResolvedAgent, budget: BudgetSlice, spawner: ChildSpawner, parent: StepContext
-    ) -> PydanticAIRunner:
+    ) -> AgentRunner:
         """A spawned child's runner: no contract, its own state folder, its own spawner."""
         context = StepContext(
             run_id=parent.run_id,
@@ -71,37 +66,54 @@ class PydanticStepRunners:
         state_dir = self.state_dir_for(parent) / "children" / child.definition.name
         return self._runner(context, spawner, state_dir, is_child=True)
 
-    def _runner(
-        self, step: StepContext, spawner: ChildSpawner, state_dir: Path, *, is_child: bool = False
-    ) -> PydanticAIRunner:
-        costs = CostLog()
-        if self.model_for is not None:
-            model = self.model_for(step)
-        else:
-            model, costs = metered_model(
-                step.agent,
-                self.identity_for(step),
-                self.gateway,
-                budget=step.budget,
-                price_for=self.prices,
-                fallback_estimate_usd=self.fallback_estimate_usd,
-                log=costs,
+    def _backend(self, agent: ResolvedAgent) -> Backend:
+        backend = self.backends.get(agent.backend)
+        if backend is None:
+            raise EngineError(
+                f"no backend {agent.backend!r} is configured (configured: {sorted(self.backends)})"
             )
-        tool_context = self.tools_for(step)
-        tools = build_tools(step.agent, tool_context) if tool_context is not None else []
-        tools += spawner.tools()
-        return PydanticAIRunner(
-            step.agent,
-            model,
-            budget=step.budget,
+        return backend
+
+    def _has_children(self, agent: ResolvedAgent) -> bool:
+        caps = CAPABILITIES.get(agent.backend)
+        return caps is not None and caps.children
+
+    def _runner(
+        self, step: StepContext, spawner: ChildSpawner | None, state_dir: Path, **kwargs
+    ) -> AgentRunner:
+        return self._backend(step.agent).runner(
+            step,
+            tool_context=self.tools_for(step),
             state_dir=state_dir,
-            tools=tools,
-            costs=costs,
-            is_child=is_child,
-            contract=step.contract,
-            run_id=step.run_id,
-            policy_version=self.policy_version,
+            spawner=spawner,
+            **kwargs,
         )
 
 
-__all__ = ["PydanticStepRunners"]
+class PydanticStepRunners(StepRunners):
+    """Native-only step runners (the form SP6 introduced)."""
+
+    def __init__(
+        self,
+        *,
+        identity_for: Callable[[StepContext], CallIdentity],
+        gateway: GatewaySettings,
+        prices: Pricer,
+        fallback_estimate_usd: Decimal,
+        tools_for: Callable[[StepContext], ToolContext | None],
+        state_dir_for: Callable[[StepContext], Path],
+        model_for: Callable[[StepContext], Model] | None = None,
+        policy_version: str | None = None,
+    ) -> None:
+        native = NativeBackend(
+            identity_for=identity_for,
+            gateway=gateway,
+            prices=prices,
+            fallback_estimate_usd=fallback_estimate_usd,
+            model_for=model_for,
+            policy_version=policy_version,
+        )
+        super().__init__({"native": native}, tools_for=tools_for, state_dir_for=state_dir_for)
+
+
+__all__ = ["PydanticStepRunners", "StepRunners"]
