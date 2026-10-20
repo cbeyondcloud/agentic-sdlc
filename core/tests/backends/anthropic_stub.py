@@ -8,6 +8,7 @@ Claude Code binary.
   client tried to go: anything sent outside TokenLean shows up in `attempts`.
 """
 
+import itertools
 import json
 import socketserver
 import threading
@@ -16,6 +17,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MARKER = "AGENTIC-TEST-MARKER-FROM-USER-SETTINGS"
+_TOOL_IDS = itertools.count(1)  # every tool call needs its own id: a repeated one is ignored
 
 
 @dataclass
@@ -23,6 +25,7 @@ class Reply:
     text: str | None = None  # a text answer, or
     tool: str | None = None  # a call to this tool
     tool_input: dict = field(default_factory=dict)
+    tool_id: str = field(default_factory=lambda: f"toolu_{next(_TOOL_IDS)}")
     input_tokens: int = 100
     output_tokens: int = 20
 
@@ -46,7 +49,7 @@ def _sse(model: str, reply: Reply) -> bytes:
     }
     send("message_start", {"type": "message_start", "message": message})
     if reply.tool:
-        block = {"type": "tool_use", "id": "toolu_t", "name": reply.tool, "input": {}}
+        block = {"type": "tool_use", "id": reply.tool_id, "name": reply.tool, "input": {}}
         delta = {"type": "input_json_delta", "partial_json": json.dumps(reply.tool_input)}
         stop = "tool_use"
     else:
@@ -127,7 +130,7 @@ class TokenLeanStub:
                     [
                         {
                             "type": "tool_use",
-                            "id": "toolu_t",
+                            "id": reply.tool_id,
                             "name": reply.tool,
                             "input": reply.tool_input,
                         }

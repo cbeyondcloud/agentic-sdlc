@@ -85,3 +85,12 @@ def test_temp_files_go_to_a_folder_outside_the_tree(tmp_path):  # review I3
     written = json.loads(box.settings.read_text(encoding="utf-8"))["filesystem"]["allowWrite"]
     assert (tmp_path / "s" / "tmp").as_posix() in written
     assert (tmp_path / "s" / "tmp").is_dir()
+
+
+def test_a_wrapped_agent_cli_sends_everything_through_the_proxy(tmp_path):
+    # srt exempts loopback and private ranges from its proxy (NO_PROXY); inside the
+    # sandbox's own network those are unreachable, so a wrapped CLI clears it (M1-29)
+    box = sandbox(tmp_path)
+    assert "NO_PROXY=" not in box.command_prefix()
+    everything = box.command_prefix(proxy_everything=True)
+    assert "NO_PROXY=" in everything and "no_proxy=" in everything

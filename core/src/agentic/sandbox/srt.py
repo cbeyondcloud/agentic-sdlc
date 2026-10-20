@@ -51,10 +51,22 @@ class SrtSandbox:
         os.replace(temp, self.settings)
         self._written = True
 
-    async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
+    def command_prefix(self, *, proxy_everything: bool = False) -> list[str]:
+        """What runs a program under this sandbox: append the program and its arguments.
+
+        `proxy_everything` is for a whole agent CLI process (M1-29, DF-65): srt exempts
+        loopback and private address ranges from its proxy (NO_PROXY), but inside the
+        sandbox's own network those are unreachable - a gateway at 127.0.0.1 or a
+        private IP could not be called. Cleared, every request goes through srt's
+        proxy and its allowlist. Agent shell commands keep srt's default, so a test
+        suite still reaches a server it started inside the sandbox."""
         if not self._written:
             self._write_settings()
-        temp = [f"{name}={self.tmp}" for name in ("TMPDIR", "TMP", "TEMP")]
-        argv = [*self.srt, "--settings", str(self.settings), "--", "env", *temp]
-        argv += ["bash", "-c", command]
+        names = [f"{name}={self.tmp}" for name in ("TMPDIR", "TMP", "TEMP")]
+        if proxy_everything:
+            names += ["NO_PROXY=", "no_proxy="]
+        return [*self.srt, "--settings", str(self.settings), "--", "env", *names]
+
+    async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
+        argv = [*self.command_prefix(), "bash", "-c", command]
         return await run_process(argv, cwd, timeout_s)
