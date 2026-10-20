@@ -54,21 +54,28 @@ def register(app: typer.Typer) -> None:
         out: Output = ctx.obj
         given = _inputs(inputs or [])
         rt = Runtime(Workspace.load())
-        report = rt.preflight(pipeline, live=not dry_run)
         if dry_run:
+            report = rt.preflight(pipeline, live=False)
             plan = rt.plan(pipeline, report)
             out.result(plan, _show_plan(plan))
             raise typer.Exit(ExitCode.OK if report.passed else ExitCode.INVALID)
+        limit = _usd(budget, "--budget")
+        gateway = rt.gateway()  # before anything is installed or written
+        report = rt.preflight(pipeline, live=True)
         if not report.passed:
             out.result({"preflight": report.text()}, lambda c: c.print(report.text(), markup=False))
             raise CliError("preflight failed: nothing was started", ExitCode.INVALID)
         for problem in report.problems:
             out.warn(f"{problem.step or 'pipeline'}: {problem.check}: {problem.detail}")
-        regime = rt.pipeline(pipeline).regime
-        engine = rt.engine(run_budget_usd=_usd(budget, "--budget"), regime=regime)
+        for agent, globs in rt.unenforced(pipeline, report).items():  # DF-64
+            out.warn(
+                f"{agent}: deny globs checked by the file tools only, not the OS sandbox: "
+                + ", ".join(globs)
+            )
+        engine = rt.engine(run_budget_usd=limit, regime=rt.pipeline(pipeline).regime)
         run_id = run_id or new_run_id(pipeline)
         state = drive(
-            rt.redact(rt.gateway()),
+            rt.redact(gateway),
             rt.store.path(run_id).parent,
             lambda: engine.start(pipeline, given, rt.user, run_id),
         )

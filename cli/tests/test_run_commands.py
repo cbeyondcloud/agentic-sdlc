@@ -134,3 +134,20 @@ def test_status_of_an_unknown_run_is_an_error_with_a_hint(workspace, cli):
 def test_status_without_a_run_lists_recent_runs(workspace, gateway, cli):
     _, run_id = start(cli)
     assert run_id in cli("status").out
+
+
+def test_dry_run_names_deny_globs_the_os_sandbox_cannot_enforce(
+    workspace, policy_repo, monkeypatch, cli
+):
+    from agentic.sandbox.readiness import Readiness
+
+    monkeypatch.setattr(runtime, "machine_readiness", lambda: Readiness("linux", ()))
+    write(
+        policy_repo / "agents" / "ba.md",
+        "---\nname: ba\ntype: analyst\nversion: 1.0.0\ndescription: BA.\n"
+        'deny: { paths: ["**/*.pem", "secrets/**"] }\n---\nGo.\n',
+    )
+    plan = cli("--json", "run", "deliver", "--dry-run").json()
+    assert plan["sandbox"].startswith("srt")
+    assert plan["steps"][0]["unenforced_deny_paths"] == ["**/*.pem"]  # secrets/** is bound
+    assert "file tools only" in cli("run", "deliver", "--dry-run").out

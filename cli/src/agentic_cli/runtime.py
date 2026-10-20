@@ -191,6 +191,16 @@ class Runtime:
                     report.problems.append(Problem(None, "codeintel", detail))
         return report
 
+    def unenforced(self, name: str, report: PreflightReport) -> dict[str, list[str]]:
+        """Per agent, its deny globs the OS sandbox cannot enforce (the file tools still
+        do), when the run would use the sandbox (DF-64)."""
+        decision = self.sandbox(self.pipeline(name))
+        if not decision.use_srt:
+            return {}
+        wiring = self._wiring(decision)
+        found = {a: wiring.unenforced_preview(agent) for a, agent in report.resolved.items()}
+        return {agent: globs for agent, globs in sorted(found.items()) if globs}
+
     def plan(self, name: str, report: PreflightReport) -> dict:
         """What a run of `name` would do, step by step (`run --dry-run`, spec §24 step 6)."""
         pipeline = self.pipeline(name)
@@ -222,7 +232,9 @@ class Runtime:
                 "skills": agent.skills,
                 "consumes": agent.consumes,
                 "produces": agent.produces,
-                "unenforced_deny_paths": wiring.unenforced_preview(agent),
+                "unenforced_deny_paths": (
+                    wiring.unenforced_preview(agent) if decision.use_srt else []
+                ),
             }
 
         def gate_step(step: GateStep) -> dict:
