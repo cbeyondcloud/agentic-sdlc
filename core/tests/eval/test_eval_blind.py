@@ -25,8 +25,12 @@ def test_scrubber_removes_tells_names_and_self_identification():
 
 
 def test_scrubber_leaves_ordinary_text_alone():
-    text = "## Design\nWe use a skilled queue worker; the agent pool is unchanged.\n"
+    text = (
+        "## Design\nWe use a skilled queue worker; the agent pool is unchanged.\n"
+        "The monthly report is created by Finance and reviewed by Audit.\n"
+    )
     assert Scrubber(names=["tdd"]).scrub(text) == text
+    assert Scrubber().scrub("Intro.\nThis model was trained by SomeLab.\nEnd.") == "Intro.\nEnd."
 
 
 def test_names_are_matched_case_insensitively_on_word_boundaries():

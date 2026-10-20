@@ -280,7 +280,6 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             same_family=choice.same_family,
             rubrics={r.key: r.sha for r in rubrics.values()},
         )
-    judge_total = [c.cost_usd for c, _ in judge_costs.calls]
     report = build_report(
         runset,
         report_id=report_id,
@@ -296,9 +295,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
         leaks=leaks.leaks,
         stale_cassettes=server.stale if server is not None else 0,
         problems=problems,
-        judge_cost_usd=(
-            float(sum(judge_total)) if judge_total and None not in judge_total else None  # type: ignore[arg-type]
-        ),
+        judge_cost_usd=_reported_total(judge_costs),
     )
     paths = write_report(report, folder, runset.runs)
     for rubric_id in rubric_ids:  # calibration shows people the rubric the judge used
@@ -589,6 +586,14 @@ def _api_key(options: RunOptions, upstream: Upstream | None) -> str:
         return Credentials().get(TOKENLEAN_KEY).value
     except CredentialError as error:
         raise CliError(str(error), ExitCode.REFUSED) from error
+
+
+def _reported_total(costs: CostLog) -> float | None:
+    """The calls' total cost, or None when any call's cost is unknown (never a partial sum)."""
+    amounts = [cost.cost_usd for cost, _ in costs.calls]
+    if not amounts or any(a is None for a in amounts):
+        return None
+    return float(sum(a for a in amounts if a is not None))
 
 
 def _model_terms(model: str) -> list[str]:

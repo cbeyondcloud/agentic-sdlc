@@ -173,6 +173,8 @@ def cluster_bootstrap_ratio(
         den = sum(d for _, d in sample)
         if den > 0:
             ratios.append(sum(num for num, _ in sample) / den)
+    if not ratios:
+        raise Unmeasurable("no resample had a denominator: the rate is unmeasurable")
     ratios.sort()
     return Bootstrap(
         n=len(values),

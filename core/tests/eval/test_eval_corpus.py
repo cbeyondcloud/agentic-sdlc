@@ -95,6 +95,13 @@ def test_load_select_and_count(tmp_path: Path):
     assert counts["review"]["truth"] == 3  # seeded defects
 
 
+def test_a_case_with_another_extension_is_an_error_not_skipped(tmp_path: Path):
+    path = write_case(tmp_path, scoping("s1"))
+    path.rename(path.with_suffix(".yml"))
+    with pytest.raises(CorpusError, match=r"s1.yml: a case file ends in .yaml"):
+        load_corpus(tmp_path)
+
+
 def test_duplicate_ids_refused(tmp_path: Path):
     write_case(tmp_path, scoping("same"))
     write_case(tmp_path, {**review("same")}, folder="review")

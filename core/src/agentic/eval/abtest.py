@@ -36,7 +36,7 @@ from pydantic_evals.evaluators import Evaluator
 from agentic.eval import stats
 from agentic.eval.blind import LeakCheck, Scrubber, assign_labels
 from agentic.eval.cases import EvalCase, Split
-from agentic.eval.metrics import scored
+from agentic.eval.metrics import judge_view, scored
 from agentic.eval.runner import RunCase, RunSet, run_eval
 
 Verdict = Literal["PROMOTE", "NO_BENEFIT", "UNMEASURABLE", "INCOMPLETE"]
@@ -319,7 +319,9 @@ async def run_ab(
         costs[label].setdefault(case_id, []).append(run.record.cost_usd)
         invalid[label] += run.record.status == "invalid"
         if run.record.output is not None:
-            outputs[(label, case_id, run.request.repeat)] = scrubber.scrub(run.record.output)
+            # without the envelope: it names the agent version, which a variant may change
+            shown = scrubber.scrub(judge_view(run.record.output))
+            outputs[(label, case_id, run.request.repeat)] = shown
 
     pairwise_y: list[float] = []
     inconsistent = 0

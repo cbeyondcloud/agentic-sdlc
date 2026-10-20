@@ -34,7 +34,12 @@ _TELL_LINES = [
         r".*(?:\n|$)",
         re.IGNORECASE | re.MULTILINE,
     ),
-    re.compile(r"^.*\b(?:trained|developed|created) by [A-Z][\w.-]+.*(?:\n|$)", re.MULTILINE),
+    # first person or "model/assistant" only: "Created by Finance" in a document stays
+    re.compile(
+        r"^.*\b(?:I|I'm|model|assistant)(?: was| am| is)? "
+        r"(?:trained|developed|created|built|made) by\b.*(?:\n|$)",
+        re.IGNORECASE | re.MULTILINE,
+    ),
 ]
 # a role tell inside a sentence: "As the business analyst agent, ..."
 _ROLE_TELL = re.compile(r"\bAs (?:the|an?|your) [\w ,'-]{1,60}? agent\b[,:]?[ \t]*", re.IGNORECASE)

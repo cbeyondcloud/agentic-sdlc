@@ -106,6 +106,10 @@ def load_corpus(root: Path, *, public: bool = False) -> Corpus:
     root = Path(root)
     problems: list[str] = []
     cases: dict[str, EvalCase] = {}
+    # a case saved as .yml (or anything else) must be an error, never silently skipped
+    stray = (p for p in (root / "cases").rglob("*") if p.is_file() and p.suffix != ".yaml")
+    for path in sorted(p for p in stray if not any(_scratch(part) for part in p.parts)):
+        problems.append(f"{path.relative_to(root).as_posix()}: a case file ends in .yaml")
     for path in sorted((root / "cases").rglob("*.yaml")):
         where = path.relative_to(root).as_posix()
         try:
