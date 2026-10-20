@@ -1,0 +1,145 @@
+# The default skills catalog (spec §11.2-11.4, master plan "Skills init downloads").
+# Each skill is vendored at a pinned upstream commit, adapted to remove harness-specific
+# orchestration, and pinned here by content hash (agentic.skills.skill_digest). An org
+# copies this folder into its policy repo's skills/ and owns it from there.
+# Licences and changes: THIRD_PARTY_NOTICES.md.
+#
+# Pre-loading for weaker or local models (spec §11.1) is off until an org names them,
+# e.g.  preload_for: {tiers: [fast], models: ["local/*"]}
+
+excluded:
+  using-superpowers: always-invoke bootstrap; duplicates the orchestrator and conflicts with role prompts (spec 11.4)
+  subagent-driven-development: duplicates the orchestrator (spec 11.4)
+  executing-plans: duplicates the orchestrator (spec 11.4)
+  using-git-worktrees: worktree and branch workflow belong to the engine (spec 11.4)
+  finishing-a-development-branch: worktree and branch workflow belong to the engine (spec 11.4)
+  caveman: no total-cost saving, accuracy collapse on small models, telemetry (spec 11.4)
+  docx: anthropics/skills document skills are source-available, not open source
+  pdf: anthropics/skills document skills are source-available, not open source
+  pptx: anthropics/skills document skills are source-available, not open source
+  xlsx: anthropics/skills document skills are source-available, not open source
+
+skills:
+  # ── Business Analyst ──────────────────────────────────────────────────────
+  addyosmani/spec-driven-development:
+    source: https://github.com/addyosmani/agent-skills
+    commit: e9e172d909744bc7840562cc6a06774b06c0b60b
+    path: skills/spec-driven-development
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:92f07abd93b1c6dc84be29f3b71dee175bb52dc33fd2d20b70370e753549ddf7
+    loading: pre
+    notes: clarifying questions go to Open Questions for the gate; plan output goes in the handoff
+  mattpocock/domain-modeling:
+    source: https://github.com/mattpocock/skills
+    commit: 423ed08ea2185f951ea9d3a8c68911bbbd3e8d88
+    path: skills/engineering/domain-modeling
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:aaf758e21d5a4002038d286f245d1fd6b8760099c1842dd24e12ef839781b11b
+    notes: vendor-specific agents/ metadata left out
+
+  # ── Design ────────────────────────────────────────────────────────────────
+  addyosmani/documentation-and-adrs:
+    source: https://github.com/addyosmani/agent-skills
+    commit: e9e172d909744bc7840562cc6a06774b06c0b60b
+    path: skills/documentation-and-adrs
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:617256ba3048c617eb8c8995ceef71f9f054f931b581f945267a9c5c5fd89b53
+    loading: pre
+    notes: harness rules file named AGENTS.md
+  superpowers/writing-plans:
+    source: https://github.com/obra/superpowers
+    commit: 8ca22dba9a94f28898bbce59f2537ff4d87c747d
+    path: skills/writing-plans
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:3e732d50ab7ee275020cc4080e8207bc92d32c94d4d5bb0a7fccf111e884fcb7
+    loading: pre
+    notes: plan goes in the handoff; worktree, sub-skill and execution-choice steps removed
+
+  # ── Developer ─────────────────────────────────────────────────────────────
+  superpowers/test-driven-development:
+    source: https://github.com/obra/superpowers
+    commit: 8ca22dba9a94f28898bbce59f2537ff4d87c747d
+    path: skills/test-driven-development
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:2a7f1edaa8a521aee09b5432f992e36746d1cb0b6539240abe0d3acef95e061d
+    loading: pre
+    notes: includes the testing anti-patterns reference (writing-good-tests.md)
+  superpowers/verification-before-completion:
+    source: https://github.com/obra/superpowers
+    commit: 8ca22dba9a94f28898bbce59f2537ff4d87c747d
+    path: skills/verification-before-completion
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:2522299ebf5d3339e8af265625b2901ce643b8245320f617027d07ba461bd304
+    loading: pre
+  superpowers/systematic-debugging:
+    source: https://github.com/obra/superpowers
+    commit: 8ca22dba9a94f28898bbce59f2537ff4d87c747d
+    path: skills/systematic-debugging
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:1dcaf9b84218b95f5cac1029e117fc69e9ac3682c2e023bd51cd7a986fd07625
+    notes: reference files only; shell script, TypeScript example, pressure tests and creation log left out
+  superpowers/receiving-code-review:
+    source: https://github.com/obra/superpowers
+    commit: 8ca22dba9a94f28898bbce59f2537ff4d87c747d
+    path: skills/receiving-code-review
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:0ce29406e8fe5c519c85dc911df145c4904a0f3ded8f7a07049e528f800869b2
+    notes: GitHub thread replies replaced by answering review findings in the handoff
+  addyosmani/incremental-implementation:
+    source: https://github.com/addyosmani/agent-skills
+    commit: e9e172d909744bc7840562cc6a06774b06c0b60b
+    path: skills/incremental-implementation
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:105ca01aec2e8da3cef6045f0d674724519484a620eb67154e75d102542bab34
+    notes: the shared definition-of-done reference is bundled
+
+  # ── Code Review ───────────────────────────────────────────────────────────
+  addyosmani/code-review-and-quality:
+    source: https://github.com/addyosmani/agent-skills
+    commit: e9e172d909744bc7840562cc6a06774b06c0b60b
+    path: skills/code-review-and-quality
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:5f7145a382cd4a2fcfb0d4760dcab8e4e839fb877f2e55d70f618187ab31fcd0
+    loading: pre
+    notes: the shared security and performance checklists are bundled
+  addyosmani/security-and-hardening:
+    source: https://github.com/addyosmani/agent-skills
+    commit: e9e172d909744bc7840562cc6a06774b06c0b60b
+    path: skills/security-and-hardening
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:39c405f591ff48516ec2c9c11fdd37d7ce08f1a3a95f95ccf3fb189524f2a478
+    notes: the shared security checklist is bundled
+
+  # ── Admins and team leads only (authoring) ────────────────────────────────
+  superpowers/writing-skills:
+    source: https://github.com/obra/superpowers
+    commit: 8ca22dba9a94f28898bbce59f2537ff4d87c747d
+    path: skills/writing-skills
+    licence: MIT
+    owner: platform-team
+    version: 1.0.0
+    sha256: sha256:51bc114c8a5c0c295a805349b500e1b14029cff9bfb2f2d846bd7f3ea7ca0321
+    audience: admins
+    notes: testing sections moved to a bundled file; scripts, graphviz and subagent references left out

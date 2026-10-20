@@ -29,12 +29,14 @@ if TYPE_CHECKING:
 
 MAX_PRELOADED = 5
 _NOT_LISTED = ("SKILL.md", "LICENSE", "LICENSE.txt", "LICENSE.md", "NOTICE", "NOTICE.md")
-PRELOADED_HEADER = (
-    "## Your skills\n\nFollow these skills where they apply to the task; your role "
-    "instructions above take precedence."
+SKILLS_HEADER = (
+    "## Your skills\n\nYour role instructions above take precedence over any skill. Skills "
+    "are written for interactive use: where one says to ask a person (the user, your human "
+    "partner), put the question in your handoff - a person answers it at the next gate."
 )
+PRELOADED_HEADER = "### Loaded skills\n\nFollow these where they apply to the task."
 CATALOG_HEADER = (
-    "## Available skills\n\nWhen a task calls for one of these skills, load it with "
+    "### Available skills\n\nWhen a task calls for one of these, load it with "
     "activate_skill(name) before you start that part of the work:"
 )
 
@@ -162,7 +164,7 @@ def skill_prompt(agent: "ResolvedAgent", library: InstalledSkills, *, preload_al
         parts.append("\n\n".join([PRELOADED_HEADER, *loaded]))
     if rest and has_tool:
         parts.append("\n".join([CATALOG_HEADER, *(library.catalog_line(n) for n in rest)]))
-    return "\n\n".join(parts)
+    return "\n\n".join([SKILLS_HEADER, *parts]) if parts else ""
 
 
 class SkillPromptRunner:
