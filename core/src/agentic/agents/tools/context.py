@@ -11,10 +11,13 @@ import inspect
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from agentic.codeintel.interface import CodeIntel  # re-exported: the tools take one
 from agentic.sandbox.process import ShellResult  # re-exported: tools return it
+
+if TYPE_CHECKING:
+    from agentic.policy import ResolvedAgent
 
 # What a bad argument from the model raises inside a tool: a directory where a file
 # was meant, text that cannot be encoded, an unusable glob, a pattern that is too slow.
@@ -53,6 +56,16 @@ class Sandbox(Protocol):
 
 class SkillCatalog(Protocol):
     def get(self, name: str) -> str: ...
+
+
+@runtime_checkable
+class SkillLibrary(SkillCatalog, Protocol):
+    """A catalog of installed skills (agentic.skills.InstalledSkills): it can also read a
+    skill's bundled files and write the skill block for an agent's instructions."""
+
+    def resource(self, name: str, path: str) -> str: ...
+
+    def prompt_for(self, agent: "ResolvedAgent") -> str: ...
 
 
 @dataclass(frozen=True)

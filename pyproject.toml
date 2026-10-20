@@ -19,7 +19,7 @@ agentic-control-plane = { workspace = true }
 # Tools used only while developing (never shipped to users).
 [dependency-groups]
 dev = [
-    "agentic-core[claude-code,codeintel]",
+    "agentic-core[claude-code,codeintel,skills]",
     "sdlc-commons",
     "agentic-cli",
     "agentic-control-plane",
@@ -98,3 +98,11 @@ name = "Commons never imports the CLI or the control plane"
 type = "forbidden"
 source_modules = ["sdlc_commons"]
 forbidden_modules = ["agentic_cli", "agentic_cp"]
+
+[[tool.importlinter.contracts]]
+name = "skills-ref only in skill admission (optional extra)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["skills_ref"]
+allow_indirect_imports = true
+ignore_imports = ["agentic.skills.admission -> skills_ref"]

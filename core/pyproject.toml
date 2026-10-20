@@ -20,6 +20,9 @@ dependencies = [
 claude-code = ["claude-agent-sdk==0.2.164"]
 # Code intelligence (M1-35, spike S5): the default symbol-level index. Pure Python, MIT.
 codeintel = ["code-review-graph==2.3.9"]
+# Skill admission checks (M1-39): the Agent Skills reference validator. Pure Python,
+# Apache-2.0 (deps click BSD-3-Clause, strictyaml MIT). Only admission needs it.
+skills = ["skills-ref==0.1.1"]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]

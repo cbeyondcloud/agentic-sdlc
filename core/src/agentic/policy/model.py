@@ -99,6 +99,7 @@ class TeamPolicy(_Strict):
     monthly_budget_usd: float | None = None
     limits_max: dict[str, RoleLimits] = {}  # keyed by agent TYPE (D35)
     deny: DenyRules = DenyRules()
+    skill_packs: list[str] = []  # opt-in skill packs from the org catalog (spec §11.2)
 
 
 #: Read-denied in every sandbox, whatever policy adds: where credentials live (D38).

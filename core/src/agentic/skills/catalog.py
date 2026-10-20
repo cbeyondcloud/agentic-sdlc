@@ -1,0 +1,149 @@
+"""The skills catalog: every approved skill, pinned by content hash (spec §11.3).
+
+The catalog is `catalog.yaml` in a catalog folder - the policy repo's `skills/`
+folder, or `library/skills/` for the shipped defaults. Each skill sits next to it in
+`<source>/<name>/` (an Agent Skills folder with a `SKILL.md`), and its key is
+`<source>/<name>`, the way agent files name skills:
+
+    skills:
+      superpowers/test-driven-development:
+        source: https://github.com/obra/superpowers
+        commit: 8ca22dba...            # the upstream commit it was taken from
+        path: skills/test-driven-development
+        licence: MIT
+        owner: platform-team
+        version: 1.0.0
+        sha256: sha256:<64 hex>       # skill_digest() of the folder
+        loading: pre                  # pre (in context at start) | on-demand
+        audience: agents              # agents | admins (authoring skills)
+        pack: null                    # an opt-in pack name: installed only if enabled
+    excluded:                         # names that may never be catalogued, with why
+      using-superpowers: duplicates the orchestrator
+    preload_for: {tiers: [], models: []}   # weak/local models get skills pre-loaded
+"""
+
+import fnmatch
+import hashlib
+import re
+from pathlib import Path
+from typing import Literal, Self
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+
+from agentic.definitions import DefinitionError
+from agentic.yamlio import YamlFileError, load_yaml, read_text
+
+CATALOG_FILE = "catalog.yaml"
+_SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+KEY = re.compile(rf"^{_SLUG}/{_SLUG}$")
+DEFAULT_LICENCES = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "internal"]
+
+
+class SkillsError(Exception):
+    """A skill cannot be installed or loaded as the catalog pins it."""
+
+
+class CatalogError(DefinitionError):
+    """The catalog file could not be loaded or is inconsistent."""
+
+    kind = "skills catalog"
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class SkillEntry(_Strict):
+    """One approved skill: where it came from, under what licence, and its pinned hash."""
+
+    source: str  # upstream repository URL, or "internal" for an org-written skill
+    commit: str  # upstream commit (or the policy-repo commit for an internal skill)
+    path: str  # the skill's folder in the source repository
+    licence: str
+    owner: str
+    version: str
+    sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    loading: Literal["pre", "on-demand"] = "on-demand"
+    audience: Literal["agents", "admins"] = "agents"  # admins: authoring skills
+    pack: str | None = None  # an opt-in pack: installed only when a team enables it
+    scripts_reviewed_by: str | None = None  # a person who reviewed its scripts (§11.3)
+    notes: str = ""  # what was changed from upstream, if anything
+
+
+class PreloadRule(_Strict):
+    """Which agents get their skills pre-loaded instead of discovered: weaker or local
+    models, named by tier or by model glob (spec §11.1). Empty: none."""
+
+    tiers: list[str] = []
+    models: list[str] = []
+
+    def matches(self, tier: str, model: str) -> bool:
+        return tier in self.tiers or any(fnmatch.fnmatchcase(model, glob) for glob in self.models)
+
+
+class AdmissionLimits(_Strict):
+    max_skill_tokens: int = Field(default=8000, ge=1)  # SKILL.md, estimated
+    max_total_bytes: int = Field(default=262_144, ge=1)  # the whole folder
+    max_catalog_tokens: int = Field(default=100, ge=1)  # one catalog line in the context
+
+
+class Catalog(_Strict):
+    skills: dict[str, SkillEntry] = {}
+    excluded: dict[str, str] = {}  # skill name or key -> why it may never be catalogued
+    licences: list[str] = DEFAULT_LICENCES  # licences a skill may carry
+    preload_for: PreloadRule = PreloadRule()
+    limits: AdmissionLimits = AdmissionLimits()
+
+    @model_validator(mode="after")
+    def keys_are_valid(self) -> Self:
+        problems = []
+        for key in self.skills:
+            if not KEY.match(key):
+                problems.append(f"key {key!r} must be '<source>/<name>' in lowercase-with-hyphens")
+            elif key in self.excluded or key.split("/")[1] in self.excluded:
+                why = self.excluded.get(key) or self.excluded[key.split("/")[1]]
+                problems.append(f"{key} is excluded and may not be catalogued: {why}")
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
+
+    def entry(self, key: str) -> SkillEntry:
+        if key not in self.skills:
+            raise SkillsError(f"{key!r} is not in the skills catalog")
+        return self.skills[key]
+
+
+def load_catalog(root: Path) -> Catalog:
+    """Read and validate `<root>/catalog.yaml`. Raises CatalogError."""
+    path = root / CATALOG_FILE
+    if not path.is_file():
+        raise CatalogError(path, [f"no {CATALOG_FILE} in {root}"])
+    try:
+        data, lines = load_yaml(read_text(path))
+    except YamlFileError as error:
+        raise CatalogError(path, [str(error)]) from error
+    try:
+        return Catalog.model_validate(data or {})
+    except ValidationError as error:
+        raise CatalogError.from_validation_error(path, error, "catalog", lines=lines) from error
+
+
+def skill_folder(root: Path, key: str) -> Path:
+    if not KEY.match(key):
+        raise SkillsError(f"not a skill key: {key!r}")
+    source, name = key.split("/")
+    return root / source / name
+
+
+def skill_digest(folder: Path) -> str:
+    """The content hash of a skill folder: every file's POSIX relative path and bytes,
+    sorted by path. CRLF counts as LF, so Windows and Linux checkouts agree."""
+    digest = hashlib.sha256()
+    for path in sorted(_files(folder), key=lambda p: p.relative_to(folder).as_posix()):
+        digest.update(path.relative_to(folder).as_posix().encode("utf-8") + b"\0")
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _files(folder: Path) -> list[Path]:
+    return [path for path in folder.rglob("*") if path.is_file()]

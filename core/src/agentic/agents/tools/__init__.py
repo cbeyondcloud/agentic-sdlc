@@ -11,11 +11,13 @@ from collections.abc import Callable
 from pydantic_ai import Tool
 
 from agentic.agents.tools.context import (
+    TOOL_ERRORS,
     CodeIntel,
     PathGuard,
     Sandbox,
     ShellResult,
     SkillCatalog,
+    SkillLibrary,
     ToolConfigError,
     ToolContext,
     refused,
@@ -24,6 +26,7 @@ from agentic.agents.tools.files import _refusal, edit_tools, read_tools, search_
 from agentic.agents.tools.shell import LocalProcessSandbox, shell_tools
 from agentic.codeintel import codeintel_tools
 from agentic.policy import ResolvedAgent
+from agentic.skills.catalog import SkillsError
 
 
 def _codeintel_tools(ctx: ToolContext) -> list[Tool]:
@@ -42,11 +45,19 @@ def _skill_tools(agent: ResolvedAgent, ctx: ToolContext) -> list[Tool]:
         raise ToolConfigError("activate_skill is allowed but no skill catalog was given")
     catalog, allowed = ctx.skills, set(agent.skills)
 
-    def activate_skill(name: str) -> str:
-        """Load the full instructions of one of your skills."""
+    def activate_skill(name: str, file: str | None = None) -> str:
+        """Load the full instructions of one of your skills, or with `file`, one of the
+        files bundled with it (a path inside the skill, as its instructions list them)."""
         if name not in allowed:
             return refused(f"{name!r} is not one of your skills: {sorted(allowed)}")
-        return catalog.get(name)
+        try:
+            if file is None:
+                return catalog.get(name)
+            if not isinstance(catalog, SkillLibrary):
+                return refused("this skill catalog has no bundled files")
+            return catalog.resource(name, file)
+        except (SkillsError, *TOOL_ERRORS) as error:  # tampered, missing, a bad path
+            return refused(f"{type(error).__name__}: {error}")
 
     return [Tool(activate_skill)]
 
@@ -90,6 +101,7 @@ __all__ = [
     "Sandbox",
     "ShellResult",
     "SkillCatalog",
+    "SkillLibrary",
     "ToolConfigError",
     "ToolContext",
     "build_tools",
