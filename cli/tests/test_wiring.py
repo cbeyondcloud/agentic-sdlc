@@ -20,11 +20,17 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from agentic.agents.tools import LocalProcessSandbox, build_tools
 from agentic.definitions import load_agent
 from agentic.engine.engine import StepContext
-from agentic.policy import ResolveContext, SandboxPolicy, load_policy, resolve_agent
+from agentic.policy import (
+    ResolveContext,
+    SandboxPolicy,
+    SecretScanPolicy,
+    load_policy,
+    resolve_agent,
+)
 from agentic.sandbox import SrtSandbox
 from agentic.sandbox.readiness import SandboxDecision
 from agentic.transport import BudgetLedger
-from agentic_cli.wiring import StepWiring
+from agentic_cli.wiring import StepWiring, production_scanner
 from sdlc_commons.ledger import RunIdentity, RunLedger
 
 FIXTURES = Path(__file__).resolve().parents[2] / "core" / "tests" / "fixtures"
@@ -151,3 +157,22 @@ def test_srt_rules_carry_policy_and_guard(repo, tmp_path, agent):
 
 def test_unenforced_globs_are_reported(repo, tmp_path, agent):
     assert "**/*.pem" in wiring(repo, tmp_path).unenforced(agent, RUN)
+
+
+def test_the_policy_scanner_reaches_every_step(repo, tmp_path, agent):  # DF-148
+    policy = load_policy(FIXTURES / "policy" / "policy")
+    masked = policy.model_copy(update={"secret_scan": SecretScanPolicy(action="mask")})
+    events: list = []
+    scanner = production_scanner(masked, on_event=events.append)
+    assert scanner.action == "mask" and scanner.on_event == events.append
+    w = wiring(repo, tmp_path)
+    w.scanner = scanner
+    assert w.tools_for(step(agent)).secret_scanner is scanner
+    assert w.scanner_for(step(agent)) is scanner
+    w2 = wiring(repo, tmp_path, SANDBOXED)
+    w2.scanner = scanner
+    assert w2.tools_for(step(agent)).secret_scanner is scanner
+
+
+def test_without_a_policy_scanner_the_default_blocks(repo, tmp_path, agent):
+    assert wiring(repo, tmp_path).scanner_for(step(agent)).action == "block"

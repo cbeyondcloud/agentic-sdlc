@@ -8,19 +8,33 @@ and the guard are Zyroflo-backed (commons). This is the one place that joins the
                           from the step's resolved agent (its allow, ask and deny
                           lists), and a sandbox - `srt` with rules compiled from the
                           guard and org policy, or, when this machine has none and
-                          the regime allows it, a plain process (D38).
+                          the regime allows it, a plain process (D38);
+  * `scanner_for(step)` - the secret scanner from org policy (`production_scanner`,
+                          DF-148), for the backends' `scanner_for` and on every
+                          step's `ToolContext.secret_scanner`; without one, the
+                          scanner's default (block, audit log) applies.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from agentic.agents.tools import LocalProcessSandbox, ToolContext
 from agentic.engine.engine import StepContext
-from agentic.policy import ResolvedAgent, SandboxPolicy
+from agentic.policy import OrgPolicy, ResolvedAgent, SandboxPolicy
 from agentic.sandbox import SandboxRules, SrtSandbox, expand_home
 from agentic.sandbox.readiness import SandboxDecision
+from agentic.security.secret_scan import SecretScanEvent, SecretScanner
 from sdlc_commons.guards import Guard
 from sdlc_commons.worktrees import RunWorktrees, StepCheckpoints
+
+
+def production_scanner(
+    policy: OrgPolicy, on_event: Callable[[SecretScanEvent], None] | None = None
+) -> SecretScanner:
+    """The scanner a production run uses: org policy's action, detectors and allowed
+    values; `on_event` is the run's audit sink (M1-54 passes the run ledger's)."""
+    return SecretScanner.from_policy(policy.secret_scan, on_event=on_event)
 
 
 @dataclass
@@ -30,6 +44,7 @@ class StepWiring:
     decision: SandboxDecision
     state_root: Path  # where per-run sandbox settings are kept
     home: Path = field(default_factory=Path.home)
+    scanner: SecretScanner | None = None  # production_scanner(org policy), DF-148
     _trees: dict[str, StepCheckpoints] = field(default_factory=dict, repr=False)
     _homes: dict[str, Path] = field(default_factory=dict, repr=False)
 
@@ -45,7 +60,11 @@ class StepWiring:
         guard = Guard.for_agent(self.target, step.run_id, step.agent)
         if not self.decision.use_srt:
             return ToolContext(
-                tree=tree, guard=guard, sandbox=LocalProcessSandbox(), allow_unisolated=True
+                tree=tree,
+                guard=guard,
+                sandbox=LocalProcessSandbox(),
+                allow_unisolated=True,
+                secret_scanner=self.scanner,
             )
         denials = self._denials(guard, step.run_id)
         rules = SandboxRules(
@@ -55,7 +74,12 @@ class StepWiring:
             allowed_domains=tuple(self.policy.allowed_domains),
         )
         settings = self.state_root / step.run_id / "sandbox" / step.agent.definition.name
-        return ToolContext(tree=tree, guard=guard, sandbox=SrtSandbox(rules, settings))
+        sandbox = SrtSandbox(rules, settings)
+        return ToolContext(tree=tree, guard=guard, sandbox=sandbox, secret_scanner=self.scanner)
+
+    def scanner_for(self, step: StepContext) -> SecretScanner:
+        """The step's secret scanner (the backends' `scanner_for`)."""
+        return self.scanner if self.scanner is not None else SecretScanner()
 
     def unenforced(self, agent: ResolvedAgent, run_id: str) -> list[str]:
         """The deny globs `srt` cannot enforce for this agent (the file tools still do),

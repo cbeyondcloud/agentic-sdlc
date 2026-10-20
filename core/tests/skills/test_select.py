@@ -106,3 +106,10 @@ def test_team_packs_from_team_policy(fixtures: Path):
     enabled = policy.model_copy(update={"teams": {"payments": team}})
     assert team_packs(enabled, "payments") == ["security-pack"]
     assert team_packs(enabled, "unknown-team") == []
+
+
+def test_a_pack_no_catalog_skill_uses_is_reported(library: Path):  # DF-145
+    catalog = load_catalog(library)
+    chosen = select_skills(catalog, [TDD], packs=["security-pack", "securty-pack"])
+    assert chosen.unknown_packs == ("securty-pack",)
+    assert select_skills(catalog, [TDD], packs=["security-pack"]).unknown_packs == ()

@@ -9,8 +9,9 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
     limits.yaml           concurrency
     licences.yaml         blocked, scan
     retention.yaml        days                      (placeholder until OR-01)
+    tool-pins.yaml        tools (per-platform artefacts `init` fetches from the mirror)
     org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines,
-                          sandbox, unhonoured, secret_scan
+                          index_export_workflow, sandbox, unhonoured, secret_scan
     teams/<team>.yaml     one TeamPolicy per team
 """
 
@@ -44,10 +45,12 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
     "licences.yaml": {"blocked": "blocked_licences", "scan": "licence_scan"},
     "retention.yaml": {"days": "retention_days"},
     "prices.yaml": {"prices": "prices"},
+    "tool-pins.yaml": {"tools": "tool_pins"},
     "org.yaml": {
         "allowed_repo_patterns": "allowed_repo_patterns",
         "tool_mirror_url": "tool_mirror_url",
         "allow_repo_pipelines": "allow_repo_pipelines",
+        "index_export_workflow": "index_export_workflow",
         "sandbox": "sandbox",
         "unhonoured": "unhonoured",
         "secret_scan": "secret_scan",

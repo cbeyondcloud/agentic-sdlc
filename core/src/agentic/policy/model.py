@@ -4,6 +4,7 @@ Agent and pipeline files only *request*; this model is the authority that the
 resolver (agentic.policy.resolve, M1-04) checks every request against.
 """
 
+import re
 from decimal import Decimal
 from typing import Literal, Self
 
@@ -191,6 +192,64 @@ def _inside(path: str, folder: str) -> bool:
     return path == folder or path.startswith(folder + "/")
 
 
+#: `<os>-<arch>` keys of a tool's per-platform artefacts (Zyroflo's third_party platforms).
+PlatformKey = Literal[
+    "windows-x86_64", "linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-aarch64"
+]
+#: A tool name, version or binary: each becomes one folder or file name in the tool cache,
+#: so never '.', '..', a separator, a drive or anything else that could leave it.
+PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
+
+
+def _plain_name_problem(where: str, value: str) -> str | None:
+    if PLAIN_NAME.fullmatch(value):
+        return None
+    return f"{where} {value!r} must be a plain name (letters, digits, '.', '_', '+', '-')"
+
+
+class ToolArtefact(_Strict):
+    """One downloadable file of a pinned tool, for one platform, on the org mirror."""
+
+    file: str  # relative to OrgPolicy.tool_mirror_url
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # The org checked the publisher's code signature of these exact bytes. Required for a
+    # Windows artefact: an unsigned native binary is never installed on Windows.
+    signed: bool = False
+
+    @model_validator(mode="after")
+    def stays_under_the_mirror(self) -> Self:
+        parts = self.file.replace("\\", "/").split("/")
+        if ":" in self.file or self.file.startswith(("/", "\\")) or ".." in parts:
+            raise ValueError(
+                f"artefact file {self.file!r} must be a relative path under the tool mirror "
+                "(no scheme, no leading '/', no '..')"
+            )
+        return self
+
+
+class ToolPin(_Strict):
+    """A user-space tool `agentic init` fetches, pinned by version and sha256 (spec §24)."""
+
+    version: str
+    binary: str  # the base name; Windows adds .exe
+    # always: every developer init; licence_scan: only when the org scans licences;
+    # on_request: only with `agentic init --install-missing`, after asking.
+    when: Literal["always", "licence_scan", "on_request"] = "always"
+    assets: dict[PlatformKey, ToolArtefact] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def binary_is_a_base_name(self) -> Self:
+        if self.binary.lower().endswith(".exe") or "/" in self.binary or "\\" in self.binary:
+            raise ValueError(f"binary {self.binary!r} must be a base name (Windows adds .exe)")
+        problems = [
+            _plain_name_problem("version", self.version),
+            _plain_name_problem("binary", self.binary),
+        ]
+        if found := [problem for problem in problems if problem]:
+            raise ValueError("; ".join(found))
+        return self
+
+
 class OrgPolicy(_Strict):
     # --- models ---
     tiers: dict[str, TierSpec]
@@ -220,7 +279,10 @@ class OrgPolicy(_Strict):
     # --- org-wide settings ---
     allowed_repo_patterns: list[str] = []  # empty = any repo (standalone use only)
     tool_mirror_url: str | None = None
+    tool_pins: dict[str, ToolPin] = {}  # tools `init` fetches from the mirror (M1-51)
     allow_repo_pipelines: bool = False  # D33: pipelines only from the policy repo
+    # D39: `init --repo` adds the nightly index export workflow only when this is on
+    index_export_workflow: bool = False
     sandbox: SandboxPolicy = SandboxPolicy()  # D38
     secret_scan: SecretScanPolicy = SecretScanPolicy()  # M1-41
     # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
@@ -305,6 +367,11 @@ class OrgPolicy(_Strict):
         for tool in self.forbidden_tools:
             if tool not in self.tools_catalog:
                 problems.append(f"forbidden tool '{tool}' is not in the tool catalog")
+        if self.tool_pins and not self.tool_mirror_url:
+            problems.append("tool pins need tool_mirror_url (the org mirror they come from)")
+        for name in self.tool_pins:
+            if problem := _plain_name_problem("tool pin name", name):
+                problems.append(problem)
 
         if problems:
             raise ValueError("; ".join(problems))

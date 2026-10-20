@@ -23,14 +23,16 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 import keyring
-from keyring.errors import KeyringError
 
 SERVICE = "agentic-sdlc"
-#: A backend can fail below keyring's own errors (D-Bus, a locked store, the OS API).
-_KEYRING_ERRORS = (KeyringError, OSError, RuntimeError)
+#: A backend can fail below keyring's own errors (D-Bus, a locked store, the OS API -
+#: Windows raises pywintypes.error, which is none of KeyringError, OSError or
+#: RuntimeError), so every exception from a keyring call becomes a CredentialError
+#: naming only its type (DF-157): its message could carry the secret.
+_KEYRING_ERRORS = (Exception,)
 TOKENLEAN_KEY = "tokenlean_api_key"
 _NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
-_NOT_CI = frozenset({"", "0", "false", "no"})
+_NOT_CI = frozenset({"", "0", "false", "no", "off"})
 #: Set by CI systems; most set `CI`, these do not always (Azure Pipelines, Jenkins...).
 CI_MARKERS = (
     "CI",
@@ -88,7 +90,15 @@ class Credentials:
 
     @property
     def in_ci(self) -> bool:
-        return any(self.environ.get(name, "").strip().lower() not in _NOT_CI for name in CI_MARKERS)
+        return self.ci_marker is not None
+
+    @property
+    def ci_marker(self) -> str | None:
+        """The first CI marker variable set to a true value, or None outside CI."""
+        for name in CI_MARKERS:
+            if self.environ.get(name, "").strip().lower() not in _NOT_CI:
+                return name
+        return None
 
     def find(self, name: str) -> Credential | None:
         """The credential, or None if neither place has it. Raises CredentialError
@@ -116,7 +126,8 @@ class Credentials:
         if self.in_ci:
             raise CredentialError(
                 f"no {name} in this CI job: set the {env_var(name)} environment variable "
-                f"from the CI system's secrets (the keyring is not used in CI)."
+                f"from the CI system's secrets (the keyring is not used in CI; "
+                f"{self.ci_marker} is set - unset it if this is not CI)."
             )
         raise CredentialError(
             f"no {name} found: set the {env_var(name)} environment variable, or run "
