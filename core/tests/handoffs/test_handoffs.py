@@ -103,6 +103,16 @@ def test_pass_with_unnamed_failures_is_refused():
         parse_handoff(handoff("test-report", fields))
 
 
+def test_naming_one_baseline_failure_twice_does_not_cover_a_second_failure():
+    fields = (
+        "verdict: pass\ntests: {passed: 39, failed: 2}\n"
+        "failures: [tests/test_legacy.py::test_flaky_clock,\n"
+        "           tests/test_legacy.py::test_flaky_clock]\n" + BASELINE_RED
+    )
+    with pytest.raises(HandoffError, match="2 test"):
+        parse_handoff(handoff("test-report", fields))
+
+
 def test_a_fail_verdict_needs_no_names():
     result = parse_handoff(handoff("test-report", "verdict: fail\ntests: {passed: 1, failed: 3}\n"))
 

@@ -13,7 +13,7 @@ folder, or `library/skills/` for the shipped defaults. Each skill sits next to i
         licence: MIT
         owner: platform-team
         version: 1.0.0
-        sha256: sha256:<64 hex>       # skill_digest() of the folder (v2, DF-140)
+        sha256: sha256:<64 hex>       # skill_digest() of the folder
         loading: pre                  # pre (in context at start) | on-demand
         audience: agents              # agents | admins (authoring skills)
         pack: null                    # an opt-in pack name: installed only if enabled

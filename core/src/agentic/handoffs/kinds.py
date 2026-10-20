@@ -181,10 +181,10 @@ class TestReportData(HandoffBase):
     @model_validator(mode="after")
     def a_pass_has_no_new_failures(self) -> "TestReportData":
         if self.verdict == "pass":
-            if self.tests.failed and len(self.failures) != self.tests.failed:
+            if self.tests.failed and len(set(self.failures)) != self.tests.failed:
                 raise ValueError(
                     f"verdict: 'pass' but {self.tests.failed} test(s) failed; a pass with "
-                    "failures must name each one in `failures`"
+                    "failures must name each one, once, in `failures`"
                 )
             if new := [name for name in self.failures if name not in self.baseline_failures]:
                 raise ValueError(
