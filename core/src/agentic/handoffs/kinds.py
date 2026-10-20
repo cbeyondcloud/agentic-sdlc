@@ -4,8 +4,9 @@ The front matter holds these fields for machines (pipeline conditions, gates,
 dashboards); the Markdown body below it holds the readable document for people.
 Every model rejects unknown fields, so a misspelt field is caught.
 
-Every kind inherits `HandoffBase` (D37, spec §7.4): a one-line `summary` and the
-`open_questions` every handoff may carry.
+Every kind inherits `HandoffBase` (D37, spec §7.4): a one-line `summary`, the
+`open_questions` every handoff may carry, and the optional `agents_md_proposals`
+(additions to AGENTS.md the agent suggests; M1-46).
 """
 
 from collections.abc import Iterable
@@ -23,6 +24,9 @@ class HandoffBase(_Strict):
 
     summary: str  # one line: what this handoff says, for gates and dashboards
     open_questions: list[str] = []
+    # Additions the agent proposes for AGENTS.md (M1-46); people accept them in the PR.
+    # Optional, so a handoff written before this field existed stays valid (D37).
+    agents_md_proposals: list[str] = []
 
     @field_validator("summary")
     @classmethod

@@ -61,6 +61,7 @@ from agentic.handoffs import (
     finalise_handoff,
     parse_handoff,
 )
+from agentic.memory.agents_md import agents_md_knowledge, nearest_agents_md
 from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
 from agentic.telemetry.spans import finish_step_span, step_span
 from agentic.telemetry.trailers import CommitAudit, commit_message
@@ -299,6 +300,7 @@ class _Run:
         )
         self.budget.on_change = self._save_budget
         self._tree_handle: StepTrees | None = None
+        self._work: Path | None = None  # where the run's agents work (from prepare)
         self._marks: tuple | None = None  # (step, iteration, base, commit) of the attempt
 
     # ── the walk ─────────────────────────────────────────────────────────────
@@ -624,9 +626,19 @@ class _Run:
             return None
         if self._tree_handle is None:
             handle = self.e.trees_for(self.state.run_id)
-            handle.prepare()
+            self._work = handle.prepare()
             self._tree_handle = handle
         return self._tree_handle
+
+    def _knowledge(self) -> str:
+        """The nearest AGENTS.md of the run's tree, wrapped as data, or "" (M1-46)."""
+        if self._work is None:
+            return ""
+        path = nearest_agents_md(self._work, self._work)
+        try:
+            return agents_md_knowledge(path, self._work) if path else ""
+        except OSError:
+            return ""  # unreadable: the step runs without it rather than failing
 
     def _tree_begin(self, *, fresh: bool) -> dict[str, str] | None:
         trees = self._trees()
@@ -831,6 +843,7 @@ class _Run:
                         instructions=agent.definition.instructions,
                         inputs=self._inputs(agent.consumes),
                         prompt=self._prompt(step.id, iteration),
+                        knowledge=self._knowledge(),
                     )
                     outcome = await runner.run(task)
                 else:

@@ -4,9 +4,10 @@
 Pydantic AI, stepping through the agent's graph node by node (`agent.iter`) so
 it can keep the latest text and check for a stuck loop after every response.
 
-What a run sees (spec §8.3): the agent's instructions, each consumed handoff
-wrapped as data (`<handoff kind="...">`), and the step's prompt - never an
-earlier agent's conversation.
+What a run sees (spec §8.3): the agent's instructions, the repository's AGENTS.md
+wrapped as data (M1-46), each consumed handoff wrapped as data
+(`<handoff kind="...">`), and the step's prompt - never an earlier agent's
+conversation.
 
 Limits (spec §8.4), each ending the run with a reason:
   * turns  - `UsageLimits(request_limit=max_turns)`             -> stopped: turns
@@ -100,6 +101,7 @@ class AgentTask:
     instructions: str  # the agent definition's body
     inputs: dict[str, str]  # consumed handoffs, by kind
     prompt: str  # what this step asks for
+    knowledge: str = ""  # the repository's AGENTS.md, wrapped as data (M1-46)
 
 
 @dataclass
@@ -406,6 +408,8 @@ def _use_up(path: Path) -> None:
 
 def _instructions(task: AgentTask, contract: OutputContract | None = None) -> str:
     parts = [task.instructions.strip()]
+    if task.knowledge.strip():
+        parts.append(task.knowledge.strip())
     for kind, text in task.inputs.items():
         parts.append(f'<handoff kind="{kind}">\n{text.strip()}\n</handoff>')
     if contract is not None:
