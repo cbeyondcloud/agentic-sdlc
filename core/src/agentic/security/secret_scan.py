@@ -97,11 +97,11 @@ class SecretBlocked(Exception):
     """Content held a secret and policy blocks it. Names kinds and counts, never values."""
 
     def __init__(self, event: SecretScanEvent, kinds: Iterable[str]) -> None:
-        self.event = event
-        total = sum(event.findings.values())
+        self.event, self.kinds = event, sorted(set(kinds))
+        self.total = sum(event.findings.values())
         super().__init__(
-            f"{event.where}: refused before sending - it holds {total} secret(s) "
-            f"({', '.join(sorted(set(kinds)))}) and the secret_scan policy is 'block'. "
+            f"{event.where}: refused before sending - it holds {self.total} secret(s) "
+            f"({', '.join(self.kinds)}) and the secret_scan policy is 'block'. "
             f"Remove the secret, or ask an admin for secret_scan action 'mask'."
         )
 

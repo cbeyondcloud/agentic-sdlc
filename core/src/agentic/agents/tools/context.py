@@ -15,6 +15,7 @@ from typing import Protocol
 
 from agentic.codeintel.interface import CodeIntel  # re-exported: the tools take one
 from agentic.sandbox.process import ShellResult  # re-exported: tools return it
+from agentic.security import SecretScanner
 
 # What a bad argument from the model raises inside a tool: a directory where a file
 # was meant, text that cannot be encoded, an unusable glob, a pattern that is too slow.
@@ -64,6 +65,8 @@ class ToolContext:
     skills: SkillCatalog | None = None
     allow_unisolated: bool = False  # run_shell without an isolated sandbox (tests, dev)
     shell_timeout_s: float = 600.0
+    # what tool output is scanned with (M1-41, DF-23); None = block, default detectors
+    secret_scanner: SecretScanner | None = None
 
 
 def refused(reason: str) -> str:

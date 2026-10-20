@@ -17,7 +17,7 @@ from pydantic_ai.models import Model
 from agentic.agents.metering import CostLog
 from agentic.agents.models import GatewaySettings, metered_model
 from agentic.agents.runner import PydanticAIRunner
-from agentic.agents.tools import ToolContext, build_tools
+from agentic.agents.tools import ToolContext, build_tools, protect_tools
 from agentic.security import SecretScanner
 from agentic.transport import CallIdentity, Pricer
 
@@ -73,8 +73,12 @@ class NativeBackend:
                 _inner=self.network_transport,
             )
         tools = build_tools(step.agent, tool_context) if tool_context is not None else []
-        if spawner is not None:
-            tools += spawner.tools()
+        if spawner is not None:  # a child's answer was shaped by what it read: data too
+            tools += protect_tools(
+                spawner.tools(),
+                scanner=tool_context.secret_scanner if tool_context else scanner,
+                tree=tool_context.tree if tool_context else None,
+            )
         return PydanticAIRunner(
             step.agent,
             model,

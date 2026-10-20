@@ -4,6 +4,10 @@ Policy names CAPABILITIES (`read_files`, `edit_files`, ...); `build_tools` turns
 the ones a resolved agent is allowed into Pydantic AI tools and builds nothing
 else - a tool the agent may not use is never listed to the model, so it cannot
 be called. `spawn_agent` is built by the child spawner (M1-17).
+
+Every tool built here goes through `protect_tools` (M1-41, M1-42): what it
+returns reaches the model with host paths scrubbed, secrets masked or withheld,
+and labelled as untrusted data.
 """
 
 from collections.abc import Callable
@@ -21,6 +25,7 @@ from agentic.agents.tools.context import (
     refused,
 )
 from agentic.agents.tools.files import edit_tools, read_tools, search_tools
+from agentic.agents.tools.protect import TRUSTED_TOOLS, protect_tools
 from agentic.agents.tools.shell import LocalProcessSandbox, shell_tools
 from agentic.codeintel import codeintel_tools
 from agentic.policy import ResolvedAgent
@@ -69,13 +74,14 @@ _BUILDERS: dict[str, Callable[[ResolvedAgent, ToolContext], list[Tool]]] = {
 
 
 def build_tools(agent: ResolvedAgent, ctx: ToolContext) -> list[Tool]:
-    """The tools for the capabilities the resolved agent is allowed - and no others."""
+    """The tools for the capabilities the resolved agent is allowed - and no others -
+    each one's output scrubbed, secret-scanned and labelled as data (`protect_tools`)."""
     if unknown := sorted(set(agent.tools) - set(_BUILDERS)):
         raise ToolConfigError(f"no tools exist for the capabilities {unknown}")
     tools: list[Tool] = []
     for capability in agent.tools:
         tools.extend(_BUILDERS[capability](agent, ctx))
-    return tools
+    return protect_tools(tools, scanner=ctx.secret_scanner, tree=ctx.tree)
 
 
 __all__ = [
@@ -85,7 +91,9 @@ __all__ = [
     "Sandbox",
     "ShellResult",
     "SkillCatalog",
+    "TRUSTED_TOOLS",
     "ToolConfigError",
     "ToolContext",
     "build_tools",
+    "protect_tools",
 ]
