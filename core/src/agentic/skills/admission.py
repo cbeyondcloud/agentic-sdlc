@@ -107,6 +107,8 @@ def telemetry_urls(text: str) -> list[str]:
 def admit(folder: Path, key: str, catalog: Catalog) -> list[Rejection]:
     """Every reason `folder` may not be catalogued as `key` ([] = admitted)."""
     entry = catalog.entry(key)
+    if not folder.is_dir():
+        return [Rejection("validate", ".", f"no skill folder at {folder}")]
     return [
         *_licence(folder, entry, catalog),
         *_validate(folder),
@@ -196,8 +198,13 @@ def _size(folder: Path, catalog: Catalog) -> list[Rejection]:
 
 def _scan(folder: Path, entry: SkillEntry) -> list[Rejection]:
     found = []
-    for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+    for path in sorted(folder.rglob("*")):
         relative = path.relative_to(folder).as_posix()
+        if path.is_symlink():  # could point anywhere on the machine that installs it
+            found.append(Rejection("scan", relative, "a symbolic link: skills hold plain files"))
+            continue
+        if not path.is_file():
+            continue
         data = path.read_bytes()
         try:
             text = data.decode("utf-8")

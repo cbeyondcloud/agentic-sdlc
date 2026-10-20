@@ -88,7 +88,10 @@ class InstalledSkills:
         target = (folder / relative).resolve()
         if not target.is_relative_to(folder.resolve()) or not target.is_file():
             raise SkillsError(f"the skill {name} has no file {path!r}")
-        return read_text(target)
+        try:
+            return read_text(target)
+        except YamlFileError as error:  # not UTF-8 text
+            raise SkillsError(f"{path!r} in the skill {name} is not text: {error}") from error
 
     def prompt_for(self, agent: "ResolvedAgent") -> str:
         preload_all = self.catalog.preload_for.matches(agent.tier, agent.model)
@@ -96,10 +99,16 @@ class InstalledSkills:
 
     # ── helpers for the skill block ──────────────────────────────────────────
 
-    def available(self, name: str) -> bool:
-        return (
-            name in self.catalog.skills and (skill_folder(self.root, name) / "SKILL.md").is_file()
-        )
+    def unavailable(self, name: str) -> str | None:
+        """Why `name` cannot be put in a context now (not catalogued, not installed,
+        changed since it was installed), or None when it can."""
+        if name not in self.catalog.skills:
+            return "not in the skills catalog"
+        try:
+            self._checked(name)
+        except SkillsError as error:
+            return str(error)
+        return None
 
     def files(self, name: str) -> list[str]:
         folder = skill_folder(self.root, name)
@@ -111,7 +120,7 @@ class InstalledSkills:
 
     def catalog_line(self, name: str) -> str:
         """`- <key>: <description>`, cut at a word to fit the catalog token limit."""
-        header = self._parts(skill_folder(self.root, name))[0]
+        header = self._parts(self._checked(name))[0]
         description = " ".join(str(header.get("description", "")).split())
         line = f"- {name}: {description}"
         limit = self.catalog.limits.max_catalog_tokens
@@ -146,13 +155,14 @@ class InstalledSkills:
 
 
 def skill_prompt(agent: "ResolvedAgent", library: InstalledSkills, *, preload_all: bool) -> str:
-    """The skill block appended to an agent's instructions ("" when it has no skills)."""
+    """The skill block appended to an agent's instructions ("" when it has no skills).
+    A skill that is not installed as pinned is left out and recorded, never loaded."""
     usable = []
     for name in agent.skills:
-        if library.available(name):
+        if (why := library.unavailable(name)) is None:
             usable.append(name)
         else:
-            library.record("skills.unavailable", {"skill": name})
+            library.record("skills.unavailable", {"skill": name, "reason": why})
     has_tool = "activate_skill" in agent.tools
     inline_all = preload_all or not has_tool
     catalog = library.catalog.skills

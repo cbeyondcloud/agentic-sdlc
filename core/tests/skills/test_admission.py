@@ -95,6 +95,27 @@ def test_unreviewed_script_rejected(tmp_path: Path):
     assert checks(binary) == {"scan"}
 
 
+def test_symlink_rejected(tmp_path: Path):
+    folder = make_skill(tmp_path, KEY)
+    outside = tmp_path / "outside.md"
+    outside.write_text("secret", encoding="utf-8")
+    try:
+        (folder / "notes.md").symlink_to(outside)
+    except OSError:
+        pytest.skip("this machine cannot create symlinks")
+    assert checks(folder) == {"scan"}
+    assert checks(folder, scripts_reviewed_by="security") == {"scan"}  # never waived
+
+
+def test_missing_folder_is_a_rejection_not_a_crash(tmp_path: Path):
+    folder = make_skill(tmp_path, KEY)
+    catalog = catalog_for(folder)
+    for path in folder.iterdir():
+        path.unlink()
+    folder.rmdir()
+    assert {r.check for r in admit(folder, KEY, catalog)} == {"validate"}
+
+
 def test_reviewed_script_admitted(tmp_path: Path):
     folder = make_skill(tmp_path, KEY, files={"scripts/run.py": "print('hi')\n"})
     assert checks(folder, scripts_reviewed_by="security@acme.example") == set()
