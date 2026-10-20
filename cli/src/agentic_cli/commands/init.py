@@ -130,16 +130,21 @@ def _init_repo(
     except ValueError as error:
         raise CliError(str(error).splitlines()[0], ExitCode.INVALID) from error
     files = repo_setup.shared_files(root.path, loaded.policy, config)
+    curated = repo_setup.existing_agents_md(root.path)
+    kept = [curated] if curated else []
     branch, commit = repo_setup.commit_on_branch(
         root.path, files, "chore: set up agentic for this repository (agentic init --repo)"
     )
     steps = repo_setup.next_steps(root.origin, root.default_branch or "main", branch)
-    data = {"branch": branch, "commit": commit, "files": sorted(files), "next": steps}
+    data = {"branch": branch, "commit": commit, "files": sorted(files), "kept": kept}
+    data["next"] = steps
 
     def show(console) -> None:
         console.print(f"Prepared branch [bold]{branch}[/bold] ({commit[:12]}) with:")
         for path in sorted(files):
             console.print(f"  {path}", markup=False)
+        for path in kept:
+            console.print(f"Kept your {path} as it is (no draft proposed).", markup=False)
         console.print("Your checkout was not changed. Next:")
         console.print(f"  {steps['push']}", markup=False)
         console.print(f"  {steps['pull_request']}", markup=False)

@@ -36,6 +36,20 @@ def commit_file(repo: Path, rel: str, text: str) -> None:
     git(repo, "commit", "-qm", f"add {rel}")
 
 
+def git_bytes(where: Path, *args: str) -> bytes:
+    done = subprocess.run(["git", "-C", str(where), *GIT, *args], capture_output=True, check=True)
+    return done.stdout
+
+
+def commit_bytes(repo: Path, rel: str, data: bytes) -> None:
+    """Commit `data` exactly as given: no line-ending conversion on the way in."""
+    target = repo / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    git(repo, "-c", "core.autocrlf=false", "add", rel)
+    git(repo, "commit", "-qm", f"add {rel}")
+
+
 def snapshot(*roots: Path) -> dict[str, bytes]:
     """Every file under the roots (path -> bytes), for 'nothing else was written' tests."""
     files: dict[str, bytes] = {}

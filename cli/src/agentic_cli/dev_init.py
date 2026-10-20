@@ -25,7 +25,9 @@ with M2-20.
 """
 
 import json
+import os
 import shutil
+import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -52,6 +54,10 @@ from sdlc_commons.tool_fetch import FetchResult, ToolFetcher, ToolFetchError
 
 LOCAL_REL = Path(".agentic") / "local"
 AUDIT_REL = Path("audit") / "init-events.jsonl"
+#: What init writes inside `.agentic/local`: none of these may be a link.
+LOCAL_WRITES = tuple(
+    Path(rel) for rel in ("audit", AUDIT_REL, "skills", "index", "init.json", ".gitignore")
+)
 BUNDLED_SKILLS = Path(__file__).resolve().parents[3] / "library" / "skills"  # dev checkout
 
 
@@ -105,7 +111,11 @@ class InitAudit:
             "fields": fields,
         }
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8", newline="\n") as log:
+        # never through a link (O_NOFOLLOW where the OS has it; init refused links already)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)  # LF on Windows
+        fd = os.open(self.path, flags, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8", newline="\n") as log:
             log.write(json.dumps(entry, default=str) + "\n")
         self.events.append(entry)
 
@@ -150,28 +160,42 @@ def run_dev_init(
         "initialised_at": datetime.now(UTC).isoformat(),
         **report.to_json(),
     }
-    (local / "init.json").write_text(
-        json.dumps(state, indent=2) + "\n", encoding="utf-8", newline="\n"
-    )
+    _replace_text(local / "init.json", json.dumps(state, indent=2) + "\n")
     audit.record("init.completed", {"ready": report.ready})
     return report
 
 
 def _prepare_local(repo: Path, home: Path) -> Path:
-    for path in (repo / ".agentic", repo / LOCAL_REL, home):
+    """`.agentic/local`, ready; refuses (writing nothing) when it, `.agentic`, the home
+    folder or anything init writes inside `.agentic/local` is a link. A repo can commit
+    links there (git tracks them, and the folder is not ignored until init runs)."""
+    local = repo / LOCAL_REL
+    for path in (repo / ".agentic", local, home, *(local / rel for rel in LOCAL_WRITES)):
         if path.is_symlink() or path.is_junction():
             raise CliError(
                 f"{path} is a link; init writes only into real folders it owns",
                 ExitCode.REFUSED,
                 hint="remove the link and run init again",
             )
-    local = repo / LOCAL_REL
     local.mkdir(parents=True, exist_ok=True)
     ignore = local / ".gitignore"
     if not ignore.is_file() or ignore.read_text(encoding="utf-8") != "*\n":
-        ignore.write_text("*\n", encoding="utf-8", newline="\n")
+        _replace_text(ignore, "*\n")
     home.mkdir(parents=True, exist_ok=True)
     return local
+
+
+def _replace_text(path: Path, text: str) -> None:
+    """Write `text` (LF) to a new file beside `path`, then rename it over `path`: a link
+    planted at `path` is replaced, never followed."""
+    fd, staged = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as out:
+            out.write(text)
+        os.replace(staged, path)
+    except BaseException:
+        Path(staged).unlink(missing_ok=True)
+        raise
 
 
 def _policy_items(loaded: LoadedPolicy) -> list[Item]:
@@ -337,10 +361,18 @@ class _Tools:
                 )
                 items.append(Item(f"tool: {name}", "info", detail))
             return items
-        plan = []
+        plan, installable = [], []
         for name, pin in pending:
-            url, dest = self.fetcher.planned(name, pin)
+            try:
+                url, dest = self.fetcher.planned(name, pin)
+            except ToolFetchError as error:  # org policy validates pins; defence in depth
+                items.append(Item(f"tool: {name}", "warn", str(error), _TOOL_FIXES["refused"]))
+                continue
+            installable.append((name, pin))
             plan.append({"tool": name, "version": pin.version, "url": url, "to": str(dest)})
+        pending = installable
+        if not pending:
+            return items
         announce(plan)
         question = f"Install {len(plan)} tool(s) into {self.fetcher.cache_root}?"
         if not (assume_yes or self.deps.confirm(question)):

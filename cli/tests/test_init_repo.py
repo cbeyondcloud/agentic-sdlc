@@ -5,13 +5,18 @@ import json
 from pathlib import Path
 
 import pytest
-from cli_helpers import FIXTURES, commit_file, git, snapshot
+from cli_helpers import FIXTURES, commit_bytes, commit_file, git, git_bytes, snapshot
 
 from agentic.policy import load_policy
 from agentic.repoconfig import RepoConfig, load_repo_config
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.main import main
-from agentic_cli.repo_setup import AGENTIC_BLOCK_BEGIN, merge_gitattributes, shared_files
+from agentic_cli.repo_setup import (
+    AGENTIC_BLOCK_BEGIN,
+    AGENTIC_BLOCK_END,
+    merge_gitattributes,
+    shared_files,
+)
 
 ALLOWED = {".agentic/config.yaml", "AGENTS.md", ".gitattributes"}
 WORKFLOW = ".github/workflows/agentic-index-export.yml"
@@ -108,6 +113,41 @@ def test_a_second_branch_name_when_the_first_is_taken(repo, policy_repo, monkeyp
     git(repo, "branch", "agentic/init")
     assert init_repo(repo, policy_repo, monkeypatch) == ExitCode.OK
     assert json.loads(capsys.readouterr().out)["branch"] == "agentic/init-2"
+
+
+@pytest.mark.parametrize("name", ["AGENTS.md", "agents.md", "Agents.MD"])
+def test_an_existing_agents_md_is_never_replaced(repo, policy_repo, monkeypatch, capsys, name):
+    """A curated AGENTS.md (in any case: one path on Windows and macOS) stays as it is."""
+    commit_file(repo, name, "# Our curated agent guide\n")
+    assert init_repo(repo, policy_repo, monkeypatch) == ExitCode.OK
+    out = json.loads(capsys.readouterr().out)
+    assert branch_files(repo) == ALLOWED - {"AGENTS.md"}
+    assert "AGENTS.md" not in out["files"] and out["kept"] == [name]
+    assert git(repo, "show", f"agentic/init:{name}") == "# Our curated agent guide"
+
+
+def test_a_crlf_gitattributes_keeps_its_line_endings(repo, policy_repo, monkeypatch):
+    commit_bytes(repo, ".gitattributes", b"*.png binary\r\n*.jpg binary\r\n")
+    assert init_repo(repo, policy_repo, monkeypatch) == ExitCode.OK
+    blob = git_bytes(repo, "cat-file", "blob", "agentic/init:.gitattributes")
+    assert blob.startswith(b"*.png binary\r\n*.jpg binary\r\n")
+    assert AGENTIC_BLOCK_BEGIN.encode() in blob and b"\n" not in blob.replace(b"\r\n", b"")
+
+
+def test_a_non_utf8_gitattributes_is_kept_byte_for_byte(repo, policy_repo, monkeypatch):
+    original = "# café assets\n*.png binary\n".encode("latin-1")
+    commit_bytes(repo, ".gitattributes", original)
+    assert init_repo(repo, policy_repo, monkeypatch) == ExitCode.OK
+    blob = git_bytes(repo, "cat-file", "blob", "agentic/init:.gitattributes")
+    assert blob.startswith(original) and AGENTIC_BLOCK_BEGIN.encode() in blob
+
+
+def test_a_begin_marker_without_end_is_not_treated_as_a_block():
+    text = f"*.png binary\n{AGENTIC_BLOCK_BEGIN}\n*.jpg binary\n"
+    merged = merge_gitattributes(text)
+    assert "*.png binary" in merged and "*.jpg binary" in merged
+    assert merged.count(AGENTIC_BLOCK_END) == 1
+    assert merge_gitattributes(merged) == merged  # the stray marker's lines survive a rerun
 
 
 def test_agents_md_describes_the_repo(repo, policy_repo, monkeypatch):

@@ -229,6 +229,7 @@ def test_tools_are_fetched_and_audited(setup_repo, policy_repo, deps, monkeypatc
     fetched = [e for e in events if e["event"] == "init.tool_fetched"]
     assert fetched and fetched[0]["fields"]["tool"] == "gitleaks"
     assert any(e["event"] == "skills.installed" for e in events)
+    assert b"\r\n" not in audit.read_bytes()
 
 
 def test_a_second_init_uses_the_cache_offline(setup_repo, policy_repo, deps, monkeypatch, capsys):
@@ -305,6 +306,36 @@ def test_a_linked_local_folder_is_refused(setup_repo, policy_repo, deps, monkeyp
     link_dir(setup_repo / ".agentic" / "local", elsewhere)
     assert init(setup_repo, policy_repo, monkeypatch) == ExitCode.REFUSED
     assert list(elsewhere.iterdir()) == []
+
+
+@pytest.mark.parametrize("target", ["audit", "skills", "index"])
+def test_a_linked_folder_inside_local_is_refused(
+    setup_repo, policy_repo, deps, monkeypatch, tmp_path, target
+):
+    """A repo can commit links under .agentic/local (not ignored until init runs): init must
+    not write its audit, skills or index through them."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (setup_repo / ".agentic" / "local").mkdir()
+    link_dir(setup_repo / ".agentic" / "local" / target, elsewhere)
+    assert init(setup_repo, policy_repo, monkeypatch) == ExitCode.REFUSED
+    assert list(elsewhere.iterdir()) == []
+
+
+@pytest.mark.parametrize("target", ["init.json", ".gitignore", "audit/init-events.jsonl"])
+def test_a_linked_file_inside_local_is_refused(
+    setup_repo, policy_repo, deps, monkeypatch, tmp_path, target
+):
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"precious\n")
+    link = setup_repo / ".agentic" / "local" / target
+    link.parent.mkdir(parents=True)
+    try:
+        link.symlink_to(outside)
+    except OSError:  # Windows without the symlink privilege (git checks out plain files)
+        pytest.skip("this account cannot create symlinks")
+    assert init(setup_repo, policy_repo, monkeypatch) == ExitCode.REFUSED
+    assert outside.read_bytes() == b"precious\n"
 
 
 def test_core_platform_keys_are_the_fetcher_s():

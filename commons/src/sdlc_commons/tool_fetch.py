@@ -26,6 +26,7 @@ place. Nothing here runs a fetched binary.
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Callable, Mapping
@@ -37,6 +38,8 @@ from urllib.parse import quote, urlsplit
 Status = Literal["fetched", "replaced", "cached", "refused", "unavailable", "failed"]
 Record = Callable[[str, dict[str, object]], None]
 RECORD_NAME = ".verified.json"
+#: A tool name, version or binary is one cache folder or file name: no '..', no separator.
+PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
 
 #: Zyroflo's platform keys (`<os>-<arch>`), the keys of a pin's `assets`.
 PLATFORMS: tuple[str, ...] = (
@@ -135,7 +138,10 @@ class ToolFetcher:
         artefact = pin.assets.get(self.platform)
         if artefact is None:
             return None
-        dest = self._destination(name, pin)
+        try:
+            dest = self._destination(name, pin)
+        except ToolFetchError:
+            return None
         return dest if self._cached_state(dest, artefact.sha256) == "verified" else None
 
     def fetch(self, name: str, pin: PinLike) -> FetchResult:
@@ -149,7 +155,10 @@ class ToolFetcher:
         if why := windows_refusal(self.platform, artefact):
             return result("refused", detail=why)
 
-        dest = self._destination(name, pin)
+        try:
+            dest = self._destination(name, pin)
+        except ToolFetchError as error:
+            return result("refused", detail=str(error))
         previous = self._cached_state(dest, artefact.sha256)
         if previous == "verified":
             return result("cached", dest)
@@ -190,8 +199,24 @@ class ToolFetcher:
         return f"{self.mirror_url}/{quote(artefact.file.replace(chr(92), '/'), safe='/')}"
 
     def _destination(self, name: str, pin: PinLike) -> Path:
+        """`<cache_root>/<tool>/<version>/<platform>/<binary>`, built from plain names only
+        (org policy checks them too); ToolFetchError for anything that could leave it."""
+        for what, value in (("tool name", name), ("version", pin.version), ("binary", pin.binary)):
+            if not PLAIN_NAME.fullmatch(value):
+                raise ToolFetchError(f"refused: {what} {value!r} is not a plain name")
         member = _zyroflo().binary_name({"binary": pin.binary}, self.platform)
-        return self.cache_root / name / pin.version / self.platform / member
+        dest = self.cache_root / name / pin.version / self.platform / member
+        root = os.path.realpath(self.cache_root)
+        try:
+            inside = os.path.commonpath([root, os.path.realpath(dest)]) == root
+        except ValueError:  # another drive on Windows
+            inside = False
+        if not inside:
+            raise ToolFetchError(
+                f"refused: {name} {pin.version} would land outside {self.cache_root} "
+                "(a linked folder in the cache?)"
+            )
+        return dest
 
     def _cached_state(self, dest: Path, asset_sha: str) -> Literal["absent", "verified", "changed"]:
         if not dest.exists():
@@ -213,6 +238,11 @@ class ToolFetcher:
                 _zyroflo().extract_binary(blob, Path(artefact.file).name, dest.name, staged)
             except SystemExit as error:  # Zyroflo's CLI helpers stop with a message
                 raise ToolFetchError(f"{pin.binary}: {error}") from None
+            except Exception as error:  # noqa: BLE001 - zip, tar, gzip, lzma... all mean one thing
+                raise ToolFetchError(
+                    f"{pin.binary}: the pinned file {Path(artefact.file).name} is not a valid "
+                    f"archive ({type(error).__name__}); ask the platform team to fix the pin"
+                ) from None
             installed = hashlib.sha256(staged.read_bytes()).hexdigest()
             record = dest.parent / RECORD_NAME
             if dest.exists():

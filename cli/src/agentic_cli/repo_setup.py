@@ -4,8 +4,9 @@
 
   * `.agentic/config.yaml` - the repo's classification, team, pipelines and components;
   * `AGENTS.md` - a first draft from a scan of the repo, for people to edit and review;
-  * `.gitattributes` - the repo's own file with an agentic block (LF for definitions,
-    generated-index marking) added or replaced;
+    only when the repo has none (a curated one, in any letter case, is never replaced);
+  * `.gitattributes` - the repo's own file, byte for byte and with its own line endings,
+    with an agentic block (LF for definitions, generated-index marking) added or replaced;
   * `.github/workflows/agentic-index-export.yml` - only when org policy sets
     `index_export_workflow` (D39: the export is opt-in).
 
@@ -88,27 +89,42 @@ jobs:
 
 
 def shared_files(repo: Path, policy: OrgPolicy, config: RepoConfig) -> dict[str, str]:
-    """Path -> LF text of every file the branch adds or changes."""
-    files = {
-        CONFIG_REL: render_repo_config(config),
-        "AGENTS.md": agents_md(repo),
-        ".gitattributes": merge_gitattributes(_git_out(repo, "show", "HEAD:.gitattributes")),
-    }
+    """Path -> text of every file the branch adds or changes.
+
+    New files are LF. The repo's own `.gitattributes` keeps its bytes and line endings
+    (decoded with surrogateescape, so a non-UTF-8 file round-trips). An AGENTS.md already
+    in the repo, in any letter case, is left alone (`existing_agents_md`)."""
+    files = {CONFIG_REL: render_repo_config(config)}
+    if existing_agents_md(repo) is None:
+        files["AGENTS.md"] = agents_md(repo)
+    attributes = _head_blob(repo, ".gitattributes") or b""
+    files[".gitattributes"] = merge_gitattributes(attributes.decode("utf-8", "surrogateescape"))
     if policy.index_export_workflow:
         files[WORKFLOW_REL] = INDEX_EXPORT_WORKFLOW
     return files
 
 
+def existing_agents_md(repo: Path) -> str | None:
+    """The name of the AGENTS.md committed at the repo root (any letter case), or None.
+
+    Windows and macOS checkouts have one path for AGENTS.md and agents.md, so a curated
+    file under either name is kept, never replaced by the scan's draft."""
+    names = _git_out(repo, "ls-tree", "-z", "--name-only", "HEAD").split("\0")
+    return next((name for name in names if name.lower() == "agents.md"), None)
+
+
 def merge_gitattributes(existing: str) -> str:
-    """`existing` with the agentic block added, or replaced if it is already there."""
+    """`existing` with the agentic block added, or replaced if it is already there; the
+    file's own line ending (CRLF or LF) is kept."""
+    eol = "\r\n" if "\r\n" in existing else "\n"
     lines = existing.replace("\r\n", "\n").split("\n") if existing else []
     if AGENTIC_BLOCK_BEGIN in lines:
         start = lines.index(AGENTIC_BLOCK_BEGIN)
         end = lines.index(AGENTIC_BLOCK_END, start) if AGENTIC_BLOCK_END in lines else start
         lines = lines[:start] + lines[end + 1 :]
-    kept = "\n".join(lines).rstrip("\n")
-    block = "\n".join([AGENTIC_BLOCK_BEGIN, *AGENTIC_ATTRIBUTES, AGENTIC_BLOCK_END])
-    return f"{kept}\n{block}\n" if kept else f"{block}\n"
+    kept = eol.join(lines).rstrip("\r\n")
+    block = eol.join([AGENTIC_BLOCK_BEGIN, *AGENTIC_ATTRIBUTES, AGENTIC_BLOCK_END])
+    return f"{kept}{eol}{block}{eol}" if kept else f"{block}{eol}"
 
 
 def agents_md(repo: Path) -> str:
@@ -138,7 +154,8 @@ def commit_on_branch(repo: Path, files: dict[str, str], message: str) -> tuple[s
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
         _git_run(repo, env, "read-tree", "HEAD")
         for path, text in sorted(files.items()):
-            blob = _git_run(repo, env, "hash-object", "-w", "--stdin", data=text.encode("utf-8"))
+            data = text.encode("utf-8", "surrogateescape")  # the repo's own bytes round-trip
+            blob = _git_run(repo, env, "hash-object", "-w", "--stdin", data=data)
             _git_run(repo, env, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}")
         tree = _git_run(repo, env, "write-tree")
         commit = _git_run(repo, env, "commit-tree", tree, "-p", "HEAD", "-m", message)
@@ -161,10 +178,21 @@ def next_steps(origin: str | None, default_branch: str, branch: str) -> dict[str
 
 
 def _git_out(repo: Path, *args: str) -> str:
+    done = subprocess.run([*_GIT, "-C", str(repo), *args], capture_output=True)
+    return done.stdout.decode("utf-8", "replace") if done.returncode == 0 else ""
+
+
+def _head_blob(repo: Path, path: str) -> bytes | None:
+    """The bytes of `path` at HEAD, exactly as committed; None when it is not there."""
+    if not _git_out(repo, "ls-tree", "-z", "--name-only", "HEAD", "--", path):
+        return None
     done = subprocess.run(
-        [*_GIT, "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8"
+        [*_GIT, "-C", str(repo), "cat-file", "blob", f"HEAD:{path}"], capture_output=True
     )
-    return done.stdout if done.returncode == 0 else ""
+    if done.returncode != 0:  # never propose the block alone over a file we could not read
+        error = done.stderr.decode("utf-8", "replace").strip()
+        raise CliError(f"could not read {path} at HEAD: {error or 'git cat-file failed'}")
+    return done.stdout
 
 
 def _git_run(repo: Path, env: dict | None, *args: str, data: bytes | None = None) -> str:

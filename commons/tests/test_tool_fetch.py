@@ -199,3 +199,51 @@ def test_the_platform_keys_are_zyroflo_s():
     from tools import third_party
 
     assert PLATFORMS == tuple(third_party.PLATFORMS)
+
+
+@pytest.mark.parametrize(
+    ("name", "version", "binary"),
+    [
+        ("../../..", "1.0", "mytool"),
+        ("..", "1.0", "mytool"),
+        ("mytool", "..", "mytool"),
+        ("mytool", "../../x", "mytool"),
+        ("/abs", "1.0", "mytool"),
+        ("C:", "1.0", "mytool"),
+        ("mytool", "1.0", ".."),
+    ],
+)
+def test_a_pin_that_would_leave_the_cache_is_refused(
+    tmp_path: Path, name: str, version: str, binary: str
+):
+    """Defence in depth under the policy model's own check: the cache path is built only
+    from plain names, so nothing is downloaded or written outside the cache."""
+    cache = tmp_path / "a" / "b" / "tools"
+    pin = Pin(version, binary, {LINUX: Artefact(FILE, sha(BLOB))})
+    mirror = Mirror({f"{MIRROR}/{FILE}": BLOB})
+    tool_fetcher = ToolFetcher(cache, MIRROR, platform=LINUX, download=mirror)
+    result = tool_fetcher.fetch(name, pin)
+    assert result.status == "refused" and "plain name" in result.detail
+    assert mirror.asked == [] and not any(tmp_path.rglob("*mytool*"))
+    assert tool_fetcher.cached(name, pin) is None
+    with pytest.raises(ToolFetchError, match="plain name"):
+        tool_fetcher.planned(name, pin)
+
+
+@pytest.mark.parametrize(
+    ("file", "blob"),
+    [
+        ("mytool/1.0/mytool.zip", b"this is not a zip\n"),
+        ("mytool/1.0/mytool.tar.gz", b"this is not a tarball\n"),
+        ("mytool/1.0/mytool.tar.gz", BLOB[: len(BLOB) // 2]),
+    ],
+    ids=["not-a-zip", "not-a-tarball", "truncated-tarball"],
+)
+def test_a_pinned_file_that_is_not_a_valid_archive_fails_cleanly(
+    tmp_path: Path, file: str, blob: bytes
+):
+    pin = Pin("1.0", "mytool", {LINUX: Artefact(file, sha(blob))})
+    result = fetcher(tmp_path, Mirror({f"{MIRROR}/{file}": blob})).fetch("mytool", pin)
+    assert result.status == "failed" and not result.ok
+    assert "mytool" in result.detail and "not a valid archive" in result.detail
+    assert not any(path.is_file() for path in (tmp_path / "tools").rglob("mytool"))

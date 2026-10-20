@@ -4,6 +4,7 @@ Agent and pipeline files only *request*; this model is the authority that the
 resolver (agentic.policy.resolve, M1-04) checks every request against.
 """
 
+import re
 from decimal import Decimal
 from typing import Literal, Self
 
@@ -195,6 +196,15 @@ def _inside(path: str, folder: str) -> bool:
 PlatformKey = Literal[
     "windows-x86_64", "linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-aarch64"
 ]
+#: A tool name, version or binary: each becomes one folder or file name in the tool cache,
+#: so never '.', '..', a separator, a drive or anything else that could leave it.
+PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
+
+
+def _plain_name_problem(where: str, value: str) -> str | None:
+    if PLAIN_NAME.fullmatch(value):
+        return None
+    return f"{where} {value!r} must be a plain name (letters, digits, '.', '_', '+', '-')"
 
 
 class ToolArtefact(_Strict):
@@ -231,6 +241,12 @@ class ToolPin(_Strict):
     def binary_is_a_base_name(self) -> Self:
         if self.binary.lower().endswith(".exe") or "/" in self.binary or "\\" in self.binary:
             raise ValueError(f"binary {self.binary!r} must be a base name (Windows adds .exe)")
+        problems = [
+            _plain_name_problem("version", self.version),
+            _plain_name_problem("binary", self.binary),
+        ]
+        if found := [problem for problem in problems if problem]:
+            raise ValueError("; ".join(found))
         return self
 
 
@@ -348,6 +364,9 @@ class OrgPolicy(_Strict):
                 problems.append(f"forbidden tool '{tool}' is not in the tool catalog")
         if self.tool_pins and not self.tool_mirror_url:
             problems.append("tool pins need tool_mirror_url (the org mirror they come from)")
+        for name in self.tool_pins:
+            if problem := _plain_name_problem("tool pin name", name):
+                problems.append(problem)
 
         if problems:
             raise ValueError("; ".join(problems))

@@ -108,3 +108,35 @@ def test_index_export_workflow_is_an_org_setting(policy_dir: Path):
         org.read_text(encoding="utf-8") + "index_export_workflow: true\n", encoding="utf-8"
     )
     assert load_policy(policy_dir).index_export_workflow is True
+
+
+@pytest.mark.parametrize(
+    ("name", "version", "binary"),
+    [
+        ("'..'", "'1'", "t"),
+        ("'.'", "'1'", "t"),
+        ("'a/b'", "'1'", "t"),
+        ("'C:'", "'1'", "t"),
+        ("t", "'..'", "t"),
+        ("t", "'1/../..'", "t"),
+        ("t", "'/abs'", "t"),
+        ("t", "'1'", "'..'"),
+        ("t", "'1'", "'.hidden'"),
+        ("t", "'1'", "'a:b'"),
+    ],
+)
+def test_names_versions_and_binaries_are_plain_path_parts(
+    policy_dir: Path, name: str, version: str, binary: str
+):
+    """The tool name, version and binary become cache folder names: never '..' or a path."""
+    _pins(
+        policy_dir,
+        f"""tools:
+  {name}:
+    version: {version}
+    binary: {binary}
+    assets: {{linux-x86_64: {{file: t.zip, sha256: "{HASH}"}}}}
+""",
+    )
+    with pytest.raises(PolicyError, match="plain name"):
+        load_policy(policy_dir)
