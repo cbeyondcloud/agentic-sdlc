@@ -147,3 +147,14 @@ Python 3.12 (tests) / image `python:3.11-slim` (existing Dockerfile), FastAPI, p
 5. `<engine> ps` shows no `tokenlean-lite` containers.
 
 **Not runnable here (owner):** a macOS (Apple Silicon) run, podman, and a live-provider smoke (SPEND, cents).
+
+---
+
+## Outcome (2026-10-21)
+
+Branch `feat/agentic-lite-profile` at `D:\token-optimisation-wt\sp19-lite`, base `b7db81e`. One commit per row: `d012a9d` (ST-3, tasks 1–2), `4c05550` (ST-6, tasks 3–5), `b276174` (ST-8, tasks 6–7). Each commit is a snapshot that passed the full suite in a separate test worktree before it was committed.
+
+- Suite: base 5481 passed / 98 skipped → 5495 → 5525 → **5543 passed / 98 skipped**, exit 0.
+- Smoke (`--mock`): **Windows** (PowerShell 5.1, Docker Desktop) pass; **Linux** (Ubuntu under WSL2, bash, fresh `git archive` on ext4, umask 077) pass; `--qdrant --langfuse` boot + smoke pass, and Langfuse received the traces. `down --purge` leaves nothing.
+- Changes from the plan: shared `_lib.sh`/`_lib.ps1`. The mock provider needs a placeholder `LLM_KEY_LITEMOCK`, because the provider client will not send an empty key. Scripts are committed 100755. `up` makes `.state/` 755, because the proxy runs as uid 1000. `smoke.sh` helpers are safe under `set -e`.
+- Owner actions: macOS (Apple Silicon) run, Podman run, live-provider smoke (SPEND), `verify-oss-gates.sh` / `test-tiers.sh`, and push/PR via `checkin-push.sh`.
