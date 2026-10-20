@@ -93,4 +93,5 @@ class NativeBackend:
             contract=step.contract,
             run_id=step.run_id,
             policy_version=self.policy_version,
+            scanner=scanner,
         )

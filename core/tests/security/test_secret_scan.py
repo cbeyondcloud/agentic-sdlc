@@ -52,6 +52,91 @@ def test_ordinary_code_has_no_findings():
     assert SecretScanner().findings(CODE) == []
 
 
+# review F1: key formats detect-secrets 1.5.0 does not know, and keyword assignments
+KEY_TAIL = "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0" * 2  # 80 token characters
+CURRENT_KEYS = {
+    "AnthropicKeyDetector": "sk-ant-" + "api03-" + KEY_TAIL,
+    "OpenAIProjectKeyDetector": "sk-" + "proj-" + KEY_TAIL,
+    "GoogleApiKeyDetector": "AIza" + "SyA-1234567890abcdefghijklmnopqrstuv",
+    "GitHubFineGrainedTokenDetector": "github_" + "pat_11ABCDEFG0" + KEY_TAIL[:60],
+    "HuggingFaceTokenDetector": "hf_" + KEY_TAIL[:34],
+}
+
+
+@pytest.mark.parametrize("detector", sorted(CURRENT_KEYS))
+def test_current_provider_key_formats_are_found_and_masked_whole(detector):
+    secret = CURRENT_KEYS[detector]
+    masked, counts = SecretScanner("mask").mask(f"export KEY={secret}\n")
+    assert counts == {detector: 1}
+    assert secret[8:] not in masked and masked.startswith("export KEY=[MASKED SECRET: ")
+
+
+@pytest.mark.parametrize(
+    ("text", "value"),
+    [
+        ('password = "' + "SuperSecret" + 'Value123!"', "SuperSecretValue123!"),
+        ("DB_PASSWORD=" + "hunter2x", "hunter2x"),
+        ('{"client_secret": "' + "q8Zr" + 'T4vX9mLp"}', "q8ZrT4vX9mLp"),
+    ],
+)
+def test_a_password_assignment_masks_only_its_value(text, value):
+    masked, counts = SecretScanner("mask").mask(text)
+    assert counts == {"PasswordAssignmentDetector": 1}
+    assert value not in masked
+    assert "[MASKED SECRET: Password Assignment]" in masked
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        'password = os.environ["DB_PASSWORD"]',
+        "api_key = settings.api_key",
+        'password = "${DB_PASSWORD}"',
+        'password: "{{ vault_db_password }}"',
+        'api_key = "your-api-key-here"',
+        "DB_PASSWORD=$DB_PASSWORD",
+        "PWD=/home/user1/app",
+        "PASSWORD_PATTERN = re.compile(r'pw[0-9]+')",  # a code constant, not an env file
+        "CERT_ACCESS_KEY = 0x0001",
+        'client_secret="your-auth0-client-secret"',
+        'client_secret="abc123..."',
+    ],
+)
+def test_code_that_names_a_password_without_one_is_not_a_finding(code):
+    assert SecretScanner().findings(code) == []
+
+
+def test_the_assignment_rules_stay_linear_on_long_runs():
+    scanner = SecretScanner(detectors=["PasswordAssignmentDetector"])
+    start = time.perf_counter()
+    scanner.findings("password-" * 60_000)
+    scanner.findings("MY_API_KEY_" * 40_000 + "=\n")
+    assert time.perf_counter() - start < 3.0
+
+
+# review F2(b): documented example values and policy allow values are not secrets
+AWS_EXAMPLE_ID = "AKIA" + "IOSFODNN7" + "EXAMPLE"
+AWS_EXAMPLE_SECRET = "wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY"
+
+
+def test_documented_example_keys_are_not_secrets():
+    text = f"aws_access_key_id = {AWS_EXAMPLE_ID}\naws_secret_access_key = {AWS_EXAMPLE_SECRET}\n"
+    assert SecretScanner().findings(text) == []
+    assert SecretScanner().check_text(text, "model-call") == text
+
+
+def test_allowed_values_are_not_secrets_but_others_still_are():
+    fixture = "AKIA" + "TESTFIXTURE0" + "0001"
+    scanner = SecretScanner(allow=[fixture])
+    assert scanner.findings(f"key = {fixture}") == []
+    assert [f.detector for f in scanner.findings(f"key = {AWS}")] == ["AWSKeyDetector"]
+
+
+def test_an_allowed_value_too_short_to_be_specific_is_refused():
+    with pytest.raises(ValueError, match="allow"):
+        SecretScanner(allow=["AKIA"])
+
+
 def test_the_default_set_is_every_regex_detector_but_public_ips():
     assert "IPPublicDetector" in known_detectors()
     assert "IPPublicDetector" not in DEFAULT_DETECTORS

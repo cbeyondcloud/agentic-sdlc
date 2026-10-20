@@ -229,6 +229,70 @@ def test_the_steps_scanner_also_scans_tool_output(resolved, tmp_path):  # review
     assert events == [SecretScanEvent("masked", "tool:read_file", {"AWSKeyDetector": 1})]
 
 
+def scripted(seen: list[httpx2.Request], replies: list[dict]):
+    """A chat-completions endpoint answering each request with the next message."""
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        message = replies.pop(0)
+        return httpx2.Response(
+            200,
+            json={
+                "id": f"chatcmpl-{len(seen)}",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-5-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls" if "tool_calls" in message else "stop",
+                        "message": {"role": "assistant", **message},
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            },
+        )
+
+    return httpx2.MockTransport(answer)
+
+
+def test_a_secret_the_model_writes_itself_does_not_end_the_run(resolved, tmp_path):
+    # review F2: the model's own text and tool-call arguments are resent on every later
+    # call; under the default policy (block) that ended the run. Now the call is refused,
+    # the model's own words are masked when resent, and the run goes on.
+    key = "AKIA" + "Z7Q4R2XW" + "9PLM3TKB"
+    (tmp_path / "tree").mkdir()
+    seen: list[httpx2.Request] = []
+    events: list[SecretScanEvent] = []
+    call = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "write_file", "arguments": json.dumps({"path": "c.py", "text": key})},
+    }
+    replies = [{"content": f"I will store {key}.", "tool_calls": [call]}, {"content": "done"}]
+    native = backend(
+        network_transport=scripted(seen, replies),
+        scanner_for=lambda ctx: SecretScanner(on_event=events.append),  # block
+    )
+    agent = resolved.model_copy(
+        update={"model": "openai/gpt-5-mini", "tools": ["edit_files"], "temperature": None}
+    )
+    context = ToolContext(tree=tmp_path / "tree", guard=OpenGuard())
+    runner = native.runner(
+        step(agent, slice_()), tool_context=context, state_dir=tmp_path / "s", spawner=None
+    )
+    outcome = asyncio.run(runner.run(AgentTask(instructions="Dev.", inputs={}, prompt="Go")))
+
+    assert (outcome.status, outcome.output) == ("completed", "done")
+    assert len(seen) == 2 and all(key.encode() not in r.content for r in seen)
+    assert not (tmp_path / "tree" / "c.py").exists()
+    assert b"placeholder" in seen[1].content  # the model was told why
+    assert {(e.action, e.where) for e in events} == {
+        ("blocked", "tool-call:write_file"),
+        ("masked", "model-output"),
+    }
+
+
 class FakeSpawner:
     def tools(self) -> list[Tool]:
         async def spawn_agent(name: str, task: str) -> str:

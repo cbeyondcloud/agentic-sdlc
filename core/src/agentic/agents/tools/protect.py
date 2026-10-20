@@ -1,9 +1,12 @@
 """What every tool returns, made safe to show the model - in one place (M1-41, M1-42).
 
 `build_tools` passes every tool through `protect_tools`; tool modules stay as
-they are. A call whose arguments carry a mask marker (`[MASKED SECRET: ...]`)
-is refused: written back, it would replace the real secret. What a tool returns
-(text; anything else as JSON) is, in order:
+they are. A call is refused before it runs when its arguments carry a mask
+marker (`[MASKED SECRET: ...]` - written back, it would replace the real secret)
+or a secret, whatever the policy's action (written to a file, run as a command
+or handed to a child, it would leak from there; the model is told to use a
+placeholder, and the run goes on - review F2). What a tool returns (text;
+anything else as JSON) is, in order:
 
   1. shown with the run's tree as `.` - an absolute host path tells the model
      (and its provider) about this machine (DF-23);
@@ -26,7 +29,7 @@ import functools
 import inspect
 import os
 import re
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from pathlib import Path
 
 from pydantic_ai import Tool
@@ -76,7 +79,7 @@ def _protected(tool: Tool, scanner: SecretScanner, paths: re.Pattern | None, lab
 
         @functools.wraps(function)
         async def run_async(*args, **kwargs):
-            if why := _copies_a_mask(args, kwargs):
+            if why := _refused_call(scanner, tool.name, args, kwargs):
                 return why
             return finish(await function(*args, **kwargs))
 
@@ -85,7 +88,7 @@ def _protected(tool: Tool, scanner: SecretScanner, paths: re.Pattern | None, lab
 
         @functools.wraps(function)
         def run(*args, **kwargs):
-            if why := _copies_a_mask(args, kwargs):
+            if why := _refused_call(scanner, tool.name, args, kwargs):
                 return why
             return finish(function(*args, **kwargs))
 
@@ -96,15 +99,35 @@ def _protected(tool: Tool, scanner: SecretScanner, paths: re.Pattern | None, lab
     return protected
 
 
-def _copies_a_mask(args: tuple, kwargs: dict) -> str | None:
-    """A refusal when an argument carries a mask marker: written back to a file it would
-    replace the real secret with the marker (mask mode shows the model only markers)."""
-    if any(isinstance(v, str) and MASKED.search(v) for v in (*args, *kwargs.values())):
+def _refused_call(scanner: SecretScanner, name: str, args: tuple, kwargs: dict) -> str | None:
+    """A refusal when an argument carries a mask marker (written back to a file it would
+    replace the real secret - mask mode shows the model only markers) or a secret."""
+    values = [*args, *kwargs.values()]
+    if any(MASKED.search(text) for text in _strings(values)):
         return refused(
             "an argument holds a masked secret marker - the real value was withheld from "
             "you, so it cannot be written; leave that text as it is and change only the rest"
         )
+    if blocked := scanner.refusal(values, f"tool-call:{name}"):
+        return refused(
+            f"an argument holds {blocked.total} secret(s) ({', '.join(blocked.kinds)}); "
+            "secrets are never written to files, commands or other agents. Use a "
+            "placeholder (such as an environment variable reference) instead"
+        )
     return None
+
+
+def _strings(value: object) -> Iterator[str]:
+    """Every string in `value`, nested lists and dicts included (keys too)."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _strings(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _strings(key)
+            yield from _strings(item)
 
 
 def _host_paths(tree: Path | None) -> re.Pattern | None:

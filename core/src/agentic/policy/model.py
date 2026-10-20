@@ -158,6 +158,20 @@ class SecretScanPolicy(_Strict):
 
     action: Literal["block", "mask"] = "block"
     detectors: list[str] | None = None  # None = the scanner's default set
+    # values never treated as secrets (test fixtures, documented examples); each at
+    # least 8 characters. Vendors' documented example keys are always allowed.
+    allow_values: list[str] = []
+
+    @model_validator(mode="after")
+    def allowed_values_are_specific(self) -> Self:
+        from agentic.security.secret_scan import MIN_ALLOWED  # lazy: no import cycle
+
+        if any(len(value) < MIN_ALLOWED for value in self.allow_values):
+            raise ValueError(
+                f"allow_values must each be at least {MIN_ALLOWED} characters - a shorter "
+                "one would let real secrets through"
+            )
+        return self
 
     @model_validator(mode="after")
     def detectors_are_known(self) -> Self:

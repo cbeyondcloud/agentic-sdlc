@@ -14,6 +14,16 @@ token characters (a pattern may stop early), and a private key's header masks
 through its END line. The entropy and keyword plugins need line heuristics and
 are not offered. Matching uses `regex` with a deadline; text that cannot be
 scanned in time is treated as a secret (fail closed).
+
+Beside them are detectors of our own (`key_formats`): current provider key
+formats detect-secrets 1.5.0 predates, and narrow password-assignment rules
+(review F1). Documented example values (AWS's `...EXAMPLE` key) and a policy's
+`allow_values` are never findings (review F2).
+
+Content a model wrote itself - its text, its tool calls' arguments - is not
+blocked when it is sent back: `scrub` masks it whatever the action, as resending
+it leaks nothing from this machine and blocking it would end the run on every
+later call. A tool call carrying a secret is refused before it runs (`refusal`).
 """
 
 import json
@@ -30,7 +40,10 @@ import regex
 from detect_secrets.core.plugins.util import get_mapping_from_secret_type_to_class
 from detect_secrets.plugins.base import RegexBasedDetector
 
+from agentic.security.key_formats import DOCUMENTED_EXAMPLES, KEY_FORMATS
+
 Action = Literal["block", "mask"]
+MIN_ALLOWED = 8  # an allowed value shorter than this would let real secrets through
 #: Not secrets: a public IP address is reported by detect-secrets but leaks nothing.
 NOT_SECRETS = frozenset({"IPPublicDetector"})
 UNSCANNABLE = "Unscannable"  # the finding for text the deadline stopped
@@ -64,11 +77,13 @@ def _catalogue() -> dict[str, _Detector]:
             for p in plugin().denylist
         )
         found[plugin.__name__] = _Detector(plugin.__name__, kind, patterns)
+    for name, (kind, sources) in KEY_FORMATS.items():
+        found[name] = _Detector(name, kind, tuple(regex.compile(p) for p in sources))
     return dict(sorted(found.items()))
 
 
 def known_detectors() -> list[str]:
-    """Every detector a policy may name: detect-secrets' regex-based plugins."""
+    """Every detector a policy may name: detect-secrets' regex-based plugins and ours."""
     return list(_catalogue())
 
 
@@ -125,9 +140,17 @@ class SecretScanner:
         *,
         on_event: Callable[[SecretScanEvent], None] | None = None,
         deadline_s: float = DEADLINE_S,
+        allow: Iterable[str] = (),
     ) -> None:
         if action not in ("block", "mask"):
             raise ValueError(f"action is 'block' or 'mask', not {action!r}")
+        allowed = set(allow)
+        if short := sorted(value for value in allowed if len(value) < MIN_ALLOWED):
+            raise ValueError(
+                f"allow values must be at least {MIN_ALLOWED} characters - a shorter one "
+                f"would let real secrets through ({len(short)} too short)"
+            )
+        self.allowed = frozenset(allowed | DOCUMENTED_EXAMPLES)
         names = list(DEFAULT_DETECTORS if detectors is None else detectors)
         catalogue = _catalogue()
         if unknown := sorted(set(names) - set(catalogue)):
@@ -143,7 +166,7 @@ class SecretScanner:
         cls, policy, on_event: Callable[[SecretScanEvent], None] | None = None
     ) -> "SecretScanner":
         """From `OrgPolicy.secret_scan` (a `SecretScanPolicy`)."""
-        return cls(policy.action, policy.detectors, on_event=on_event)
+        return cls(policy.action, policy.detectors, on_event=on_event, allow=policy.allow_values)
 
     # ── finding and masking ───────────────────────────────────────────────────
 
@@ -154,11 +177,18 @@ class SecretScanner:
         spans: list[Finding] = []
         for detector in self.detectors:
             for pattern in detector.patterns:
+                group = "secret" if "secret" in pattern.groupindex else 0
                 left = max(deadline - time.monotonic(), 0.001)
                 for match in pattern.finditer(text, timeout=left):
-                    if match.end() > match.start():
-                        spans.append(_span(detector, text, match.start(), match.end()))
+                    start, end = match.span(group)
+                    if end > start:
+                        span = _span(detector, text, start, end)
+                        if not self._allowed(text[span.start : span.end]):
+                            spans.append(span)
         return _merged(spans)
+
+    def _allowed(self, found: str) -> bool:
+        return any(value in found for value in self.allowed)
 
     def mask(self, text: str, deadline: float | None = None) -> tuple[str, Counter]:
         """`text` with each secret replaced by a marker, and how many of each detector."""
@@ -206,6 +236,39 @@ class SecretScanner:
             return content
         # ASCII escapes: a lone surrogate (valid JSON) has no UTF-8 encoding
         return json.dumps(rebuilt, separators=(",", ":")).encode("ascii")
+
+    def scrub[T](self, value: T, where: str) -> T:
+        """`value` - text, or JSON-like data - with every secret masked WHATEVER the
+        action, and a `masked` event; `value` itself when clean. For content a model
+        wrote itself, sent back to it (see the module)."""
+        masked, counts = self._masked_all(value)
+        if not counts:
+            return value
+        self.on_event(SecretScanEvent("masked", where, dict(sorted(counts.items()))))
+        return masked
+
+    def refusal(self, value: object, where: str) -> SecretBlocked | None:
+        """A SecretBlocked - returned, not raised - when any string in `value` holds a
+        secret, WHATEVER the action, with a `blocked` event; None when clean. For what
+        must never carry a secret: a tool call's arguments (written to a file, run as a
+        command, or given to a child agent)."""
+        _, counts = self._masked_all(value)
+        if not counts:
+            return None
+        event = SecretScanEvent("blocked", where, dict(sorted(counts.items())))
+        self.on_event(event)
+        return SecretBlocked(event, (self._kind(name) for name in counts))
+
+    def _masked_all[T](self, value: T) -> tuple[T, Counter]:
+        counts: Counter = Counter()
+        deadline = time.monotonic() + self.deadline_s
+
+        def mask(text: str) -> str:
+            masked, found = self.mask(text, deadline)
+            counts.update(found)
+            return masked
+
+        return _walk(value, mask), counts  # type: ignore[return-value]
 
     def _decide(self, counts: Counter, where: str) -> bool:
         """True when masked text is to be used; raises when blocked; False when clean."""

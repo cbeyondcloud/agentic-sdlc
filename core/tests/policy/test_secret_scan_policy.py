@@ -46,6 +46,22 @@ def test_an_unknown_detector_is_an_error_naming_it(fixtures, tmp_path):
         load_policy(root)
 
 
+def test_allow_values_load_and_reach_the_scanner(fixtures, tmp_path):  # review F2(b)
+    from agentic.security import SecretScanner
+
+    fixture = "AKIA" + "TESTFIXTURE0" + "0001"
+    root = policy_copy(fixtures, tmp_path, f"secret_scan:\n  allow_values: [{fixture}]\n")
+    policy = load_policy(root).secret_scan
+    assert policy.allow_values == [fixture]
+    assert SecretScanner.from_policy(policy).findings(f"key = {fixture}") == []
+
+
+def test_a_short_allow_value_is_an_error(fixtures, tmp_path):
+    root = policy_copy(fixtures, tmp_path, "secret_scan:\n  allow_values: [AKIA]\n")
+    with pytest.raises(PolicyError, match="allow_values"):
+        load_policy(root)
+
+
 def test_an_empty_detector_list_is_an_error(fixtures, tmp_path):
     # an empty list would switch the scan off without saying so
     root = policy_copy(fixtures, tmp_path, "secret_scan:\n  detectors: []\n")
