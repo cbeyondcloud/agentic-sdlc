@@ -174,6 +174,16 @@ def test_planned_names_the_url_and_destination_without_fetching(tmp_path: Path):
     assert url == f"{MIRROR}/{FILE}" and dest.name == "mytool" and mirror.asked == []
 
 
+def test_cached_says_whether_a_verified_copy_exists_without_fetching(tmp_path: Path):
+    mirror = Mirror({f"{MIRROR}/{FILE}": BLOB})
+    assert fetcher(tmp_path, mirror).cached("mytool", PIN) is None
+    path = fetcher(tmp_path, mirror).fetch("mytool", PIN).path
+    asked = len(mirror.asked)
+    assert fetcher(tmp_path, mirror).cached("mytool", PIN) == path and len(mirror.asked) == asked
+    path.write_bytes(b"changed\n")
+    assert fetcher(tmp_path, mirror).cached("mytool", PIN) is None
+
+
 def test_the_record_file_is_json_with_lf(tmp_path: Path):
     result = fetcher(tmp_path, Mirror({f"{MIRROR}/{FILE}": BLOB})).fetch("mytool", PIN)
     record = result.path.parent / ".verified.json"

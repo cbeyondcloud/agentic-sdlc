@@ -11,7 +11,7 @@ from typing import Annotated
 import typer
 
 from agentic.repoconfig import RepoConfig
-from agentic_cli import repo_setup
+from agentic_cli import dev_init, repo_setup
 from agentic_cli.config import agentic_home, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
@@ -42,20 +42,65 @@ def register(app: typer.Typer) -> None:
             list[str] | None,
             typer.Option("--pipeline", help="--repo: a pipeline enabled for the repo (repeat)."),
         ] = None,
+        install_missing: bool = typer.Option(
+            False,
+            "--install-missing",
+            help="Also install the org's on-request user-space tools (shows them, then asks).",
+        ),
+        yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask before installing."),
     ) -> None:
         """Set up agentic for this repository (run from the repo root)."""
         out: Output = ctx.obj
         home = agentic_home()
-        loaded = resolve_policy(
-            standalone=standalone, policy_path=policy, home=home, config=user_config(home)
-        )
+        config = user_config(home)
+        if install_missing and out.json_mode and not yes:
+            raise CliError(
+                "--install-missing asks before installing, which --json cannot",
+                ExitCode.USAGE,
+                hint="add --yes after reviewing the tools with a plain `agentic init`",
+            )
+        loaded = resolve_policy(standalone=standalone, policy_path=policy, home=home, config=config)
         try:
             if repo:
                 _init_repo(out, loaded, classification, team, pipeline or [])
             else:
-                raise CliError("developer init is not available yet", ExitCode.ERROR)
+                _init_developer(out, loaded, home, config, install_missing, yes)
         finally:
             loaded.discard()
+
+
+def _init_developer(
+    out: Output, loaded: LoadedPolicy, home: Path, config: dict, install: bool, yes: bool
+) -> None:
+    root = check_repo(
+        Path.cwd(),
+        mode="developer",
+        home=Path.home(),
+        policy=loaded.policy,
+        org_mode=loaded.mode == "org",
+    )
+    deps = dev_init.default_deps()
+    roles = config.get("roles") or []
+    deps.roles = tuple(str(role) for role in roles) if isinstance(roles, list) else ()
+    console = out.err if out.json_mode else out.out
+
+    def announce(plan: list[dict]) -> None:
+        console.print("These tools will be installed (user space only):")
+        for tool in plan:
+            console.print(f"  {tool['tool']} {tool['version']}", markup=False)
+            console.print(f"    from {tool['url']}", markup=False)
+            console.print(f"    to   {tool['to']}", markup=False)
+
+    report = dev_init.run_dev_init(
+        root, loaded, home, deps, install_missing=install, assume_yes=yes, announce=announce
+    )
+    out.result(report.to_json(), report.show)
+    if not report.ready:
+        raise CliError(
+            "init finished, but this machine is not ready",
+            ExitCode.ERROR,
+            hint="fix the items marked missing above, then run `agentic init` again",
+        )
 
 
 def _init_repo(

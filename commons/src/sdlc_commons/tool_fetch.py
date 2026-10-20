@@ -130,6 +130,14 @@ class ToolFetcher:
         artefact = pin.assets[self.platform]
         return self._url(artefact), self._destination(name, pin)
 
+    def cached(self, name: str, pin: PinLike) -> Path | None:
+        """The verified cached binary for this platform, or None. Never downloads."""
+        artefact = pin.assets.get(self.platform)
+        if artefact is None:
+            return None
+        dest = self._destination(name, pin)
+        return dest if self._cached_state(dest, artefact.sha256) == "verified" else None
+
     def fetch(self, name: str, pin: PinLike) -> FetchResult:
         def result(status: Status, path: Path | None = None, detail: str = "") -> FetchResult:
             return FetchResult(name, pin.version, self.platform, status, path, detail)
