@@ -45,6 +45,14 @@ def test_unknown_field_refused(tmp_path: Path):
         load_catalog(tmp_path)
 
 
+@pytest.mark.parametrize("reviewer", ["", "   "])
+def test_blank_reviewer_refused(tmp_path: Path, reviewer: str):
+    # A blank name would waive the human review of a skill's scripts (SP10 review F4).
+    write_catalog(tmp_path, {"a/b": entry("sha256:" + "0" * 64, scripts_reviewed_by=reviewer)})
+    with pytest.raises(CatalogError, match="scripts_reviewed_by"):
+        load_catalog(tmp_path)
+
+
 def test_bad_digest_refused(tmp_path: Path):
     write_catalog(tmp_path, {"a/b": entry("md5:abc")})
     with pytest.raises(CatalogError, match="sha256"):

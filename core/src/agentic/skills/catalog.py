@@ -66,7 +66,8 @@ class SkillEntry(_Strict):
     loading: Literal["pre", "on-demand"] = "on-demand"
     audience: Literal["agents", "admins"] = "agents"  # admins: authoring skills
     pack: str | None = None  # an opt-in pack: installed only when a team enables it
-    scripts_reviewed_by: str | None = None  # a person who reviewed its scripts (§11.3)
+    # a person who reviewed its scripts (§11.3); never blank, which would waive the review
+    scripts_reviewed_by: str | None = Field(default=None, pattern=r"^.*\S.*$")
     notes: str = ""  # what was changed from upstream, if anything
 
 
