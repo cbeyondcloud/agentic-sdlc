@@ -173,12 +173,24 @@ class TestReportData(HandoffBase):
     tests: TestCounts
     acceptance_results: list[AcceptanceResult] = []
     dependency_scan: DependencyScan | None = None
+    # Judged against the baseline taken at intake (Zyroflo P5: no NEW failures, not zero
+    # failures). Optional, so a report written before these fields existed stays valid.
+    failures: list[str] = []  # the failing tests, by name
+    baseline_failures: list[str] = []  # tests already failing at intake (the baseline report)
 
     @model_validator(mode="after")
-    def a_pass_has_no_failures(self) -> "TestReportData":
+    def a_pass_has_no_new_failures(self) -> "TestReportData":
         if self.verdict == "pass":
-            if self.tests.failed:
-                raise ValueError(f"verdict: 'pass' but {self.tests.failed} test(s) failed")
+            if self.tests.failed and len(self.failures) != self.tests.failed:
+                raise ValueError(
+                    f"verdict: 'pass' but {self.tests.failed} test(s) failed; a pass with "
+                    "failures must name each one in `failures`"
+                )
+            if new := [name for name in self.failures if name not in self.baseline_failures]:
+                raise ValueError(
+                    f"verdict: 'pass' but {', '.join(new)} failed and was not failing at "
+                    "intake (`baseline_failures`)"
+                )
             if failed := [r.criterion_id for r in self.acceptance_results if not r.passed]:
                 raise ValueError(f"verdict: 'pass' but acceptance criterion {failed[0]} failed")
         return self

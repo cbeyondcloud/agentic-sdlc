@@ -70,6 +70,45 @@ def test_each_kind_parses(kind: str):
     assert result.envelope.kind == kind
 
 
+# --- test-report: judged against the baseline taken at intake (Zyroflo P5) ---
+
+BASELINE_RED = "baseline_failures: [tests/test_legacy.py::test_flaky_clock]\n"
+
+
+def test_pass_with_only_baseline_failures_is_valid():
+    """No NEW failures is the bar, not zero failures: a suite already red at intake
+    may still pass when every failure is named and was already failing."""
+    fields = (
+        "verdict: pass\ntests: {passed: 40, failed: 1}\n"
+        "failures: [tests/test_legacy.py::test_flaky_clock]\n" + BASELINE_RED
+    )
+    result = parse_handoff(handoff("test-report", fields))
+
+    assert result.data.failures == result.data.baseline_failures
+
+
+def test_pass_with_a_new_failure_is_refused():
+    fields = (
+        "verdict: pass\ntests: {passed: 39, failed: 2}\n"
+        "failures: [tests/test_legacy.py::test_flaky_clock, tests/test_export.py::test_csv]\n"
+        + BASELINE_RED
+    )
+    with pytest.raises(HandoffError, match="tests/test_export.py::test_csv"):
+        parse_handoff(handoff("test-report", fields))
+
+
+def test_pass_with_unnamed_failures_is_refused():
+    fields = "verdict: pass\ntests: {passed: 40, failed: 1}\n" + BASELINE_RED
+    with pytest.raises(HandoffError, match="1 test"):
+        parse_handoff(handoff("test-report", fields))
+
+
+def test_a_fail_verdict_needs_no_names():
+    result = parse_handoff(handoff("test-report", "verdict: fail\ntests: {passed: 1, failed: 3}\n"))
+
+    assert result.data.failures == [] and result.data.baseline_failures == []
+
+
 def test_missing_rationale_rejected():
     text = handoff("design", "decisions:\n  - id: D1\n    choice: Use a queue\n")
 
