@@ -1,0 +1,12 @@
+# Licences (SPDX ids) an agent must not bring in as a new dependency. `scan: true`
+# also runs a licence scanner on new dependencies (it needs the scanner installed).
+blocked:
+  - AGPL-3.0-only
+  - AGPL-3.0-or-later
+  - GPL-2.0-only
+  - GPL-2.0-or-later
+  - GPL-3.0-only
+  - GPL-3.0-or-later
+  - SSPL-1.0
+  - BUSL-1.1
+scan: false

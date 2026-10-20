@@ -1,0 +1,3 @@
+# How many runs may go at once. Per-run caps (budget, turns, minutes, child
+# agents) live with each agent type in agent-types.yaml (D35).
+concurrency: { per_user: 3, per_team: 20 }

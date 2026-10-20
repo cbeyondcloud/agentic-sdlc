@@ -1,0 +1,97 @@
+# =============================================================================
+# AGENT TYPES (D35, spec §5.5)
+# Every agent file names one of these types. The type is the approved template:
+# an agent inherits every setting it leaves out, and anything it sets must stay
+# within the type (a subset of tools, a lower budget...). Caps are required, so
+# nothing is unlimited by omission. The library agents (library/agents/) use the
+# first five types; `general` is for anything else.
+# =============================================================================
+types:
+  business-analyst:
+    description: Turns a request into requirements with testable acceptance criteria.
+    tier: balanced
+    backends: [native]
+    tools: [read_files, search, codeintel, activate_skill]
+    skills: [addyosmani/interview-me, addyosmani/spec-driven-development, mattpocock/to-spec,
+             mattpocock/domain-modeling]
+    consumes: []
+    produces: requirements
+    limits:
+      max: { budget_usd: 2, max_turns: 40, max_minutes: 30 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0,
+                      per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }
+
+  design:
+    description: Turns approved requirements into a change set, a test plan and recorded decisions.
+    tier: deep-reasoning
+    backends: [native]
+    tools: [read_files, search, codeintel, activate_skill]
+    skills: [addyosmani/documentation-and-adrs, superpowers/writing-plans,
+             addyosmani/api-and-interface-design, mattpocock/improve-codebase-architecture]
+    consumes: [requirements, test-report]
+    produces: design
+    limits:
+      max: { budget_usd: 4, max_turns: 60, max_minutes: 45 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0,
+                      per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }
+
+  developer:
+    description: Implements an approved design as small, tested changes.
+    tier: balanced
+    backends: [native]                  # add an approved agent-CLI backend here (templates/agent/agent.md)
+    tools: [read_files, search, edit_files, run_shell, codeintel, spawn_agent, activate_skill]
+    shell: [pytest, "python -m pytest", "uv run pytest", "npm test", "npm run lint",
+            "mvn -q test", "gradle test", "go test", "cargo test", "dotnet test", ruff,
+            "git status", "git diff", "git log"]
+    skills: [superpowers/test-driven-development, superpowers/verification-before-completion,
+             superpowers/systematic-debugging, addyosmani/incremental-implementation,
+             superpowers/receiving-code-review]
+    consumes: [requirements, design, review, test-report]
+    produces: dev-report
+    limits:
+      max: { budget_usd: 5, max_turns: 80, max_minutes: 60 }
+      children_max: { max_total: 5, max_concurrent: 2, max_depth: 1,
+                      per_child: { budget_usd: 1, max_turns: 30, max_minutes: 15 } }
+
+  code-review:
+    description: Reviews a change against its requirements and design; findings by severity.
+    tier: balanced
+    backends: [native]
+    tools: [read_files, search, run_shell, codeintel, activate_skill]
+    shell: ["git status", "git diff", "git log", "git show"]
+    skills: [addyosmani/code-review-and-quality, superpowers/requesting-code-review,
+             addyosmani/security-and-hardening]
+    consumes: [requirements, design, dev-report]
+    produces: review
+    limits:
+      max: { budget_usd: 3, max_turns: 60, max_minutes: 30 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0,
+                      per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }
+
+  qa:
+    description: Runs the tests against the intake baseline and checks every acceptance criterion.
+    tier: balanced
+    backends: [native]
+    tools: [read_files, search, run_shell, codeintel, activate_skill]
+    shell: [pytest, "python -m pytest", "uv run pytest", "npm test", "mvn -q test",
+            "gradle test", "go test", "cargo test", "dotnet test", "pip-audit", "npm audit",
+            "git status", "git diff", "git log"]
+    skills: [superpowers/verification-before-completion,
+             addyosmani/browser-testing-with-devtools]
+    consumes: [requirements, dev-report, test-report]
+    produces: test-report
+    limits:
+      max: { budget_usd: 3, max_turns: 60, max_minutes: 45 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0,
+                      per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }
+
+  general:
+    description: Any other agent, for example a docs writer.
+    tier: fast
+    backends: [native]
+    tools: [read_files, search, edit_files]
+    consumes: [requirements, design, dev-report, review, test-report]
+    limits:
+      max: { budget_usd: 1, max_turns: 30, max_minutes: 20 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0,
+                      per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }

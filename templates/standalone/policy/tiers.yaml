@@ -1,0 +1,19 @@
+# =============================================================================
+# CAPABILITY TIERS (standalone policy template)
+# Agents ask for a tier by what it is good at, never for a vendor's model, so
+# the same agents run with any provider your gateway serves (spec §5.3).
+# EDIT EVERY `model:` BELOW: replace the change-me name with a model your
+# gateway (TokenLean) serves, written the way the gateway names it.
+# =============================================================================
+tiers:
+  deep-reasoning:                       # architecture and design: the strongest model you have
+    model: change-me/deep-reasoning-model
+    effort: high
+  balanced:                             # most work: requirements, coding, review, QA
+    model: change-me/balanced-model
+    effort: medium
+  fast:                                 # cheap, quick tasks
+    model: change-me/fast-model
+    effort: low
+  local:                                # a model running on your own machine or network;
+    model: local/change-me              # the only tier a `restricted` repo may use
