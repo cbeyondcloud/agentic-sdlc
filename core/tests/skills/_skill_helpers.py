@@ -1,5 +1,6 @@
 """Helpers for the skills tests: build skill folders and catalogs in a temporary folder."""
 
+import os
 from pathlib import Path
 
 from agentic.yamlio import dump_yaml
@@ -36,6 +37,17 @@ def make_skill(
         else:
             path.write_text(content, encoding="utf-8", newline="\n")
     return folder
+
+
+def make_dir_link(link: Path, target: Path) -> None:
+    """A directory link anyone can make: a junction on Windows, a symlink elsewhere."""
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
 
 
 def entry(digest: str, **overrides) -> dict:

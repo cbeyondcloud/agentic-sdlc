@@ -13,7 +13,7 @@ folder, or `library/skills/` for the shipped defaults. Each skill sits next to i
         licence: MIT
         owner: platform-team
         version: 1.0.0
-        sha256: sha256:<64 hex>       # skill_digest() of the folder
+        sha256: sha256:<64 hex>       # skill_digest() of the folder (v2, DF-140)
         loading: pre                  # pre (in context at start) | on-demand
         audience: agents              # agents | admins (authoring skills)
         pack: null                    # an opt-in pack name: installed only if enabled
@@ -24,6 +24,7 @@ folder, or `library/skills/` for the shipped defaults. Each skill sits next to i
 
 import fnmatch
 import hashlib
+import os
 import re
 from pathlib import Path
 from typing import Literal, Self
@@ -138,13 +139,38 @@ def skill_folder(root: Path, key: str) -> Path:
 
 def skill_digest(folder: Path) -> str:
     """The content hash of a skill folder: every file's POSIX relative path and bytes,
-    sorted by path. CRLF counts as LF, so Windows and Linux checkouts agree."""
+    sorted by path, each length-prefixed so two layouts can never feed the same bytes
+    (DF-140). CRLF counts as LF, so Windows and Linux checkouts agree.
+
+    A link (symlink or Windows junction) anywhere in the folder is refused: one OS
+    would follow it and another skip it, and either way it reaches outside the skill."""
+    files, links = skill_files(folder)
+    if links:
+        names = ", ".join(link.relative_to(folder).as_posix() for link in links)
+        raise SkillsError(f"{folder}: skills hold plain files, not links ({names})")
     digest = hashlib.sha256()
-    for path in sorted(_files(folder), key=lambda p: p.relative_to(folder).as_posix()):
-        digest.update(path.relative_to(folder).as_posix().encode("utf-8") + b"\0")
-        digest.update(path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    for path in sorted(files, key=lambda p: p.relative_to(folder).as_posix()):
+        name = path.relative_to(folder).as_posix().encode("utf-8")
+        content = path.read_bytes().replace(b"\r\n", b"\n")
+        for part in (name, content):
+            digest.update(len(part).to_bytes(8, "big") + part)
     return f"sha256:{digest.hexdigest()}"
 
 
-def _files(folder: Path) -> list[Path]:
-    return [path for path in folder.rglob("*") if path.is_file()]
+def skill_files(folder: Path) -> tuple[list[Path], list[Path]]:
+    """(files, links) below `folder`, sorted, never following a link: a symlink or a
+    junction is reported as a link and not entered (Path.rglob enters a junction)."""
+    files: list[Path] = []
+    links: list[Path] = []
+    pending = [folder]
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                path = Path(entry.path)
+                if entry.is_symlink() or entry.is_junction():
+                    links.append(path)
+                elif entry.is_dir(follow_symlinks=False):
+                    pending.append(path)
+                elif entry.is_file(follow_symlinks=False):
+                    files.append(path)
+    return sorted(files), sorted(links)

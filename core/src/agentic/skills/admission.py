@@ -28,8 +28,10 @@ from agentic.skills.catalog import (
     Catalog,
     CatalogError,
     SkillEntry,
+    SkillsError,
     load_catalog,
     skill_digest,
+    skill_files,
     skill_folder,
 )
 from agentic.skills.loader import estimate_tokens
@@ -127,7 +129,11 @@ def admit_catalog(root: Path) -> dict[str, list[Rejection]]:
         if not folder.is_dir():
             results[key] = [Rejection("pin", key, f"no folder {folder.relative_to(root)}")]
             continue
-        found = skill_digest(folder)
+        try:
+            found = skill_digest(folder)
+        except SkillsError as error:  # a link inside the skill: it has no digest
+            results[key] = [Rejection("pin", key, str(error)), *admit(folder, key, catalog)]
+            continue
         pin = (
             [Rejection("pin", key, f"pinned {entry.sha256}, folder hashes to {found}")]
             if found != entry.sha256
@@ -188,7 +194,7 @@ def _size(folder: Path, catalog: Catalog) -> list[Rejection]:
                     f"about {tokens} tokens, over the budget of {limits.max_skill_tokens}",
                 )
             )
-    total = sum(p.stat().st_size for p in folder.rglob("*") if p.is_file())
+    total = sum(p.stat().st_size for p in skill_files(folder)[0])
     if total > limits.max_total_bytes:
         found.append(
             Rejection("size", ".", f"{total} bytes, over the budget of {limits.max_total_bytes}")
@@ -197,14 +203,14 @@ def _size(folder: Path, catalog: Catalog) -> list[Rejection]:
 
 
 def _scan(folder: Path, entry: SkillEntry) -> list[Rejection]:
-    found = []
-    for path in sorted(folder.rglob("*")):
+    files, links = skill_files(folder)
+    # a symlink or junction could point anywhere on the machine that installs the skill
+    found = [
+        Rejection("scan", link.relative_to(folder).as_posix(), "a link: skills hold plain files")
+        for link in links
+    ]
+    for path in files:
         relative = path.relative_to(folder).as_posix()
-        if path.is_symlink():  # could point anywhere on the machine that installs it
-            found.append(Rejection("scan", relative, "a symbolic link: skills hold plain files"))
-            continue
-        if not path.is_file():
-            continue
         data = path.read_bytes()
         try:
             text = data.decode("utf-8")

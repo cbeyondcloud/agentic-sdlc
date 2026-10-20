@@ -28,7 +28,7 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:92f07abd93b1c6dc84be29f3b71dee175bb52dc33fd2d20b70370e753549ddf7
+    sha256: sha256:b4a7a304c267c9743dcaaa34735dd1839fed9cdedf15d1ded6c333e0b97f9433
     loading: pre
     notes: clarifying questions go to Open Questions for the gate; plan output goes in the handoff
   mattpocock/domain-modeling:
@@ -38,7 +38,7 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:aaf758e21d5a4002038d286f245d1fd6b8760099c1842dd24e12ef839781b11b
+    sha256: sha256:a46a173d93951d0c278636a86fba54701ef314b767d0e8f60f5f571fb3a74f07
     notes: vendor-specific agents/ metadata left out
 
   # ── Design ────────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:617256ba3048c617eb8c8995ceef71f9f054f931b581f945267a9c5c5fd89b53
+    sha256: sha256:1cd49169f5768ebd413a4926b1824cdbef51f2d7bbd983850901ab7299ba0a5f
     loading: pre
     notes: harness rules file named AGENTS.md
   superpowers/writing-plans:
@@ -59,7 +59,7 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:3e732d50ab7ee275020cc4080e8207bc92d32c94d4d5bb0a7fccf111e884fcb7
+    sha256: sha256:4936c893793c6dcf7009ffe04cf83369bf6691393ea0d531065c89c9dd274d4b
     loading: pre
     notes: plan goes in the handoff; worktree, sub-skill and execution-choice steps removed
 
@@ -71,7 +71,7 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:2a7f1edaa8a521aee09b5432f992e36746d1cb0b6539240abe0d3acef95e061d
+    sha256: sha256:71324f0c3180610e04c6b9fb4704e0e147dfcf4b243af5fce0edcebd818be436
     loading: pre
     notes: includes the testing anti-patterns reference (writing-good-tests.md)
   superpowers/verification-before-completion:
@@ -81,7 +81,7 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:2522299ebf5d3339e8af265625b2901ce643b8245320f617027d07ba461bd304
+    sha256: sha256:24d40232f1f2eb37814b08f7965ee9f070b29d67521e072b00e52a5774c2a6c8
     loading: pre
   superpowers/systematic-debugging:
     source: https://github.com/obra/superpowers
@@ -90,7 +90,7 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:1dcaf9b84218b95f5cac1029e117fc69e9ac3682c2e023bd51cd7a986fd07625
+    sha256: sha256:b732fc8f6afc55c7aeff23418875113431d6fa97e85c65ed9db701b5b14beb2d
     notes: reference files only; shell script, TypeScript example, pressure tests and creation log left out
   superpowers/receiving-code-review:
     source: https://github.com/obra/superpowers
@@ -99,7 +99,7 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:0ce29406e8fe5c519c85dc911df145c4904a0f3ded8f7a07049e528f800869b2
+    sha256: sha256:a1c9960a5a76347ad0ef5214ba7d9159392f259e6707d8ef3dc167d831453a49
     notes: GitHub thread replies replaced by answering review findings in the handoff
   addyosmani/incremental-implementation:
     source: https://github.com/addyosmani/agent-skills
@@ -108,7 +108,7 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:105ca01aec2e8da3cef6045f0d674724519484a620eb67154e75d102542bab34
+    sha256: sha256:303a8e26801af812ac978e790dc349c48bb1efeb966c1b1e61be87906a55077a
     notes: the shared definition-of-done reference is bundled
 
   # ── Code Review ───────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:5f7145a382cd4a2fcfb0d4760dcab8e4e839fb877f2e55d70f618187ab31fcd0
+    sha256: sha256:8e7041df15713aaa13a1ad9d0b0d9356ac12d2e8d355bb4b3ec17252b0f92df9
     loading: pre
     notes: the shared security and performance checklists are bundled
   addyosmani/security-and-hardening:
@@ -129,7 +129,7 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:39c405f591ff48516ec2c9c11fdd37d7ce08f1a3a95f95ccf3fb189524f2a478
+    sha256: sha256:90bda220a67a65bde04bc31fb229d6f7b854efcfdd66336886544a866b431251
     notes: the shared security checklist is bundled
 
   # ── Admins and team leads only (authoring) ────────────────────────────────
@@ -140,6 +140,6 @@ skills:
     licence: MIT
     owner: platform-team
     version: 1.0.0
-    sha256: sha256:51bc114c8a5c0c295a805349b500e1b14029cff9bfb2f2d846bd7f3ea7ca0321
+    sha256: sha256:af20b067298aca0add9e49e8aaf9669ad4aa931d672550ee9974074cf8882fe6
     audience: admins
     notes: testing sections moved to a bundled file; scripts, graphviz and subagent references left out
