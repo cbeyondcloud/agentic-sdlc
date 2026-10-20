@@ -11,7 +11,7 @@ import pytest
 from agentic.telemetry.logs import StepLogs, read_logs, render_logs
 from sdlc_commons.redaction import redactor
 
-SECRET = "sk-live-9f8e7d6c5b4a39281706"
+SECRET = "sk-live-9f8e7d6c5b4a39281706"  # gitleaks:allow (fake key)
 LOG = logging.getLogger("agentic.test")
 
 

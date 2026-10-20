@@ -15,7 +15,7 @@ steps:
   - id: design
     agent: designer
 """
-SECRET = "tl-key-0123456789abcdef"
+SECRET = "tl-key-0123456789abcdef"  # gitleaks:allow (fake key)
 
 
 def test_each_step_gets_its_own_json_log(make_harness):

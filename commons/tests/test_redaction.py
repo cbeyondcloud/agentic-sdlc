@@ -2,7 +2,7 @@
 
 from sdlc_commons.redaction import redactor
 
-KEY = "sk-live-0123456789abcdefABCD"
+KEY = "sk-live-0123456789abcdefABCD"  # gitleaks:allow (fake key)
 
 
 def test_redactor_masks_env_values_token_shapes_and_flags():
