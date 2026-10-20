@@ -69,6 +69,15 @@ class Pending(_Strict):
     calls: list[str] = []  # tool calls awaiting a person's decision
 
 
+class ApprovalMark(_Strict):
+    """Who approved which gate, and when: what a commit's `Agentic-Approved-By` names (M1-45).
+    The approval ledger is the record; this copy saves reading it for every commit."""
+
+    gate: str
+    approver: str
+    at: AwareDatetime
+
+
 class RunState(_Strict):
     schema_version: int = 1
     run_id: str
@@ -94,6 +103,7 @@ class RunState(_Strict):
     extra_minutes: int = Field(default=0, ge=0)  # granted by a person on resume
     unpinned: dict[str, str] = {}  # artefacts written since the last gate: path -> digest
     approved: dict[str, dict[str, str]] = {}  # gate -> what its latest approval pinned
+    approvals: list[ApprovalMark] = []  # every approval, in order (M1-45)
     digests: dict[str, str] = {}  # every handoff the run wrote: path -> digest when recorded
     waited_seconds: float = Field(default=0, ge=0)  # time spent waiting for a person
     loop_pass_start: int = Field(default=0, ge=0)  # history index where this loop pass began
@@ -158,6 +168,7 @@ def _sync_folder(folder: Path) -> None:
 
 __all__ = [
     "RUN_FILE",
+    "ApprovalMark",
     "Cursor",
     "Pending",
     "RunState",

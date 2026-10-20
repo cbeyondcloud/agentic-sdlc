@@ -25,6 +25,9 @@ codeintel = ["code-review-graph==2.3.9"]
 # Skill admission checks (M1-39): the Agent Skills reference validator. Pure Python,
 # Apache-2.0 (deps click BSD-3-Clause, strictyaml MIT). Only admission needs it.
 skills = ["skills-ref==0.1.1"]
+# Telemetry (M1-43): the OpenTelemetry SDK, so spans are recorded and exported. Without it
+# the API alone (a core dependency) makes every span a no-op. Pure Python, Apache-2.0.
+telemetry = ["opentelemetry-sdk==1.45.1"]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]

@@ -19,7 +19,8 @@ so it sees every request Pydantic AI or a provider SDK makes:
      provider, so it is charged its reservation (`unavailable`). An error status
      is never treated as a stream.
 
-A settle that overshoots records the spend, then raises `LimitHit`.
+A settle that overshoots records the spend, then raises `LimitHit`. Every settle also
+marks the current (model-call) span with TokenLean's trace and request ids (M1-43).
 """
 
 import json
@@ -30,6 +31,7 @@ from decimal import Decimal
 
 import httpx2
 
+from agentic.telemetry.spans import mark_call
 from agentic.transport import (
     BudgetSlice,
     CallCost,
@@ -166,6 +168,7 @@ class MeteringTransport(httpx2.AsyncBaseTransport):
             pass  # recorded in the log; the original error is the one to raise
 
     def _settle(self, reservation: Reservation, cost: CallCost) -> None:
+        mark_call(cost)  # TokenLean's trace id beside the model-call span (M1-43)
         try:
             charged = reservation.settle(cost)
         except LimitHit as hit:

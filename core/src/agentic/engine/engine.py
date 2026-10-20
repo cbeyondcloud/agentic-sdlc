@@ -25,9 +25,10 @@ gate ledger are protocols, wired by the CLI (and the tests).
 
 import hashlib
 import json
+import logging
 import os
 from collections.abc import Callable, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -53,7 +54,7 @@ from agentic.definitions.pipeline import (
 )
 from agentic.engine.expressions import ExpressionError, compile_condition
 from agentic.engine.gates import Approve, Authorizer, Decision, Edit, GateRefused, Reject
-from agentic.engine.state import Cursor, Pending, RunState, RunStore, StepRecord
+from agentic.engine.state import ApprovalMark, Cursor, Pending, RunState, RunStore, StepRecord
 from agentic.handoffs import (
     EnvelopeStamp,
     HandoffContract,
@@ -61,10 +62,15 @@ from agentic.handoffs import (
     finalise_handoff,
     parse_handoff,
 )
+from agentic.memory.agents_md import agents_md_knowledge, nearest_agents_md
 from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
+from agentic.telemetry.logs import StepLogs
+from agentic.telemetry.spans import finish_step_span, step_span
+from agentic.telemetry.trailers import CommitAudit, commit_message
 from agentic.transport import BudgetLedger, BudgetSlice, LimitHit
 from agentic.transport.budget import BudgetError
 
+_LOG = logging.getLogger("agentic.engine")
 PROMPT_HEAD = "Pipeline: {pipeline} · step: {step} · iteration: {iteration}"
 
 
@@ -154,6 +160,7 @@ class Engine:
         run_budget_usd: Decimal | None = None,
         sandbox_label: str = "none",
         trees_for: Callable[[str], StepTrees] | None = None,
+        step_logs: StepLogs | None = None,
     ) -> None:
         self.definitions, self.policy, self.context = definitions, policy, context
         self.store, self.recorder_for, self.gates_for = store, recorder_for, gates_for
@@ -162,6 +169,7 @@ class Engine:
         self.run_budget_usd = run_budget_usd
         self.sandbox_label = sandbox_label  # recorded on every run it starts
         self.trees_for = trees_for  # None: steps get no tree (tests, pipelines without code)
+        self.step_logs = step_logs  # None: no per-step log files (M1-47)
 
     async def start(
         self, pipeline: str, inputs: dict[str, str], starter: str, run_id: str
@@ -297,6 +305,7 @@ class _Run:
         )
         self.budget.on_change = self._save_budget
         self._tree_handle: StepTrees | None = None
+        self._work: Path | None = None  # where the run's agents work (from prepare)
         self._marks: tuple | None = None  # (step, iteration, base, commit) of the attempt
 
     # ── the walk ─────────────────────────────────────────────────────────────
@@ -534,6 +543,8 @@ class _Run:
             notes=decision.notes,
             extra={"regime": state.regime},
         )
+        mark = ApprovalMark(gate=pending.id, approver=decision.approver, at=self.e.clock.now())
+        state.approvals.append(mark)
         if self._gate_step(pending.id) is not None:
             state.approved[pending.id] = dict(pending.artefacts)
         self._clear_pending()
@@ -620,9 +631,19 @@ class _Run:
             return None
         if self._tree_handle is None:
             handle = self.e.trees_for(self.state.run_id)
-            handle.prepare()
+            self._work = handle.prepare()
             self._tree_handle = handle
         return self._tree_handle
+
+    def _knowledge(self) -> str:
+        """The nearest AGENTS.md of the run's tree, wrapped as data, or "" (M1-46)."""
+        if self._work is None:
+            return ""
+        path = nearest_agents_md(self._work, self._work)
+        try:
+            return agents_md_knowledge(path, self._work) if path else ""
+        except OSError:
+            return ""  # unreadable: the step runs without it rather than failing
 
     def _tree_begin(self, *, fresh: bool) -> dict[str, str] | None:
         trees = self._trees()
@@ -751,9 +772,61 @@ class _Run:
                 self._history(step.id, iteration, "skipped", started=now)
                 self.recorder.record("step_finished", step.id, outcome="skipped")
                 return True  # saved with the cursor move
+        with self._step_log(step.id, iteration):
+            _LOG.info("step started", extra={"fields": self._log_fields(step, iteration)})
+            seen = len(self.state.history)
+            try:
+                if isinstance(step, ActionStep):
+                    done = self._action(step, iteration)
+                else:
+                    done = await self._agent(step, iteration, resume)
+            except Exception:
+                _LOG.exception("step failed")
+                raise
+            self._log_end(seen)
+            return done
+
+    # ── the step's log (M1-47) ───────────────────────────────────────────────
+
+    def _step_log(self, step: str, iteration: int):
+        logs = self.e.step_logs
+        if logs is None:
+            return nullcontext()
+        return logs.step(self.recorder.run_dir, self.state.run_id, step, iteration)
+
+    def _log_fields(self, step: AgentStep | ActionStep, iteration: int) -> dict:
+        fields: dict = {"attempt": self._attempt(step.id, iteration)}
         if isinstance(step, ActionStep):
-            return self._action(step, iteration)
-        return await self._agent(step, iteration, resume)
+            fields["action"] = step.action
+        else:
+            try:
+                definition = self.e.definitions.agent(step.agent)
+                fields["agent"] = f"{definition.name}@{definition.version}"
+            except Exception:  # an unknown agent: the step itself reports it
+                fields["agent"] = step.agent
+        return fields
+
+    def _log_end(self, seen: int) -> None:
+        """How the step ended: its newest history record, or the pause it left."""
+        records = self.state.history[seen:]
+        if records:
+            last = records[-1]
+            outcome, fields = last.outcome, {"cost_usd": last.cost_usd}
+            if last.handoff:
+                fields["handoff"] = last.handoff
+            if last.detail:
+                fields["detail"] = last.detail
+        else:
+            pending = self.state.pending
+            outcome, fields = f"paused-{pending.id}" if pending else "none", {}
+            if pending:
+                fields["detail"] = pending.reason
+        level = {"completed": logging.INFO, "skipped": logging.INFO, "failed": logging.ERROR}
+        _LOG.log(
+            level.get(outcome, logging.WARNING),
+            "step ended",
+            extra={"fields": {"outcome": outcome, **fields}},
+        )
 
     def _action(self, step: ActionStep, iteration: int) -> bool:
         started = self.e.clock.now()
@@ -821,15 +894,18 @@ class _Run:
             StepContext(self.state.run_id, step.id, iteration, agent, budget, contract)
         )
         try:
-            if resume is None:
-                task = AgentTask(
-                    instructions=agent.definition.instructions,
-                    inputs=self._inputs(agent.consumes),
-                    prompt=self._prompt(step.id, iteration),
-                )
-                outcome = await runner.run(task)
-            else:
-                outcome = await runner.resume(*resume)
+            with step_span(self.state.run_id, step.id, iteration, agent) as span:
+                if resume is None:
+                    task = AgentTask(
+                        instructions=agent.definition.instructions,
+                        inputs=self._inputs(agent.consumes),
+                        prompt=self._prompt(step.id, iteration),
+                        knowledge=self._knowledge(),
+                    )
+                    outcome = await runner.run(task)
+                else:
+                    outcome = await runner.resume(*resume)
+                finish_step_span(span, outcome)
         except _Unusable as problem:
             self._close_slice(budget)
             self._pause(problem.pause_id, problem.reason, step=step.id)
@@ -857,7 +933,10 @@ class _Run:
         # the retry's fresh begin, so a later reject returns to the step's real base (I7);
         # a tool-approval pause keeps working in the tree.
         if outcome.status in ("completed", "invalid"):
-            message = f"agentic: {step.id} #{iteration} ({self.state.run_id})"
+            message = commit_message(
+                f"agentic: {step.id} #{iteration} ({self.state.run_id})",
+                self._audit(step.id, iteration, agent),
+            )
             try:
                 commit = self._tree_finish(message)
             except Exception as error:
@@ -1030,6 +1109,22 @@ class _Run:
         if feedback := self.state.feedback.get(step):
             parts.append(f"Feedback from the last review of this step:\n{feedback}")
         return "\n\n".join(parts)
+
+    def _audit(self, step: str, iteration: int, agent: ResolvedAgent) -> CommitAudit:
+        """The trailers of a step's checkpoint commit: who, what, which approval, and the
+        handoffs the step consumed (M1-45)."""
+        approval = self.state.approvals[-1] if self.state.approvals else None
+        consumed = [self.state.latest[k] for k in agent.consumes if k in self.state.latest]
+        return CommitAudit(
+            run_id=self.state.run_id,
+            step=step,
+            iteration=iteration,
+            agent=_name(agent),
+            triggered_by=self.state.starter,
+            approved_by=approval.approver if approval else None,
+            approval_gate=approval.gate if approval else None,
+            handoffs=tuple(consumed),
+        )
 
     def _attempt(self, step: str, iteration: int) -> int:
         tried = [r for r in self.state.history if r.step == step and r.iteration == iteration]

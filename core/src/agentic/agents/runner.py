@@ -5,9 +5,9 @@ Pydantic AI, stepping through the agent's graph node by node (`agent.iter`) so
 it can keep the latest text and check for a stuck loop after every response.
 
 What a run sees (spec §8.3): the agent's instructions, a notice that wrapped
-text is data (M1-42), each consumed handoff wrapped as data (`<handoff
-kind="...">`, escaped so it cannot close early), and the step's prompt - never
-an earlier agent's conversation.
+text is data (M1-42), the repository's AGENTS.md wrapped as data (M1-46), each
+consumed handoff wrapped as data (`<handoff kind="...">`, escaped so it cannot
+close early), and the step's prompt - never an earlier agent's conversation.
 
 What the model wrote itself (its text, thinking, tool-call arguments, and the
 retry prompts that echo them) is secret-masked in the history before each call,
@@ -67,6 +67,7 @@ from pydantic_ai.messages import (
     ToolCallPart,
 )
 from pydantic_ai.models import Model
+from pydantic_ai.models.instrumented import instrument_model
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from agentic.agents.metering import CostLog
@@ -76,6 +77,7 @@ from agentic.agents.stuck import stuck_check as detector_check
 from agentic.policy import ResolvedAgent
 from agentic.security import SecretBlocked, SecretScanner
 from agentic.security.untrusted import DATA_NOTICE, HANDOFF_TAG, fence
+from agentic.telemetry.spans import model_instrumentation
 from agentic.transport import BudgetSlice, LimitHit
 
 Stopped = Literal["budget", "turns", "time", "stuck"]
@@ -116,6 +118,7 @@ class AgentTask:
     instructions: str  # the agent definition's body
     inputs: dict[str, str]  # consumed handoffs, by kind
     prompt: str  # what this step asks for
+    knowledge: str = ""  # the repository's AGENTS.md, wrapped as data (M1-46)
 
 
 @dataclass
@@ -317,7 +320,8 @@ class PydanticAIRunner:
 
     def _pydantic_agent(self, instructions: str) -> Agent:
         agent = Agent(
-            self.model,
+            instrument_model(self.model, model_instrumentation()),  # spans, no content (M1-43)
+            name=self.agent.definition.name,
             instructions=instructions,
             tools=self.tools,
             output_type=[str, DeferredToolRequests],
@@ -473,9 +477,12 @@ def _use_up(path: Path) -> None:
 
 
 def _instructions(task: AgentTask, contract: OutputContract | None = None) -> str:
-    """The agent's instructions, the data notice, each handoff fenced as data (a
-    `</handoff>` inside cannot close it - DF-24), then the output contract."""
+    """The agent's instructions, the data notice, the repository's AGENTS.md (wrapped
+    as data), each handoff fenced as data (a `</handoff>` inside cannot close it -
+    DF-24), then the output contract."""
     parts = [task.instructions.strip(), DATA_NOTICE]
+    if task.knowledge.strip():
+        parts.append(task.knowledge.strip())
     for kind, text in task.inputs.items():
         parts.append(fence(text.strip(), HANDOFF_TAG, kind=kind))
     if contract is not None:
