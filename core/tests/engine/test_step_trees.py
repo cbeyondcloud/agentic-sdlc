@@ -64,13 +64,16 @@ def test_each_agent_step_begins_fresh_and_finishes(make_harness):
         make_harness, TWO, {"designer": [answer("design")], "dev": [answer("dev-report")]}
     )
     assert start(h).status == "completed"
-    assert trees.calls == [
+    # the subject line; the audit trailers follow it (M1-45, test_checkpoint_trailers.py)
+    calls = [(c[0], c[1].split("\n")[0]) if c[0] == "finish" else c for c in trees.calls]
+    assert calls == [
         ("prepare",),
         ("begin", True),
         ("finish", "agentic: design #1 (r-1)"),
         ("begin", True),
         ("finish", "agentic: develop #1 (r-1)"),
     ]
+    assert all("\n\nAgentic-Run: r-1\n" in c[1] for c in trees.calls if c[0] == "finish")
 
 
 def test_records_carry_base_and_commit(make_harness):

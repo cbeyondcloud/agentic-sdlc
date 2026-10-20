@@ -53,7 +53,7 @@ from agentic.definitions.pipeline import (
 )
 from agentic.engine.expressions import ExpressionError, compile_condition
 from agentic.engine.gates import Approve, Authorizer, Decision, Edit, GateRefused, Reject
-from agentic.engine.state import Cursor, Pending, RunState, RunStore, StepRecord
+from agentic.engine.state import ApprovalMark, Cursor, Pending, RunState, RunStore, StepRecord
 from agentic.handoffs import (
     EnvelopeStamp,
     HandoffContract,
@@ -63,6 +63,7 @@ from agentic.handoffs import (
 )
 from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
 from agentic.telemetry.spans import finish_step_span, step_span
+from agentic.telemetry.trailers import CommitAudit, commit_message
 from agentic.transport import BudgetLedger, BudgetSlice, LimitHit
 from agentic.transport.budget import BudgetError
 
@@ -535,6 +536,8 @@ class _Run:
             notes=decision.notes,
             extra={"regime": state.regime},
         )
+        mark = ApprovalMark(gate=pending.id, approver=decision.approver, at=self.e.clock.now())
+        state.approvals.append(mark)
         if self._gate_step(pending.id) is not None:
             state.approved[pending.id] = dict(pending.artefacts)
         self._clear_pending()
@@ -860,7 +863,10 @@ class _Run:
         # the retry's fresh begin, so a later reject returns to the step's real base (I7);
         # a tool-approval pause keeps working in the tree.
         if outcome.status in ("completed", "invalid"):
-            message = f"agentic: {step.id} #{iteration} ({self.state.run_id})"
+            message = commit_message(
+                f"agentic: {step.id} #{iteration} ({self.state.run_id})",
+                self._audit(step.id, iteration, agent),
+            )
             try:
                 commit = self._tree_finish(message)
             except Exception as error:
@@ -1033,6 +1039,22 @@ class _Run:
         if feedback := self.state.feedback.get(step):
             parts.append(f"Feedback from the last review of this step:\n{feedback}")
         return "\n\n".join(parts)
+
+    def _audit(self, step: str, iteration: int, agent: ResolvedAgent) -> CommitAudit:
+        """The trailers of a step's checkpoint commit: who, what, which approval, and the
+        handoffs the step consumed (M1-45)."""
+        approval = self.state.approvals[-1] if self.state.approvals else None
+        consumed = [self.state.latest[k] for k in agent.consumes if k in self.state.latest]
+        return CommitAudit(
+            run_id=self.state.run_id,
+            step=step,
+            iteration=iteration,
+            agent=_name(agent),
+            triggered_by=self.state.starter,
+            approved_by=approval.approver if approval else None,
+            approval_gate=approval.gate if approval else None,
+            handoffs=tuple(consumed),
+        )
 
     def _attempt(self, step: str, iteration: int) -> int:
         tried = [r for r in self.state.history if r.step == step and r.iteration == iteration]
