@@ -62,6 +62,7 @@ from agentic.handoffs import (
     parse_handoff,
 )
 from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
+from agentic.telemetry.spans import finish_step_span, step_span
 from agentic.transport import BudgetLedger, BudgetSlice, LimitHit
 from agentic.transport.budget import BudgetError
 
@@ -821,15 +822,17 @@ class _Run:
             StepContext(self.state.run_id, step.id, iteration, agent, budget, contract)
         )
         try:
-            if resume is None:
-                task = AgentTask(
-                    instructions=agent.definition.instructions,
-                    inputs=self._inputs(agent.consumes),
-                    prompt=self._prompt(step.id, iteration),
-                )
-                outcome = await runner.run(task)
-            else:
-                outcome = await runner.resume(*resume)
+            with step_span(self.state.run_id, step.id, iteration, agent) as span:
+                if resume is None:
+                    task = AgentTask(
+                        instructions=agent.definition.instructions,
+                        inputs=self._inputs(agent.consumes),
+                        prompt=self._prompt(step.id, iteration),
+                    )
+                    outcome = await runner.run(task)
+                else:
+                    outcome = await runner.resume(*resume)
+                finish_step_span(span, outcome)
         except _Unusable as problem:
             self._close_slice(budget)
             self._pause(problem.pause_id, problem.reason, step=step.id)

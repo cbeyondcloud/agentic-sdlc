@@ -20,6 +20,9 @@ dependencies = [
 claude-code = ["claude-agent-sdk==0.2.164"]
 # Code intelligence (M1-35, spike S5): the default symbol-level index. Pure Python, MIT.
 codeintel = ["code-review-graph==2.3.9"]
+# Telemetry (M1-43): the OpenTelemetry SDK, so spans are recorded and exported. Without it
+# the API alone (a core dependency) makes every span a no-op. Pure Python, Apache-2.0.
+telemetry = ["opentelemetry-sdk==1.45.1"]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]

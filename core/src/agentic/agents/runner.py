@@ -52,6 +52,7 @@ from pydantic_ai import (
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, TextPart
 from pydantic_ai.models import Model
+from pydantic_ai.models.instrumented import instrument_model
 from pydantic_ai.usage import RunUsage, UsageLimits
 
 from agentic.agents.metering import CostLog
@@ -59,6 +60,7 @@ from agentic.agents.models import model_settings
 from agentic.agents.stuck import StuckDetector
 from agentic.agents.stuck import stuck_check as detector_check
 from agentic.policy import ResolvedAgent
+from agentic.telemetry.spans import model_instrumentation
 from agentic.transport import BudgetSlice, LimitHit
 
 Stopped = Literal["budget", "turns", "time", "stuck"]
@@ -295,7 +297,8 @@ class PydanticAIRunner:
 
     def _pydantic_agent(self, instructions: str) -> Agent:
         agent = Agent(
-            self.model,
+            instrument_model(self.model, model_instrumentation()),  # spans, no content (M1-43)
+            name=self.agent.definition.name,
             instructions=instructions,
             tools=self.tools,
             output_type=[str, DeferredToolRequests],
