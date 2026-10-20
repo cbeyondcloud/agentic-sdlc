@@ -30,6 +30,7 @@ Common changes:
 | `superpowers/systematic-debugging` | `skills/systematic-debugging` | Left out: `find-polluter.sh`, `condition-based-waiting-example.ts`, the pressure-test files and `CREATION-LOG.md`. The bisection-script and example references were reworded; skill references now use catalog keys |
 | `superpowers/receiving-code-review` | `skills/receiving-code-review` | "GitHub Thread Replies" became "Answering Review Findings" (in the handoff); an instruction-file reference was removed |
 | `superpowers/writing-plans` | `skills/writing-plans` | Removed: the announce line, worktree context, plan-file location, the sub-skill header line and the execution-method handoff. The plan now goes in the step's handoff |
+| `superpowers/requesting-code-review` | `skills/requesting-code-review` | `SKILL.md` is the reviewer checklist from the upstream `code-reviewer.md` (what to check, calibration, output, critical rules), for the Code Review agent itself. Removed: subagent dispatch, the git-SHA and placeholder steps, the requester-side guidance (covered by `superpowers/receiving-code-review`) and the temporary-worktree hint. Upstream Critical / Important / Minor map to the handoff's critical / high / medium-low severities |
 | `superpowers/writing-skills` | `skills/writing-skills` | Personal-skill paths now point at this framework. Sub-agent, graphviz, render script and `@`-link references were removed. The testing sections moved to the bundled `testing-and-bulletproofing.md`. Left out: `render-graphs.js`, `graphviz-conventions.dot`, `examples/`, `testing-skills-with-subagents.md`, and `anthropic-best-practices.md` (licence of that text not confirmed) |
 
 ## addyosmani/agent-skills
@@ -45,6 +46,9 @@ Common changes:
 | `addyosmani/incremental-implementation` | `skills/incremental-implementation` | `references/definition-of-done.md` bundled from the repository's shared `references/` |
 | `addyosmani/code-review-and-quality` | `skills/code-review-and-quality` | `references/security-checklist.md` and `references/performance-checklist.md` bundled from the repository's shared `references/` |
 | `addyosmani/security-and-hardening` | `skills/security-and-hardening` | `references/security-checklist.md` bundled from the repository's shared `references/` |
+| `addyosmani/interview-me` | `skills/interview-me` | "Loading Constraints" (no non-interactive use) became "In a Pipeline Step": one round of questions per step, asked through Open Questions and answered at the gate. The confirmed intent goes in the handoff instead of `docs/intent/`; "stop your turn" became "end the step". `spec-driven-development` references use its catalog key |
+| `addyosmani/api-and-interface-design` | `skills/api-and-interface-design` | None |
+| `addyosmani/browser-testing-with-devtools` | `skills/browser-testing-with-devtools` | The install block (a vendor CLI settings file and an unpinned `npx ...@latest` command) was replaced by a note that the organisation configures pinned browser tools. A quoted prompt-injection example was paraphrased so the admission scan does not refuse the skill |
 
 Mentions of addyosmani skills that are not vendored (for example `performance-optimization`)
 are left as plain references.
@@ -58,3 +62,9 @@ are left as plain references.
 | Skill | Upstream path | Changes |
 |---|---|---|
 | `mattpocock/domain-modeling` | `skills/engineering/domain-modeling` | Left out: the vendor-specific `agents/` metadata |
+| `mattpocock/to-spec` | `skills/engineering/to-spec` | The spec goes in the step's handoff instead of the issue tracker (no triage label, no set-up command); the seam check with the user became an Open Question. Left out: the `disable-model-invocation` front matter field and the `agents/` metadata |
+| `mattpocock/improve-codebase-architecture` | `skills/engineering/improve-codebase-architecture` | Candidates go in the step's handoff instead of an HTML report (left out: `HTML-REPORT.md` and its CDN scripts). The skill-tool calls (`codebase-design`, `grilling`, `domain-modeling`) and the sub-agent were removed: the vocabulary is listed inline, the grilling loop runs through Open Questions at the gate, glossary and ADR changes are proposed in the handoff, and "design it twice" is done by the agent itself. Left out: the `disable-model-invocation` field and the `agents/` metadata |
+
+`mattpocock/grill-with-docs` is not vendored: its whole body asks the agent to call two
+other skills (`grilling`, `domain-modeling`), so it adds nothing to `addyosmani/interview-me`
+plus the vendored `mattpocock/domain-modeling`.
