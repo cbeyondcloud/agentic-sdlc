@@ -41,6 +41,16 @@ PARTS = {part for pair in RATIO_METRICS.values() for part in pair}
 ORDER = ["schema_valid", "rubric", "defect_recall", "unmatched_blocking", "qa_catch"]
 ORDER += ["tests_pass", "cost_usd", "tokens", "duration_s"]
 VOLATILE = ("duration_s",)
+#: The metric each case class exists to measure: always listed, so a metric nobody
+#: could compute shows as unscored instead of quietly missing.
+EXPECTED = {
+    "scoping": "rubric",
+    "review": "defect_recall",
+    "qa": "qa_catch",
+    "dev_task": "tests_pass",
+    "defect": "tests_pass",
+}
+JUDGED = frozenset({"rubric"})  # a judged primary that nobody scored voids the report
 VERBOSITY_FLAG = 0.5  # |r| between rubric score and output length above this is flagged
 
 
@@ -150,14 +160,25 @@ def build_report(
 ) -> EvalReport:
     runs = [_eval_run(r) for r in runset.runs]
     cases = sorted({r.case_id for r in runs})
+    expected = sorted({EXPECTED[r.request.case.case_class] for r in runset.runs})
     by_label: dict[str, list[EvalRun]] = {}
     for item in runs:
         by_label.setdefault(item.label, []).append(item)
     aggregates = {
-        label: _aggregates(items, cases, runset.seed) for label, items in sorted(by_label.items())
+        label: _aggregates(items, cases, runset.seed, expected)
+        for label, items in sorted(by_label.items())
     }
-    costs = [r.cost_usd for r in runs if scored_run(r)]
-    measured = [c for c in costs if c is not None]
+    problems = list(problems)
+    for label, metrics in aggregates.items():
+        for name in sorted(JUDGED & set(expected)):
+            if metrics[name].n_scored == 0:
+                problems.append(
+                    f"{label}: no case got a {name} score - the judge failed on every run "
+                    "(see the evaluator errors)"
+                )
+    # every run that spent counts, scored or not: an INCOMPLETE run's spend is real
+    spent = [r for r in runs if r.requests or r.cost_usd is not None]
+    measured = [r.cost_usd for r in spent if r.cost_usd is not None]
     model_ids = sorted({m for r in runs for m in r.model_ids})
     if leaks or problems or not any(scored_run(r) for r in runs):
         verdict: Verdict = "UNMEASURABLE"
@@ -183,7 +204,7 @@ def build_report(
         aggregates=aggregates,
         unscored_runs=[r.run_id for r in runs if not scored_run(r)],
         cost_total_usd=round(sum(measured), 6) if measured else None,
-        cost_unmeasured_runs=len(costs) - len(measured),
+        cost_unmeasured_runs=len(spent) - len(measured),
         model_ids=model_ids,
         # one label's runs answered by more than one model: the provider changed mid-run
         # (two variants on different tiers are expected to differ, so it is per label)
@@ -197,7 +218,7 @@ def build_report(
         judge_cost_usd=judge_cost_usd,
         verbosity_r={label: _verbosity(items, runset) for label, items in sorted(by_label.items())},
         verdict=verdict,
-        problems=list(problems),
+        problems=problems,
     )
 
 
@@ -258,6 +279,9 @@ def render_markdown(report: EvalReport) -> str:
             f"{report.stale_cassettes} stale cassettes: prompts changed since recording; "
             "re-record (`--mode record`)."
         )
+    errors = [f"{r.run_id}: {e}" for r in report.runs for e in r.evaluator_errors]
+    if errors:
+        notes.append(f"{len(errors)} evaluator errors: {'; '.join(errors[:5])}")
     if report.model_changed:
         notes.append("The resolved model changed during the evaluation.")
     if report.budget_hit:
@@ -337,8 +361,10 @@ def _eval_run(result: EvalRunResult) -> EvalRun:
     )
 
 
-def _aggregates(runs: list[EvalRun], cases: list[str], seed: int) -> dict[str, MetricAggregate]:
-    names = {name for r in runs for name in r.metrics} - PARTS
+def _aggregates(
+    runs: list[EvalRun], cases: list[str], seed: int, expected: Sequence[str] = ()
+) -> dict[str, MetricAggregate]:
+    names = ({name for r in runs for name in r.metrics} - PARTS) | {"schema_valid", *expected}
     ordered = [n for n in ORDER if n in names] + sorted(names - set(ORDER))
     out = {}
     for name in ordered:

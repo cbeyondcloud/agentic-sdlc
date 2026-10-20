@@ -130,6 +130,40 @@ class PairwiseComparer(Protocol):
     async def compare(self, a: str, b: str, *, reference: str | None = None) -> object: ...
 
 
+class PlanMismatch(ValueError):
+    """The run about to start is not the one the plan pre-registered."""
+
+
+def check_plan(
+    plan: ABPlan,
+    cases: Sequence[EvalCase],
+    *,
+    corpus_manifest_sha: str,
+    judge_model: str | None = None,
+    rubric_sha: str | None = None,
+) -> None:
+    """Refuse, before anything runs, a run that differs from its plan: another corpus,
+    cases from another split or another agent, fewer cases than n, another judge or
+    rubric. A verdict is only as good as the protocol it followed."""
+    problems = []
+    if corpus_manifest_sha != plan.corpus_manifest_sha:
+        problems.append(
+            f"corpus {corpus_manifest_sha} is not the plan's {plan.corpus_manifest_sha}"
+        )
+    if stray := sorted(c.id for c in cases if c.split != plan.split):
+        problems.append(f"cases outside the plan's {plan.split} split: {', '.join(stray)}")
+    if other := sorted(c.id for c in cases if c.agent != plan.agent):
+        problems.append(f"cases for another agent than {plan.agent}: {', '.join(other)}")
+    if len(cases) < plan.n:
+        problems.append(f"{plan.n} cases are needed and {len(cases)} were given")
+    if judge_model is not None and judge_model != plan.judge_model:
+        problems.append(f"judge {judge_model} is not the plan's {plan.judge_model}")
+    if rubric_sha is not None and rubric_sha != plan.rubric_sha:
+        problems.append(f"rubric {rubric_sha} is not the plan's {plan.rubric_sha}")
+    if problems:
+        raise PlanMismatch("the run does not follow its plan: " + "; ".join(problems))
+
+
 def register_plan(plan: ABPlan, record: Record) -> str:
     """Pre-register `plan`: its sha goes to the ledger before any run."""
     sha = plan.sha
@@ -151,6 +185,7 @@ def decide(
     invalid_b: int = 0,
     pairwise: Sequence[float] | None = None,
     order_inconsistent: int = 0,
+    pairwise_comparisons: int | None = None,  # swapped comparisons made (cases x k)
     false_rate_a: float | None = None,
     false_rate_b: float | None = None,
     leaks: Sequence[str] = (),
@@ -187,7 +222,7 @@ def decide(
     guards = _guards(plan, costs_a, costs_b, invalid_a, invalid_b, false_rate_a, false_rate_b)
     pair = None
     if pairwise is not None and len(pairwise):
-        total = len(pairwise)
+        total = pairwise_comparisons or len(pairwise)
         inconsistency = order_inconsistent / total
         pair = {
             "win_rate": fmean(pairwise),
@@ -284,13 +319,23 @@ async def run_ab(
     *,
     kind: str,
     record: Record,
+    corpus_manifest_sha: str,
+    judge_model: str | None = None,
+    rubric_sha: str | None = None,
     evaluators: Sequence[Evaluator] = (),
     pairwise_judge: PairwiseComparer | None = None,
     scrubber: Scrubber | None = None,
     leaks: LeakCheck | None = None,
     max_concurrency: int = 1,
 ) -> tuple[ABResult, RunSet]:
-    """Register the plan, run A and B blind as X/Y, score, reveal, decide."""
+    """Check and register the plan, run A and B blind as X/Y, score, reveal, decide."""
+    check_plan(
+        plan,
+        cases,
+        corpus_manifest_sha=corpus_manifest_sha,
+        judge_model=judge_model,
+        rubric_sha=rubric_sha,
+    )
     sha = register_plan(plan, record)
     mapping = assign_labels(["A", "B"], seed=plan.seed)
     labelled = {mapping.label(v): runners[v] for v in ("A", "B")}
@@ -324,7 +369,7 @@ async def run_ab(
             outputs[(label, case_id, run.request.repeat)] = shown
 
     pairwise_y: list[float] = []
-    inconsistent = 0
+    inconsistent = comparisons = 0
     if pairwise_judge is not None:
         per_case: dict[str, list[float]] = {}
         for case in sorted(cases, key=lambda c: c.id):
@@ -333,6 +378,7 @@ async def run_ab(
                 if x is None or y is None:
                     continue
                 result = await pairwise_judge.compare(x, y)
+                comparisons += 1
                 per_case.setdefault(case.id, []).append(result.score_b)  # type: ignore[attr-defined]
                 inconsistent += not result.consistent  # type: ignore[attr-defined]
         pairwise_y = [fmean(v) for v in per_case.values()]
@@ -352,6 +398,7 @@ async def run_ab(
         invalid_b=invalid[b],
         pairwise=pairwise_b,
         order_inconsistent=inconsistent,
+        pairwise_comparisons=comparisons or None,
         leaks=leaks.leaks if leaks is not None else (),
         budget_hit=runset.budget_hit,
         mapping=revealed,

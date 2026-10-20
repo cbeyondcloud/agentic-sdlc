@@ -149,11 +149,13 @@ class AgentCaseRunner:
     async def __call__(self, request: RunRequest) -> RunRecord:
         definition = self.resolved.definition
         agent = f"{definition.name}@{definition.version}"
-        limit = Decimal(str(self.resolved.limits.budget_usd))
+        own = self.resolved.limits.budget_usd
+        limit = None if own is None else Decimal(str(own))
         try:
             slice_ = self.budget.run.open(request.run_id, "step", limit)
         except LimitHit:
             return RunRecord(status="skipped", error=BUDGET_STOP)
+        granted = slice_.limit_usd
         costs = CostLog()
         started = time.perf_counter()
         try:
@@ -167,13 +169,15 @@ class AgentCaseRunner:
                 contract=self._contract(request.run_id, agent),
             )
             outcome = await runner.run(task_for(request.case, definition.instructions))
-        except LimitHit:
-            return _record(RunRecord(status="stopped", error=BUDGET_STOP), costs, started)
+        except LimitHit as hit:
+            if hit_eval_cap(hit, granted=granted, own=limit):
+                record = RunRecord(status="stopped", error=BUDGET_STOP)
+            else:  # the agent spent its own per-run budget: its failure, and scored
+                record = RunRecord(status="stopped", errors=[str(hit)])
+            return _record(record, costs, started)
         finally:
             slice_.close()
         record = RunRecord(status=outcome.status, output=outcome.output, errors=outcome.errors)
-        if outcome.stopped == "budget":
-            record.error = BUDGET_STOP
         return _record(record, costs, started)
 
     def _contract(self, run_id: str, agent: str) -> HandoffContract:
@@ -182,9 +186,20 @@ class AgentCaseRunner:
         return HandoffContract(self.schema, run_id, self.step, agent, clock=self.clock)
 
 
+def hit_eval_cap(hit: LimitHit, *, granted: Decimal | None, own: Decimal | None) -> bool:
+    """Whether a budget stop was the evaluation's cap (the run is unscored, the eval
+    INCOMPLETE) rather than the agent spending its own per-run limit (an agent failure,
+    scored). A run slice smaller than the agent's limit was cut short by the cap."""
+    if hit.scope == "run":
+        return True
+    return granted is not None and (own is None or granted < own)
+
+
 def task_for(case: EvalCase, instructions: str) -> AgentTask:
     """What the agent is given: its instructions, the case's handoffs (fenced as data by
-    the runner), and the prompt with any diff fenced as untrusted data."""
+    the runner), and the prompt with any diff fenced as untrusted data. A dev_task's
+    workspace is not given yet: running agents in a worktree of it, inside the sandbox,
+    and executing its tests is deferred, so `tests_pass` stays unmeasured."""
     prompt = case.inputs.prompt.strip()
     if case.inputs.diff:
         prompt += "\n\n" + untrusted(case.inputs.diff, source="diff")

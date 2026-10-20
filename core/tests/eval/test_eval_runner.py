@@ -109,6 +109,17 @@ def test_a_run_that_raises_is_kept_as_an_error():
     assert run.metrics == {}
 
 
+def test_an_agent_s_own_budget_is_its_failure_the_eval_cap_is_not():
+    from agentic.eval.runner import hit_eval_cap
+    from agentic.transport import LimitHit
+
+    own = Decimal("1")
+    step_hit = LimitHit("step", "c1.X.0", own, Decimal("1.2"))
+    assert not hit_eval_cap(step_hit, granted=own, own=own)  # the agent ran away: scored
+    assert hit_eval_cap(step_hit, granted=Decimal("0.4"), own=own)  # the cap cut its slice
+    assert hit_eval_cap(LimitHit("run", "run", Decimal("5"), Decimal("5.1")), granted=own, own=own)
+
+
 def test_agent_case_runner_produces_a_schema_valid_handoff(fixtures: Path, tmp_path: Path):
     policy = load_policy(fixtures / "policy" / "policy")
     agent_file = tmp_path / "business-analyst.md"

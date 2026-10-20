@@ -28,21 +28,21 @@ _TELL_LINES = [
         r"^[ \t>*-]*(?:using|applying|loaded|activating|activated) (?:the )?skills?\b.*(?:\n|$)",
         re.IGNORECASE | re.MULTILINE,
     ),
-    # model self-identification: "I am an AI language model ...", "... trained by X"
+    # model self-identification, in the first person only - "Label it as AI-generated" or
+    # "the data model is built by the nightly job" in a document stays
     re.compile(
-        r"^.*\b(?:I am|I'm|as) (?:an? )?(?:AI\b|AI assistant|(?:large )?language model)"
-        r".*(?:\n|$)",
+        r"^.*(?:\b(?:I am|I'm) (?:an? )?(?:AI|AI assistant|(?:large )?language model)\b"
+        r"|\bAs an AI\b(?! *-)).*(?:\n|$)",
         re.IGNORECASE | re.MULTILINE,
     ),
-    # first person or "model/assistant" only: "Created by Finance" in a document stays
     re.compile(
-        r"^.*\b(?:I|I'm|model|assistant)(?: was| am| is)? "
-        r"(?:trained|developed|created|built|made) by\b.*(?:\n|$)",
+        r"^.*\b(?:I|I'm)(?: was| am)? (?:trained|developed|created|built|made) by\b.*(?:\n|$)",
         re.IGNORECASE | re.MULTILINE,
     ),
 ]
-# a role tell inside a sentence: "As the business analyst agent, ..."
-_ROLE_TELL = re.compile(r"\bAs (?:the|an?|your) [\w ,'-]{1,60}? agent\b[,:]?[ \t]*", re.IGNORECASE)
+# a role tell that opens a clause: "As the business analyst agent, I ..." (the comma or
+# colon is required, so "As the delivery agent retries, ..." stays)
+_ROLE_TELL = re.compile(r"\bAs (?:the|an?|your) [\w '-]{1,60}? agent[,:][ \t]*", re.IGNORECASE)
 
 
 class BlindingError(ValueError):

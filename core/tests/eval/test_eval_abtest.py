@@ -115,6 +115,38 @@ def test_pairwise_below_half_blocks_a_rubric_win():
     assert result.verdict == "NO_BENEFIT" and result.pairwise["win_rate"] == 0.4
 
 
+def test_order_inconsistency_is_a_share_of_comparisons_not_cases():
+    a, b = per_case({c: 6.0 for c in CASES}), per_case({c: 8.0 for c in CASES})
+    result = decide(
+        plan(pairwise_required=True),
+        a,
+        b,
+        costs_a=COSTS,
+        costs_b=COSTS,
+        pairwise=[0.8] * 20,  # per case, each the mean of k=3 comparisons
+        order_inconsistent=10,
+        pairwise_comparisons=60,
+    )
+    assert result.pairwise["order_inconsistency"] == pytest.approx(10 / 60)
+    assert result.verdict == "PROMOTE"
+
+
+def test_a_run_that_does_not_follow_its_plan_is_refused_before_it_starts():
+    from agentic.eval.abtest import PlanMismatch, check_plan
+
+    cases = [scoping_case(c) for c in CASES[:4]]
+    small = plan(n=4, k=1)
+    check_plan(small, cases, corpus_manifest_sha=SHA, judge_model="family-b/judge", rubric_sha=SHA)
+    with pytest.raises(PlanMismatch, match="corpus"):
+        check_plan(small, cases, corpus_manifest_sha="sha256:" + "d" * 64)
+    with pytest.raises(PlanMismatch, match="split"):
+        check_plan(small, [scoping_case("x1", split="dev"), *cases], corpus_manifest_sha=SHA)
+    with pytest.raises(PlanMismatch, match="judge"):
+        check_plan(small, cases, corpus_manifest_sha=SHA, judge_model="family-c/other")
+    with pytest.raises(PlanMismatch, match="4 cases are needed"):
+        check_plan(small, cases[:3], corpus_manifest_sha=SHA)
+
+
 def test_non_inferiority_with_a_negative_margin():
     a = per_case({c: 6.0 for c in CASES}, noise=0.2, seed=1)
     b = per_case({c: 5.9 for c in CASES}, noise=0.2, seed=2)
@@ -147,6 +179,7 @@ def test_plan_registered_before_any_run_and_mapping_revealed_only_in_the_result(
             {"A": variant(5.0, log), "B": variant(8.0, log)},
             cases,
             kind="requirements",
+            corpus_manifest_sha=SHA,
             record=lambda event, **fields: log.append((event, fields.get("plan_sha"))),
             evaluators=[ScoreFromOutput()],
         )
@@ -183,6 +216,7 @@ def test_a_leak_makes_the_ab_unmeasurable():
             {"A": variant(5.0, []), "B": variant(8.0, [], tell="secret-skill ")},
             cases,
             kind="requirements",
+            corpus_manifest_sha=SHA,
             record=lambda event, **fields: None,
             evaluators=[ScoreFromOutput()],
             pairwise_judge=LeakyJudge(leaks),

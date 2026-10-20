@@ -135,6 +135,36 @@ def test_a_changed_prompt_is_stale_but_served(tmp_path: Path):
     assert server.finish() == [] and server.stale == 1
 
 
+def test_the_http_upstream_asks_for_an_uncompressed_reply(monkeypatch):
+    from agentic.eval import replay
+
+    sent = {}
+
+    class Reply:
+        status = 200
+        headers = {"content-type": "application/json"}
+
+        def read(self):
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout):
+        sent.update({k.lower(): v for k, v in request.header_items()})
+        return Reply()
+
+    monkeypatch.setattr(replay.urllib.request, "urlopen", fake_urlopen)
+    forward = replay.http_upstream("http://gateway.invalid")
+    headers = {"accept-encoding": "gzip, br", "authorization": "Bearer x", "host": "h"}
+    forward(replay.UpstreamRequest("c/X/0", "/v1/messages", b"{}", headers))
+    assert sent["accept-encoding"] == "identity"  # a gzip body could not be stored or replayed
+    assert sent["authorization"] == "Bearer x" and "host" not in sent
+
+
 def test_request_hash_ignores_key_order_and_volatile_fields():
     a = json.dumps({"model": "m", "messages": [], "metadata": {"user_id": "1"}}).encode()
     b = json.dumps({"messages": [], "model": "m"}).encode()

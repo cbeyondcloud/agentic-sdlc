@@ -73,32 +73,44 @@ def schema_valid(status: str, output: str | None, kind: str) -> bool:
 def match_findings(
     findings: Sequence[object], seeded: Sequence[SeededDefect], *, tolerance: int = TOLERANCE
 ) -> Matching:
-    """One-to-one, in finding order: each finding claims the nearest seeded defect not yet
-    claimed (inside the range is distance 0), so one finding never counts twice and a
-    duplicate finding claims nothing."""
-    caught: set[int] = set()
-    unmatched = []
-    for index, raw in enumerate(findings):
+    """A maximum one-to-one matching (Kuhn's augmenting paths): a finding counts for at
+    most one seeded defect and a defect for at most one finding, and as many defects as
+    possible are matched - whatever order the agent listed its findings in. Candidates
+    are tried nearest first (inside the range is distance 0)."""
+    candidates: list[list[int]] = []
+    for raw in findings:
         found = _as_dict(raw)
         file, line = found.get("file"), found.get("line")
-        best: tuple[int, int] | None = None  # (distance, defect index)
+        near: list[tuple[int, int]] = []
         if isinstance(file, str) and isinstance(line, int):
-            path = _posix(file)
-            category = found.get("category")
+            path, category = _posix(file), found.get("category")
             for d_index, defect in enumerate(seeded):
-                if d_index in caught or _posix(defect.file) != path:
+                if _posix(defect.file) != path:
                     continue
                 if category and str(category).casefold() != defect.category.casefold():
                     continue
                 start, end = defect.lines
                 distance = max(start - line, line - end, 0)
-                if distance <= tolerance and (best is None or distance < best[0]):
-                    best = (distance, d_index)
-        if best is None:
-            unmatched.append(index)
-        else:
-            caught.add(best[1])
-    return Matching(frozenset(caught), tuple(unmatched))
+                if distance <= tolerance:
+                    near.append((distance, d_index))
+        candidates.append([d for _, d in sorted(near)])
+    owner: dict[int, int] = {}  # defect index -> finding index
+
+    def claim(finding: int, seen: set[int]) -> bool:
+        for defect in candidates[finding]:
+            if defect in seen:
+                continue
+            seen.add(defect)
+            if defect not in owner or claim(owner[defect], seen):
+                owner[defect] = finding
+                return True
+        return False
+
+    for index in range(len(candidates)):
+        claim(index, set())
+    matched = set(owner.values())
+    unmatched = tuple(i for i in range(len(candidates)) if i not in matched)
+    return Matching(frozenset(owner), unmatched)
 
 
 def defect_recall(findings: Sequence[object], seeded: Sequence[SeededDefect]) -> tuple[int, int]:

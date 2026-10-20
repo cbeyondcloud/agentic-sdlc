@@ -158,9 +158,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     created = datetime.now(UTC)
     report_id = f"eval-{options.agent}-{created:%Y%m%dT%H%M%S}-{secrets.token_hex(3)}"
     folder = options.out or Path(".agentic") / "local" / "eval" / report_id
-    ledger = EvalLedger(Path.cwd(), report_id, policy.version, options.agent)
-    ledger("eval.run_started")
-
+    api_key = _api_key(options, upstream)  # before anything starts or is ledgered
     server = None
     if options.mode != "live":
         cassettes = options.cassettes or fixtures / "cassettes"
@@ -170,8 +168,6 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             server = CassetteServer(
                 cassettes, "record", upstream or http_upstream(options.gateway or "")
             )
-        server.start()
-    api_key = _api_key(options, upstream)
     network = NetworkSettings(trust_env=False) if options.mode == "replay" else None
 
     def gateway_for(key: str) -> GatewaySettings:
@@ -247,8 +243,11 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
         ObjectiveMetrics(),
         RubricMetric(judge_for=judge_for, scrubber=scrubber, reference=reference),
     ]
+    ledger = EvalLedger(Path.cwd(), report_id, policy.version, options.agent)
+    ledger("eval.run_started")
     try:
         if server is not None:
+            server.start()
             server.expect(f"{c.id}/X/{r}/agent" for c in cases for r in range(repeats))
         runset = asyncio.run(
             run_eval(
@@ -263,6 +262,9 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
                 name=f"eval-{options.agent}",
             )
         )
+    except BaseException:
+        ledger("eval.failed")  # the run is closed in the ledger, never left open
+        raise
     finally:
         if server is not None:
             server.close()
@@ -362,6 +364,7 @@ class EvalLedger:
       eval.ab_decided       -> step_finished  (step "ab", outcome verdict, artifacts {plan})
       eval.report_written   -> step_finished  (step "eval", outcome verdict,
                                artifacts {report.json: sha}), then run_closed
+      eval.failed           -> run_closed     (status error: the run raised)
 
     It is also the `record(event, **fields)` callback `agentic.eval.abtest` takes.
     """
@@ -403,6 +406,9 @@ class EvalLedger:
                     "step_finished", phase="eval", outcome=outcome, artifacts=artifacts
                 )
                 self.ledger.record("run_closed", status=outcome)
+                self.ledger.release()
+            elif event == "eval.failed":
+                self.ledger.record("run_closed", status="error")
                 self.ledger.release()
             else:
                 raise ValueError(f"unknown eval event {event!r}")

@@ -63,6 +63,20 @@ def test_one_finding_claims_one_defect_the_nearest():
     assert taken.caught == {0} and taken.unmatched == (1,)  # a duplicate finding claims nothing
 
 
+def test_matching_is_maximal_whatever_the_finding_order():
+    apart = [
+        SeededDefect(file="a.py", lines=(40, 41), category="logic"),
+        SeededDefect(file="a.py", lines=(46, 47), category="logic"),
+    ]
+    # greedy would give line 44 the nearer defect B and leave line 49 with nothing
+    for order in (
+        [finding("a.py", 44), finding("a.py", 49)],
+        [finding("a.py", 49), finding("a.py", 44)],
+    ):
+        result = match_findings(order, apart)
+        assert result.caught == {0, 1} and result.unmatched == ()
+
+
 def test_unmatched_blocking_counts_open_blocking_findings_only():
     findings = [
         finding("billing/export.py", 41),  # matches

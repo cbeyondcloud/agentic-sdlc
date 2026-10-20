@@ -92,9 +92,28 @@ def test_leaks_and_replay_problems_make_it_unmeasurable_and_the_budget_incomplet
 def test_cost_and_model_changes_are_reported():
     runs = [run("c1", 0, {}), run("c2", 0, {}, cost=None)]
     runs[1].record.model_ids = ["family-a/m2"]
+    runs[1].record.requests = 1  # it called a model, but no cost was reported
     report = report_of(runs)
     assert report.cost_total_usd == 0.1 and report.cost_unmeasured_runs == 1
     assert report.model_ids == ["family-a/m1", "family-a/m2"] and report.model_changed
+
+
+def test_a_rubric_case_the_judge_never_scored_is_named_and_unmeasurable():
+    runs = [run("c1", 0, {"schema_valid": 1.0}), run("c2", 0, {"schema_valid": 1.0})]
+    runs[0].evaluator_errors.append("RubricMetric: judge budget spent")
+    report = report_of(runs)
+    rubric = report.aggregates["X"]["rubric"]
+    assert rubric.value is None and rubric.unscored == ["c1", "c2"]
+    assert report.verdict == "UNMEASURABLE"
+    assert any("rubric" in p for p in report.problems)
+    assert "judge budget spent" in render_markdown(report)
+
+
+def test_spend_counts_every_run_that_spent():
+    runs = [run("c1", 0, {"rubric": 7.0}), run("c2", 0, {}, status="error", cost=0.3)]
+    runs[1].record.requests = 1
+    report = report_of(runs)
+    assert report.cost_total_usd == 0.4 and report.cost_unmeasured_runs == 0
 
 
 def test_markdown_and_files(tmp_path: Path):

@@ -28,9 +28,13 @@ def test_scrubber_leaves_ordinary_text_alone():
     text = (
         "## Design\nWe use a skilled queue worker; the agent pool is unchanged.\n"
         "The monthly report is created by Finance and reviewed by Audit.\n"
+        "The invoice data model is built by the nightly job.\n"
+        "Label suggestions as AI-generated.\n"
+        "As the delivery agent retries, each event keeps its id.\n"
     )
     assert Scrubber(names=["tdd"]).scrub(text) == text
-    assert Scrubber().scrub("Intro.\nThis model was trained by SomeLab.\nEnd.") == "Intro.\nEnd."
+    assert Scrubber().scrub("Intro.\nI was trained by SomeLab.\nEnd.") == "Intro.\nEnd."
+    assert Scrubber().scrub("As an AI assistant, I think so.\nEnd.") == "End."
 
 
 def test_names_are_matched_case_insensitively_on_word_boundaries():

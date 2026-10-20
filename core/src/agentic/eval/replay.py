@@ -77,7 +77,10 @@ def http_upstream(base_url: str, timeout_s: float = 600.0) -> Upstream:
     root = base_url.rstrip("/")
 
     def forward(request: UpstreamRequest) -> UpstreamReply:
-        headers = {k: v for k, v in request.headers.items() if k not in ("host", "content-length")}
+        skip = ("host", "content-length", "accept-encoding")
+        headers = {k: v for k, v in request.headers.items() if k.lower() not in skip}
+        # urllib does not decompress, and a cassette stores text: ask for a plain body
+        headers["accept-encoding"] = "identity"
         outgoing = urllib.request.Request(
             root + request.path, data=request.body, headers=headers, method="POST"
         )
