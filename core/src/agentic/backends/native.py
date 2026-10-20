@@ -7,6 +7,7 @@ all tools, child agents, approval pauses, the stuck check.
 """
 
 from collections.abc import Callable
+from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -72,6 +73,8 @@ class NativeBackend:
                 scanner=scanner,
                 _inner=self.network_transport,
             )
+        if tool_context is not None and tool_context.secret_scanner is None:
+            tool_context = replace(tool_context, secret_scanner=scanner)  # the step's policy
         tools = build_tools(step.agent, tool_context) if tool_context is not None else []
         if spawner is not None:  # a child's answer was shaped by what it read: data too
             tools += protect_tools(

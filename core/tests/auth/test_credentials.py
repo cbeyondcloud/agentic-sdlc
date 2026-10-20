@@ -76,6 +76,16 @@ def test_in_ci_a_missing_key_says_to_set_the_variable():
     assert ring.asked == 0
 
 
+@pytest.mark.parametrize(
+    "marker", ["TF_BUILD", "JENKINS_URL", "BUILDKITE", "TEAMCITY_VERSION", "GITLAB_CI"]
+)
+def test_ci_systems_that_do_not_set_ci_are_recognised(marker):  # review
+    ring = MemoryKeyring({("agentic-sdlc", TOKENLEAN_KEY): "from-keyring"})
+    with pytest.raises(CredentialError, match="CI"):
+        Credentials(environ={marker: "True"}, keyring=ring).get(TOKENLEAN_KEY)
+    assert ring.asked == 0
+
+
 @pytest.mark.parametrize("ci", ["", "0", "false", "False", "no"])
 def test_a_false_ci_value_is_not_ci(ci):
     ring = MemoryKeyring({("agentic-sdlc", TOKENLEAN_KEY): "k"})

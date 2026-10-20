@@ -34,6 +34,8 @@ Action = Literal["block", "mask"]
 #: Not secrets: a public IP address is reported by detect-secrets but leaks nothing.
 NOT_SECRETS = frozenset({"IPPublicDetector"})
 UNSCANNABLE = "Unscannable"  # the finding for text the deadline stopped
+#: What a mask looks like, to recognise one coming back (the model may copy it).
+MASKED = re.compile(r"\[MASKED(?: SECRET)?: ")
 _KEY_DETECTOR = "PrivateKeyDetector"
 _KEY_END = re.compile(r"-----END[^\n]{0,64}?-----")
 _TOKEN_TAIL = re.compile(r"[A-Za-z0-9_\-+/=.]*")
@@ -145,9 +147,10 @@ class SecretScanner:
 
     # ── finding and masking ───────────────────────────────────────────────────
 
-    def findings(self, text: str) -> list[Finding]:
-        """Every secret in `text`, as merged spans in order. Raises TimeoutError."""
-        deadline = time.monotonic() + self.deadline_s
+    def findings(self, text: str, deadline: float | None = None) -> list[Finding]:
+        """Every secret in `text`, as merged spans in order. Raises TimeoutError once
+        `deadline` (a `time.monotonic()` value; default: `deadline_s` from now) passes."""
+        deadline = deadline if deadline is not None else time.monotonic() + self.deadline_s
         spans: list[Finding] = []
         for detector in self.detectors:
             for pattern in detector.patterns:
@@ -157,10 +160,10 @@ class SecretScanner:
                         spans.append(_span(detector, text, match.start(), match.end()))
         return _merged(spans)
 
-    def mask(self, text: str) -> tuple[str, Counter]:
+    def mask(self, text: str, deadline: float | None = None) -> tuple[str, Counter]:
         """`text` with each secret replaced by a marker, and how many of each detector."""
         try:
-            found = self.findings(text)
+            found = self.findings(text, deadline)
         except TimeoutError:
             return "[MASKED: not scanned in time]", Counter({UNSCANNABLE: 1})
         if not found:
@@ -183,7 +186,7 @@ class SecretScanner:
         """A request body: `content` itself if clean, else masked or SecretBlocked.
         In JSON every string is scanned decoded (escapes cannot hide a secret) and the
         body re-encoded only when masked; any other body is scanned as latin-1, so
-        the bytes around a mask are kept exactly."""
+        the bytes around a mask are kept exactly. One deadline covers the whole body."""
         try:
             data = json.loads(content) if content else None
         except (ValueError, UnicodeDecodeError):
@@ -191,16 +194,18 @@ class SecretScanner:
             masked = self.check_text(text, where)
             return content if masked is text else masked.encode("latin-1")
         counts: Counter = Counter()
+        deadline = time.monotonic() + self.deadline_s
 
         def mask(value: str) -> str:
-            masked, found = self.mask(value)
+            masked, found = self.mask(value, deadline)
             counts.update(found)
             return masked
 
         rebuilt = _walk(data, mask)
         if not self._decide(counts, where):
             return content
-        return json.dumps(rebuilt, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        # ASCII escapes: a lone surrogate (valid JSON) has no UTF-8 encoding
+        return json.dumps(rebuilt, separators=(",", ":")).encode("ascii")
 
     def _decide(self, counts: Counter, where: str) -> bool:
         """True when masked text is to be used; raises when blocked; False when clean."""
@@ -242,11 +247,19 @@ def _merged(spans: list[Finding]) -> list[Finding]:
 
 
 def _walk(value: object, fn: Callable[[str], str]) -> object:
-    """`value` with `fn` applied to every string in it, keys included."""
+    """`value` with `fn` applied to every string in it, keys included. Two keys that
+    mask alike stay two entries (numbered), so no value is dropped."""
     if isinstance(value, str):
         return fn(value)
     if isinstance(value, list):
         return [_walk(item, fn) for item in value]
     if isinstance(value, dict):
-        return {fn(key): _walk(item, fn) for key, item in value.items()}
+        rebuilt: dict[str, object] = {}
+        for key, item in value.items():
+            new, n = fn(key), 1
+            while new in rebuilt:
+                n += 1
+                new = f"{fn(key)} #{n}"
+            rebuilt[new] = _walk(item, fn)
+        return rebuilt
     return value

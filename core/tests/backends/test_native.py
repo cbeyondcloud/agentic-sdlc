@@ -16,6 +16,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from agentic.agents.models import GatewaySettings, model_settings
 from agentic.agents.runner import AgentTask
+from agentic.agents.tools import ToolContext
 from agentic.backends.native import NativeBackend
 from agentic.engine.engine import EngineError, StepContext
 from agentic.engine.factory import StepRunners
@@ -194,6 +195,38 @@ def test_each_step_scans_with_the_scanner_made_for_it(resolved, tmp_path):
 
     assert seen and all(key.encode() not in r.content for r in seen)
     assert events[0] == ("develop", SecretScanEvent("masked", "model-call", {"AWSKeyDetector": 1}))
+
+
+class OpenGuard:
+    def writes(self, paths):
+        return []
+
+    def command(self, command):
+        return []
+
+    def asks(self, command):
+        return []
+
+
+def test_the_steps_scanner_also_scans_tool_output(resolved, tmp_path):  # review
+    key = "AKIA" + "Z7Q4R2XW" + "9PLM3TKB"
+    (tmp_path / "tree").mkdir()
+    (tmp_path / "tree" / "conf.py").write_text(f"KEY = '{key}'\n", encoding="utf-8")
+    events: list[SecretScanEvent] = []
+    native = backend(
+        model_for=lambda ctx: FunctionModel(lambda m, i: ModelResponse(parts=[])),
+        scanner_for=lambda ctx: SecretScanner("mask", on_event=events.append),
+    )
+    agent = resolved.model_copy(update={"tools": ["read_files"]})
+    context = ToolContext(tree=tmp_path / "tree", guard=OpenGuard())
+    runner = native.runner(
+        step(agent, slice_()), tool_context=context, state_dir=tmp_path / "s", spawner=None
+    )
+    read = next(tool for tool in runner.tools if tool.name == "read_file")
+
+    seen = read.function(path="conf.py")
+    assert "[MASKED SECRET: AWS Access Key]" in seen and key not in seen
+    assert events == [SecretScanEvent("masked", "tool:read_file", {"AWSKeyDetector": 1})]
 
 
 class FakeSpawner:

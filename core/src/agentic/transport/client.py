@@ -74,11 +74,7 @@ def make_client(
     """A synchronous client for TokenLean at `base_url`, stamping `identity`; every
     body is secret-scanned first (`scanner`, default: block, default detectors)."""
     stamp = _stamper(base_url, identity, _allowed(allow))
-    settings = network or NetworkSettings()
-    tls = ssl_context(settings)
-    inner = _transport or _SyncClientTransport(
-        httpx2.Client(verify=tls, trust_env=settings.trust_env)
-    )
+    inner = _transport or make_sync_network_transport(network)
     transport = SyncScanningTransport(inner, scanner or SecretScanner())
     return httpx2.Client(
         base_url=base_url,
@@ -154,6 +150,14 @@ def make_network_transport(network: NetworkSettings | None = None) -> httpx2.Asy
     settings = network or NetworkSettings()
     return _ClientTransport(
         httpx2.AsyncClient(verify=ssl_context(settings), trust_env=settings.trust_env)
+    )
+
+
+def make_sync_network_transport(network: NetworkSettings | None = None) -> httpx2.BaseTransport:
+    """`make_network_transport` for the synchronous client."""
+    settings = network or NetworkSettings()
+    return _SyncClientTransport(
+        httpx2.Client(verify=ssl_context(settings), trust_env=settings.trust_env)
     )
 
 

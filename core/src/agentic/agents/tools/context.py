@@ -69,10 +69,16 @@ class ToolContext:
     secret_scanner: SecretScanner | None = None
 
 
+class Refusal(str):
+    """A refusal written by the framework. Its TYPE marks it - the one tool result
+    not labelled as untrusted data (M1-42) - so file text that merely starts with
+    'REFUSED:' cannot pass for one."""
+
+
 def refused(reason: str) -> str:
     """What a refused call returns to the model: it can read the reason and try
     something else (a ModelRetry would count against the run's retry limit)."""
-    return f"REFUSED: {reason}"
+    return Refusal(f"REFUSED: {reason}")
 
 
 def guarded[F: Callable](tool: F) -> F:

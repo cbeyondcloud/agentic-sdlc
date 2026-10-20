@@ -4,7 +4,8 @@ v1's credential is the user's TokenLean proxy key (D12). Lookup order:
 
   1. the environment variable `AGENTIC_<NAME>` - how CI and service accounts
      pass it; it always wins;
-  2. in CI (`CI` set to anything but empty/0/false/no) the search stops there:
+  2. in CI (`CI`, or another system's marker in `CI_MARKERS`, set to anything
+     but empty/0/false/no) the search stops there:
      a CI runner has no keychain, and a keychain prompt would hang the job;
   3. the OS keyring (Windows Credential Manager, macOS Keychain, Secret
      Service) through `keyring` (MIT), service `agentic-sdlc` - where
@@ -30,6 +31,19 @@ _KEYRING_ERRORS = (KeyringError, OSError, RuntimeError)
 TOKENLEAN_KEY = "tokenlean_api_key"
 _NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _NOT_CI = frozenset({"", "0", "false", "no"})
+#: Set by CI systems; most set `CI`, these do not always (Azure Pipelines, Jenkins...).
+CI_MARKERS = (
+    "CI",
+    "TF_BUILD",
+    "JENKINS_URL",
+    "BUILDKITE",
+    "TEAMCITY_VERSION",
+    "GITLAB_CI",
+    "GITHUB_ACTIONS",
+    "CIRCLECI",
+    "BITBUCKET_BUILD_NUMBER",
+    "CODEBUILD_BUILD_ID",
+)
 
 
 class CredentialError(Exception):
@@ -74,7 +88,7 @@ class Credentials:
 
     @property
     def in_ci(self) -> bool:
-        return self.environ.get("CI", "").strip().lower() not in _NOT_CI
+        return any(self.environ.get(name, "").strip().lower() not in _NOT_CI for name in CI_MARKERS)
 
     def find(self, name: str) -> Credential | None:
         """The credential, or None if neither place has it. Raises CredentialError

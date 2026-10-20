@@ -156,8 +156,37 @@ def test_a_non_json_body_keeps_its_other_bytes():
     assert AWS.encode() not in masked
 
 
+def test_two_secret_keys_stay_two_entries_when_masked():  # review: keys collided
+    other = "AKIA" + "B" * 16
+    body = json.dumps({"meta": {AWS: 1, other: 2}}).encode()
+    meta = json.loads(SecretScanner("mask").check_body(body, "model-call"))["meta"]
+    assert sorted(meta.values()) == [1, 2]
+    assert all(AWS not in key and other not in key for key in meta)
+
+
+def test_a_lone_surrogate_does_not_break_masking():  # review: utf-8 re-encode raised
+    body = json.dumps({"a": "\ud800 " + AWS}).encode()
+    masked = SecretScanner("mask").check_body(body, "model-call")
+    assert AWS.encode() not in masked
+    assert json.loads(masked)["a"] == "\ud800 [MASKED SECRET: AWS Access Key]"
+
+
+def test_one_deadline_covers_a_whole_body(monkeypatch):  # review: it was per string
+    deadlines: list[float] = []
+    real = SecretScanner.findings
+
+    def spy(self, text, deadline=None):
+        deadlines.append(deadline)
+        return real(self, text, deadline)
+
+    monkeypatch.setattr(SecretScanner, "findings", spy)
+    SecretScanner().check_body(json.dumps({"a": "x", "b": ["y", "z"]}).encode(), "model-call")
+    assert len(deadlines) == 5  # two keys and three strings
+    assert len(set(deadlines)) == 1 and deadlines[0] is not None
+
+
 def test_text_that_cannot_be_scanned_in_time_fails_closed(monkeypatch):
-    def too_slow(self, text):
+    def too_slow(self, text, deadline=None):
         raise TimeoutError
 
     monkeypatch.setattr(SecretScanner, "findings", too_slow)
