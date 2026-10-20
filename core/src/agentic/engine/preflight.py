@@ -17,6 +17,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
+from agentic.backends import available, backend_issues
 from agentic.definitions import AgentStep, DefinitionSet, LoopStep, PipelineDefinition
 from agentic.definitions.pipeline import ActionStep, GateStep
 from agentic.engine.expressions import ExpressionError, cel_name, compile_condition
@@ -26,8 +27,6 @@ from agentic.policy.resolve import kind_violations
 
 if TYPE_CHECKING:
     from agentic.sandbox.readiness import SandboxDecision
-
-AVAILABLE_BACKENDS = frozenset({"native"})  # claude-code is M1-29, codex M2-40
 
 
 @dataclass(frozen=True)
@@ -77,9 +76,11 @@ def preflight(
     context: ResolveContext,
     actions: Collection[str] = (),
     sandbox: "SandboxDecision | None" = None,
+    available_backends: Collection[str] | None = None,
 ) -> PreflightReport:
     report = PreflightReport(pipeline=pipeline.name, problems=[])
     problems = report.problems
+    backends = available() if available_backends is None else available_backends
     if sandbox is not None and sandbox.refusal:  # the regime needs an OS sandbox (D38)
         problems.append(Problem(None, "sandbox", sandbox.refusal))
     elif sandbox is not None and sandbox.warning:
@@ -105,15 +106,10 @@ def preflight(
                     step.id, "kind", f"{v.field}: unknown handoff kind {v.requested!r}", v.allowed
                 )
             )
-        if agent.backend not in AVAILABLE_BACKENDS:
+        for issue in backend_issues(agent, policy, available=backends):  # M1-27
+            severity = "error" if issue.action == "block" else "warning"
             problems.append(
-                Problem(
-                    step.id,
-                    "backend",
-                    f"backend {agent.backend!r} is not available until M1-29 "
-                    "(only native runs in M1)",
-                    sorted(AVAILABLE_BACKENDS),
-                )
+                Problem(step.id, "backend", issue.detail, agent.backend, severity=severity)
             )
 
     def condition(owner: str, text: str, can_read: set[str]) -> None:
@@ -187,4 +183,4 @@ def preflight(
     return report
 
 
-__all__ = ["AVAILABLE_BACKENDS", "PreflightReport", "Problem", "preflight"]
+__all__ = ["PreflightReport", "Problem", "preflight"]

@@ -186,6 +186,11 @@ class OrgPolicy(_Strict):
     tool_mirror_url: str | None = None
     allow_repo_pipelines: bool = False  # D33: pipelines only from the policy repo
     sandbox: SandboxPolicy = SandboxPolicy()  # D38
+    # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
+    unhonoured: dict[Literal["temperature", "effort"], Literal["ignore", "warn", "block"]] = {
+        "temperature": "warn",
+        "effort": "warn",
+    }
 
     # --- model prices, for estimating costs TokenLean does not report ---
     prices: dict[str, ModelPrice] = {}
@@ -201,6 +206,17 @@ class OrgPolicy(_Strict):
         lowered = model.lower()
         matches = [name for name in self.prices if name.lower() in lowered]
         return self.prices[max(matches, key=len)] if matches else None
+
+    @model_validator(mode="before")
+    @classmethod
+    def unhonoured_defaults(cls, data: object) -> object:
+        """A policy naming one setting keeps the default for the other."""
+        if isinstance(data, dict) and isinstance(data.get("unhonoured"), dict):
+            data = {
+                **data,
+                "unhonoured": {"temperature": "warn", "effort": "warn", **data["unhonoured"]},
+            }
+        return data
 
     @model_validator(mode="after")
     def references_are_consistent(self) -> Self:

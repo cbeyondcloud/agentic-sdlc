@@ -14,7 +14,7 @@ Everything found but not fixed: review minors that were deferred, and notes a la
 
 | ID | Found in | Item | Effect if never done | Target | Status |
 |---|---|---|---|---|---|
-| DF-01 | SP1 review | An agent with an explicit `model` can still carry its tier's `effort`/`temperature` | A setting meant for another model is sent, or silently ignored | M1-27 | Open |
+| DF-01 | SP1 review | An agent with an explicit `model` can still carry its tier's `effort`/`temperature` | A setting meant for another model is sent, or silently ignored | M1-27 | Done (SP7 Task 1) |
 | DF-02 | SP1 review | `policy_version` content hash: CRLF vs LF bytes and the exact set of files hashed | The same policy gets a different version id on Windows and Linux; audit records disagree | M1-81 | Open |
 | DF-03 | SP1 review | Discovery: a file's stem need not equal its `name`; names are not checked unique within a layer | Two files define one agent; which wins is not obvious | M1-81 | Open |
 | DF-04 | SP1 review | Shell allow/deny coverage (`_covers`) compares tokens loosely | A deny entry may fail to drop an allow prefix it covers | M1-31 | Done (SP8 Task 1) |
@@ -38,7 +38,7 @@ Everything found but not fixed: review minors that were deferred, and notes a la
 | DF-22 | SP4 review M3 | A model stream opened and never closed leaves its reservation in flight; `slice.close()` then refuses | A step cannot close its budget slice | M1-21 | Done (c87109d: a slice that cannot close is recorded, the run continues) |
 | DF-23 | SP4 review M8 | Tool error text shows absolute host paths; `read_file`/`search`/`run_shell` output is not secret-scrubbed | Host paths and secrets in files reach the model | M1-41, M1-42 | Open |
 | DF-24 | SP4 review M13 | Handoff wrappers are not escaped: a handoff containing `</handoff>` breaks out | Prompt injection from one agent's output into the next agent's instructions | M1-42 | Open |
-| DF-25 | SP4 finding | Pydantic AI silently drops `temperature` for reasoning models (e.g. gpt-5), with only a warning | Policy says temperature X; the model never gets it | M1-27 | Open |
+| DF-25 | SP4 finding | Pydantic AI silently drops `temperature` for reasoning models (e.g. gpt-5), with only a warning | Policy says temperature X; the model never gets it | M1-27 | Done (SP7 Task 1) |
 | DF-26 | SP4 finding | `Limits.budget_usd` is a float; the ledger needs Decimal: convert through `str` when opening run/step slices (as `children._usd` does) | Float rounding in budgets | M1-21 | Done (c87109d) |
 | DF-27 | SP4 review fixes | `Sandbox.run` is async: the OS sandboxes must kill their command when the call is cancelled | A stopped run leaves a sandboxed command running | M1-32, M1-33 | Done (SP8 Task 4) |
 | DF-28 | SP4 review fixes | The runner factory receives the child's own `ChildSpawner`; the engine must add `spawner.tools()` to each runner's tools | Children cannot spawn their own children | M1-21 | Done (a2b5833) |

@@ -47,6 +47,7 @@ def check(tmp_path: Path, fixtures: Path):
         actions=(),
         type_produces: dict[str, str] | None = None,
         sandbox=None,
+        available_backends=None,
     ):
         layer = tmp_path / "layer"
         for name, extra in {**AGENTS, **(extra_agents or {})}.items():
@@ -72,6 +73,7 @@ def check(tmp_path: Path, fixtures: Path):
             ResolveContext(team="payments"),
             actions=actions,
             sandbox=sandbox,
+            available_backends=available_backends,
         )
 
     return run
@@ -129,7 +131,20 @@ def test_non_native_backend(check):
     )
 
     problem = next(p for p in report.problems if p.check == "backend")
-    assert problem.step == "develop" and "M1-29" in problem.detail
+    assert problem.step == "develop" and "not available" in problem.detail
+    assert report.passed is False  # an unavailable backend blocks
+
+
+def test_capability_problems_reach_preflight(check):  # M1-27, Review Focus 4
+    extra = (
+        "type: developer\nconsumes: [design, review]\nbackend: claude-code\n"
+        "temperature: 0.2\n"  # the developer type inherits spawn_agent and codeintel
+    )
+    report = check(CLEAN, extra_agents={"dev": extra}, available_backends={"native", "claude-code"})
+    found = [(p.step, p.severity) for p in report.problems if p.check == "backend"]
+    assert ("develop", "error") in found  # tools claude-code cannot offer
+    assert ("develop", "warning") in found  # temperature not honoured (policy: warn)
+    assert any("spawn_agent" in p.detail for p in report.problems if p.check == "backend")
 
 
 def test_input_from_a_conditional_step_is_a_warning(check):  # DF-05

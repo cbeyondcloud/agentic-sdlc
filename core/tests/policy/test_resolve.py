@@ -340,3 +340,17 @@ def test_kind_violations_cover_kinds_from_the_type(policy, developer):  # D37
     found = [(v.field, v.requested) for v in kind_violations(agent, BUILTIN_CATALOG)]
     assert found == [("produces", "threat-model"), ("consumes", "poem")]
     assert kind_violations(resolved, BUILTIN_CATALOG) == []
+
+
+def test_an_explicit_model_does_not_inherit_tier_effort_or_temperature(policy):  # DF-01
+    policy.tiers["balanced"] = policy.tiers["balanced"].model_copy(update={"temperature": 0.3})
+    agent = minimal(type="developer", tier="balanced", model="google/gemini-flash")
+
+    resolved, violations = resolve_agent(agent, policy, ResolveContext())
+
+    assert violations == []
+    assert (resolved.model, resolved.effort, resolved.temperature) == (
+        "google/gemini-flash",
+        None,
+        None,
+    )

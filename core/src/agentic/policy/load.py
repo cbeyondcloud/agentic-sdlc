@@ -48,6 +48,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "tool_mirror_url": "tool_mirror_url",
         "allow_repo_pipelines": "allow_repo_pipelines",
         "sandbox": "sandbox",
+        "unhonoured": "unhonoured",
     },
 }
 
