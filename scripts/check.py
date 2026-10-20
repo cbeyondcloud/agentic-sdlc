@@ -5,7 +5,7 @@ architecture rules, licence allow-list, known-vulnerability audit and (Linux onl
 secret scan.
 
     uv run python scripts/check.py           # on this machine (Windows/macOS/Linux)
-    uv run python scripts/check.py --linux   # inside a clean Linux container (needs Docker)
+    uv run python scripts/check.py --linux   # inside a clean Linux container (Docker or Podman)
     uv run python scripts/check.py --all     # both
 
 Run `--all` before pushing; it is not wired into a git hook.
@@ -54,16 +54,35 @@ LINUX_DOCKERFILE = REPO_ROOT / "scripts" / "linux-check.Dockerfile"
 SANDBOX_OPTS = ["--security-opt", "seccomp=unconfined", "--security-opt", "systempaths=unconfined"]
 
 
-def linux_image() -> str | None:
+ENGINES = ("docker", "podman")
+
+
+def container_engine(env=os.environ, which=shutil.which) -> str | None:
+    """The container engine CLI: CONTAINER_ENGINE if set, else docker or podman on PATH.
+
+    Engine-neutral so the org can standardise on any free runtime (spike S12); a named
+    engine that is unknown or missing stops the run rather than silently falling back.
+    """
+    named = env.get("CONTAINER_ENGINE", "").strip()
+    if named:
+        if named not in ENGINES:
+            raise SystemExit(f"CONTAINER_ENGINE={named}: use docker or podman")
+        if which(named) is None:
+            raise SystemExit(f"CONTAINER_ENGINE={named} but {named} is not on PATH")
+        return named
+    return next((name for name in ENGINES if which(name)), None)
+
+
+def linux_image(engine: str) -> str | None:
     """The check image's tag, built once per Dockerfile version; None if the build fails."""
     digest = hashlib.sha256(LINUX_DOCKERFILE.read_bytes()).hexdigest()[:12]
     tag = f"agentic-check-linux:{digest}"
-    found = subprocess.run(["docker", "image", "inspect", tag], capture_output=True)
+    found = subprocess.run([engine, "image", "inspect", tag], capture_output=True)
     if found.returncode == 0:
         return tag
     print(f"[linux] building {tag}", flush=True)
     build = [
-        "docker",
+        engine,
         "build",
         "-q",
         "-t",
@@ -113,11 +132,12 @@ def run_linux() -> bool:
     The files are streamed into the container (never mounted), so the Windows
     virtualenv and scratch folders on the host are never seen or touched.
     """
-    if shutil.which("docker") is None:
-        print("[linux] SKIPPED: docker not found")
+    engine = container_engine()
+    if engine is None:
+        print("[linux] SKIPPED: no container engine (docker or podman) found")
         return True
     inner = " && ".join(" ".join(cmd) for _, cmd in CHECKS + LINUX_ONLY_CHECKS)
-    image = linux_image()
+    image = linux_image(engine)
     if image is None:
         print("[linux] FAILED: the check image could not be built")
         return False
@@ -141,7 +161,7 @@ def run_linux() -> bool:
         return False
     env = dict(os.environ, GH_TOKEN=token)
     cmd = [
-        "docker",
+        engine,
         "run",
         "--rm",
         "-i",

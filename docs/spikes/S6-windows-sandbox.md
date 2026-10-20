@@ -85,7 +85,7 @@ Wrapping one command costs about **0.18 s** (median of 5, `true`, inside the con
 | macOS | `srt` (Seatbelt) | Node ≥ 20.11, `ripgrep` |
 | Linux and CI | `srt` (bubblewrap) | Node ≥ 20.11, `bubblewrap`, `socat`, `ripgrep`; unprivileged user namespaces enabled |
 | Windows | **`srt` in Linux mode inside WSL2.** The repo and run folders live on the WSL disk; the CLI runs inside WSL. | WSL2 with a distro carrying the Linux prerequisites (all from the distro's signed package repositories) |
-| Windows, later alternative | A container backend (Docker or Podman) | Decided by S12 (licensing) |
+| Windows, later alternative | A container backend (Docker or Podman) | S12 (`docs/spikes/S12-container-runtime-licensing.md`): engine-neutral (Docker or Podman CLI); org standard Rancher Desktop (free, Apache-2.0); Docker Desktop not required |
 | Windows, excluded | Native `srt-win` | Allowed only if the org builds it from source and signs it with its own code-signing certificate |
 
 **When no sandbox is available.**
