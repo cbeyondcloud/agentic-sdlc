@@ -37,7 +37,14 @@ from agentic.eval.records import RunRecord, RunRequest
 from agentic.handoffs import BLOCK_ON_DEFAULT, Handoff, HandoffError, parse_handoff
 
 TOLERANCE = 3  # lines either side of a seeded range (S10)
-SCORED_STATUSES = ("completed", "invalid")  # the agent answered; anything else is unscored
+# The agent answered, or failed on its own (turns, time, stuck): scored. An error, a skip,
+# a pause or a budget stop is the harness's or a person's doing: unscored.
+SCORED_STATUSES = ("completed", "invalid", "stopped")
+
+
+def scored(record: RunRecord) -> bool:
+    """Did this run measure the agent (rather than fail for a harness reason)?"""
+    return record.status in SCORED_STATUSES and record.error is None
 
 
 @dataclass(frozen=True)
@@ -118,7 +125,7 @@ def qa_catch(
 
 def objective_metrics(case: EvalCase, record: RunRecord, kind: str) -> dict[str, float]:
     """Every metric this run can support, by name; unmeasurable ones are absent."""
-    if record.status not in SCORED_STATUSES:
+    if not scored(record):
         return {}
     metrics: dict[str, float] = {}
     document = parse_document(record.output, kind) if record.status == "completed" else None
@@ -175,12 +182,13 @@ class RubricMetric(Evaluator[RunRequest, RunRecord, None]):
     ) -> dict[str, float]:
         case, record = ctx.inputs.case, ctx.output
         judge = self.judges.get(case.rubric or "")
-        if judge is None or record.status not in SCORED_STATUSES:
+        if judge is None or not scored(record):
             return {}
         if parse_document(record.output, ctx.inputs.kind) is None or record.status != "completed":
             return {"rubric": 0.0}  # an invalid document delivers nothing to grade
+        record.judged = self.scrubber.scrub(record.output or "")  # what the judge sees
         result = await judge.score(
-            self.scrubber.scrub(record.output or ""),
+            record.judged,
             reference=self.reference(case),
             key_points=case.expected.key_points,
         )

@@ -1,0 +1,145 @@
+"""Running an evaluation (M1-63): cases x labels x repeats on pydantic-evals, interleaved,
+budget-capped, every run kept; and one case run by the real agent runner."""
+
+import asyncio
+from decimal import Decimal
+from pathlib import Path
+
+from _eval_support import REQUIREMENTS_ANSWER, scoping_case
+from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+from agentic.definitions import load_agent
+from agentic.eval.metrics import ObjectiveMetrics
+from agentic.eval.records import RunRecord, RunRequest
+from agentic.eval.runner import AgentCaseRunner, run_eval
+from agentic.handoffs import BUILTIN_CATALOG
+from agentic.policy import ResolveContext, load_policy, resolve_agent
+from agentic.transport import BudgetLedger
+
+
+def recorder(log: list, cost: float | None = 0.5, status: str = "completed"):
+    async def run(request: RunRequest) -> RunRecord:
+        log.append((request.case.id, request.label, request.repeat))
+        return RunRecord(status=status, output=REQUIREMENTS_ANSWER, cost_usd=cost)
+
+    return run
+
+
+def test_every_case_label_and_repeat_runs_interleaved_in_seeded_order():
+    log: list = []
+    cases = [scoping_case("c1"), scoping_case("c2")]
+    result = asyncio.run(
+        run_eval(
+            cases,
+            {"X": recorder(log), "Y": recorder(log)},
+            kind="requirements",
+            repeats=3,
+            seed=11,
+        )
+    )
+    assert len(result.runs) == 12 and len(log) == 12
+    assert {(c, lab, r) for c, lab, r in log} == {
+        (c, lab, r) for c in ("c1", "c2") for lab in "XY" for r in range(3)
+    }
+    # interleaved per case: each case's six runs are adjacent, both labels in each repeat
+    assert [c for c, _, _ in log] == ["c1"] * 6 + ["c2"] * 6
+    assert len({log[i][1] for i in range(0, 12, 2)}) == 2  # the order is flipped per pair
+    again: list = []
+    asyncio.run(
+        run_eval(
+            cases,
+            {"X": recorder(again), "Y": recorder(again)},
+            kind="requirements",
+            repeats=3,
+            seed=11,
+        )
+    )
+    assert again == log  # the same seed, the same order
+
+
+def test_metrics_are_attached_to_each_run():
+    result = asyncio.run(
+        run_eval(
+            [scoping_case("c1")],
+            {"X": recorder([])},
+            kind="requirements",
+            repeats=1,
+            seed=0,
+            evaluators=[ObjectiveMetrics()],
+        )
+    )
+    (run,) = result.runs
+    assert run.request.run_id == "c1.X.0"
+    assert run.metrics["schema_valid"] == 0.0  # the answer lacks the envelope: not a handoff
+    assert run.metrics["cost_usd"] == 0.5
+
+
+def test_the_budget_cap_skips_the_remaining_runs():
+    log: list = []
+    result = asyncio.run(
+        run_eval(
+            [scoping_case("c1"), scoping_case("c2")],
+            {"X": recorder(log, cost=1.0)},
+            kind="requirements",
+            repeats=2,
+            seed=0,
+            budget_usd=2.0,
+        )
+    )
+    assert result.budget_hit
+    assert len(log) == 2
+    assert [r.record.status for r in result.runs] == [
+        "completed",
+        "completed",
+        "skipped",
+        "skipped",
+    ]
+
+
+def test_a_run_that_raises_is_kept_as_an_error():
+    async def broken(request: RunRequest) -> RunRecord:
+        raise RuntimeError("connection reset")
+
+    result = asyncio.run(
+        run_eval([scoping_case("c1")], {"X": broken}, kind="requirements", repeats=1, seed=0)
+    )
+    (run,) = result.runs
+    assert run.record.status == "error" and "connection reset" in run.record.error
+    assert run.metrics == {}
+
+
+def test_agent_case_runner_produces_a_schema_valid_handoff(fixtures: Path, tmp_path: Path):
+    policy = load_policy(fixtures / "policy" / "policy")
+    agent_file = tmp_path / "business-analyst.md"
+    agent_file.write_text(
+        "---\nname: business-analyst\ntype: business-analyst\nversion: 1.0.0\nowner: eval\n"
+        "status: active\ndescription: BA for tests.\ntools: []\nproduces: requirements\n"
+        "limits: {budget_usd: 1, max_turns: 5, max_minutes: 5}\n---\nWrite requirements.\n",
+        encoding="utf-8",
+    )
+    resolved, violations = resolve_agent(
+        load_agent(agent_file), policy, ResolveContext(team="payments")
+    )
+    assert resolved is not None, violations
+    prompts: list[str] = []
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        prompts.append(info.instructions or "")
+        return ModelResponse(parts=[TextPart(REQUIREMENTS_ANSWER)])
+
+    runner = AgentCaseRunner(
+        resolved,
+        lambda request, costs, budget: FunctionModel(answer),
+        schema=BUILTIN_CATALOG.schema("requirements"),
+        state_root=tmp_path / "state",
+        budget=BudgetLedger(Decimal("5")),
+    )
+    case = scoping_case("c1")
+    record = asyncio.run(
+        runner(RunRequest(case=case, label="X", repeat=0, kind="requirements", run_id="c1.X.0"))
+    )
+    assert record.status == "completed", record.errors
+    assert record.output.startswith("---\nkind: requirements")
+    assert record.cost_usd is None  # FunctionModel calls go through no meter: unmeasured
+    assert "Write requirements." in prompts[0]

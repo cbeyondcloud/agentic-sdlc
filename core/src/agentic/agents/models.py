@@ -60,9 +60,22 @@ def build_model(
 ) -> Model:
     """The model the agent runs on, calling TokenLean through the identity client;
     each call secret-scanned by `scanner` (default: block, default detectors)."""
-    provider, _, name = agent.model.partition("/")
+    return build_model_for(agent.model, identity, gateway, transport, scanner=scanner)
+
+
+def build_model_for(
+    model_id: str,
+    identity: CallIdentity,
+    gateway: GatewaySettings,
+    transport: httpx2.AsyncBaseTransport,
+    *,
+    scanner: SecretScanner | None = None,
+) -> Model:
+    """`build_model` for a model id rather than a resolved agent - the eval judge, whose
+    model comes from a policy tier (M1-63). Same routing, identity and scanning."""
+    provider, _, name = model_id.partition("/")
     if not name:
-        provider, name = "", agent.model
+        provider, name = "", model_id
     root = gateway.base_url.rstrip("/")
     client = make_async_client(
         root, identity, network=gateway.network, scanner=scanner, _transport=transport
