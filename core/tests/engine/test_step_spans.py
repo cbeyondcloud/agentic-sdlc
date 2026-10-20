@@ -5,8 +5,13 @@ is off: no prompt or answer text is exported."""
 import asyncio
 
 from _engine_support import answer
+from opentelemetry.trace import StatusCode
+from pydantic_ai.usage import RunUsage
 
+from agentic.agents.metering import CostLog
+from agentic.agents.runner import AgentOutcome
 from agentic.telemetry.semconv import span_problems
+from agentic.telemetry.spans import finish_step_span, tracer
 
 PIPELINE = """\
 name: test
@@ -16,6 +21,7 @@ steps:
     agent: designer
 """
 SECRET_PROMPT = "export the customer ledger as CSV"
+SENTINEL = "SENTINEL-ERROR-TEXT-4410"
 
 
 def run(make_harness):
@@ -66,3 +72,56 @@ def test_no_prompt_or_answer_text_reaches_a_span(make_harness, spans):  # review
     assert SECRET_PROMPT not in exported
     assert "the-answer-text" not in exported
     assert "You are designer" not in exported  # the agent's instructions
+
+
+def everything(span) -> str:
+    """All of a span's text an exporter would send: attributes, events and status."""
+    events = [(e.name, dict(e.attributes or {})) for e in span.events]
+    return repr((span.name, dict(span.attributes), events, span.status.description))
+
+
+def run_failing(make_harness):
+    def fail(ctx):
+        raise RuntimeError(f"provider said 401 for {SENTINEL}")
+
+    harness = make_harness(PIPELINE, {"designer": [fail]})
+    state = asyncio.run(harness.engine.start("test", {"request": SECRET_PROMPT}, "dev@x", "r-f"))
+    assert state.pending is not None and state.pending.id == "step-error"
+
+
+def test_a_stopped_step_span_names_the_reason_code_only(spans):
+    outcome = AgentOutcome(
+        status="stopped",
+        output=None,
+        stopped="stuck",
+        usage=RunUsage(),
+        costs=CostLog(),
+        detail=f"the same call three times: read_file({SENTINEL!r})",
+    )
+    with tracer().start_as_current_span("step x") as span:
+        finish_step_span(span, outcome)
+    (step,) = named(spans, "step x")
+    assert step.status.status_code is StatusCode.ERROR
+    assert step.status.description == "stuck"
+    assert SENTINEL not in everything(step)
+
+
+def test_a_failed_step_span_names_the_error_type_only(make_harness, spans):
+    run_failing(make_harness)
+    (step,) = named(spans, "step design")
+    assert step.status.status_code is StatusCode.ERROR
+    assert step.status.description == "RuntimeError"
+    assert step.attributes["error.type"] == "RuntimeError"
+    assert SENTINEL not in everything(step)
+
+
+def test_no_error_text_reaches_an_exported_span(make_harness, exported_spans):
+    run_failing(make_harness)
+    finished = exported_spans.get_finished_spans()
+    assert {"step design", "invoke_agent designer"} <= {s.name for s in finished}
+    for span in finished:
+        assert SENTINEL not in everything(span), span.name
+        assert SECRET_PROMPT not in everything(span), span.name
+    events = [e for s in finished for e in s.events if e.name == "exception"]
+    assert events  # Pydantic AI's spans keep their exception events, with the type only
+    assert {e.attributes["exception.type"] for e in events} == {"RuntimeError"}

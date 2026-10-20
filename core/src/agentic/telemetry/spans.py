@@ -47,8 +47,9 @@ def model_instrumentation() -> InstrumentationSettings:
 
 @contextmanager
 def step_span(run_id: str, step: str, iteration: int, agent: "ResolvedAgent") -> Iterator[Span]:
-    """The span of one agent step (a run or a resume). An exception leaving it is
-    recorded on the span and marks it as an error."""
+    """The span of one agent step (a run or a resume). An exception leaving it marks the
+    span as an error naming only the exception's type (`error.type`, and the status
+    description): its message may echo a provider's response, a prompt or a key."""
     name, version = agent.definition.name, agent.definition.version
     attributes = {
         "gen_ai.agent.name": name,
@@ -59,8 +60,19 @@ def step_span(run_id: str, step: str, iteration: int, agent: "ResolvedAgent") ->
         "agentic.iteration": iteration,
         "agentic.agent.version": version,
     }
-    with tracer().start_as_current_span(f"step {step}", attributes=attributes) as span:
-        yield span
+    with tracer().start_as_current_span(
+        f"step {step}",
+        attributes=attributes,
+        record_exception=False,
+        set_status_on_exception=False,
+    ) as span:
+        try:
+            yield span
+        except BaseException as error:
+            kind = type(error).__name__
+            span.set_attribute("error.type", kind)
+            span.set_status(Status(StatusCode.ERROR, kind))
+            raise
 
 
 def finish_step_span(span: Span, outcome: "AgentOutcome") -> None:
@@ -78,7 +90,8 @@ def finish_step_span(span: Span, outcome: "AgentOutcome") -> None:
     if traces:
         span.set_attribute("agentic.tokenlean.trace_ids", list(dict.fromkeys(traces)))
     if outcome.status in ("stopped", "invalid"):
-        span.set_status(Status(StatusCode.ERROR, outcome.detail or outcome.status))
+        # the reason code, never `detail`: a stuck pattern quotes the agent's tool calls
+        span.set_status(Status(StatusCode.ERROR, outcome.stopped or outcome.status))
 
 
 def mark_call(cost: "CallCost") -> None:
