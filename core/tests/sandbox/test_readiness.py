@@ -163,3 +163,9 @@ def test_an_org_may_let_team_runs_go_unsandboxed():
 def test_windows_guidance_installs_a_node_new_enough():  # review: apt's nodejs is too old
     assert "20.11" in WINDOWS_GUIDANCE
     assert "apt install -y bubblewrap socat ripgrep nodejs" not in WINDOWS_GUIDANCE
+
+
+def test_the_windows_guidance_names_the_org_pin():  # DF-67
+    r = readiness(system="Windows", which=lambda name: None, run=boom, srt_version="0.0.99")
+    assert "@anthropic-ai/sandbox-runtime@0.0.99" in r.text()
+    assert "0.0.78" not in r.text()

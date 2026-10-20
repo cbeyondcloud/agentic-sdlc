@@ -24,6 +24,8 @@ ADMIN_ROLES = frozenset({"org-admin", "team-lead"})
 class Selection:
     names: tuple[str, ...]  # catalog keys to install, sorted
     missing: tuple[str, ...]  # wanted but not in the catalog: never installed
+    # enabled packs no catalog skill belongs to: a typo, or a pack not yet vendored (DF-145)
+    unknown_packs: tuple[str, ...] = ()
 
 
 def pipeline_agents(pipeline: PipelineDefinition) -> list[str]:
@@ -82,4 +84,8 @@ def select_skills(
         elif key in wanted:
             chosen.add(key)
     missing = sorted(key for key in wanted if key not in catalog.skills)
-    return Selection(names=tuple(sorted(chosen)), missing=tuple(missing))
+    known_packs = {entry.pack for entry in catalog.skills.values() if entry.pack is not None}
+    unknown = sorted(set(packs) - known_packs)
+    return Selection(
+        names=tuple(sorted(chosen)), missing=tuple(missing), unknown_packs=tuple(unknown)
+    )

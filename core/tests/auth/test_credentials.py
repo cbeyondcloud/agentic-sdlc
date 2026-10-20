@@ -123,3 +123,35 @@ def test_store_refuses_a_blank_value():
 def test_a_credential_name_is_a_lower_case_slug(name):
     with pytest.raises(ValueError, match="credential name"):
         env_var(name)
+
+
+class OddBackendError(Exception):
+    """Like pywintypes.error: not a KeyringError, OSError or RuntimeError."""
+
+
+class OddKeyring(MemoryKeyring):
+    def get_password(self, service: str, username: str) -> str | None:
+        raise OddBackendError("the secret is " + "s3cret-value")
+
+    def set_password(self, service: str, username: str, password: str) -> None:
+        raise OddBackendError("too large")
+
+
+def test_any_keyring_backend_error_is_a_credential_error():  # DF-157
+    creds = Credentials(environ={}, keyring=OddKeyring())
+    with pytest.raises(CredentialError) as raised:
+        creds.get(TOKENLEAN_KEY)
+    assert "OddBackendError" in str(raised.value) and "s3cret" not in str(raised.value)
+    with pytest.raises(CredentialError, match="OddBackendError"):
+        creds.store(TOKENLEAN_KEY, "value")
+
+
+def test_ci_off_is_not_ci():  # DF-158
+    ring = MemoryKeyring({("agentic-sdlc", TOKENLEAN_KEY): "k"})
+    assert Credentials(environ={"CI": "off"}, keyring=ring).get(TOKENLEAN_KEY).source == "keyring"
+
+
+def test_the_ci_error_names_the_marker():  # DF-158
+    ring = MemoryKeyring()
+    with pytest.raises(CredentialError, match="JENKINS_URL"):
+        Credentials(environ={"JENKINS_URL": "http://ci"}, keyring=ring).get(TOKENLEAN_KEY)
