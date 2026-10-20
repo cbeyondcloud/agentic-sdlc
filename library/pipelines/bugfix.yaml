@@ -1,0 +1,40 @@
+# bugfix: a defect becomes a reviewed, tested fix with a regression test (spec §6.2).
+# intake (BA, with the reproduction) -> test baseline -> fix plan (Design: root
+# cause and the smallest fix) -> Developer <-> Code Review -> [review gate] -> QA
+# -> pull request. The Developer writes the failing regression test first.
+name: bugfix
+version: 1.0.0
+regime: team
+inputs:
+  request: { from: [text, file, jira] }
+
+steps:
+  - id: intake                          # the symptom as observed, reproduction, expected vs actual
+    agent: business-analyst
+
+  - id: baseline                        # the tests on the untouched tree, before the fix
+    agent: qa-baseline
+
+  - id: fix-plan                        # root cause with evidence, the fix, the regression test
+    agent: design
+
+  - loop:
+      id: fix-review
+      max_iterations: 3
+      until: "review.open_blocking == 0"   # Zyroflo's exit rule: the score never gates
+      on_exhausted: gate
+      steps:
+        - id: develop
+          agent: developer
+        - id: review
+          agent: code-review
+
+  - gate: review-approval               # a person reads the fix (and its plan) before QA
+    approver_role: approver
+
+  - id: qa                              # no new failures, the regression test passes
+    agent: qa
+
+  - id: publish
+    action: github.open_pr
+    when: "test_report.verdict == 'pass'"

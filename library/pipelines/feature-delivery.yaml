@@ -1,0 +1,43 @@
+# feature-delivery: a request becomes a reviewed, tested pull request (spec §6.2).
+# BA -> test baseline -> Design -> [design gate] -> Developer <-> Code Review
+# -> [review gate] -> QA -> pull request. Every step's agent is a library agent
+# (library/agents/); the stage instructions come from Zyroflo's SOPs.
+name: feature-delivery
+version: 1.0.0
+regime: team
+inputs:
+  request: { from: [text, file, jira] }
+
+steps:
+  - id: requirements                    # questions, options, EARS acceptance criteria
+    agent: business-analyst
+
+  - id: baseline                        # the tests on the untouched tree: QA's "no new failures" bar
+    agent: qa-baseline
+
+  - id: design                          # change set, test plan, decisions, impact
+    agent: design
+
+  - gate: design-approval               # nothing is built before a person approves the design
+    approver_role: team-lead
+
+  - loop:
+      id: build-review
+      max_iterations: 3
+      until: "review.open_blocking == 0"   # Zyroflo's exit rule: the score never gates
+      on_exhausted: gate                   # still blocked after 3 rounds: a person decides
+      steps:
+        - id: develop
+          agent: developer
+        - id: review
+          agent: code-review
+
+  - gate: review-approval               # a person reads the change before QA and publishing
+    approver_role: approver
+
+  - id: qa                              # tests against the baseline, every acceptance criterion
+    agent: qa
+
+  - id: publish
+    action: github.open_pr
+    when: "test_report.verdict == 'pass'"
