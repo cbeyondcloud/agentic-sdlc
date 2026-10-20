@@ -25,8 +25,13 @@ def workspace(tmp_path: Path, repo: Path, policy_repo: Path, monkeypatch) -> Pat
     monkeypatch.setenv("AGENTIC_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("AGENTIC_POLICY_REPO", str(policy_repo))
     monkeypatch.setenv("AGENTIC_TEAM", "payments")
+    monkeypatch.setenv("AGENTIC_TRACES", "off")  # one global tracer provider per process
     for name in ("AGENTIC_USER", "AGENTIC_GATEWAY_URL", "AGENTIC_TOKENLEAN_API_KEY"):
         monkeypatch.delenv(name, raising=False)
+    from agentic.sandbox.readiness import Readiness
+    from agentic_cli import runtime
+
+    monkeypatch.setattr(runtime, "machine_readiness", lambda: Readiness("windows", ()))
     return repo
 
 
