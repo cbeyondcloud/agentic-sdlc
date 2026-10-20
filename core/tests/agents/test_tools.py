@@ -537,6 +537,28 @@ def test_a_masked_secret_marker_cannot_be_written_back(tree, resolved):  # revie
     assert target.read_text(encoding="utf-8") == before
 
 
+@pytest.mark.parametrize("action", ["block", "mask"])
+def test_a_tool_call_carrying_a_secret_is_refused_before_it_runs(tree, resolved, action):
+    # review F2(a): written to a file or a command line, a key would leak from there
+    events: list[SecretScanEvent] = []
+    ctx = scanning(tree, resolved, SecretScanner(action, on_event=events.append))
+    tools = build_tools(agent_with(resolved, ["edit_files"]), ctx)
+
+    seen = call(tools, "write_file", path="src/conf.py", text=f"KEY = '{AWS}'\n")
+    assert seen.startswith("REFUSED") and "placeholder" in seen and AWS not in seen
+    assert not (tree[1] / "src" / "conf.py").exists()
+    assert events == [SecretScanEvent("blocked", "tool-call:write_file", {"AWSKeyDetector": 1})]
+
+
+def test_a_documented_example_key_may_be_written(tree, resolved):  # review F2(b)
+    example = "AKIA" + "IOSFODNN7" + "EXAMPLE"
+    tools = build_tools(agent_with(resolved, ["edit_files"]), context(tree, resolved))
+
+    seen = call(tools, "write_file", path="src/conf.py", text=f"KEY = '{example}'\n")
+    assert not seen.startswith("REFUSED")
+    assert example in (tree[1] / "src" / "conf.py").read_text(encoding="utf-8")
+
+
 def scanning(tree, resolved, scanner: SecretScanner | None) -> ToolContext:
     return replace(context(tree, resolved), secret_scanner=scanner)
 

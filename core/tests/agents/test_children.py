@@ -13,6 +13,7 @@ from agentic.agents.children import ChildSpawner, ChildSpec
 from agentic.agents.metering import CostLog
 from agentic.agents.runner import AgentOutcome, AgentTask
 from agentic.definitions import ChildLimits, Limits
+from agentic.security import SecretBlocked, SecretScanEvent
 from agentic.transport import BudgetLedger, LimitHit
 
 D = Decimal
@@ -231,6 +232,23 @@ def test_a_step_limit_hit_inside_a_child_reaches_the_engine(resolved):
     s.runner_factory = lambda child, slice_, spawner: type("R", (), {"run": staticmethod(boom)})()
     with pytest.raises(LimitHit):
         asyncio.run(run())
+
+
+def test_a_child_blocked_by_the_secret_scan_is_refused_not_the_parents_failure(resolved):
+    # review F2(c): the parent decides what to do, as for any other refused child
+    s, _ = spawner(parent(resolved))
+    event = SecretScanEvent("blocked", "model-call", {"AWSKeyDetector": 1})
+
+    async def blocked(task):
+        raise SecretBlocked(event, ["AWS Access Key"])
+
+    s.runner_factory = lambda child, slice_, spawner: type(
+        "R", (), {"run": staticmethod(blocked)}
+    )()
+    result = spawn(s)
+    assert (result.stopped, result.output) == ("refused", None)
+    assert "AWS Access Key" in result.reason and "secret_scan" in result.reason
+    assert s.tree.spawned == 1  # it ran: the spawn counts
 
 
 # ── the spawn_agent tool ──────────────────────────────────────────────────────

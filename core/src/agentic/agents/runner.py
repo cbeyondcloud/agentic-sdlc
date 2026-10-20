@@ -9,6 +9,12 @@ text is data (M1-42), each consumed handoff wrapped as data (`<handoff
 kind="...">`, escaped so it cannot close early), and the step's prompt - never
 an earlier agent's conversation.
 
+What the model wrote itself (its text, thinking, tool-call arguments, and the
+retry prompts that echo them) is secret-masked in the history before each call,
+whatever the policy's action: resending it leaks nothing from this machine, and
+under `block` one key the model made up would otherwise end the run (review F2).
+Everything else in the request is still scanned, and blocked, by the transport.
+
 Limits (spec §8.4), each ending the run with a reason:
   * turns  - `UsageLimits(request_limit=max_turns)`             -> stopped: turns
   * time   - `max_minutes`, measured around the whole run        -> stopped: time
@@ -37,7 +43,7 @@ import json
 import os
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
 
@@ -50,8 +56,16 @@ from pydantic_ai import (
     Tool,
     ToolDenied,
 )
+from pydantic_ai.capabilities import ProcessHistory
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter, TextPart
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    RetryPromptPart,
+    TextPart,
+    ThinkingPart,
+    ToolCallPart,
+)
 from pydantic_ai.models import Model
 from pydantic_ai.usage import RunUsage, UsageLimits
 
@@ -60,7 +74,7 @@ from agentic.agents.models import model_settings
 from agentic.agents.stuck import StuckDetector
 from agentic.agents.stuck import stuck_check as detector_check
 from agentic.policy import ResolvedAgent
-from agentic.security import SecretBlocked
+from agentic.security import SecretBlocked, SecretScanner
 from agentic.security.untrusted import DATA_NOTICE, HANDOFF_TAG, fence
 from agentic.transport import BudgetSlice, LimitHit
 
@@ -68,6 +82,7 @@ Stopped = Literal["budget", "turns", "time", "stuck"]
 StuckCheck = Callable[[list[ModelMessage]], str | None]
 _USAGE = TypeAdapter(RunUsage)
 STUCK_WINDOW = 40  # messages the stuck check looks at (it scans at most 20 events)
+MODEL_OUTPUT = "model-output"  # the `where` of a scan event for what the model wrote
 OUTPUT_RETRIES = 1  # an invalid answer goes back once with its errors, then the run is invalid
 RETRY_MESSAGE = """\
 Your handoff document is not valid:
@@ -142,9 +157,11 @@ class PydanticAIRunner:
         run_id: str | None = None,
         policy_version: str | None = None,
         contract: OutputContract | None = None,
+        scanner: SecretScanner | None = None,  # masks what the model wrote; None = default
     ) -> None:
         self.agent, self.model, self.budget, self.state_dir = agent, model, budget, state_dir
         self.contract = contract
+        self.scanner = scanner or SecretScanner()
         self._invalid: tuple[str, list[str]] | None = None  # the last refused answer
         self.tools, self.is_child = list(tools), is_child
         self.stuck_check = stuck_check or detector_check(StuckDetector())
@@ -305,6 +322,7 @@ class PydanticAIRunner:
             tools=self.tools,
             output_type=[str, DeferredToolRequests],
             retries={"tools": 1, "output": OUTPUT_RETRIES},
+            capabilities=[ProcessHistory(scrubbed_history(self.scanner))],
         )
         contract = self.contract
         if contract is not None:
@@ -375,6 +393,54 @@ class PydanticAIRunner:
         if self.is_child and hit.scope == "child":
             return self._stopped("budget", seen, detail=str(hit))
         raise hit  # a step or run limit: the engine pauses the run for a human
+
+
+def scrubbed_history(
+    scanner: SecretScanner,
+) -> Callable[[list[ModelMessage]], list[ModelMessage]]:
+    """A history processor masking secrets in what the model wrote (see the module).
+    A message found clean is remembered (and kept alive, so its id stays its own),
+    so each is scanned once per run, not on every call."""
+    done: dict[int, ModelMessage] = {}
+
+    def process(messages: list[ModelMessage]) -> list[ModelMessage]:
+        result = []
+        for message in messages:
+            if id(message) not in done:
+                message = _scrubbed(message, scanner)
+                done[id(message)] = message
+            result.append(message)
+        return result
+
+    return process
+
+
+def _scrubbed(message: ModelMessage, scanner: SecretScanner) -> ModelMessage:
+    parts = [_scrubbed_part(part, scanner) for part in message.parts]
+    if all(new is old for new, old in zip(parts, message.parts, strict=True)):
+        return message
+    return replace(message, parts=parts)
+
+
+def _scrubbed_part(part, scanner: SecretScanner):
+    if isinstance(part, TextPart | ThinkingPart):
+        content = scanner.scrub(part.content, MODEL_OUTPUT)
+        return part if content is part.content else replace(part, content=content)
+    if isinstance(part, ToolCallPart) and part.args:
+        args = part.args
+        try:
+            parsed = json.loads(args) if isinstance(args, str) else args
+        except ValueError:
+            parsed = args  # not JSON: masked as text
+        masked = scanner.scrub(parsed, MODEL_OUTPUT)
+        if masked is parsed:
+            return part
+        decoded = isinstance(args, str) and parsed is not args  # JSON text: keep it JSON text
+        return replace(part, args=json.dumps(masked) if decoded else masked)
+    if isinstance(part, RetryPromptPart):  # may echo the model's arguments back to it
+        content = scanner.scrub(part.content, MODEL_OUTPUT)
+        return part if content is part.content else replace(part, content=content)
+    return part
 
 
 def _fingerprint(payload: dict) -> str:

@@ -21,8 +21,9 @@ A spawn that breaks a limit is not an exception: it returns `stopped:
 "refused"` with the reason, and the parent decides what to do. A child that
 hits its own limit returns its partial output marked `stopped:` (budget, turns,
 time, stuck). A child cannot wait for a human: one that pauses for approval
-returns `stopped: "paused"`. A step or run limit hit inside a child reaches the
-engine.
+returns `stopped: "paused"`. A child the secret scan blocks (its task held a
+secret) returns `stopped: "refused"` with the kinds found, never the values. A
+step or run limit hit inside a child reaches the engine.
 """
 
 import asyncio
@@ -37,6 +38,7 @@ from pydantic_ai import Tool
 from agentic.agents.runner import AgentRunner, AgentTask
 from agentic.definitions import Limits
 from agentic.policy import ResolvedAgent
+from agentic.security import SecretBlocked
 from agentic.transport import BudgetError, BudgetSlice, LimitHit
 
 # (child, its budget slice, its own spawner - for its spawn_agent tool) -> runner
@@ -128,14 +130,17 @@ class ChildSpawner:
         except LimitHit:
             await self._give_back()  # nothing ran: the spawn does not count
             return _refused("the parent has no budget left for a child")
-        started = False
+        started, blocked = False, None
         try:
             child = self._child(spec, tools, limits)
             runner = self.runner_factory(child, budget, self.for_child(child, budget))
             started = True
-            outcome = await runner.run(
-                AgentTask(instructions=spec.instructions, inputs={}, prompt=spec.prompt)
-            )
+            try:
+                outcome = await runner.run(
+                    AgentTask(instructions=spec.instructions, inputs={}, prompt=spec.prompt)
+                )
+            except SecretBlocked as error:
+                blocked = error
         finally:
             cost = budget.total_spent()
             try:
@@ -144,6 +149,8 @@ class ChildSpawner:
                 pass  # calls still in flight after a failure: the slice stays open
             if not started:
                 await self._give_back()  # the child was never built: the spawn does not count
+        if blocked is not None:  # names kinds and counts, never a value
+            return ChildResult(output=None, stopped="refused", cost_usd=cost, reason=str(blocked))
         if outcome.status == "paused":
             return ChildResult(
                 output=outcome.output,
