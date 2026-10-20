@@ -16,6 +16,7 @@ import sys
 
 from agentic.codeintel.index import LocalIndex
 from agentic.codeintel.interface import Candidates, CodeIntelError
+from agentic.codeintel.tools import tree_path
 
 _DIFF_FILE = re.compile(r"^(?:\+\+\+ b/|--- a/)(.+?)\s*$", re.MULTILINE)
 
@@ -34,7 +35,9 @@ class CodeReviewGraph:
         return self._candidates({"op": "tests_for", "path": path})
 
     def impact(self, diff: str) -> Candidates:
-        files = [f for f in dict.fromkeys(_DIFF_FILE.findall(diff)) if self._exists(f)]
+        # every path the diff names goes through the tree's confinement (SP9 review I7)
+        named = (tree_path(self.index.tree, raw) for raw in _DIFF_FILE.findall(diff))
+        files = [f for f in dict.fromkeys(named) if f and self._exists(f)]
         if not files:
             return Candidates((), source=self.name, note="the diff names no file in the tree")
         return self._candidates({"op": "impact", "files": files})
@@ -46,7 +49,9 @@ class CodeReviewGraph:
         return (self.index.tree / rel).is_file()
 
     def _candidates(self, request: dict) -> Candidates:
-        return Candidates(tuple(self._query(request).get("files", [])), source=self.name)
+        # a file removed since the last update is no candidate (SP9 review I1)
+        files = [f for f in self._query(request).get("files", []) if self._exists(f)]
+        return Candidates(tuple(files), source=self.name)
 
     def _query(self, request: dict) -> dict:
         self.index.ensure()  # CodeIntelError when it cannot be built or updated
@@ -69,4 +74,17 @@ class CodeReviewGraph:
             raise CodeIntelError(
                 f"code-review-graph query failed: {lines[-1] if lines else done.returncode}"
             )
-        return json.loads(done.stdout or "{}")
+        return parse_answer(done.stdout)
+
+
+def parse_answer(stdout: str) -> dict:
+    """The JSON answer: the last line that is a JSON object (a tool may print warnings
+    before it, SP9 review I4)."""
+    for line in reversed(stdout.strip().splitlines()):
+        try:
+            answer = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(answer, dict):
+            return answer
+    raise CodeIntelError("code-review-graph query returned no answer")

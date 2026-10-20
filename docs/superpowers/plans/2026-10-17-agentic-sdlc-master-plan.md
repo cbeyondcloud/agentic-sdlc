@@ -60,7 +60,7 @@ The user wants a framework of specialised AI agents (BA, Design, Developer, Code
 ## Global Constraints
 
 - Python **3.12**; dependency management with **uv** workspace; all dependency versions pinned in `uv.lock`.
-- **OSS-first** (standing instruction): research GitHub before building any component; only permissive licences (MIT, Apache-2.0, BSD, ISC, PostgreSQL) as dependencies. **No** GPL/AGPL/LGPL-linked, SSPL, BSL, PolyForm, Commons-Clause or other non-OSI dependencies. CC-BY-SA content only as opt-in, after legal review.
+- **OSS-first** (standing instruction): research GitHub before building any component; only permissive licences (MIT, Apache-2.0, BSD, ISC, PostgreSQL) as dependencies; public-domain-style licences (Unlicense, CC0-1.0) are allowed for unmodified third-party dependencies (owner decision 2026-10-20, DF-83; legal to confirm before org-wide rollout). **No** GPL/AGPL/LGPL-linked, SSPL, BSL, PolyForm, Commons-Clause or other non-OSI dependencies. CC-BY-SA content only as opt-in, after legal review.
 - Must run on **Windows, macOS and Linux**; CI matrix covers all three. No symlinks in generated repo files.
 - **Every model call goes through TokenLean** via base_url; no direct provider calls from product code.
 - TokenLean is used as-is (same codebase) with the **LITE profile** (ST-6): no fork. Behaviour-changing optimisations stay off for agent traffic unless enabled through the A/B opt-in process (ST-7).

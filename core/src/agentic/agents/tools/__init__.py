@@ -20,7 +20,7 @@ from agentic.agents.tools.context import (
     ToolContext,
     refused,
 )
-from agentic.agents.tools.files import edit_tools, read_tools, search_tools
+from agentic.agents.tools.files import _refusal, edit_tools, read_tools, search_tools
 from agentic.agents.tools.shell import LocalProcessSandbox, shell_tools
 from agentic.codeintel import codeintel_tools
 from agentic.policy import ResolvedAgent
@@ -29,7 +29,12 @@ from agentic.policy import ResolvedAgent
 def _codeintel_tools(ctx: ToolContext) -> list[Tool]:
     if ctx.codeintel is None:
         raise ToolConfigError("codeintel is allowed but no code intelligence adapter was given")
-    return codeintel_tools(ctx.codeintel, ctx.tree)  # only what the adapter supports (M1-34)
+    # only what the adapter supports (M1-34); reads obey the guard (SP9 review C1)
+    return codeintel_tools(
+        ctx.codeintel,
+        ctx.tree,
+        read_refusal=lambda target: _refusal(ctx, target, reading=True),
+    )
 
 
 def _skill_tools(agent: ResolvedAgent, ctx: ToolContext) -> list[Tool]:

@@ -839,6 +839,8 @@ Until P0 items land, the framework degrades gracefully: it counts tokens from th
 | Control plane | FastAPI + Postgres (TokenLean's stack) | MIT / PostgreSQL | — |
 | Lifecycle content, run ledger, CI ledger check, guards, worktree, domain graph, runner contract, connectors, metrics doctrine | **Zyroflo** (`cbeyondcloud/sdlc-harness`) — see §1.4 | MIT (same owner) | — |
 
+**Licence allow-list**: MIT, Apache-2.0, BSD, ISC, PostgreSQL; public-domain-style licences (Unlicense, CC0-1.0) for unmodified third-party dependencies (owner decision 2026-10-20, DF-83; legal to confirm before org-wide rollout).
+
 **Licence red flags (do not use)**: GitNexus (PolyForm NC), Serena (GPL — only as separate process after legal review), CodeQL (OSS-only terms), Daytona (now closed / AGPL), claude-squad / Devon (AGPL), GPT-Pilot (FSL + malware incident), Restate (BSL), Inngest (SSPL), anthropics/skills docx/pdf/pptx/xlsx (source-available), Trail of Bits skills (CC-BY-SA — opt-in after legal review).
 
 ---

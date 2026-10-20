@@ -467,3 +467,11 @@ def test_windows_device_names_are_refused(tree, resolved, name):
     tools = build_tools(agent_with(resolved, ["edit_files"]), context(tree, resolved))
 
     assert call(tools, "write_file", path=name, text="x").startswith("REFUSED")
+
+
+@pytest.mark.parametrize("path", [".env", "infra/prod/main.tf"])
+def test_context_pack_obeys_the_guards_read_walls(tree, resolved, path):  # SP9 review C1
+    tools = build_tools(agent_with(resolved, ["codeintel"]), context(tree, resolved))
+    out = call(tools, "context_pack", path=path)
+    assert out.startswith("REFUSED")
+    assert "TOKEN=abc" not in out and "secret_infra" not in out
