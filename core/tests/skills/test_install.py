@@ -1,6 +1,8 @@
 """Tests for the skills installer: pinned, read-only copies and tamper restore (M1-37)."""
 
+import os
 import stat
+import threading
 from pathlib import Path
 
 import pytest
@@ -135,3 +137,90 @@ def test_writes_nothing_outside_dest(library: Path, dest: Path, tmp_path: Path):
     sync_skills(load_catalog(library), library, dest, [TDD])
     created = {p for p in tmp_path.rglob("*")} - before
     assert created and all(p == dest or dest in p.parents or p in dest.parents for p in created)
+
+
+def make_dir_link(link: Path, target: Path) -> None:
+    """A directory link anyone can make: a junction on Windows, a symlink elsewhere."""
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        os.symlink(target, link, target_is_directory=True)
+
+
+@pytest.fixture
+def outside(tmp_path: Path) -> Path:
+    """A folder of the user's own files, outside the skills folder."""
+    folder = tmp_path / "home"
+    (folder / "taxes").mkdir(parents=True)
+    (folder / "notes.txt").write_text("mine", encoding="utf-8")
+    (folder / "taxes" / "2025.pdf").write_bytes(b"%PDF")
+    return folder
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "superpowers",  # a source folder
+        "superpowers/test-driven-development",  # a selected skill
+        "superpowers/systematic-debugging",  # an unselected skill: removed
+        "someone",  # a stray source folder
+        "superpowers/test-driven-development/extra",  # inside a skill
+    ],
+)
+def test_a_link_under_dest_is_never_followed(library: Path, dest: Path, outside: Path, link: str):
+    """F1: a link committed under the skills folder must not let sync delete or write the
+    files it points to; the link itself is removed and the skill installed for real."""
+    before = files_under(outside)
+    catalog = load_catalog(library)
+    if "/test-driven-development/" in link:
+        sync_skills(catalog, library, dest, [TDD])
+        make_writable(dest / "superpowers" / "test-driven-development")
+    make_dir_link(dest / link, outside)
+    events = Events()
+    report = sync_skills(catalog, library, dest, [TDD], record=events)
+    assert files_under(outside) == before
+    assert sorted(p.name for p in outside.iterdir()) == ["notes.txt", "taxes"]
+    installed = dest / "superpowers" / "test-driven-development"
+    assert not installed.is_symlink() and not installed.is_junction()
+    assert files_under(installed) == files_under(
+        library / "superpowers" / "test-driven-development"
+    )
+    assert [e["path"] for e in events.named("skills.link_removed")] == [link]
+    assert skill_digest(installed) == catalog.skills[TDD].sha256
+    assert report.removed == []  # the link was the whole entry; nothing behind it is touched
+
+
+def test_dest_that_is_a_link_is_refused(library: Path, dest: Path, outside: Path):
+    make_dir_link(dest, outside)
+    with pytest.raises(SkillsError, match="is a link"):
+        sync_skills(load_catalog(library), library, dest, [TDD])
+    assert sorted(p.name for p in outside.iterdir()) == ["notes.txt", "taxes"]
+
+
+def test_concurrent_syncs_do_not_collide(library: Path, dest: Path):
+    """F2: two runs of one repo sync the same folder at once; neither may fail."""
+    catalog = load_catalog(library)
+    selections = [[TDD], [TDD, DEBUG], [DEBUG], [TDD, DEBUG, "superpowers/writing-skills"]]
+    start = threading.Barrier(4)
+    errors: list[BaseException] = []
+
+    def worker(names: list[str]) -> None:
+        start.wait()
+        for _ in range(6):
+            try:
+                sync_skills(catalog, library, dest, names, record=lambda *_: None)
+            except BaseException as error:  # noqa: BLE001 - collected for the assert
+                errors.append(error)
+
+    threads = [threading.Thread(target=worker, args=(names,)) for names in selections]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    report = sync_skills(catalog, library, dest, [TDD])
+    assert report.unchanged == [TDD]
+    assert sorted(p.name for p in (dest / "superpowers").iterdir()) == ["test-driven-development"]
