@@ -15,7 +15,7 @@ does not fail preflight.
 
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from agentic.backends import available, backend_issues
 from agentic.definitions import AgentStep, DefinitionSet, LoopStep, PipelineDefinition
@@ -24,9 +24,36 @@ from agentic.engine.expressions import ExpressionError, cel_name, compile_condit
 from agentic.handoffs.compat import CONDITIONAL, check_compatibility
 from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
 from agentic.policy.resolve import kind_violations
+from agentic.skills.loader import MAX_PRELOADED
 
 if TYPE_CHECKING:
     from agentic.sandbox.readiness import SandboxDecision
+
+
+class SkillAvailability(Protocol):
+    """The installed skills a run would load (`agentic.skills.InstalledSkills`)."""
+
+    def unavailable(self, name: str) -> str | None: ...
+
+    def preloads_all(self, agent: ResolvedAgent) -> bool: ...
+
+
+def skill_problems(agent: ResolvedAgent, skills: SkillAvailability) -> list[str]:
+    """Why the agent cannot get every skill it was resolved with (DF-136, DF-144): a skill
+    not catalogued or not installed as pinned, or more skills to inline than fit."""
+    problems, usable = [], []
+    for name in agent.skills:
+        if why := skills.unavailable(name):
+            problems.append(f"{name}: {why}")
+        else:
+            usable.append(name)
+    inline_all = "activate_skill" not in agent.tools or skills.preloads_all(agent)
+    if inline_all and len(usable) > MAX_PRELOADED:
+        problems.append(
+            f"{len(usable)} skills would be pre-loaded, but at most {MAX_PRELOADED} fit; "
+            "give the agent activate_skill or fewer skills"
+        )
+    return problems
 
 
 @dataclass(frozen=True)
@@ -77,6 +104,7 @@ def preflight(
     actions: Collection[str] = (),
     sandbox: "SandboxDecision | None" = None,
     available_backends: Collection[str] | None = None,
+    skills: SkillAvailability | None = None,
 ) -> PreflightReport:
     report = PreflightReport(pipeline=pipeline.name, problems=[])
     problems = report.problems
@@ -111,6 +139,9 @@ def preflight(
             problems.append(
                 Problem(step.id, "backend", issue.detail, agent.backend, severity=severity)
             )
+        if skills is not None:
+            for detail in skill_problems(agent, skills):
+                problems.append(Problem(step.id, "skills", detail))
 
     def condition(owner: str, text: str, can_read: set[str]) -> None:
         try:
@@ -183,4 +214,4 @@ def preflight(
     return report
 
 
-__all__ = ["PreflightReport", "Problem", "preflight"]
+__all__ = ["PreflightReport", "Problem", "SkillAvailability", "preflight", "skill_problems"]
