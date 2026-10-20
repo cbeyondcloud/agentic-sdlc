@@ -47,6 +47,14 @@ LINUX_ONLY_CHECKS: list[tuple[str, list[str]]] = [
     ("secret scan", ["gitleaks", "dir", ".", "--no-banner", "--redact"]),
 ]
 
+
+def linux_steps() -> list[tuple[str, list[str]]]:
+    """The Linux stage's steps. The secret scan goes first, on the tree exactly as
+    streamed in: later steps write compiled files (pytest's __pycache__) whose folded
+    constants can look like keys."""
+    return LINUX_ONLY_CHECKS + CHECKS
+
+
 # The Linux image: the pinned uv/Python image plus git and the sandbox prerequisites
 # (`srt`, bubblewrap), built from this Dockerfile and tagged by its content hash.
 LINUX_DOCKERFILE = REPO_ROOT / "scripts" / "linux-check.Dockerfile"
@@ -136,7 +144,7 @@ def run_linux() -> bool:
     if engine is None:
         print("[linux] SKIPPED: no container engine (docker or podman) found")
         return True
-    inner = " && ".join(" ".join(cmd) for _, cmd in CHECKS + LINUX_ONLY_CHECKS)
+    inner = " && ".join(" ".join(cmd) for _, cmd in linux_steps())
     image = linux_image(engine)
     if image is None:
         print("[linux] FAILED: the check image could not be built")

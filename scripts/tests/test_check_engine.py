@@ -35,3 +35,12 @@ def test_a_named_engine_that_is_missing_is_an_error():
 def test_an_unknown_engine_name_is_an_error():
     with pytest.raises(SystemExit, match="docker or podman"):
         container_engine({"CONTAINER_ENGINE": "lxc"}, _which("lxc"))
+
+
+def test_the_secret_scan_runs_before_anything_writes_into_the_tree():
+    # Tests leave compiled files whose folded constants look like keys (P0-03 follow-up).
+    from check import linux_steps
+
+    names = [name for name, _ in linux_steps()]
+    assert names.index("secret scan") < names.index("tests")
+    assert names.index("secret scan") < names.index("lock file up to date")

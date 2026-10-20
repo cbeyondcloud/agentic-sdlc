@@ -222,5 +222,8 @@ def test_concurrent_syncs_do_not_collide(library: Path, dest: Path):
         thread.join()
     assert errors == []
     report = sync_skills(catalog, library, dest, [TDD])
-    assert report.unchanged == [TDD]
+    # Whichever worker finished last decides whether TDD is still there (the [DEBUG]
+    # worker removes it), but no sync may leave a damaged copy behind to restore.
+    assert report.restored == []
+    assert report.unchanged + report.installed == [TDD]
     assert sorted(p.name for p in (dest / "superpowers").iterdir()) == ["test-driven-development"]
