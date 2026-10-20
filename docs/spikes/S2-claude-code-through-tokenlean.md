@@ -76,3 +76,17 @@ As in S1, TokenLean was stood in for, and no real model was called:
 ## Cost if wrong
 
 The backend sits behind the backend protocol (M1-27): replacing the SDK with direct `claude -p --output-format stream-json` driving touches one module. The lock-down checks are contract tests, so a Claude Code release that changes a flag fails the pinned-version tests before it reaches a developer.
+
+## Correction (SP7 final review, 2026-10-20)
+
+Two points in the decision above were wrong, and the claude-code backend does not follow them.
+
+- **`allowed_tools` must stay empty.** A bare tool name there (`Bash`, `Edit`, `Read`) approves every use of that tool. It beats don't-ask mode and the guard's prefix rules, so only explicit deny rules held. Q6 missed this because it tried only a denied and an allowed command, never an unlisted one. The backend now passes no `allowed_tools`: the guard's rules in `--settings` (plus `Edit(./**)` inside the tree) are the only approvals. Contract tests now cover:
+  - an unlisted command;
+  - a chained command;
+  - an ask-listed command;
+  - a redirect, edit and read outside the tree.
+- **In `--bare` mode Claude Code offers only Read, Edit and Bash.** It offers no Grep, Glob or Write, so `search` has no tool there and preflight blocks it.
+
+The review also found that the user's environment reaches Claude Code: the SDK merges `os.environ` under the options. With `CLAUDE_CODE_USE_BEDROCK=1` set, calls went to AWS instead of TokenLean. The backend now blanks every provider switch, cloud credential and secret-named variable from the user's environment, and a contract test runs with a hostile environment.
+

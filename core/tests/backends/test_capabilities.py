@@ -91,3 +91,11 @@ def test_unhonoured_policy_loads_from_org_yaml(fixtures, tmp_path: Path):
     org.write_text(org.read_text(encoding="utf-8") + "unhonoured: {effort: ignore}\n", "utf-8")
     policy = load_policy(root)
     assert policy.unhonoured == {"temperature": "warn", "effort": "ignore"}
+
+
+def test_claude_code_maps_only_the_tools_it_really_offers():  # review I5 (--bare)
+    assert CAPABILITIES["claude-code"].tools == {
+        "read_files": ("Read",),
+        "edit_files": ("Edit",),
+        "run_shell": ("Bash",),
+    }

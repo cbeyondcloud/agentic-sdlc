@@ -50,8 +50,10 @@ class LimitHit(Exception):
         self.limit_usd, self.spent_usd = limit_usd, spent_usd
 
     def __str__(self) -> str:
-        return (f"{self.scope} {self.name!r} reached its budget: {self.spent_usd} of "
-                f"{self.limit_usd} USD")  # fmt: skip
+        return (
+            f"{self.scope} {self.name!r} reached its budget: {self.spent_usd} of "
+            f"{self.limit_usd} USD"
+        )
 
 
 class BudgetLedger:
@@ -88,8 +90,14 @@ class BudgetLedger:
 
 
 class BudgetSlice:
-    def __init__(self, lock: threading.RLock, name: str, scope: Scope,
-                 limit_usd: Decimal | None, parent: "BudgetSlice | None") -> None:  # fmt: skip
+    def __init__(
+        self,
+        lock: threading.RLock,
+        name: str,
+        scope: Scope,
+        limit_usd: Decimal | None,
+        parent: "BudgetSlice | None",
+    ) -> None:
         self._lock = lock
         self.name, self.scope, self.parent = name, scope, parent
         self._limit = limit_usd
@@ -111,8 +119,9 @@ class BudgetSlice:
     def limit_usd(self) -> Decimal | None:
         return self._limit
 
-    def open(self, name: str, scope: Literal["step", "child"],
-             limit_usd: Decimal | None) -> "BudgetSlice":  # fmt: skip
+    def open(
+        self, name: str, scope: Literal["step", "child"], limit_usd: Decimal | None
+    ) -> "BudgetSlice":
         """Carve a slice: never more than this slice has left; held while open."""
         limit_usd = _amount(limit_usd, "slice limit")
         with self._lock:
@@ -131,8 +140,10 @@ class BudgetSlice:
         """Hold an estimate (above zero) before a call; LimitHit if it does not fit."""
         estimate_usd = _amount(estimate_usd, "estimate")
         if estimate_usd is None or estimate_usd <= 0:
-            raise BudgetError("a reservation needs an estimate above zero - it is what an "
-                              "unpriced call is charged")  # fmt: skip
+            raise BudgetError(
+                "a reservation needs an estimate above zero - it is what an "
+                "unpriced call is charged"
+            )
         with self._lock:
             self._check_open()
             left = self.available()
@@ -143,6 +154,19 @@ class BudgetSlice:
             self._changed()  # saved now: a crash while the call is in flight still counts it
             return Reservation(self, estimate_usd)
 
+    def charge(self, cost: CallCost, fallback_usd: Decimal) -> Decimal:
+        """Record a call that already happened (an agent CLI reports usage after the fact):
+        its cost, or `fallback_usd` when it is unknown. The spend is recorded first, then
+        LimitHit is raised at the outermost limit now crossed - as a settle does."""
+        with self._lock:
+            self._check_open()
+            unpriced = cost.cost_usd is None
+            charged = _amount(fallback_usd if unpriced else cost.cost_usd, "cost")
+            self._reserved += charged
+            self._open_reservations += 1
+            self._settle(charged, charged, unpriced)
+            return charged
+
     def raise_limit(self, new_limit_usd: Decimal) -> None:
         """A human grants more budget: never lower, never more than the parent has left."""
         new_limit_usd = _amount(new_limit_usd, "new limit")
@@ -152,8 +176,12 @@ class BudgetSlice:
                 raise BudgetError(f"{self.scope} {self.name!r}: a limit can only be raised")
             parent_left = self.parent.available() if self.parent is not None else None
             if parent_left is not None and new_limit_usd - self._limit > parent_left:
-                raise LimitHit(self.parent.scope, self.parent.name, self.parent._limit,
-                               self.parent.total_spent())  # fmt: skip
+                raise LimitHit(
+                    self.parent.scope,
+                    self.parent.name,
+                    self.parent._limit,
+                    self.parent.total_spent(),
+                )
             self.limit_changes.append((self._limit, new_limit_usd))
             self._limit = new_limit_usd
             self._changed()
@@ -163,8 +191,10 @@ class BudgetSlice:
         with self._lock:
             if self._limit is None:
                 return None
-            held = sum((max(c._limit or Decimal(0), c.total_spent())
-                        for c in self._open_children), Decimal(0))  # fmt: skip
+            held = sum(
+                (max(c._limit or Decimal(0), c.total_spent()) for c in self._open_children),
+                Decimal(0),
+            )
             return self._limit - self._spent - self._reserved - held
 
     def spent(self) -> Decimal:
@@ -184,8 +214,10 @@ class BudgetSlice:
             if self.closed:
                 return
             if self._in_flight():
-                raise BudgetError(f"{self.scope} {self.name!r} still has calls in flight - "
-                                  f"settle or release them first")  # fmt: skip
+                raise BudgetError(
+                    f"{self.scope} {self.name!r} still has calls in flight - "
+                    f"settle or release them first"
+                )
             self._close()
             self._changed()
 

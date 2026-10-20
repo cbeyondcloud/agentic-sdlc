@@ -56,12 +56,9 @@ CAPABILITIES: dict[str, BackendCapabilities] = {
     ),
     "claude-code": BackendCapabilities(
         name="claude-code",
-        tools={
-            "read_files": ("Read",),
-            "search": ("Grep", "Glob"),
-            "edit_files": ("Edit", "Write"),
-            "run_shell": ("Bash",),
-        },
+        # what Claude Code offers in --bare mode: Read, Edit, Bash (review I5) - no
+        # Grep/Glob/Write, so `search` is unavailable there and preflight blocks it
+        tools={"read_files": ("Read",), "edit_files": ("Edit",), "run_shell": ("Bash",)},
         temperature=False,
         effort=True,
         approvals=False,

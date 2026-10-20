@@ -60,7 +60,9 @@ def test_every_lock_down_setting_is_present(coder):
     assert kw["setting_sources"] == []
     assert kw["extra_args"] == {"bare": None, "no-session-persistence": None}
     assert kw["permission_mode"] == "dontAsk"
-    assert kw["tools"] == kw["allowed_tools"] == ["Read", "Grep", "Glob", "Edit", "Write", "Bash"]
+    # search has no tool in --bare Claude Code (review I5); nothing is auto-approved (C1)
+    assert kw["tools"] == ["Read", "Edit", "Bash"]
+    assert "allowed_tools" not in kw
     assert kw["model"] == coder.model and kw["cwd"] == str(Path("/tree"))
     assert kw["effort"] == "high" and kw["max_turns"] == coder.limits.max_turns
     env = kw["env"]
@@ -82,7 +84,7 @@ def test_every_lock_down_setting_is_present(coder):
 def test_tools_follow_the_agents_capabilities(coder):
     reader = coder.model_copy(update={"tools": ["read_files"]})
     kw = options(reader, edit_tree=False)
-    assert kw["tools"] == kw["allowed_tools"] == ["Read"]
+    assert kw["tools"] == ["Read"] and "allowed_tools" not in kw
     assert "Edit(./**)" not in json.loads(kw["settings"])["permissions"]["allow"]
 
 
@@ -140,3 +142,19 @@ def test_cli_path_is_passed_when_the_org_pins_an_install(coder):
     )
     assert options(coder, settings=pinned)["cli_path"] == str(Path("/opt/claude"))
     assert "cli_path" not in options(coder)
+
+
+def test_provider_switches_and_credentials_are_blanked(coder):  # review I1
+    environ = {
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "AWS_SECRET_ACCESS_KEY": "s",
+        "ANTHROPIC_AUTH_TOKEN": "t",
+        "GITHUB_TOKEN": "g",
+        "PATH": "/usr/bin",
+        "CLAUDE_CODE_GIT_BASH_PATH": "C:/Git/bin/bash.exe",
+    }
+    env = options(coder, environ=environ)["env"]
+    assert env["CLAUDE_CODE_USE_BEDROCK"] == env["AWS_SECRET_ACCESS_KEY"] == ""
+    assert env["ANTHROPIC_AUTH_TOKEN"] == env["GITHUB_TOKEN"] == ""
+    assert "PATH" not in env and "CLAUDE_CODE_GIT_BASH_PATH" not in env  # kept as the user has them
+    assert env["ANTHROPIC_API_KEY"] == "tl-key"  # ours, never blanked

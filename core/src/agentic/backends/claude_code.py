@@ -22,9 +22,12 @@ import copy
 import json
 import os
 import shlex
+import signal
 import stat
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+import subprocess
+import sys
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -43,6 +46,7 @@ from agentic.agents.runner import (
 from agentic.agents.tools import ToolContext
 from agentic.backends.capabilities import CAPABILITIES
 from agentic.policy import ResolvedAgent
+from agentic.sandbox.process import SECRET_NAME
 from agentic.transport import BudgetSlice, CallCost, CallIdentity, LimitHit, Pricer
 from agentic.transport.cost import estimate_usd
 
@@ -59,10 +63,35 @@ QUIET = {
 }
 
 
+#: Never inherited from the user's environment (review I1): another provider's switch
+#: or credential would route Claude Code around TokenLean or leak to the agent.
+_BLANKED_PREFIXES = (
+    "ANTHROPIC_",
+    "AWS_",
+    "AZURE_",
+    "GOOGLE_",
+    "GCLOUD_",
+    "CLOUDSDK_",
+    "VERTEX_",
+    "BEDROCK_",
+    "OPENAI_",
+    "GEMINI_",
+    "CLAUDE_CODE_USE_",
+)
+_BLANKED = {"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS"}
+
+
+def _blanked(name: str) -> bool:
+    upper = name.upper()
+    return (
+        upper.startswith(_BLANKED_PREFIXES) or upper in _BLANKED or bool(SECRET_NAME.search(upper))
+    )
+
+
 @dataclass(frozen=True)
 class ClaudeCodeSettings:
     gateway_url: str  # TokenLean's root
-    api_key: str  # the user's TokenLean key
+    api_key: str = field(repr=False)  # the user's TokenLean key
     config_root: Path  # per-step CLAUDE_CONFIG_DIR folders live here
     cli_path: Path | None = None  # None: the SDK's bundled (Anthropic-signed) binary
 
@@ -75,6 +104,7 @@ def lock_down(
     permissions: dict,
     cwd: Path,
     edit_tree: bool,
+    environ: Mapping[str, str] | None = None,
 ) -> dict:
     """The `ClaudeAgentOptions` keyword arguments for one step: every lock-down setting."""
     agent = step.agent
@@ -96,6 +126,9 @@ def lock_down(
         "CLAUDE_CONFIG_DIR": str(config_dir),
         **QUIET,
     }
+    for name in environ if environ is not None else os.environ:
+        if name not in env and _blanked(name):
+            env[name] = ""  # the SDK merges the user's environment under ours (review I1)
     options: dict = {
         "cwd": str(cwd),
         "model": agent.model,
@@ -103,7 +136,8 @@ def lock_down(
         "setting_sources": [],
         "extra_args": {"bare": None, "no-session-persistence": None},
         "tools": tools,
-        "allowed_tools": list(tools),
+        # No `allowed_tools`: a bare tool name there approves EVERY use of the tool
+        # (review C1). The guard's rules in `settings` are the only approvals.
         "permission_mode": "dontAsk",
         "settings": json.dumps(rules),
     }
@@ -154,19 +188,56 @@ class ClaudeCodeRunner:
         self.costs = CostLog()
         self.usage = RunUsage()
         self._last_text = ""
+        self._client = None
 
     async def run(self, task: AgentTask) -> AgentOutcome:
+        session = asyncio.ensure_future(self._session(task))
         try:
-            return await asyncio.wait_for(self._session(task), self.time_limit_s)
+            done, _ = await asyncio.wait({session}, timeout=self.time_limit_s)
+        except asyncio.CancelledError:  # the run was stopped: so is everything it started
+            self._kill_tree()
+            session.cancel()
+            raise
+        if not done:  # the time limit: kill Claude Code and what it started, then close
+            self._kill_tree()
+            session.cancel()
+            try:
+                await session
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - it is being stopped
+                pass
+            detail = f"the step's time limit ({self.time_limit_s}s) was reached"
+            return self._outcome("stopped", self._last_text, stopped="time", detail=detail)
+        try:
+            return session.result()
         except _Stopped as stop:
             return self._outcome("stopped", self._last_text, stopped=stop.why, detail=stop.detail)
-        except TimeoutError:  # the session is closed: the Claude Code process ends
-            return self._outcome(
-                "stopped",
-                self._last_text,
-                stopped="time",
-                detail=f"the step's time limit ({self.time_limit_s}s) was reached",
+
+    def _kill_tree(self) -> None:
+        """Kill the Claude Code process and every process it started (review I4)."""
+        process = getattr(getattr(self._client, "_transport", None), "_process", None)
+        pid = getattr(process, "pid", None)
+        if pid is None:
+            return
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
             )
+            return
+        # Claude Code starts each shell command in a process group of its own, so the
+        # group of Claude Code alone is not enough: kill every descendant, found by
+        # parent id before anything dies (orphans are re-parented), then the group.
+        for target in [*_descendants(pid), pid]:
+            try:
+                os.kill(target, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+        try:  # the launcher made Claude Code a session leader: its group is its own
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
 
     async def resume(self, state_path, decisions, expected_digest) -> AgentOutcome:
         raise ResumeError("claude-code steps never pause for approval (don't-ask mode)")
@@ -180,9 +251,12 @@ class ClaudeCodeRunner:
             "preset": "claude_code",
             "append": _instructions(task, self.contract),
         }
-        if self.wrap:
-            options["cli_path"] = str(_wrapper(self.wrap, options))
+        if os.name != "nt":  # a session leader, so the time limit can kill its group
+            options["cli_path"] = str(_launcher(self.wrap or [], options))
+        elif self.wrap:
+            raise RuntimeError("wrapping Claude Code in a sandbox needs macOS, Linux or WSL2 (D38)")
         async with ClaudeSDKClient(options=ClaudeAgentOptions(**options)) as client:
+            self._client = client
             text = await self._turn(client, task.prompt)
             if self.contract is None:
                 return self._outcome("completed", text)
@@ -277,10 +351,10 @@ class ClaudeCodeRunner:
             )
         if estimate <= 0:
             return
-        reservation = self.budget.reserve(estimate)  # LimitHit if it does not fit
+        # The call already happened: record it, then stop past the slice (review I3).
         try:
-            charged = reservation.settle(cost)
-        except Exception:
+            charged = self.budget.charge(cost, estimate)
+        except LimitHit:
             self.costs.add(cost, estimate)
             raise
         self.costs.add(cost, charged)
@@ -349,15 +423,51 @@ class ClaudeCodeBackend:
         )
 
 
-def _wrapper(wrap: Sequence[str], options: dict) -> Path:
-    """An executable script that runs Claude Code under `wrap` (srt, D38). POSIX only."""
-    if os.name == "nt":
-        raise RuntimeError("wrapping Claude Code in a sandbox needs macOS, Linux or WSL2 (D38)")
+def _descendants(pid: int) -> list[int]:
+    """Every process below `pid` (POSIX): from /proc on Linux, else from `ps`."""
+    children: dict[int, list[int]] = {}
+    proc = Path("/proc")
+    if proc.is_dir():
+        for entry in proc.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                stat_line = (entry / "stat").read_text()
+            except OSError:
+                continue
+            fields = stat_line.rsplit(")", 1)[-1].split()
+            if len(fields) > 1:
+                children.setdefault(int(fields[1]), []).append(int(entry.name))
+    else:
+        listing = subprocess.run(
+            ["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, check=False
+        ).stdout
+        for line in listing.splitlines():
+            parts = line.split()
+            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                children.setdefault(int(parts[1]), []).append(int(parts[0]))
+    found, queue = [], [pid]
+    while queue:
+        for child in children.get(queue.pop(), []):
+            if child not in found:
+                found.append(child)
+                queue.append(child)
+    return found
+
+
+_SESSION = "import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])"
+
+
+def _launcher(wrap: Sequence[str], options: dict) -> Path:
+    """An executable script that starts Claude Code as a session leader (so the time
+    limit can kill its whole process group, review I4), under `wrap` (srt, D38) when
+    given. POSIX only."""
     claude = options.get("cli_path") or str(bundled_cli())
     folder = Path(options["env"]["CLAUDE_CONFIG_DIR"])
     folder.mkdir(parents=True, exist_ok=True)
-    script = folder / "claude-in-sandbox"
-    command = " ".join(shlex.quote(part) for part in [*wrap, claude])
+    script = folder / "claude-launcher"
+    parts = [sys.executable, "-c", _SESSION, *wrap, claude]
+    command = " ".join(shlex.quote(part) for part in parts)
     script.write_text(f'#!/bin/sh\nexec {command} "$@"\n', encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IXUSR)
     return script
