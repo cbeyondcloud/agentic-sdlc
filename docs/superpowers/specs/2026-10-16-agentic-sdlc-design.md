@@ -6,7 +6,7 @@
 | Date | 2026-10-16 |
 | Owner | Sumit Gupta |
 | Supporting research | [OSS reuse report](../../../reports/Agentic%20SDLC%20OSS%20reuse.md) · [research notes](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/) · [Zyroflo comparison](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/sdlc_harness_comparison.md) |
-| Revision | r3 (2026-10-18): decisions D26-D35 folded in; new §23 Users and roles, §24 Developer onboarding (init, skills, custom skills, learning loop), §25 Deployment landscape (incl. TokenLean LITE), §26 Executive cost breakdown, §27 Enterprise coverage; §5 agent types and deny lists; §19 milestones. Since r3: D36 (httpx2), D37 (handoff templates inherit a base, extend-only layering, §7.4), D38 (sandbox: `srt` on every OS, Windows via WSL2, spike S6), D39 (code-intelligence index built locally; opt-in export outside `main`, spike S9); S4 re-confirms D1/D17 (build, not adopt; OpenHands as an optional `acp:` backend) |
+| Revision | r3 (2026-10-18): decisions D26-D35 folded in; new §23 Users and roles, §24 Developer onboarding (init, skills, custom skills, learning loop), §25 Deployment landscape (incl. TokenLean LITE), §26 Executive cost breakdown, §27 Enterprise coverage; §5 agent types and deny lists; §19 milestones. Since r3: D36 (httpx2), D37 (handoff templates inherit a base, extend-only layering, §7.4), D38 (sandbox: `srt` on every OS, Windows via WSL2, spike S6), D39 (code-intelligence index built locally; opt-in export outside `main`, spike S9); S4 re-confirms D1/D17 (build, not adopt); S7: ACP v1 is the single phase-2 adapter, opencode moves onto it (D32 revised), Antigravity via its official ACP server, OpenHands dropped |
 | Earlier | r2 (2026-10-17): Zyroflo (sdlc-harness) artefacts folded in — §1.4, D16, D25, §6, §7, §9.2, §10, §14.5, §16, §18–§21 |
 
 ---
@@ -71,7 +71,7 @@ Decisions agreed during requirements clarification (2026-10-16).
 
 | # | Area | Decision |
 |---|---|---|
-| D1 | Runtime | Standalone Python runtime with **pluggable backends**: our own agent loop, plus CLI agents (Claude Code, Codex) and later remote agents (Devin etc.). Re-confirmed by spike S4 (2026-10-20): no OSS project is adopted wholesale (OpenHands' budgets, RBAC and audit are in its commercial Enterprise edition; Archon has no policy layer or budget enforcement); OpenHands is usable only as an optional `acp:` backend (`docs/spikes/S4-build-vs-adopt.md`) |
+| D1 | Runtime | Standalone Python runtime with **pluggable backends**: our own agent loop, plus CLI agents (Claude Code, Codex) and later remote agents (Devin etc.). Re-confirmed by spike S4 (2026-10-20): no OSS project is adopted wholesale (OpenHands' budgets, RBAC and audit are in its commercial Enterprise edition; Archon has no policy layer or budget enforcement) (`docs/spikes/S4-build-vs-adopt.md`); S7 then found the OpenHands CLI unmaintained, so it is not an `acp:` backend either |
 | D2 | Gateway | **TokenLean** is the only model gateway (OpenAI/Anthropic/Gemini-compatible). It owns provider keys, routing and admin model overrides, spend caps, per-call usage. Enhancements required (§17) |
 | D3 | Pipeline control flow | Linear steps + **human gates** + **loops** (bounded) + **conditional branches**; no pipeline-level parallelism |
 | D4 | Handoffs | Markdown documents with **schema-validated YAML front matter**; each agent declares what it consumes and produces |
@@ -102,7 +102,7 @@ Decisions agreed during requirements clarification (2026-10-16).
 | D29 | Learning loop | Human-approved learning loop for every functional agent in v1: capture corrections → attribute → repeat threshold → propose → explicit approval by the scope owner → apply/measure/undo; guardrail proposals in phase 2 (§24) |
 | D30 | Ownership | Shared (org/team/repo) skills, memory and agents are read-only for users and changed only by the scope owner (org admin / team lead / repo maintainer via CODEOWNERS); personal skills and memory belong to each user; promotion on request (§23, §24) |
 | D31 | Deny lists | Org, team and agent files may declare `deny` (shell prefixes, path globs); merged as a union, deny beats allow, children inherit (§5.6) |
-| D32 | Backends | `opencode` gets a dedicated adapter (M2); Antigravity only via spike S7 (§9.1) |
+| D32 | Backends | `opencode` gets a dedicated profile on the shared ACP backend (M2-57; revised after spike S7, was a dedicated adapter). Antigravity: S7 found it ACP-capable via Google's official ACP server and routable via `GOOGLE_GEMINI_BASE_URL`, so it becomes `acp:antigravity` in phase 2, conditional on a TokenLean Gemini route, path-prefix identity and a terms review; no dedicated adapter |
 | D33 | Pipelines | Only org admins and team leads change pipelines (policy repo + CODEOWNERS); repo pipelines off by default in org mode; runs use the approved, hash-matched version (§6) |
 | D34 | Zyroflo dependency | Zyroflo (`sdlc-harness`) is a pinned git dependency used unchanged behind thin adapters in `sdlc_commons`; gaps closed by small backward-compatible Zyroflo PRs (§1.4, spike S14) |
 | D35 | Agent types | Every agent declares an org-defined type; the type (not the name) sets caps, ceilings and defaults; agents inherit and may only narrow; teams lower caps (§5.5) |
@@ -550,8 +550,8 @@ Model/proxy errors: bounded retries with backoff (TokenLean already fails over b
 | `native` | Pydantic AI v2 behind our `AgentRunner`; native openai/anthropic SDKs with injected httpx client | Full: model, headers, cost, tools |
 | `claude-code` | Claude Agent SDK (Python, MIT) — locked down: `--bare`, `--json-schema`, `--permission-mode dontAsk`, managed `allowedProviders: ["customEndpoint"]` | Model + proxy routing; tools via allowed-tools; no temperature |
 | `codex` | `codex exec --json --output-schema` (Apache-2.0) with `[model_providers]` pointing at TokenLean (`wire_api = "responses"`) | Needs TokenLean Responses API endpoint (§17) |
-| `opencode` (M2, D32) | `opencode run --format json`; lock-down via `OPENCODE_CONFIG_CONTENT` (provider `baseURL` → TokenLean, model forced) and `OPENCODE_PERMISSION` from the shell policy and deny lists; wrapped in `srt`/container (no own sandbox) | Model-agnostic harness fully routed through TokenLean |
-| `acp:<agent>` (phase 2) | `agent-client-protocol` Python SDK (Apache-2.0) for Gemini CLI, Goose, Copilot CLI, OpenHands (`openhands acp`, routed by `LLM_BASE_URL` with `--override-with-envs`; never `--headless`, which always auto-approves), … (Antigravity only if spike S7 finds it ACP-capable and routable) | Per-agent config profile |
+| `opencode` (M2, D32) | ACP profile (`opencode acp --pure`) on the shared ACP backend (S7); lock-down via `OPENCODE_CONFIG_CONTENT` (provider `baseURL` → TokenLean, model forced) and `OPENCODE_PERMISSION` from the shell policy and deny lists; wrapped in `srt`/container (no own sandbox); project `opencode.json` and `.opencode/` merge under the inline config, so neutralise project `mcp`, `instructions` and plugins, set every permission key, `small_model` = the resolved model | Model-agnostic harness fully routed through TokenLean |
+| `acp:<agent>` (phase 2) | `agent-client-protocol` Python SDK (Apache-2.0), ACP v1, pinned 0.12.1 (S7); Gemini CLI (`--acp`), Goose (`goose acp`), Copilot CLI (`--acp --stdio`, BYOK + `COPILOT_OFFLINE`), OpenCode (`opencode acp --pure`), Antigravity (official `agy_acp_server`, API key + `GOOGLE_GEMINI_BASE_URL`); the ACP permission callback is a second gate - agent-native policy and `srt` stay the boundary; result from a validated final message; cost from TokenLean | Per-agent profile as data |
 | `remote:devin` etc. (phase 3) | submit / poll / collect-PR adapter | Not routable via TokenLean; policy can only allow/deny |
 
 Each backend has **contract tests** pinned to a tool version; flags change fast (research finding).
@@ -807,6 +807,8 @@ From the code review of TokenLean (2026-10-16; see research notes).
 | P2 | Per-user erasure; per-team prompt retention | Retention/GDPR phase |
 | P0 (D27) | **OSS per-user key API** `/admin/keys` with user + team binding over a cloud-agnostic Postgres key store | Provisioning and revocation without the commercial portal |
 | P0 (D27) | **OSS routing-rules and team-limits admin endpoint** (validated, versioned, audited) | Control plane applies tier/classification routing |
+| P1 (S7) | **Inbound Gemini API route** (`/v1beta/models/*:streamGenerateContent`) | Gemini CLI and Antigravity (`acp:` backends) routed through TokenLean |
+| P1 (S7) | **Identity tags from a base-URL path prefix** (`/agentic/<run>/<step>/...`) | Agents that cannot send custom headers (Antigravity) keep per-step attribution |
 | P1 (D26) | **LITE profile + `deploy/lite/`** scripts (local compose, cloud Helm) and the LITE dashboard set | One profile for laptops and clusters (§25) |
 
 Until P0 items land, the framework degrades gracefully: it counts tokens from the provider usage chunk on streams, and stores TokenLean's `X-Trace-ID` beside its own span.

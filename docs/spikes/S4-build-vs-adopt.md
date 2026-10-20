@@ -100,3 +100,7 @@ Spec D1 builds a standalone Python runtime with pluggable backends. D17 runs one
 ## Cost if wrong
 
 If OpenHands turned out to be the better agent loop, it would be swapped in behind `AgentRunner` (one module plus contract tests), because the engine, policy, ledger and gates do not depend on Pydantic AI. Adding it as an ACP backend is additive. If Archon's UX were wanted later, it is a UI reference, not a dependency. The irreversible mistake would have been adopting either one, which would have moved budgets, policy and audit outside the framework. This record avoids that.
+
+## Correction (spike S7, 2026-10-20)
+
+S7 tested `openhands acp` hands-on and withdrew the optional `acp:openhands` backend recommended above: the OpenHands CLI README says it is no longer actively maintained (last release 1.16.0, 2026-05-08), it runs on Windows only under WSL, it pins an ACP SDK below 0.9, and its ACP mode ignores `--override-with-envs` and needs `~/.openhands/agent_settings.json`, which stores the API key in plain text. See `docs/spikes/S7-acp-and-antigravity.md`. The build-not-adopt verdict on D1/D17 stands.
