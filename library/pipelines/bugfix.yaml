@@ -1,7 +1,9 @@
 # bugfix: a defect becomes a reviewed, tested fix with a regression test (spec §6.2).
-# intake (BA, with the reproduction) -> test baseline -> fix plan (Design: root
-# cause and the smallest fix) -> Developer <-> Code Review -> [review gate] -> QA
-# -> pull request. The Developer writes the failing regression test first.
+# intake (BA, with the reproduction) -> [intake gate] -> test baseline -> fix plan
+# (Design: root cause and the smallest fix) -> Developer <-> Code Review -> [review
+# gate] -> QA -> pull request. The Developer writes the failing regression test first.
+# A QA `fail` opens no PR: the skipped publish step records the condition that
+# stopped it (an on-fail route back to the Developer is M2-23).
 name: bugfix
 version: 1.0.0
 regime: team
@@ -12,7 +14,10 @@ steps:
   - id: intake                          # the symptom as observed, reproduction, expected vs actual
     agent: business-analyst
 
-  - id: baseline                        # the tests on the untouched tree, before the fix
+  - gate: intake-approval               # a person confirms the symptom and answers the BA's
+    approver_role: team-lead            # Open Questions before anyone diagnoses or fixes
+
+  - id: baseline                       # the tests on the untouched tree, before the fix
     agent: qa-baseline
 
   - id: fix-plan                        # root cause with evidence, the fix, the regression test

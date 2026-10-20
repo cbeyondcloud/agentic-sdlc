@@ -132,6 +132,16 @@ def test_a_false_when_skips_the_step(make_harness):
     assert [r.outcome for r in state.history] == ["completed", "skipped"]
 
 
+def test_a_skipped_step_says_which_condition_was_false(make_harness):  # SP18b review F2
+    pipeline = TWO_STEPS.replace(
+        "agent: designer", "agent: designer\n    when: \"requirements.size != 'trivial'\""
+    )
+    h = make_harness(pipeline, {"ba": [answer("requirements", size="trivial")], "designer": []})
+
+    skipped = start(h).history[-1]
+    assert skipped.detail == "condition not met: requirements.size != 'trivial'"
+
+
 def test_a_condition_on_a_missing_field_pauses_with_the_reason(make_harness):  # RF 5
     pipeline = TWO_STEPS.replace(
         "agent: designer", 'agent: designer\n    when: "requirements.missing == 1"'

@@ -767,9 +767,10 @@ class _Run:
             except _Unusable as problem:
                 self._pause(problem.pause_id, problem.reason, step=step.id)
                 return False
-            if not wanted:
+            if not wanted:  # the record says why, e.g. a QA `fail` opening no PR
                 now = self.e.clock.now()
-                self._history(step.id, iteration, "skipped", started=now)
+                why = f"condition not met: {step.when}"
+                self._history(step.id, iteration, "skipped", started=now, detail=why)
                 self.recorder.record("step_finished", step.id, outcome="skipped")
                 return True  # saved with the cursor move
         with self._step_log(step.id, iteration):

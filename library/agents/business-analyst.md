@@ -44,10 +44,14 @@ tunable). The questions people forget are the same six every time.
 
 You cannot ask in chat. Every question whose answer changes the requirements goes
 under Open Questions, most important first, each with your best guess (see your
-interview skill). Never fill a gap with a silent assumption; a default you chose
-where the request was silent goes under Assumptions, where a person will see it.
-If the criteria would be guesses without answers, write what you can, set `status:
-partial` and say so in the summary.
+interview skill). A person reads them at the gate that follows this step, before
+any design or code: they approve your best guesses, edit your document, or send it
+back with their answers - so when the step prompt carries a person's feedback,
+those answers replace your guesses and the questions they settle leave the list.
+Never fill a gap with a silent assumption; a default you chose where the request
+was silent goes under Assumptions, where a person will see it. If the criteria
+would be guesses without answers, write what you can, set `status: partial` and
+say in the summary which questions the criteria hang on.
 
 ## 3. Options
 

@@ -1,7 +1,9 @@
 # feature-delivery: a request becomes a reviewed, tested pull request (spec §6.2).
-# BA -> test baseline -> Design -> [design gate] -> Developer <-> Code Review
-# -> [review gate] -> QA -> pull request. Every step's agent is a library agent
-# (library/agents/); the stage instructions come from Zyroflo's SOPs.
+# BA -> [requirements gate] -> test baseline -> Design -> [design gate] -> Developer
+# <-> Code Review -> [review gate] -> QA -> pull request. Every step's agent is a
+# library agent (library/agents/); the stage instructions come from Zyroflo's SOPs.
+# A QA `fail` opens no PR: the skipped publish step records the condition that
+# stopped it (an on-fail route back to the Developer is M2-23).
 name: feature-delivery
 version: 1.0.0
 regime: team
@@ -12,7 +14,10 @@ steps:
   - id: requirements                    # questions, options, EARS acceptance criteria
     agent: business-analyst
 
-  - id: baseline                        # the tests on the untouched tree: QA's "no new failures" bar
+  - gate: requirements-approval         # a person answers the BA's Open Questions (spec §5.4);
+    approver_role: team-lead            # rejecting with the answers re-runs the BA on them
+
+  - id: baseline                       # the tests on the untouched tree: QA's "no new failures" bar
     agent: qa-baseline
 
   - id: design                          # change set, test plan, decisions, impact

@@ -14,6 +14,7 @@ from pydantic_ai.models.function import FunctionModel
 
 import sdlc_commons.ledger as ledger_module
 from agentic.agents.models import GatewaySettings
+from agentic.definitions.pipeline import AgentStep, GateStep, LoopStep
 from agentic.engine.engine import Engine
 from agentic.engine.factory import PydanticStepRunners
 from agentic.engine.gates import Approve, StandaloneAuthorizer
@@ -32,11 +33,11 @@ ACTIONS = {"github.open_pr"}
 EXPECTED = {
     "feature-delivery": (
         ["requirements", "baseline", "design", "develop", "review", "develop", "review", "qa"],
-        ["design-approval", "review-approval"],
+        ["requirements-approval", "design-approval", "review-approval"],
     ),
     "bugfix": (
         ["intake", "baseline", "fix-plan", "develop", "review", "develop", "review", "qa"],
-        ["review-approval"],
+        ["intake-approval", "review-approval"],
     ),
 }
 
@@ -58,6 +59,14 @@ SCRIPT = {  # agent -> its answers, in order (the last one repeats)
     "code-review": [answer("review", findings=BLOCKING), answer("review", findings=[])],
     "qa": [answer("test-report")],
 }
+QA_FAILS = [
+    answer(
+        "test-report",
+        verdict="fail",
+        tests={"passed": 41, "failed": 1, "skipped": 0},
+        failures=["tests/test_export.py::test_csv"],
+    )
+]
 
 
 class Clock:
@@ -97,12 +106,29 @@ def test_compatibility_check_is_clean(library, standalone_policy, name):
 
 @pytest.mark.parametrize("name", PIPELINES)
 def test_baseline_runs_before_any_code_changes(library, name):
-    agents = [getattr(step, "agent", None) for step in library.pipeline(name).steps]
-    assert agents.index("qa-baseline") < agents.index(None)  # before the first gate or loop
+    steps = library.pipeline(name).steps
+    agents = [getattr(step, "agent", None) for step in steps]
+    first_loop = next(i for i, step in enumerate(steps) if isinstance(step, LoopStep))
+    assert agents.index("qa-baseline") < first_loop  # code changes only inside the loop
 
 
 @pytest.mark.parametrize("name", PIPELINES)
-def test_dry_run_completes_through_the_engine(library, standalone_policy, name, tmp_path: Path):
+def test_a_person_answers_the_analysts_questions_before_anything_is_built(library, name):
+    """Review F1: the Business Analyst's Open Questions go to a person. A gate follows it
+    directly, and a rejection sends the work back to it (with the person's answers)."""
+    steps = library.pipeline(name).steps
+    analyst = next(
+        i for i, s in enumerate(steps) if isinstance(s, AgentStep) and s.agent == "business-analyst"
+    )
+    gate = steps[analyst + 1]
+    assert isinstance(gate, GateStep), gate
+    assert gate.on_reject in (None, steps[analyst].id)  # None: the step before the gate
+
+
+def dry_run(library, standalone_policy, name: str, tmp_path: Path, script: dict) -> dict:
+    """Run `name` through the engine on scripted fake models, approving every gate it
+    stops at. Returns the final state, the PR action's calls, the ledger and the
+    instructions each agent ran on."""
     repo = tmp_path / "repo"
     repo.mkdir()
     turns: dict[str, int] = {}
@@ -115,7 +141,7 @@ def test_dry_run_completes_through_the_engine(library, standalone_policy, name, 
             seen[agent] = str(getattr(messages[-1], "instructions", "") or "")
             index = turns.get(agent, 0)
             turns[agent] = index + 1
-            answers = SCRIPT[agent]
+            answers = script[agent]
             return ModelResponse(parts=[TextPart(answers[min(index, len(answers) - 1)])])
 
         return FunctionModel(respond)
@@ -159,25 +185,38 @@ def test_dry_run_completes_through_the_engine(library, standalone_policy, name, 
         run_budget_usd=Decimal("50"),
     )
     run_id = f"r-{name}"
-    steps, gates = EXPECTED[name]
+    gates: list[str] = []
 
     state = asyncio.run(engine.start(name, {"request": "Add CSV export"}, "me@example.com", run_id))
-    for gate in gates:
-        assert (state.status, state.pending.id) == ("awaiting_gate", gate), state.status
-        decision = Approve(gate, "me@example.com")
+    while state.status == "awaiting_gate":
+        gates.append(state.pending.id)
         state = asyncio.run(
             engine.decide(
                 run_id,
-                decision,
+                Approve(state.pending.id, "me@example.com"),
                 authorizer=StandaloneAuthorizer(),
                 self_approval=self_approval_refusal,
             )
         )
+    return {
+        "state": state,
+        "gates": gates,
+        "published": published,
+        "ledger": ledgers[run_id],
+        "seen": seen,
+    }
 
+
+@pytest.mark.parametrize("name", PIPELINES)
+def test_dry_run_completes_through_the_engine(library, standalone_policy, name, tmp_path: Path):
+    run = dry_run(library, standalone_policy, name, tmp_path, SCRIPT)
+    state, ledger = run["state"], run["ledger"]
+    steps, gates = EXPECTED[name]
+
+    assert run["gates"] == gates
     assert state.status == "completed"
     assert [record.step for record in state.history if record.step != "publish"] == steps
-    assert published == [run_id]  # QA passed, so the PR action ran
-    ledger = ledgers[run_id]
+    assert run["published"] == [state.run_id]  # QA passed, so the PR action ran
     assert ledger.verify() == []
     for kind, rel in state.latest.items():
         handoff = parse_handoff(
@@ -186,5 +225,21 @@ def test_dry_run_completes_through_the_engine(library, standalone_policy, name, 
             block_on=regime_block_on(state.regime),
         )
         assert handoff.envelope.kind == kind
-    for agent, instructions in seen.items():  # each agent ran on its own library instructions
+    for agent, instructions in run["seen"].items():  # each ran on its own library instructions
         assert library.agent(agent).instructions.splitlines()[0] in instructions, agent
+
+
+@pytest.mark.parametrize("name", PIPELINES)
+def test_a_failed_qa_opens_no_pull_request_and_says_why(
+    library, standalone_policy, name, tmp_path: Path
+):
+    """Review F2: a QA `fail` publishes nothing, and the skipped publish step names the
+    condition that stopped it - a person reading the run sees why there is no PR."""
+    run = dry_run(library, standalone_policy, name, tmp_path, {**SCRIPT, "qa": QA_FAILS})
+    state = run["state"]
+
+    assert run["published"] == []
+    publish = state.history[-1]
+    assert (publish.step, publish.outcome) == ("publish", "skipped")
+    assert publish.detail == "condition not met: test_report.verdict == 'pass'"
+    assert run["ledger"].verify() == []
