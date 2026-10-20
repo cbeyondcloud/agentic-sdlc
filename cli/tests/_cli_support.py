@@ -131,7 +131,7 @@ class FakeGateway:
     """TokenLean's OpenAI-compatible route, scripted: each request gets the next answer
     for the agent named in its identity header, with a reported cost."""
 
-    answers: dict[str, list[str]]
+    answers: dict[str, list[str | dict]]
     cost_usd: str = "0.0125"
     requests: list[dict] = field(default_factory=list)
 
@@ -139,19 +139,23 @@ class FakeGateway:
         agent = request.headers.get("x-agentic-agent", "?").split("@")[0]
         self.requests.append({"agent": agent, "path": request.url.path})
         queue = self.answers.get(agent) or ["no answer scripted"]
-        text = queue.pop(0) if len(queue) > 1 else queue[0]
+        reply = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(reply, dict):  # {"tool": name, "args": {...}}: the model calls a tool
+            call = {
+                "id": f"call-{len(self.requests)}",
+                "type": "function",
+                "function": {"name": reply["tool"], "arguments": json.dumps(reply["args"])},
+            }
+            message = {"role": "assistant", "content": None, "tool_calls": [call]}
+            finish = "tool_calls"
+        else:
+            message, finish = {"role": "assistant", "content": reply}, "stop"
         body = {
             "id": f"chatcmpl-{len(self.requests)}",
             "object": "chat.completion",
             "created": 0,
             "model": "model",
-            "choices": [
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": text},
-                    "finish_reason": "stop",
-                }
-            ],
+            "choices": [{"index": 0, "message": message, "finish_reason": finish}],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
         }
         headers = {"x-tokenlean-cost-usd": self.cost_usd, "x-tokenlean-request-id": "req"}
