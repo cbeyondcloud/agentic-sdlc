@@ -5,7 +5,9 @@ an agent-CLI backend; M1-28) with:
   * the step's tool context (worktree, guard, sandbox - M1-30), or none;
   * a `spawn_agent` spawner when the backend can run child agents; the children
     are built by this same factory (DF-28);
-  * the step's state folder.
+  * the step's state folder;
+  * when the tool context carries installed skills, the agent's skill block at the
+    end of its instructions (catalog or pre-loaded skills, M1-38).
 
 `PydanticStepRunners` is the native-only form kept for existing callers.
 """
@@ -19,12 +21,13 @@ from pydantic_ai.models import Model
 from agentic.agents.children import ChildSpawner
 from agentic.agents.models import GatewaySettings
 from agentic.agents.runner import AgentRunner
-from agentic.agents.tools import ToolContext
+from agentic.agents.tools import SkillLibrary, ToolContext
 from agentic.backends.base import Backend
 from agentic.backends.capabilities import CAPABILITIES
 from agentic.backends.native import NativeBackend
 from agentic.engine.engine import EngineError, StepContext
 from agentic.policy import ResolvedAgent
+from agentic.skills.loader import SkillPromptRunner
 from agentic.transport import BudgetSlice, CallIdentity, Pricer
 
 
@@ -81,13 +84,18 @@ class StepRunners:
     def _runner(
         self, step: StepContext, spawner: ChildSpawner | None, state_dir: Path, **kwargs
     ) -> AgentRunner:
-        return self._backend(step.agent).runner(
+        tool_context = self.tools_for(step)
+        runner = self._backend(step.agent).runner(
             step,
-            tool_context=self.tools_for(step),
+            tool_context=tool_context,
             state_dir=state_dir,
             spawner=spawner,
             **kwargs,
         )
+        skills = tool_context.skills if tool_context is not None else None
+        if isinstance(skills, SkillLibrary) and (prompt := skills.prompt_for(step.agent)):
+            return SkillPromptRunner(runner, prompt)  # the agent's skill block (M1-38)
+        return runner
 
 
 class PydanticStepRunners(StepRunners):

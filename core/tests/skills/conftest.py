@@ -5,7 +5,20 @@ from pathlib import Path
 import pytest
 from _skill_helpers import entry, make_skill, write_catalog
 
+from agentic.definitions import load_agent
+from agentic.policy import ResolveContext, ResolvedAgent, load_policy, resolve_agent
 from agentic.skills import skill_digest
+
+
+@pytest.fixture
+def resolved(fixtures: Path) -> ResolvedAgent:
+    """The fixture Developer agent, resolved for the payments team against the fixture policy."""
+    policy = load_policy(fixtures / "policy" / "policy")
+    agent, violations = resolve_agent(
+        load_agent(fixtures / "agents" / "developer.md"), policy, ResolveContext(team="payments")
+    )
+    assert agent is not None, violations
+    return agent
 
 
 @pytest.fixture
