@@ -25,9 +25,10 @@ gate ledger are protocols, wired by the CLI (and the tests).
 
 import hashlib
 import json
+import logging
 import os
 from collections.abc import Callable, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -63,11 +64,13 @@ from agentic.handoffs import (
 )
 from agentic.memory.agents_md import agents_md_knowledge, nearest_agents_md
 from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
+from agentic.telemetry.logs import StepLogs
 from agentic.telemetry.spans import finish_step_span, step_span
 from agentic.telemetry.trailers import CommitAudit, commit_message
 from agentic.transport import BudgetLedger, BudgetSlice, LimitHit
 from agentic.transport.budget import BudgetError
 
+_LOG = logging.getLogger("agentic.engine")
 PROMPT_HEAD = "Pipeline: {pipeline} · step: {step} · iteration: {iteration}"
 
 
@@ -157,6 +160,7 @@ class Engine:
         run_budget_usd: Decimal | None = None,
         sandbox_label: str = "none",
         trees_for: Callable[[str], StepTrees] | None = None,
+        step_logs: StepLogs | None = None,
     ) -> None:
         self.definitions, self.policy, self.context = definitions, policy, context
         self.store, self.recorder_for, self.gates_for = store, recorder_for, gates_for
@@ -165,6 +169,7 @@ class Engine:
         self.run_budget_usd = run_budget_usd
         self.sandbox_label = sandbox_label  # recorded on every run it starts
         self.trees_for = trees_for  # None: steps get no tree (tests, pipelines without code)
+        self.step_logs = step_logs  # None: no per-step log files (M1-47)
 
     async def start(
         self, pipeline: str, inputs: dict[str, str], starter: str, run_id: str
@@ -767,9 +772,58 @@ class _Run:
                 self._history(step.id, iteration, "skipped", started=now)
                 self.recorder.record("step_finished", step.id, outcome="skipped")
                 return True  # saved with the cursor move
+        with self._step_log(step.id, iteration):
+            _LOG.info("step started", extra={"fields": self._log_fields(step, iteration)})
+            seen = len(self.state.history)
+            try:
+                if isinstance(step, ActionStep):
+                    done = self._action(step, iteration)
+                else:
+                    done = await self._agent(step, iteration, resume)
+            except Exception:
+                _LOG.exception("step failed")
+                raise
+            self._log_end(seen)
+            return done
+
+    # ── the step's log (M1-47) ───────────────────────────────────────────────
+
+    def _step_log(self, step: str, iteration: int):
+        logs = self.e.step_logs
+        if logs is None:
+            return nullcontext()
+        return logs.step(self.recorder.run_dir, self.state.run_id, step, iteration)
+
+    def _log_fields(self, step: AgentStep | ActionStep, iteration: int) -> dict:
+        fields: dict = {"attempt": self._attempt(step.id, iteration)}
         if isinstance(step, ActionStep):
-            return self._action(step, iteration)
-        return await self._agent(step, iteration, resume)
+            fields["action"] = step.action
+        else:
+            definition = self.e.definitions.agent(step.agent)
+            fields["agent"] = f"{definition.name}@{definition.version}"
+        return fields
+
+    def _log_end(self, seen: int) -> None:
+        """How the step ended: its newest history record, or the pause it left."""
+        records = self.state.history[seen:]
+        if records:
+            last = records[-1]
+            outcome, fields = last.outcome, {"cost_usd": last.cost_usd}
+            if last.handoff:
+                fields["handoff"] = last.handoff
+            if last.detail:
+                fields["detail"] = last.detail
+        else:
+            pending = self.state.pending
+            outcome, fields = f"paused-{pending.id}" if pending else "none", {}
+            if pending:
+                fields["detail"] = pending.reason
+        level = {"completed": logging.INFO, "skipped": logging.INFO, "failed": logging.ERROR}
+        _LOG.log(
+            level.get(outcome, logging.WARNING),
+            "step ended",
+            extra={"fields": {"outcome": outcome, **fields}},
+        )
 
     def _action(self, step: ActionStep, iteration: int) -> bool:
         started = self.e.clock.now()
