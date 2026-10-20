@@ -10,6 +10,8 @@ drive, wired from core and commons.
                     secret-scanned under org policy; tools from `StepWiring` (run trees,
                     guard, sandbox, installed skills, code intelligence);
   * step logs     - `StepLogs` through the commons redactor, the gateway key included;
+                    the same redactor masks the pause reasons and step details the
+                    engine stores in run.json (a provider's error can echo the key);
   * traces        - the local JSONL span exporter into the run folder, when the
                     telemetry extra is installed (`AGENTIC_TRACES=off` turns it off).
 
@@ -64,6 +66,12 @@ SKILLS = Path(".agentic") / "local" / "skills"
 STATE = Path(".agentic") / "local" / "state"
 #: Charged for a call whose cost the gateway did not report and whose model has no price.
 FALLBACK_ESTIMATE_USD = Decimal("0.05")
+#: Why four-eyes is a record and not yet a control in standalone mode (review F7).
+UNVERIFIED = (
+    "approvals are not authenticated before org sign-in (M2-03): the approver's name "
+    "comes from AGENTIC_USER or git user.email and roles are not checked, so four-eyes "
+    "compares names only"
+)
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
 
@@ -126,6 +134,7 @@ class Runtime:
         self._gates: dict[str, ZyrofloGates] = {}
         self._pipelines: dict[str, str] = {}
         self._library: InstalledSkills | None | bool = False  # False: not looked up yet
+        self._gateway_key: str | None = None  # the key `redact` masks once it is known
 
     @property
     def user(self) -> str:
@@ -181,6 +190,10 @@ class Runtime:
             available_backends=CONFIGURED_BACKENDS,
             skills=self._skill_check(name, live=live),
         )
+        if pipeline.regime == "regulated" or any(
+            isinstance(step, GateStep) and step.four_eyes for step in pipeline.steps
+        ):
+            report.problems.append(Problem(None, "identity", UNVERIFIED, severity="warning"))
         if not codeintel_index.available():
             for agent_name, agent in sorted(report.resolved.items()):
                 if "codeintel" in agent.tools:
@@ -239,12 +252,18 @@ class Runtime:
 
         def gate_step(step: GateStep) -> dict:
             four_eyes = step.four_eyes or pipeline.regime == "regulated"
+            # standalone (M1): no sign-in and no RBAC, so the plan must not promise them
+            who = (
+                f"role {step.approver_role} - not checked before org sign-in (M2-03): "
+                "anyone using agentic in this repository can decide"
+            )
             if pipeline.regime == "solo":
-                who = f"you (solo regime), or anyone holding {step.approver_role}"
-            else:
-                who = f"a person holding {step.approver_role}"
+                who = f"you (solo regime); {who}"
             if four_eyes:
-                who += ", not the person who started the run (four-eyes)"
+                who += (
+                    "; four-eyes: a different name from the person who started the run "
+                    "(names come from AGENTIC_USER or git user.email and are not authenticated)"
+                )
             return {
                 "kind": "gate",
                 "id": step.gate,
@@ -291,6 +310,7 @@ class Runtime:
             "policy_version": self.ws.policy().version,
             "team": self.ws.team,
             "sandbox": decision.label,
+            "approver_identity": "unverified",  # standalone: names and roles are not checked
             "steps": steps,
             "preflight": {
                 "passed": report.passed,
@@ -326,7 +346,11 @@ class Runtime:
         return GatewaySettings(base_url=url, api_key=key)
 
     def redact(self, gateway: GatewaySettings | None = None) -> Callable[[str], str]:
-        return redactor(extra=[gateway.api_key] if gateway is not None else [])
+        """Masks known secrets: the environment's, secret shapes, and the gateway key
+        when given (the last one asked for is remembered, for later calls without it)."""
+        if gateway is not None:
+            self._gateway_key = gateway.api_key
+        return redactor(extra=[self._gateway_key] if self._gateway_key else [])
 
     def engine(
         self,
@@ -366,6 +390,7 @@ class Runtime:
             sandbox_label=decision.label,
             trees_for=wiring.trees_for,
             step_logs=StepLogs(self.redact(gateway)),
+            redact=self.redact(gateway),  # pause reasons and step details in run.json
         )
 
     def identity(self, step: StepContext) -> CallIdentity:

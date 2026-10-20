@@ -54,6 +54,9 @@ class DefinitionSet:
     pipelines: dict[str, tuple[PipelineDefinition, Layer]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     handoffs: "HandoffCatalog" = field(default_factory=_builtin_handoffs)
+    # the file each winning definition was read from (empty for a set built in code)
+    agent_files: dict[str, Path] = field(default_factory=dict)
+    pipeline_files: dict[str, Path] = field(default_factory=dict)
 
     @classmethod
     def discover(
@@ -66,7 +69,7 @@ class DefinitionSet:
         from agentic.handoffs.extensions import extend_catalog, load_extension
 
         found = cls()
-        agent_files: dict[str, Path] = {}
+        agent_files = found.agent_files
         extensions = []
         # Load farthest first, so nearer layers overwrite: org, then team, then repo.
         for layer, root in (("org", org), ("team", team), ("repo", repo)):
@@ -87,6 +90,7 @@ class DefinitionSet:
                     continue
                 pipeline = load_pipeline(path)
                 found.pipelines[pipeline.name] = (pipeline, layer)
+                found.pipeline_files[pipeline.name] = path
         found.handoffs = extend_catalog(found.handoffs, extensions)
         for name, (agent, _) in found.agents.items():
             if problems := _unknown_kinds(agent, found.handoffs):
@@ -107,6 +111,13 @@ class DefinitionSet:
 
     def pipeline_names(self) -> list[str]:
         return sorted(self.pipelines)
+
+    def agent_file(self, name: str) -> Path | None:
+        """The file agent `name` was read from, or None (a set built in code)."""
+        return self.agent_files.get(name)
+
+    def pipeline_file(self, name: str) -> Path | None:
+        return self.pipeline_files.get(name)
 
     @staticmethod
     def _lookup(table: dict, kind: str, name: str) -> tuple:

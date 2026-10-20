@@ -69,7 +69,9 @@ def test_each_step_records_the_sandbox_it_ran_in(make_harness):
     shared: dict = {"ledgers": {}, "gates": {}}
     script = {"designer": [answer("design")], "dev": [once_over_budget]}
     first = make_harness(TWO, script, shared=shared, sandbox_label="srt 0.0.78")
-    assert run(first.engine.start("test", {}, "dev@acme.example", "r-1")).pending.id == "budget"
+    assert (
+        run(first.engine.start("test", {}, "dev@acme.example", "r-1")).pending.id == "step-budget"
+    )
 
     later = make_harness(TWO, script, shared=shared, sandbox_label="none")
     later.runners.calls.update(first.runners.calls)

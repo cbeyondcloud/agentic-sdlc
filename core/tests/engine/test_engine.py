@@ -255,7 +255,7 @@ def test_a_budget_limit_pauses_the_run(make_harness):
     h = make_harness(TWO_STEPS, {"ba": [answer("requirements")], "designer": [over_budget]})
 
     state = start(h)
-    assert (state.status, state.pending.id) == ("paused", "budget")
+    assert (state.status, state.pending.id) == ("paused", "step-budget")
     assert "budget" in state.pending.reason
 
 

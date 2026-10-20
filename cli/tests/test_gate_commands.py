@@ -185,6 +185,32 @@ def test_show_includes_the_diff_of_the_gated_steps(workspace, policy_repo, gatew
     assert "src/new.py" in cli("show", run_id).out
 
 
+ESCAPES = "\x1b]0;pwned\x07\x1b[1A\x1b[2K\x9b2K"
+
+
+def test_show_does_not_pass_terminal_control_sequences_through(
+    workspace, policy_repo, gateway, cli
+):  # F2: an agent cannot hide lines from the approver
+    write(policy_repo / "pipelines" / "build.yaml", BUILD)
+    write(
+        policy_repo / "agents" / "builder.md",
+        "---\nname: builder\ntype: general\nversion: 1.0.0\ndescription: Builds.\n"
+        "tools: [read_files, edit_files]\nconsumes: []\n---\nBuild it.\n",
+    )
+    gateway.answers["builder"] = [
+        {"tool": "write_file", "args": {"path": "src/new.py", "text": f"y = '{ESCAPES}hidden'\n"}},
+        f"built it{ESCAPES}fake approval line",
+    ]
+    result = cli("--json", "run", "build")
+    assert result.code == ExitCode.PAUSED, result.err
+    run_id = result.json()["run_id"]
+    shown = cli("show", run_id).out
+    assert "hidden" in shown and "fake approval line" in shown
+    assert not any(c in shown for c in "\x1b\x07\x9b"), repr(shown)
+    logs = cli("logs", run_id).out
+    assert not any(c in logs for c in "\x1b\x07\x9b"), repr(logs)
+
+
 def test_waiting_lists_gates_across_runs(workspace, gateway, cli):
     first, second = started(cli), started(cli)
     rows = cli("--json", "waiting").json()

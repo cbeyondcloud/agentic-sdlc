@@ -10,6 +10,12 @@
 
 A run that waits for a person exits 4, one stopped (or paused at a limit) exits 5, a
 dry run whose preflight fails exits 3 with the report.
+
+`--extra-budget` raises the run's budget limit: it is refused (exit 2) for a run
+started without `--budget`, and for a step that reached its agent's own budget.
+`--skip` is a person's decision: it is recorded under the workspace's person, in the
+approval ledger, and in the regulated regime it may not be the person who started
+the run (four-eyes).
 """
 
 import asyncio
@@ -34,6 +40,7 @@ from agentic_cli.output import Output
 from agentic_cli.output import table as output_table
 from agentic_cli.runtime import Runtime, new_run_id
 from agentic_cli.workspace import Workspace
+from sdlc_commons.gates import self_approval_refusal
 
 
 def register(app: typer.Typer) -> None:
@@ -79,7 +86,7 @@ def register(app: typer.Typer) -> None:
             rt.store.path(run_id).parent,
             lambda: engine.start(pipeline, given, rt.user, run_id),
         )
-        _finish(out, state)
+        _finish(out, state, rt)
 
     @app.command("resume")
     def resume(
@@ -95,6 +102,11 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Continue a paused or interrupted run."""
         out: Output = ctx.obj
+        if skip and (extra_minutes or extra_budget is not None or allow or deny):
+            raise CliError(
+                "--skip goes on its own: it skips the step and grants nothing else",
+                ExitCode.USAGE,
+            )
         rt = Runtime(Workspace.load())
         state = _load(rt, run_id)
         decisions: dict[str, bool | str] | None = None
@@ -111,9 +123,11 @@ def register(app: typer.Typer) -> None:
                 extra_budget_usd=extra,
                 decisions=decisions,
                 skip=skip,
+                who=rt.user if skip else None,
+                self_approval=self_approval_refusal,
             ),
         )
-        _finish(out, state)
+        _finish(out, state, rt)
 
     @app.command("status")
     def status(ctx: typer.Context, run_id: Annotated[str | None, typer.Argument()] = None) -> None:
@@ -124,7 +138,7 @@ def register(app: typer.Typer) -> None:
             _list(out, rt, show_all=True, limit=10)
             return
         state = _load(rt, run_id)
-        out.result(summary(state), show_state(state))
+        out.result(summary(state, rt.redact()), show_state(state, rt.redact()))
 
     @app.command("runs")
     def runs(
@@ -147,7 +161,7 @@ def register(app: typer.Typer) -> None:
         engine = rt.engine(regime=state.regime, offline=True)
         with engine_errors():
             state = asyncio.run(engine.stop(run_id, rt.user, reason))
-        out.result(summary(state), show_state(state))
+        out.result(summary(state, rt.redact()), show_state(state, rt.redact()))
 
     @app.command("logs")
     def logs(
@@ -196,8 +210,9 @@ def _load(rt: Runtime, run_id: str) -> RunState:
         return rt.store.load(run_id)
 
 
-def _finish(out: Output, state: RunState) -> None:
-    out.result(summary(state), show_state(state))
+def _finish(out: Output, state: RunState, rt: Runtime) -> None:
+    redact = rt.redact()  # the gateway key is known: the command asked for it
+    out.result(summary(state, redact), show_state(state, redact))
     raise typer.Exit(exit_code_for(state))
 
 

@@ -37,6 +37,49 @@ def test_validate_reports_policy_violations_with_field_names(workspace, cli):
     assert "tools: " in human.out
 
 
+def test_validate_names_the_file_a_problem_is_in(workspace, cli):  # F5 (b)
+    path = write(
+        workspace / ".agentic" / "agents" / "greedy.md",
+        "---\nname: greedy\ntype: general\nversion: 0.1.0\ndescription: Wants too much.\n"
+        "tier: deep-thought\n---\nHi.\n",
+    )
+    problems = cli("--json", "validate").json()["problems"]
+    assert {p["file"] for p in problems if p["name"] == "greedy"} == {str(path)}
+    assert f"{path}: greedy: tier" in cli("validate").out
+
+
+CONDITIONAL = """name: cond
+version: 1.0.0
+steps:
+  - id: requirements
+    agent: ba
+  - id: design
+    agent: architect
+    when: "requirements.status == 'complete'"
+  - id: build
+    agent: dev
+"""
+
+
+def test_validate_passes_with_warnings_only(workspace, policy_repo, cli):  # F5 (a)
+    write(
+        policy_repo / "agents" / "dev.md",
+        "---\nname: dev\ntype: general\nversion: 1.0.0\ndescription: Dev.\n"
+        "consumes: [design]\n---\nBuild.\n",
+    )
+    path = write(policy_repo / "pipelines" / "cond.yaml", CONDITIONAL)
+    dry = cli("--json", "run", "cond", "--dry-run")
+    assert dry.code == ExitCode.OK, dry.out
+    assert any(p["severity"] == "warning" for p in dry.json()["preflight"]["problems"])
+
+    result = cli("--json", "validate")
+    assert result.code == ExitCode.OK, result.out + result.err
+    warnings = [p for p in result.json()["problems"] if p["severity"] == "warning"]
+    assert warnings and {p["file"] for p in warnings} == {str(path)}
+    human = cli("validate")
+    assert human.code == ExitCode.OK and "1 warning" in human.out
+
+
 def test_validate_one_file_reports_load_errors_with_lines(workspace, cli):
     broken = write(
         workspace / "draft.md",

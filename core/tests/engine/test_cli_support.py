@@ -94,7 +94,7 @@ def test_skip_moves_past_the_step_a_condition_pause_is_about(make_harness):
     state = start(harness, {"request": "x"})
     assert state.status == "paused" and state.pending.id == "condition"
 
-    done = asyncio.run(harness.engine.resume("r-1", skip=True))
+    done = asyncio.run(harness.engine.resume("r-1", skip=True, who="lead@acme.example"))
     assert done.status == "completed"
     assert [(r.step, r.outcome) for r in done.history] == [
         ("requirements", "completed"),
@@ -111,7 +111,7 @@ def test_skip_is_refused_for_any_other_pause(make_harness):
     harness.engine.runner_factory = lambda ctx: (_ for _ in ()).throw(ValueError("boom"))
     start(harness, {"request": "x"})
     with pytest.raises(EngineError, match="only a condition pause"):
-        asyncio.run(harness.engine.resume("r-1", skip=True))
+        asyncio.run(harness.engine.resume("r-1", skip=True, who="lead@acme.example"))
 
 
 def _cost(usd: str) -> CallCost:

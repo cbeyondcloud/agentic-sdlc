@@ -30,7 +30,7 @@ from agentic_cli.driving import drive, exit_code_for, show_state, summary
 from agentic_cli.editor import edit_file
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
-from agentic_cli.output import Output
+from agentic_cli.output import Output, printable
 from agentic_cli.output import table as output_table
 from agentic_cli.runtime import STATE, Runtime
 from agentic_cli.workspace import Workspace
@@ -186,7 +186,8 @@ def _decide(out: Output, rt: Runtime, state: RunState, decision: Decision) -> No
             self_approval=self_approval_refusal,
         ),
     )
-    out.result(summary(result), show_state(result))
+    redact = rt.redact()
+    out.result(summary(result, redact), show_state(result, redact))
     raise typer.Exit(exit_code_for(result))
 
 
@@ -264,16 +265,17 @@ def _show(shown: dict):
         console.print(f"run {shown['run_id']} waits at {shown['gate']}: {shown['reason']}")
         for handoff in shown["handoffs"]:
             console.rule(handoff["path"])
+            text = printable(handoff["text"])  # an agent's text cannot drive the terminal
             try:
-                header, body = split_front_matter(handoff["text"].replace("\r\n", "\n"))
+                header, body = split_front_matter(text)
             except YamlFileError:  # not a handoff (an agent's free text): shown as it is
-                header, body = "", handoff["text"]
+                header, body = "", text
             if header:
                 console.print(Syntax(header, "yaml", word_wrap=True))
             console.print(Markdown(body))
         console.rule("code changes")
         if shown["diff"]:
-            console.print(Syntax(shown["diff"], "diff", word_wrap=True))
+            console.print(Syntax(printable(shown["diff"]), "diff", word_wrap=True))
         else:
             console.print("no code changes", markup=False)
 

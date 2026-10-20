@@ -53,17 +53,15 @@ def register(app: typer.Typer) -> None:
             list[Path] | None, typer.Argument(help="Agent (.md) or pipeline (.yaml) files.")
         ] = None,
     ) -> None:
-        """Check agents and pipelines against org policy before use (exit 3 on a problem)."""
+        """Check agents and pipelines against org policy before use (exit 3 on an error;
+        warnings are shown and pass, as they do for a run)."""
         out: Output = ctx.obj
         ws = Workspace.load()
         report = _validate(ws, paths or [])
         out.result(report, _show_validation(report))
-        if report["problems"]:
-            count = len(report["problems"])
-            raise CliError(
-                f"validation failed: {count} problem{'s' if count > 1 else ''}",
-                ExitCode.INVALID,
-            )
+        errors = sum(p["severity"] != "warning" for p in report["problems"])
+        if errors:
+            raise CliError(f"validation failed: {_counted(report)}", ExitCode.INVALID)
 
     @agents.command("list")
     def agents_list(ctx: typer.Context) -> None:
@@ -160,12 +158,13 @@ def _validate(ws: Workspace, paths: list[Path]) -> dict:
     agents = pipelines = 0
     if not paths:
         definitions = ws.definitions()
-        for _name, (agent, layer) in sorted(definitions.agents.items()):
+        for name, (agent, layer) in sorted(definitions.agents.items()):
             agents += 1
-            problems += _agent_problems(ws, agent, Path(layer))
+            problems += _agent_problems(ws, agent, definitions.agent_file(name) or Path(layer))
         for name in definitions.pipeline_names():
             pipelines += 1
-            problems += _pipeline_problems(ws, definitions.pipeline(name), Path(name))
+            where = definitions.pipeline_file(name) or Path(name)
+            problems += _pipeline_problems(ws, definitions.pipeline(name), where)
     for path in paths:
         try:
             if path.suffix == ".md":
@@ -212,6 +211,16 @@ def _problem(where, name, field, reason, allowed=None, severity="error") -> dict
     }
 
 
+def _counted(report: dict) -> str:
+    """'2 errors, 1 warning'."""
+    warnings = sum(p["severity"] == "warning" for p in report["problems"])
+    errors = len(report["problems"]) - warnings
+    return (
+        f"{errors} error{'s' if errors != 1 else ''}, "
+        f"{warnings} warning{'s' if warnings != 1 else ''}"
+    )
+
+
 def _show_validation(report: dict):
     def show(console) -> None:
         agents, pipelines = report["agents"], report["pipelines"]
@@ -222,7 +231,7 @@ def _show_validation(report: dict):
         if not report["problems"]:
             console.print(f"valid: {head}", markup=False)
             return
-        console.print(f"checked {head}:", markup=False)
+        console.print(f"checked {head}: {_counted(report)}", markup=False)
         for p in report["problems"]:
             allowed = f" (allowed: {p['allowed']})" if p["allowed"] not in (None, []) else ""
             warning = " (warning)" if p["severity"] == "warning" else ""

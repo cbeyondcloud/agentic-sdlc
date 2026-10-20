@@ -5,7 +5,10 @@
 * `engine_errors` - the engine's error families as messages and exit codes (DF-54);
 * `exit_code_for` - the run's state as the command's exit code: completed 0, waiting
                    for a person 4, stopped or paused at a limit 5, failed 1;
-* `summary` / `show_state` - the run as JSON, and as text with what to do next.
+* `summary` / `show_state` - the run as JSON, and as text with what to do next; the
+                   free text in them (pause reasons, step details, why it ended) goes
+                   through the redactor once more, for runs recorded before the engine
+                   redacted what it stores.
 """
 
 import asyncio
@@ -56,8 +59,11 @@ def _hint(message: str) -> str | None:
 def drive(
     redact: Callable[[str], str], run_dir: Path, call: Callable[[], Awaitable[RunState]]
 ) -> RunState:
-    with console_logging(redact), traces_into(run_dir), engine_errors():
-        return asyncio.run(call())
+    try:
+        with console_logging(redact), traces_into(run_dir), engine_errors():
+            return asyncio.run(call())
+    except CliError as error:  # an engine refusal can quote a provider's text
+        raise CliError(redact(str(error)), error.code, hint=error.hint) from error
 
 
 def exit_code_for(state: RunState) -> ExitCode:
@@ -83,8 +89,8 @@ def spent(state: RunState) -> Decimal:
     return total(budget) if budget else Decimal(0)
 
 
-def summary(state: RunState) -> dict:
-    pending = state.pending
+def summary(state: RunState, redact: Callable[[str], str] | None = None) -> dict:
+    pending, clean = state.pending, redact or _as_is
     return {
         "run_id": state.run_id,
         "pipeline": state.pipeline,
@@ -100,7 +106,7 @@ def summary(state: RunState) -> dict:
         else {
             "kind": pending.kind,
             "id": pending.id,
-            "reason": pending.reason,
+            "reason": clean(pending.reason),
             "step": pending.step,
             "since": pending.since.isoformat(),
             "artefacts": sorted(pending.artefacts),
@@ -113,15 +119,19 @@ def summary(state: RunState) -> dict:
                 "outcome": r.outcome,
                 "cost_usd": r.cost_usd,
                 "handoff": r.handoff,
-                "detail": r.detail,
+                "detail": clean(r.detail),
             }
             for r in state.history
         ],
         "cost_usd": str(spent(state)),
         "ended_by": state.ended_by,
-        "end_reason": state.end_reason,
+        "end_reason": clean(state.end_reason) if state.end_reason else state.end_reason,
         "exit_code": int(exit_code_for(state)),
     }
+
+
+def _as_is(text: str) -> str:
+    return text
 
 
 def next_steps(state: RunState) -> list[str]:
@@ -139,8 +149,14 @@ def next_steps(state: RunState) -> list[str]:
     if pending.kind == "approval":
         calls = " ".join(f"--allow {c}" for c in pending.calls)
         return [f"agentic resume {run} {calls}   (or --deny <call>)"]
-    if pending.id in ("budget", "step-budget"):
+    if pending.id == "budget":  # the run's limit: more run budget lets it go on
         return [f"agentic resume {run} --extra-budget <USD>", f"agentic stop {run} --reason ..."]
+    if pending.id == "step-budget":  # the agent's own limit: more run budget does not help
+        return [
+            f"agentic stop {run} --reason ...",
+            f"agentic resume {run}   (retries the step from its start with the same step "
+            "budget; a larger limits.budget_usd in the agent applies to new runs)",
+        ]
     if pending.id == "run-timeout":
         return [f"agentic resume {run} --extra-minutes <N>", f"agentic stop {run} --reason ..."]
     if pending.id == "condition":
@@ -148,9 +164,9 @@ def next_steps(state: RunState) -> list[str]:
     return [f"agentic resume {run}", f"agentic stop {run} --reason ..."]
 
 
-def show_state(state: RunState):
+def show_state(state: RunState, redact: Callable[[str], str] | None = None):
     def show(console) -> None:
-        data = summary(state)
+        data = summary(state, redact)
         console.print(
             f"run {state.run_id} ({state.pipeline} {state.pipeline_version}): {state.status}",
             markup=False,
@@ -165,9 +181,10 @@ def show_state(state: RunState):
         pending = state.pending
         if pending is not None:
             where = "waiting at" if pending.kind == "gate" else "paused"
-            console.print(f"  {where} {pending.id}: {pending.reason}", markup=False)
+            reason = data["pending"]["reason"]
+            console.print(f"  {where} {pending.id}: {reason}", markup=False)
         if state.end_reason:
-            console.print(f"  stopped by {state.ended_by}: {state.end_reason}", markup=False)
+            console.print(f"  stopped by {state.ended_by}: {data['end_reason']}", markup=False)
         console.print(f"  spent ${data['cost_usd']}", markup=False)
         for line in next_steps(state):
             console.print(f"  next: {line}", markup=False)
