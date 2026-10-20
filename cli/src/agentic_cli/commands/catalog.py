@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
-from rich.table import Table
 
 from agentic.definitions import (
     AgentDefinition,
@@ -30,6 +29,7 @@ from agentic.skills.catalog import CatalogError, load_catalog, skill_digest, ski
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.output import Output
+from agentic_cli.output import table as output_table
 from agentic_cli.runtime import ACTIONS, CONFIGURED_BACKENDS, installed_skills_root
 from agentic_cli.workspace import Workspace
 
@@ -308,7 +308,7 @@ def _table(console, rows: list[dict], columns: tuple[str, ...]) -> None:
     if not rows:
         console.print("nothing found", markup=False)
         return
-    table = Table(*columns)
+    table = output_table(*columns)
     for row in rows:
         table.add_row(*(str(row[c]) for c in columns))
     console.print(table)
@@ -381,11 +381,12 @@ def _policy_summary(policy: OrgPolicy, team: str | None) -> dict:
 
 def _show_policy(console, shown: dict) -> None:
     console.print(f"policy {shown['version']}", markup=False)
-    tiers = Table("tier", "model", "effort")
+    tiers = output_table("tier", "model", "effort")
     for name, tier in shown["tiers"].items():
         tiers.add_row(name, tier["model"], str(tier["effort"] or ""))
     console.print(tiers)
-    types = Table("agent type", "tier", "backends", "budget USD", "turns", "minutes", "children")
+    columns = ("agent type", "tier", "backends", "budget USD", "turns", "minutes", "children")
+    types = output_table(*columns)
     for name, t in shown["agent_types"].items():
         caps = t["caps"]
         types.add_row(

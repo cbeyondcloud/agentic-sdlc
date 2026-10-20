@@ -33,7 +33,7 @@ from agentic.auth.credentials import TOKENLEAN_KEY, CredentialError, Credentials
 from agentic.codeintel import index as codeintel_index
 from agentic.definitions import PipelineDefinition, UnknownDefinitionError
 from agentic.definitions.pipeline import ActionStep, AgentStep, GateStep, LoopStep
-from agentic.engine.engine import Engine, StepContext
+from agentic.engine.engine import Engine, EngineError, StepContext
 from agentic.engine.factory import StepRunners
 from agentic.engine.preflight import PreflightReport, Problem, preflight
 from agentic.engine.state import RunStore
@@ -316,22 +316,29 @@ class Runtime:
     def redact(self, gateway: GatewaySettings | None = None) -> Callable[[str], str]:
         return redactor(extra=[gateway.api_key] if gateway is not None else [])
 
-    def engine(self, *, run_budget_usd: Decimal | None = None, pipeline: str | None = None):
-        """The engine for this workspace. `pipeline` (when starting a run) picks the
-        sandbox decision by its regime; a resumed run uses its own."""
-        gateway = self.gateway()
+    def engine(
+        self,
+        *,
+        run_budget_usd: Decimal | None = None,
+        regime: str = "team",
+        offline: bool = False,
+    ) -> Engine:
+        """The engine for this workspace; the run's `regime` picks the sandbox decision.
+        `offline` builds one that makes no model calls (stopping a run needs no gateway)."""
+        gateway = None if offline else self.gateway()
         policy = self.ws.policy()
-        regime = self.pipeline(pipeline).regime if pipeline else "team"
         decision = decide_sandbox(machine_readiness(), regime, policy.sandbox)
         wiring = self._wiring(decision)
-        native = _native_backend(self, gateway)
-        runners = StepRunners(
-            {"native": native},
-            tools_for=wiring.tools_for,
-            state_dir_for=lambda step: (
-                self.ws.repo / STATE / step.run_id / "agents" / f"{step.step}-{step.iteration}"
-            ),
-        )
+        if gateway is None:
+            runners = _no_model_calls
+        else:
+            runners = StepRunners(
+                {"native": _native_backend(self, gateway)},
+                tools_for=wiring.tools_for,
+                state_dir_for=lambda step: (
+                    self.ws.repo / STATE / step.run_id / "agents" / f"{step.step}-{step.iteration}"
+                ),
+            )
         return Engine(
             definitions=self.ws.definitions(),
             policy=policy,
@@ -416,6 +423,10 @@ class Runtime:
         if known:  # sync before every run: restores a locally edited skill (M1-37)
             sync_skills(library.catalog, self._catalog_root(), library.root, known)
         return library
+
+
+def _no_model_calls(step: StepContext):
+    raise EngineError("this command makes no model calls")
 
 
 def _native_backend(rt: Runtime, gateway: GatewaySettings):

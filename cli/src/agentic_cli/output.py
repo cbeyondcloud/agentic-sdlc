@@ -13,8 +13,18 @@ from collections.abc import Callable
 from typing import Any
 
 from rich.console import Console
+from rich.table import Table
 
 from agentic_cli.errors import CliError
+
+
+def table(*columns: str) -> Table:
+    """A table whose cells wrap instead of being cut, and whose first column (the id or
+    name a person copies into the next command) is never wrapped."""
+    shown = Table()
+    for index, column in enumerate(columns):
+        shown.add_column(column, overflow="fold", no_wrap=index == 0)
+    return shown
 
 
 class Output:
