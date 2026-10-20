@@ -10,7 +10,8 @@ import pytest
 from pydantic_ai import Agent
 
 from agentic.agents.models import GatewaySettings, build_model, metered_model, model_settings
-from agentic.agents.runner import _limit_hit
+from agentic.agents.runner import AgentTask, PydanticAIRunner, _found, _limit_hit
+from agentic.security import SecretBlocked, SecretScanner
 from agentic.transport import BudgetLedger
 
 GATEWAY = GatewaySettings(base_url="https://tokenlean.acme.internal", api_key="tok-gateway")
@@ -80,7 +81,7 @@ def test_requests_go_only_to_the_gateway_host(resolved, tokenlean):
 # ── review I6: a metered model in one call; retries are the engine's decision ─
 
 
-def metered(agent, tokenlean, limit: str):
+def metered(agent, tokenlean, limit: str, scanner: SecretScanner | None = None):
     step = BudgetLedger(Decimal("5")).run.open("build", "step", Decimal(limit))
     model, log = metered_model(
         agent,
@@ -89,9 +90,51 @@ def metered(agent, tokenlean, limit: str):
         budget=step,
         price_for=lambda name: None,
         fallback_estimate_usd=Decimal("0.01"),
+        scanner=scanner,
         _inner=httpx2.MockTransport(tokenlean),
     )
     return model, log, step
+
+
+# ── M1-41: a secret never leaves; the masked variant does ─────────────────────
+
+AWS = "AKIA" + "Z7Q4R2XW" + "9PLM3TKB"  # assembled, so this file never holds one whole
+
+
+@pytest.mark.parametrize("model_name", ["anthropic/claude-sonnet", "openai/gpt-5"])
+def test_a_planted_secret_is_blocked_before_any_http_call(resolved, tokenlean, model_name):
+    agent = resolved.model_copy(update={"model": model_name})
+    model, log, step = metered(agent, tokenlean, "1")
+
+    with pytest.raises(Exception) as caught:
+        asyncio.run(Agent(model).run(f"deploy with key {AWS}"))
+    assert _found(caught.value, SecretBlocked) is not None
+    assert tokenlean.seen == []  # nothing left the machine
+    assert log.requests == 0 and step.spent() == Decimal(0)
+    assert step.available() == Decimal(1)  # nothing reserved either
+
+
+def test_a_blocked_run_raises_the_secret_error_itself(resolved, tokenlean, tmp_path):
+    # the SDK wraps a transport error as a connection error; the engine must see why
+    model, log, step = metered(resolved, tokenlean, "1")
+    runner = PydanticAIRunner(resolved, model, budget=step, state_dir=tmp_path, costs=log)
+    task = AgentTask(instructions="You are the Developer.", inputs={}, prompt=f"use {AWS}")
+
+    with pytest.raises(SecretBlocked, match="AWS Access Key"):
+        asyncio.run(runner.run(task))
+    assert tokenlean.seen == []
+
+
+@pytest.mark.parametrize("model_name", ["anthropic/claude-sonnet", "openai/gpt-5"])
+def test_the_masked_variant_is_sent(resolved, tokenlean, model_name):
+    agent = resolved.model_copy(update={"model": model_name})
+    model, log, _ = metered(agent, tokenlean, "1", scanner=SecretScanner("mask"))
+
+    assert asyncio.run(Agent(model).run(f"deploy with key {AWS}")).output
+    (sent,) = tokenlean.seen
+    assert AWS.encode() not in sent.content
+    assert b"[MASKED SECRET: AWS Access Key]" in sent.content
+    assert log.requests == 1
 
 
 def test_a_metered_model_charges_every_call_to_the_budget(resolved, tokenlean):

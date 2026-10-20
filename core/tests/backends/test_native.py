@@ -14,9 +14,11 @@ from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from agentic.agents.models import GatewaySettings, model_settings
+from agentic.agents.runner import AgentTask
 from agentic.backends.native import NativeBackend
 from agentic.engine.engine import EngineError, StepContext
 from agentic.engine.factory import StepRunners
+from agentic.security import SecretScanEvent, SecretScanner
 from agentic.transport import CallIdentity, LimitHit
 
 GATEWAY = GatewaySettings(base_url="https://tokenlean.acme.internal", api_key="k")
@@ -171,6 +173,26 @@ def test_native_runs_any_provider_through_tokenlean(resolved, tmp_path, model):
     assert (outcome.status, outcome.output) == ("completed", "VALID from tokenlean")
     assert seen and all(str(r.url).startswith(GATEWAY.base_url) for r in seen)
     assert all(r.headers.get("x-agentic-run-id") == "r-1" for r in seen)
+
+
+def test_each_step_scans_with_the_scanner_made_for_it(resolved, tmp_path):
+    # M1-41: the step's scanner (policy action, audit sink bound to the step) is the one used
+    seen: list[httpx2.Request] = []
+    events: list[tuple[str, SecretScanEvent]] = []
+
+    def scanner_for(ctx: StepContext) -> SecretScanner:
+        return SecretScanner("mask", on_event=lambda event: events.append((ctx.step, event)))
+
+    agent = resolved.model_copy(update={"tools": []})
+    native = backend(network_transport=tokenlean(seen), scanner_for=scanner_for)
+    runner = native.runner(
+        step(agent, slice_()), tool_context=None, state_dir=tmp_path, spawner=None
+    )
+    key = "AKIA" + "Z7Q4R2XW" + "9PLM3TKB"
+    asyncio.run(runner.run(AgentTask(instructions="Dev.", inputs={}, prompt=f"use {key}")))
+
+    assert seen and all(key.encode() not in r.content for r in seen)
+    assert events[0] == ("develop", SecretScanEvent("masked", "model-call", {"AWSKeyDetector": 1}))
 
 
 VENDOR = re.compile(r"claude|anthropic|openai|gemini|codex", re.IGNORECASE)

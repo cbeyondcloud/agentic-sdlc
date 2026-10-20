@@ -59,6 +59,7 @@ from agentic.agents.models import model_settings
 from agentic.agents.stuck import StuckDetector
 from agentic.agents.stuck import stuck_check as detector_check
 from agentic.policy import ResolvedAgent
+from agentic.security import SecretBlocked
 from agentic.transport import BudgetSlice, LimitHit
 
 Stopped = Literal["budget", "turns", "time", "stuck"]
@@ -277,6 +278,8 @@ class PydanticAIRunner:
         except BaseException as error:
             hit = _limit_hit(error)
             if hit is None:
+                if blocked := _found(error, SecretBlocked):
+                    raise blocked from error  # the SDK wrapped it as a connection error
                 raise
             return self._budget(hit, seen)
         if self.costs.limit_hit is not None and self.costs.limit_hit is not earlier_hit:
@@ -419,14 +422,19 @@ def _usage(seen: dict) -> RunUsage:
 
 def _limit_hit(error: BaseException) -> LimitHit | None:
     """A LimitHit inside `error`: itself, a member of an exception group, or a cause."""
+    return _found(error, LimitHit)
+
+
+def _found[E: BaseException](error: BaseException, kind: type[E]) -> E | None:
+    """An exception of `kind` inside `error`: itself, a group member, or a cause."""
     seen: set[int] = set()
-    stack = [error]
+    stack: list[BaseException | None] = [error]
     while stack:
         current = stack.pop()
         if current is None or id(current) in seen:
             continue
         seen.add(id(current))
-        if isinstance(current, LimitHit):
+        if isinstance(current, kind):
             return current
         if isinstance(current, BaseExceptionGroup):
             stack.extend(current.exceptions)

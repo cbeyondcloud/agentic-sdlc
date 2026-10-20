@@ -13,9 +13,9 @@ handed to the SDK client, which sets the auth header itself (spike S1); SDK
 retries are off (`agentic.transport.sdk`).
 
 `metered_model` is what production uses: network transport (corporate CA and
-proxy) -> metering transport (the budget) -> identity client -> model, built in
-one call, with the run's `CostLog`. `build_model` needs the transport spelled
-out, so a model is never unmetered by default (review I6).
+proxy) -> metering transport (the budget) -> secret scan (M1-41) -> identity
+client -> model, built in one call, with the run's `CostLog`. `build_model` needs
+the transport spelled out, so a model is never unmetered by default (review I6).
 """
 
 from dataclasses import dataclass
@@ -31,6 +31,7 @@ from pydantic_ai.settings import ModelSettings
 
 from agentic.agents.metering import CostLog, MeteringTransport
 from agentic.policy import ResolvedAgent
+from agentic.security import SecretScanner
 from agentic.transport import (
     BudgetSlice,
     CallIdentity,
@@ -54,13 +55,18 @@ def build_model(
     identity: CallIdentity,
     gateway: GatewaySettings,
     transport: httpx2.AsyncBaseTransport,
+    *,
+    scanner: SecretScanner | None = None,
 ) -> Model:
-    """The model the agent runs on, calling TokenLean through the identity client."""
+    """The model the agent runs on, calling TokenLean through the identity client;
+    each call secret-scanned by `scanner` (default: block, default detectors)."""
     provider, _, name = agent.model.partition("/")
     if not name:
         provider, name = "", agent.model
     root = gateway.base_url.rstrip("/")
-    client = make_async_client(root, identity, network=gateway.network, _transport=transport)
+    client = make_async_client(
+        root, identity, network=gateway.network, scanner=scanner, _transport=transport
+    )
     if provider == "anthropic":
         sdk = anthropic_client(root, gateway.api_key, client)
         return AnthropicModel(name, provider=AnthropicProvider(anthropic_client=sdk))
@@ -77,10 +83,11 @@ def metered_model(
     price_for: Pricer,
     fallback_estimate_usd: Decimal,
     log: CostLog | None = None,
+    scanner: SecretScanner | None = None,
     _inner: httpx2.AsyncBaseTransport | None = None,  # tests: a stand-in for the network
 ) -> tuple[Model, CostLog]:
-    """The agent's model with every call charged to `budget`, and the log of those
-    calls - pass the same log to the runner so its outcome reports them."""
+    """The agent's model with every call secret-scanned, then charged to `budget`, and
+    the log of those calls - pass the same log to the runner so its outcome reports them."""
     log = log if log is not None else CostLog()
     meter = MeteringTransport(
         _inner or make_network_transport(gateway.network),
@@ -89,7 +96,7 @@ def metered_model(
         fallback_estimate_usd=fallback_estimate_usd,
         log=log,
     )
-    return build_model(agent, identity, gateway, transport=meter), log
+    return build_model(agent, identity, gateway, transport=meter, scanner=scanner), log
 
 
 def model_settings(agent: ResolvedAgent) -> ModelSettings:
