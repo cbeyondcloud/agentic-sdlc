@@ -14,6 +14,11 @@ dependencies = [
     "truststore>=0.10,<0.11",
 ]
 
+[project.optional-dependencies]
+# The claude-code backend (M1-29, spike S2). Optional: its use is under Anthropic's
+# Commercial Terms and the wheel bundles the (Anthropic-signed) Claude Code binary.
+claude-code = ["claude-agent-sdk==0.2.164"]
+
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]
 build-backend = "uv_build"

@@ -19,7 +19,7 @@ agentic-control-plane = { workspace = true }
 # Tools used only while developing (never shipped to users).
 [dependency-groups]
 dev = [
-    "agentic-core",
+    "agentic-core[claude-code]",
     "sdlc-commons",
     "agentic-cli",
     "agentic-control-plane",
