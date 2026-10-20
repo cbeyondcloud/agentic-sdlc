@@ -151,6 +151,27 @@ class SandboxPolicy(_Strict):
         return self
 
 
+class SecretScanPolicy(_Strict):
+    """What happens to a secret in content about to leave for a model (M1-41): the call
+    is refused (`block`) or the secret is replaced by a marker (`mask`), and either way
+    an audit event is recorded. The same rule applies to tool output (DF-23)."""
+
+    action: Literal["block", "mask"] = "block"
+    detectors: list[str] | None = None  # None = the scanner's default set
+
+    @model_validator(mode="after")
+    def detectors_are_known(self) -> Self:
+        if self.detectors is None:
+            return self
+        if not self.detectors:
+            raise ValueError("detectors may not be empty (that would switch the scan off)")
+        from agentic.security.secret_scan import known_detectors  # lazy: no import cycle
+
+        if unknown := sorted(set(self.detectors) - set(known_detectors())):
+            raise ValueError(f"unknown detectors {unknown}; known: {known_detectors()}")
+        return self
+
+
 def _inside(path: str, folder: str) -> bool:
     path, folder = path.rstrip("/"), folder.rstrip("/")
     return path == folder or path.startswith(folder + "/")
@@ -187,6 +208,7 @@ class OrgPolicy(_Strict):
     tool_mirror_url: str | None = None
     allow_repo_pipelines: bool = False  # D33: pipelines only from the policy repo
     sandbox: SandboxPolicy = SandboxPolicy()  # D38
+    secret_scan: SecretScanPolicy = SecretScanPolicy()  # M1-41
     # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
     unhonoured: dict[Literal["temperature", "effort"], Literal["ignore", "warn", "block"]] = {
         "temperature": "warn",

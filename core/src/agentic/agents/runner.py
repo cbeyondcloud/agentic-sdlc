@@ -4,9 +4,10 @@
 Pydantic AI, stepping through the agent's graph node by node (`agent.iter`) so
 it can keep the latest text and check for a stuck loop after every response.
 
-What a run sees (spec §8.3): the agent's instructions, each consumed handoff
-wrapped as data (`<handoff kind="...">`), and the step's prompt - never an
-earlier agent's conversation.
+What a run sees (spec §8.3): the agent's instructions, a notice that wrapped
+text is data (M1-42), each consumed handoff wrapped as data (`<handoff
+kind="...">`, escaped so it cannot close early), and the step's prompt - never
+an earlier agent's conversation.
 
 Limits (spec §8.4), each ending the run with a reason:
   * turns  - `UsageLimits(request_limit=max_turns)`             -> stopped: turns
@@ -59,6 +60,8 @@ from agentic.agents.models import model_settings
 from agentic.agents.stuck import StuckDetector
 from agentic.agents.stuck import stuck_check as detector_check
 from agentic.policy import ResolvedAgent
+from agentic.security import SecretBlocked
+from agentic.security.untrusted import DATA_NOTICE, HANDOFF_TAG, fence
 from agentic.transport import BudgetSlice, LimitHit
 
 Stopped = Literal["budget", "turns", "time", "stuck"]
@@ -277,6 +280,8 @@ class PydanticAIRunner:
         except BaseException as error:
             hit = _limit_hit(error)
             if hit is None:
+                if blocked := _found(error, SecretBlocked):
+                    raise blocked from error  # the SDK wrapped it as a connection error
                 raise
             return self._budget(hit, seen)
         if self.costs.limit_hit is not None and self.costs.limit_hit is not earlier_hit:
@@ -402,9 +407,11 @@ def _use_up(path: Path) -> None:
 
 
 def _instructions(task: AgentTask, contract: OutputContract | None = None) -> str:
-    parts = [task.instructions.strip()]
+    """The agent's instructions, the data notice, each handoff fenced as data (a
+    `</handoff>` inside cannot close it - DF-24), then the output contract."""
+    parts = [task.instructions.strip(), DATA_NOTICE]
     for kind, text in task.inputs.items():
-        parts.append(f'<handoff kind="{kind}">\n{text.strip()}\n</handoff>')
+        parts.append(fence(text.strip(), HANDOFF_TAG, kind=kind))
     if contract is not None:
         parts.append(contract.instructions)
     return "\n\n".join(parts)
@@ -419,14 +426,19 @@ def _usage(seen: dict) -> RunUsage:
 
 def _limit_hit(error: BaseException) -> LimitHit | None:
     """A LimitHit inside `error`: itself, a member of an exception group, or a cause."""
+    return _found(error, LimitHit)
+
+
+def _found[E: BaseException](error: BaseException, kind: type[E]) -> E | None:
+    """An exception of `kind` inside `error`: itself, a group member, or a cause."""
     seen: set[int] = set()
-    stack = [error]
+    stack: list[BaseException | None] = [error]
     while stack:
         current = stack.pop()
         if current is None or id(current) in seen:
             continue
         seen.add(id(current))
-        if isinstance(current, LimitHit):
+        if isinstance(current, kind):
             return current
         if isinstance(current, BaseExceptionGroup):
             stack.extend(current.exceptions)

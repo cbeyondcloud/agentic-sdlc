@@ -9,7 +9,8 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
     limits.yaml           concurrency
     licences.yaml         blocked, scan
     retention.yaml        days                      (placeholder until OR-01)
-    org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines
+    org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines,
+                          sandbox, unhonoured, secret_scan
     teams/<team>.yaml     one TeamPolicy per team
 """
 
@@ -49,6 +50,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "allow_repo_pipelines": "allow_repo_pipelines",
         "sandbox": "sandbox",
         "unhonoured": "unhonoured",
+        "secret_scan": "secret_scan",
     },
 }
 

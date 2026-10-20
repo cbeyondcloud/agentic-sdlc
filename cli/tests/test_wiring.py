@@ -118,7 +118,8 @@ def test_shell_runs_in_the_tree_and_refuses_unlisted_programs(repo, tmp_path, ag
     assert isinstance(context.sandbox, LocalProcessSandbox) and context.allow_unisolated
     tools = build_tools(agent, context)
 
-    assert call(tools, "run_shell", command="echo ok").startswith("exit 0")
+    shell_output = '<untrusted-data source="run_shell">\nexit 0'  # labelled as data (M1-42)
+    assert call(tools, "run_shell", command="echo ok").startswith(shell_output)
     assert "not on the allow list" in call(tools, "run_shell", command="ls")
 
 

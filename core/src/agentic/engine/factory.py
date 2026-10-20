@@ -27,6 +27,7 @@ from agentic.backends.capabilities import CAPABILITIES
 from agentic.backends.native import NativeBackend
 from agentic.engine.engine import EngineError, StepContext
 from agentic.policy import ResolvedAgent
+from agentic.security import SecretScanner
 from agentic.skills.loader import SkillPromptRunner
 from agentic.transport import BudgetSlice, CallIdentity, Pricer
 
@@ -112,6 +113,7 @@ class PydanticStepRunners(StepRunners):
         state_dir_for: Callable[[StepContext], Path],
         model_for: Callable[[StepContext], Model] | None = None,
         policy_version: str | None = None,
+        scanner_for: Callable[[StepContext], SecretScanner] | None = None,
     ) -> None:
         native = NativeBackend(
             identity_for=identity_for,
@@ -120,6 +122,7 @@ class PydanticStepRunners(StepRunners):
             fallback_estimate_usd=fallback_estimate_usd,
             model_for=model_for,
             policy_version=policy_version,
+            scanner_for=scanner_for,
         )
         super().__init__({"native": native}, tools_for=tools_for, state_dir_for=state_dir_for)
 

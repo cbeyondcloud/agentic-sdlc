@@ -17,6 +17,9 @@ makes it. The hook, in order:
      one whose trace id is derived from the run id - so all calls of a run join
      into one trace - with a fresh span id per call.
 
+Under the hook, the body is secret-scanned (`agentic.transport.scan`, M1-41):
+blocked or masked per policy before anything is metered or sent.
+
 The hook guards what goes through the client; it is not a sandbox against code
 that builds its own client. The OS sandbox and egress rules (M1-32, M2-42) are.
 """
@@ -29,8 +32,10 @@ from collections.abc import Iterable
 import httpx2
 from opentelemetry.propagate import inject
 
+from agentic.security import SecretScanner
 from agentic.transport.identity import CallIdentity
 from agentic.transport.network import NetworkSettings, ssl_context
+from agentic.transport.scan import ScanningTransport, SyncScanningTransport
 
 #: Request headers TokenLean acts on (it caches, routes, adds memory or rewrites
 #: the prompt), read from its source 2026-10-19. Never sent unless allowed.
@@ -63,15 +68,22 @@ def make_client(
     network: NetworkSettings | None = None,
     allow: Iterable[str] = frozenset(),
     timeout: float = 600.0,
+    scanner: SecretScanner | None = None,
     _transport: httpx2.BaseTransport | None = None,
 ) -> httpx2.Client:
-    """A synchronous client for TokenLean at `base_url`, stamping `identity`."""
+    """A synchronous client for TokenLean at `base_url`, stamping `identity`; every
+    body is secret-scanned first (`scanner`, default: block, default detectors)."""
     stamp = _stamper(base_url, identity, _allowed(allow))
-    settings = network or NetworkSettings()
-    tls = ssl_context(settings)
-    return httpx2.Client(base_url=base_url, headers=_auth(api_key), timeout=timeout,
-                        event_hooks={"request": [stamp]}, transport=_transport, verify=tls,
-                        trust_env=settings.trust_env, follow_redirects=False)  # fmt: skip
+    inner = _transport or make_sync_network_transport(network)
+    transport = SyncScanningTransport(inner, scanner or SecretScanner())
+    return httpx2.Client(
+        base_url=base_url,
+        headers=_auth(api_key),
+        timeout=timeout,
+        event_hooks={"request": [stamp]},
+        transport=transport,
+        follow_redirects=False,
+    )
 
 
 def make_async_client(
@@ -82,20 +94,39 @@ def make_async_client(
     network: NetworkSettings | None = None,
     allow: Iterable[str] = frozenset(),
     timeout: float = 600.0,
+    scanner: SecretScanner | None = None,
     _transport: httpx2.AsyncBaseTransport | None = None,
 ) -> httpx2.AsyncClient:
-    """An asynchronous client for TokenLean at `base_url`, stamping `identity`."""
+    """An asynchronous client for TokenLean at `base_url`, stamping `identity`; every
+    body is secret-scanned first (`scanner`, default: block, default detectors)."""
     stamp = _stamper(base_url, identity, _allowed(allow))
 
     async def stamp_async(request: httpx2.Request) -> None:
         stamp(request)
 
-    settings = network or NetworkSettings()
-    tls = ssl_context(settings)
-    return httpx2.AsyncClient(base_url=base_url, headers=_auth(api_key), timeout=timeout,
-                             event_hooks={"request": [stamp_async]}, transport=_transport,
-                             verify=tls, trust_env=settings.trust_env,
-                             follow_redirects=False)  # fmt: skip
+    inner = _transport or make_network_transport(network)
+    transport = ScanningTransport(inner, scanner or SecretScanner())
+    return httpx2.AsyncClient(
+        base_url=base_url,
+        headers=_auth(api_key),
+        timeout=timeout,
+        event_hooks={"request": [stamp_async]},
+        transport=transport,
+        follow_redirects=False,
+    )
+
+
+class _SyncClientTransport(httpx2.BaseTransport):
+    """`_ClientTransport` for the synchronous client."""
+
+    def __init__(self, client: httpx2.Client) -> None:
+        self.client = client
+
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
+        return self.client.send(request, stream=True, follow_redirects=False)
+
+    def close(self) -> None:
+        self.client.close()
 
 
 class _ClientTransport(httpx2.AsyncBaseTransport):
@@ -119,6 +150,14 @@ def make_network_transport(network: NetworkSettings | None = None) -> httpx2.Asy
     settings = network or NetworkSettings()
     return _ClientTransport(
         httpx2.AsyncClient(verify=ssl_context(settings), trust_env=settings.trust_env)
+    )
+
+
+def make_sync_network_transport(network: NetworkSettings | None = None) -> httpx2.BaseTransport:
+    """`make_network_transport` for the synchronous client."""
+    settings = network or NetworkSettings()
+    return _SyncClientTransport(
+        httpx2.Client(verify=ssl_context(settings), trust_env=settings.trust_env)
     )
 
 
