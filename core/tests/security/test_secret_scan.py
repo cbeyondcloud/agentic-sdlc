@@ -53,7 +53,7 @@ def test_ordinary_code_has_no_findings():
 
 
 # review F1: key formats detect-secrets 1.5.0 does not know, and keyword assignments
-KEY_TAIL = "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0" * 2  # 80 token characters
+KEY_TAIL = "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0" * 2  # 80 token chars; gitleaks:allow
 CURRENT_KEYS = {
     "AnthropicKeyDetector": "sk-ant-" + "api03-" + KEY_TAIL,
     "OpenAIProjectKeyDetector": "sk-" + "proj-" + KEY_TAIL,
@@ -116,7 +116,7 @@ def test_the_assignment_rules_stay_linear_on_long_runs():
 
 # review F2(b): documented example values and policy allow values are not secrets
 AWS_EXAMPLE_ID = "AKIA" + "IOSFODNN7" + "EXAMPLE"
-AWS_EXAMPLE_SECRET = "wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY"
+AWS_EXAMPLE_SECRET = "wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY"  # gitleaks:allow
 
 
 def test_documented_example_keys_are_not_secrets():
