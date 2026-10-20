@@ -9,6 +9,7 @@ from agentic.policy.model import (
     OrgPolicy,
     RoleLimits,
     SandboxPolicy,
+    SecretScanPolicy,
     TeamPolicy,
     TierSpec,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "ResolvedAgent",
     "RoleLimits",
     "SandboxPolicy",
+    "SecretScanPolicy",
     "TeamPolicy",
     "TierSpec",
     "Violation",
