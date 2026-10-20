@@ -6,7 +6,7 @@
 | Date | 2026-10-16 |
 | Owner | Sumit Gupta |
 | Supporting research | [OSS reuse report](../../../reports/Agentic%20SDLC%20OSS%20reuse.md) · [research notes](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/) · [Zyroflo comparison](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/sdlc_harness_comparison.md) |
-| Revision | r3 (2026-10-18): decisions D26-D35 folded in; new §23 Users and roles, §24 Developer onboarding (init, skills, custom skills, learning loop), §25 Deployment landscape (incl. TokenLean LITE), §26 Executive cost breakdown, §27 Enterprise coverage; §5 agent types and deny lists; §19 milestones. Since r3: D36 (httpx2), D37 (handoff templates inherit a base, extend-only layering, §7.4), D38 (sandbox: `srt` on every OS, Windows via WSL2, spike S6), D39 (code-intelligence index built locally; opt-in export outside `main`, spike S9) |
+| Revision | r3 (2026-10-18): decisions D26-D35 folded in; new §23 Users and roles, §24 Developer onboarding (init, skills, custom skills, learning loop), §25 Deployment landscape (incl. TokenLean LITE), §26 Executive cost breakdown, §27 Enterprise coverage; §5 agent types and deny lists; §19 milestones. Since r3: D36 (httpx2), D37 (handoff templates inherit a base, extend-only layering, §7.4), D38 (sandbox: `srt` on every OS, Windows via WSL2, spike S6), D39 (code-intelligence index built locally; opt-in export outside `main`, spike S9); S4 re-confirms D1/D17 (build, not adopt; OpenHands as an optional `acp:` backend) |
 | Earlier | r2 (2026-10-17): Zyroflo (sdlc-harness) artefacts folded in — §1.4, D16, D25, §6, §7, §9.2, §10, §14.5, §16, §18–§21 |
 
 ---
@@ -71,7 +71,7 @@ Decisions agreed during requirements clarification (2026-10-16).
 
 | # | Area | Decision |
 |---|---|---|
-| D1 | Runtime | Standalone Python runtime with **pluggable backends**: our own agent loop, plus CLI agents (Claude Code, Codex) and later remote agents (Devin etc.) |
+| D1 | Runtime | Standalone Python runtime with **pluggable backends**: our own agent loop, plus CLI agents (Claude Code, Codex) and later remote agents (Devin etc.). Re-confirmed by spike S4 (2026-10-20): no OSS project is adopted wholesale (OpenHands' budgets, RBAC and audit are in its commercial Enterprise edition; Archon has no policy layer or budget enforcement); OpenHands is usable only as an optional `acp:` backend (`docs/spikes/S4-build-vs-adopt.md`) |
 | D2 | Gateway | **TokenLean** is the only model gateway (OpenAI/Anthropic/Gemini-compatible). It owns provider keys, routing and admin model overrides, spend caps, per-call usage. Enhancements required (§17) |
 | D3 | Pipeline control flow | Linear steps + **human gates** + **loops** (bounded) + **conditional branches**; no pipeline-level parallelism |
 | D4 | Handoffs | Markdown documents with **schema-validated YAML front matter**; each agent declares what it consumes and produces |
@@ -551,7 +551,7 @@ Model/proxy errors: bounded retries with backoff (TokenLean already fails over b
 | `claude-code` | Claude Agent SDK (Python, MIT) — locked down: `--bare`, `--json-schema`, `--permission-mode dontAsk`, managed `allowedProviders: ["customEndpoint"]` | Model + proxy routing; tools via allowed-tools; no temperature |
 | `codex` | `codex exec --json --output-schema` (Apache-2.0) with `[model_providers]` pointing at TokenLean (`wire_api = "responses"`) | Needs TokenLean Responses API endpoint (§17) |
 | `opencode` (M2, D32) | `opencode run --format json`; lock-down via `OPENCODE_CONFIG_CONTENT` (provider `baseURL` → TokenLean, model forced) and `OPENCODE_PERMISSION` from the shell policy and deny lists; wrapped in `srt`/container (no own sandbox) | Model-agnostic harness fully routed through TokenLean |
-| `acp:<agent>` (phase 2) | `agent-client-protocol` Python SDK (Apache-2.0) for Gemini CLI, Goose, Copilot CLI, … (Antigravity only if spike S7 finds it ACP-capable and routable) | Per-agent config profile |
+| `acp:<agent>` (phase 2) | `agent-client-protocol` Python SDK (Apache-2.0) for Gemini CLI, Goose, Copilot CLI, OpenHands (`openhands acp`, routed by `LLM_BASE_URL` with `--override-with-envs`; never `--headless`, which always auto-approves), … (Antigravity only if spike S7 finds it ACP-capable and routable) | Per-agent config profile |
 | `remote:devin` etc. (phase 3) | submit / poll / collect-PR adapter | Not routable via TokenLean; policy can only allow/deny |
 
 Each backend has **contract tests** pinned to a tool version; flags change fast (research finding).
