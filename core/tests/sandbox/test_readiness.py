@@ -3,8 +3,6 @@ the regime decision (M1-33, M1-32; D38: srt everywhere, Windows via WSL2)."""
 
 from pathlib import Path
 
-import pytest
-
 from agentic.policy import SandboxPolicy
 from agentic.sandbox.readiness import (
     WINDOWS_GUIDANCE,
@@ -146,16 +144,20 @@ def test_regulated_refuses_without_a_sandbox():
     assert d.refusal and "regulated" in d.refusal and not d.use_srt
 
 
-@pytest.mark.parametrize("regime", ["team", "solo"])
-def test_other_regimes_run_unsandboxed_with_a_warning(regime):
-    d = decide_sandbox(UNAVAILABLE, regime, SandboxPolicy())
+def test_team_refuses_without_a_sandbox_by_default():  # DF-72: owner decision
+    d = decide_sandbox(UNAVAILABLE, "team", SandboxPolicy())
+    assert d.refusal and "team" in d.refusal and not d.use_srt
+
+
+def test_solo_runs_unsandboxed_with_a_warning():
+    d = decide_sandbox(UNAVAILABLE, "solo", SandboxPolicy())
     assert (d.use_srt, d.label, d.refusal) == (False, "none", None)
     assert d.warning and "policy guards only" in d.warning
 
 
-def test_policy_can_require_the_sandbox_for_team():
-    d = decide_sandbox(UNAVAILABLE, "team", SandboxPolicy(required_for=["team", "regulated"]))
-    assert d.refusal
+def test_an_org_may_let_team_runs_go_unsandboxed():
+    d = decide_sandbox(UNAVAILABLE, "team", SandboxPolicy(required_for=["regulated"]))
+    assert d.refusal is None and d.warning
 
 
 def test_windows_guidance_installs_a_node_new_enough():  # review: apt's nodejs is too old

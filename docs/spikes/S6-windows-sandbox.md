@@ -90,7 +90,7 @@ Wrapping one command costs about **0.18 s** (median of 5, `true`, inside the con
 
 **When no sandbox is available.**
 - Org policy decides per regime.
-- Proposed default: `regulated` refuses to run; `team` and `solo` run with policy guards only and a warning (deny lists, Zyroflo command guards, worktree confinement).
+- Default (owner decision 2026-10-20, DF-72): `team` and `regulated` refuse to run; `solo` runs with policy guards only and a warning (deny lists, Zyroflo command guards, worktree confinement).
 - The run record says which sandbox each step used, or "none".
 
 **Where the sandbox sits.**

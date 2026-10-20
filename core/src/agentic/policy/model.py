@@ -123,8 +123,9 @@ _GLOB = set("*?[")
 class SandboxPolicy(_Strict):
     """How agent commands are sandboxed (D38, spike S6): `srt` on every OS."""
 
-    # regimes that refuse to run without a sandbox; the others run on guards, with a warning
-    required_for: list[Literal["solo", "team", "regulated"]] = ["regulated"]
+    # regimes that refuse to run without a sandbox; the others run on guards, with a warning.
+    # Team runs too (owner decision, DF-72): guards cannot stop code an allowed program runs.
+    required_for: list[Literal["solo", "team", "regulated"]] = ["team", "regulated"]
     allowed_domains: list[str] = []  # package registries a sandboxed command may reach
     deny_read: list[str] = []  # added to DEFAULT_DENY_READ, never instead of it
     allow_write: list[str] = []  # writable besides the run's tree, e.g. "~/.cache/uv"

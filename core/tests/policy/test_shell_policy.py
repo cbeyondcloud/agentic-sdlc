@@ -85,7 +85,7 @@ def test_a_denied_command_is_not_also_an_ask(policy):
 
 
 def test_sandbox_policy_defaults(policy):
-    assert policy.sandbox.required_for == ["regulated"]
+    assert policy.sandbox.required_for == ["team", "regulated"]  # DF-72: owner decision
     assert policy.sandbox.srt_version == "0.0.78"
     assert policy.sandbox.effective_deny_read[0] == "~/.ssh"
 
