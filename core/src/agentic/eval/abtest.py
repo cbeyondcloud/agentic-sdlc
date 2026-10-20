@@ -12,12 +12,14 @@ is a new plan; the old result stays in the record.
 | NO_BENEFIT   | otherwise; an inconclusive result is not "almost promoted": a re-test is a |
 |              | new, larger pre-registered plan                                            |
 | UNMEASURABLE | fewer than n cases scored on both sides, a blinding leak, or a judge       |
-|              | calibration failure: an empty comparison is a failure, never a tie         |
+|              | calibration that failed or is missing (judged primary): an empty           |
+|              | comparison is a failure, never a tie                                       |
 | INCOMPLETE   | the budget cap stopped the runs                                            |
 
 Guards: invalid outcomes not higher in B (by more than `max_invalid_increase` runs);
 median cost per run B/A within `max_cost_increase` (an unmeasured cost does not hold);
-for Code Review the false-finding rate not more than 10 pp higher; for TokenLean
+for Code Review the false-finding rate not more than 10 pp higher (unmeasured: does
+not hold); a judged primary always requires the pairwise judgement; for TokenLean
 optimisation groups (non-inferiority) the cost must actually fall.
 
 `run_ab` runs both variants under sealed X/Y labels, scores everything, then reveals
@@ -42,6 +44,7 @@ from agentic.eval.runner import RunCase, RunSet, run_eval
 Verdict = Literal["PROMOTE", "NO_BENEFIT", "UNMEASURABLE", "INCOMPLETE"]
 Record = Callable[..., object]  # record(event, **fields): the ledger
 JUDGED_METRICS = frozenset({"rubric"})
+REVIEW_METRICS = frozenset({"defect_recall"})  # Code Review: the false-finding guard applies
 UNRELIABLE_ORDER = 0.30  # pairwise verdicts that flip with order above this: judge unreliable
 
 
@@ -93,12 +96,34 @@ class ABPlan(_Strict):
             raise ValueError("a superiority plan's margin is 0 or more")
         if self.primary_metric in JUDGED_METRICS and not (self.judge_model and self.rubric_sha):
             raise ValueError("a judged metric needs the judge model and rubric sha pinned")
+        if self.primary_metric in JUDGED_METRICS and not self.pairwise_required:
+            # S10: a rubric win also needs B's pairwise win rate >= 0.5
+            raise ValueError("a judged metric needs pairwise_required: true (S10)")
         return self
 
     @property
     def sha(self) -> str:
         canonical = json.dumps(self.model_dump(mode="json"), sort_keys=True, ensure_ascii=False)
         return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class Calibration(_Strict):
+    """A human calibration of the judge (`agentic eval calibrate score`'s result.json):
+    which judge models and rubric shas it covered, and its verdict."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)  # result.json carries more
+
+    verdict: Literal["ACCEPTED", "REJECTED", "RUBRIC_AMBIGUOUS"]
+    judge_models: list[str]
+    rubric_shas: list[str]
+
+    def matches(self, plan: ABPlan) -> bool:
+        """It calibrated this plan's judge model on this plan's rubric."""
+        return plan.judge_model in self.judge_models and plan.rubric_sha in self.rubric_shas
+
+    def covers(self, plan: ABPlan) -> bool:
+        """It matches the plan and the judge was accepted."""
+        return self.matches(plan) and self.verdict == "ACCEPTED"
 
 
 class GuardResult(_Strict):
@@ -209,6 +234,12 @@ def decide(
         )
     if calibration_ok is False:
         return ABResult(**base, verdict="UNMEASURABLE", reasons=["the judge failed calibration"])
+    if plan.primary_metric in JUDGED_METRICS and calibration_ok is None:
+        reason = (
+            "no accepted human calibration of the judge for this rubric and judge model "
+            "(run `agentic eval calibrate`)"
+        )
+        return ABResult(**base, verdict="UNMEASURABLE", reasons=[reason])
     if budget_hit:
         return ABResult(**base, verdict="INCOMPLETE", reasons=["the budget cap stopped the runs"])
     if len(diffs) < plan.n:
@@ -309,6 +340,14 @@ def _guards(
             limit=limits.max_false_finding_increase,
             note=f"false-finding rate changed by {rise:+.0%}",
         )
+    elif plan.primary_metric in REVIEW_METRICS:
+        # like cost: a guard that was not measured does not hold
+        out["false_findings"] = GuardResult(
+            ok=False,
+            value=None,
+            limit=limits.max_false_finding_increase,
+            note="the false-finding rate is unmeasured, so its increase is unknown",
+        )
     return out
 
 
@@ -326,9 +365,12 @@ async def run_ab(
     pairwise_judge: PairwiseComparer | None = None,
     scrubber: Scrubber | None = None,
     leaks: LeakCheck | None = None,
+    calibration: Calibration | None = None,
     max_concurrency: int = 1,
 ) -> tuple[ABResult, RunSet]:
-    """Check and register the plan, run A and B blind as X/Y, score, reveal, decide."""
+    """Check and register the plan, run A and B blind as X/Y, score, reveal, decide.
+    A judged primary needs `calibration` of the plan's judge model and rubric sha:
+    without it the A/B is UNMEASURABLE, rejected it fails."""
     check_plan(
         plan,
         cases,
@@ -401,6 +443,11 @@ async def run_ab(
         pairwise_comparisons=comparisons or None,
         leaks=leaks.leaks if leaks is not None else (),
         budget_hit=runset.budget_hit,
+        calibration_ok=(
+            calibration.covers(plan)
+            if calibration is not None and calibration.matches(plan)
+            else None  # none, or one of another judge or rubric: not calibrated
+        ),
         mapping=revealed,
     )
     record("eval.ab_decided", plan_sha=sha, verdict=result.verdict)

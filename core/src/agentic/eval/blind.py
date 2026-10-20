@@ -9,7 +9,9 @@
                       (Zyroflo's `blind_and_score` order).
   * `LeakCheck`     - every judge input is searched for the forbidden terms. Any hit makes
                       the evaluation UNMEASURABLE: a leaked label voids the run, it never
-                      counts as a pass.
+                      counts as a pass. It is deliberately broader than the scrubber (no
+                      right-hand boundary, joiners interchangeable), so whatever the
+                      scrubber misses is caught here rather than slipping through.
 
 Only variant-DISTINGUISHING terms are scrubbed and forbidden: the agent's own name is
 the same for both variants (and "design" or "developer" are ordinary words), so it is
@@ -61,13 +63,37 @@ def _terms(names: Iterable[str]) -> list[str]:
     return sorted(set(terms), key=lambda t: (-len(t), t))  # longest first
 
 
-def _term_pattern(term: str) -> re.Pattern[str]:
-    return re.compile(rf"(?<![\w-]){re.escape(term)}(?![\w-])", re.IGNORECASE)
+_JOINER = r"[-_./]"  # what joins the parts of an id: model-7, model_7, model.7, vendor/m
+_ALNUM = r"[^\W_]"  # a letter or digit (\w without the underscore, which is a joiner)
+
+
+def _term_core(term: str) -> str:
+    """The term with its joiners made interchangeable or absent (model-7 = model_7 =
+    model7), so a respelled id is still the same id."""
+    parts = [re.escape(p) for p in re.split(_JOINER, term) if p]
+    return f"{_JOINER}?".join(parts)
+
+
+def _scrub_pattern(term: str) -> re.Pattern[str]:
+    """The whole joined token around the term: a dated, versioned or prefixed id
+    (`model-7-20260101`, `x.model-7`, `model-7b`) is redacted entirely. Token parts are
+    letters and digits only, so a long snake_case name cannot make the match backtrack."""
+    return re.compile(
+        rf"(?<!{_ALNUM})(?:{_ALNUM}+[-_.])*{_term_core(term)}{_ALNUM}*"
+        rf"(?:[-_.]{_ALNUM}+)*(?!{_ALNUM})",
+        re.IGNORECASE,
+    )
+
+
+def _leak_pattern(term: str) -> re.Pattern[str]:
+    """The term anywhere it starts a token or follows a joiner - no right boundary, so a
+    suffix never hides it. A false hit only voids a run, the safe direction."""
+    return re.compile(rf"(?<![^\W_]){_term_core(term)}", re.IGNORECASE)
 
 
 class Scrubber:
     def __init__(self, names: Iterable[str] = (), markers: Iterable[str] = ()) -> None:
-        self._names = [_term_pattern(term) for term in _terms(names)]
+        self._names = [_scrub_pattern(term) for term in _terms(names)]
         self._markers = [m for m in markers if m]
 
     def scrub(self, text: str) -> str:
@@ -121,7 +147,7 @@ class LeakCheck:
     """Searches every judge input for the forbidden terms; `leaks` lists those found."""
 
     def __init__(self, forbidden: Iterable[str] = ()) -> None:
-        self._patterns = [(term.lower(), _term_pattern(term)) for term in _terms(forbidden)]
+        self._patterns = [(term.lower(), _leak_pattern(term)) for term in _terms(forbidden)]
         self.leaks: list[str] = []
         self.inputs_seen = 0
 

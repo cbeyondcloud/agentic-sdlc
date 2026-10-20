@@ -4,11 +4,13 @@ the tracker asks for: it runs on every `check.py` pass, on Windows and Linux."""
 
 import hashlib
 import json
+import shutil
 import socket
 from pathlib import Path
 
 import pytest
 
+from agentic.eval.corpus import write_manifest
 from agentic.eval.report import EvalReport, comparable
 from agentic.yamlio import dump_yaml
 from agentic_cli.exit_codes import ExitCode
@@ -142,8 +144,182 @@ def test_live_mode_needs_a_gateway(tmp_path: Path, capsys):
     assert "--gateway" in capsys.readouterr().err
 
 
+def corpus_copy(tmp_path: Path) -> Path:
+    copy = tmp_path / "corpus"
+    shutil.copytree(LIBRARY, copy)
+    return copy
+
+
+def run_corpus(corpus: Path, out: Path, agent: str, *extra: str) -> int:
+    return main(
+        [
+            "--json",
+            "eval",
+            "run",
+            "--agent",
+            agent,
+            "--corpus",
+            str(corpus),
+            "--split",
+            "all",
+            "--mode",
+            "replay",
+            "--out",
+            str(out),
+            *extra,
+        ]
+    )
+
+
+def test_a_rubric_id_cannot_leave_the_corpus(tmp_path: Path, capsys):
+    """F1: `rubric: ../../outside` must neither read nor write outside the corpus."""
+    corpus = corpus_copy(tmp_path / "t")
+    rubric = (corpus / "rubrics" / "ba-requirements.yaml").read_bytes()
+    (tmp_path / "t" / "outside.yaml").write_bytes(rubric)
+    case = corpus / "cases" / "scoping" / "ba-bulk-tagging.yaml"
+    case.write_bytes(
+        case.read_bytes().replace(b"rubric: ba-requirements", b"rubric: ../../outside")
+    )
+    write_manifest(corpus)
+    out = tmp_path / "t" / "out" / "rep"
+    code = run_corpus(corpus, out, "business-analyst")
+    assert code == ExitCode.INVALID, capsys.readouterr()
+    assert "rubric" in capsys.readouterr().err
+    assert not (tmp_path / "t" / "out" / "outside.yaml").exists()
+    assert not out.exists()
+
+
+def restricted_policy(tmp_path: Path) -> Path:
+    policy = tmp_path / "policy"
+    shutil.copytree(LIBRARY / "fixtures" / "policy", policy)
+    path = policy / "classifications.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "  restricted:\n    allowed_tiers: [balanced]\n    allowed_backends: [native]\n",
+        encoding="utf-8",
+    )
+    return policy
+
+
+def test_a_class_without_the_judge_tier_is_refused_before_any_call(tmp_path: Path, capsys):
+    """F6: restricted cases never reach the eval-judge model."""
+    policy = restricted_policy(tmp_path)
+    out = tmp_path / "rep"
+    code = run_corpus(
+        LIBRARY, out, "business-analyst", "--policy", str(policy), "--classification", "restricted"
+    )
+    assert code == ExitCode.REFUSED
+    assert "restricted" in capsys.readouterr().err
+    assert not out.exists()  # refused before any run or judge call
+
+
+def classify(corpus: Path, agent: str, classification: str, only: str | None = None) -> None:
+    source = b"source: {repo: synthetic, synthetic: true, licence: CC0-1.0}"
+    labelled = source[:-1] + b", classification: " + classification.encode() + b"}"
+    changed = 0
+    for case in sorted((corpus / "cases").rglob("*.yaml")):
+        text = case.read_bytes()
+        if f"agent: {agent}\n".encode() in text and (only is None or case.stem == only):
+            assert source in text, case
+            case.write_bytes(text.replace(source, labelled))
+            changed += 1
+    assert changed
+    write_manifest(corpus)
+
+
+def test_case_classifications_select_the_class(tmp_path: Path, capsys):
+    corpus = corpus_copy(tmp_path)
+    classify(corpus, "business-analyst", "restricted")
+    policy = restricted_policy(tmp_path)
+    out = tmp_path / "rep"
+    assert run_corpus(corpus, out, "business-analyst", "--policy", str(policy)) == (
+        ExitCode.REFUSED
+    )
+    assert "restricted" in capsys.readouterr().err
+    code = run_corpus(
+        corpus, out, "business-analyst", "--policy", str(policy), "--classification", "internal"
+    )
+    assert code == ExitCode.INVALID  # the flag cannot relabel a restricted case
+    assert "restricted" in capsys.readouterr().err
+    assert not out.exists()
+
+
+def test_cases_of_different_classes_are_not_run_together(tmp_path: Path, capsys):
+    corpus = corpus_copy(tmp_path)
+    classify(corpus, "business-analyst", "restricted", only="ba-bulk-tagging")
+    out = tmp_path / "rep"
+    policy = restricted_policy(tmp_path)
+    assert run_corpus(corpus, out, "business-analyst", "--policy", str(policy)) == (
+        ExitCode.INVALID
+    )
+    err = capsys.readouterr().err
+    assert "internal" in err and "restricted" in err
+    assert not out.exists()
+
+
 def calibrate(*args: str) -> int:
     return main(["--json", "eval", "calibrate", *args])
+
+
+def rater_files(tmp_path: Path, out: Path, names=("lead-a", "lead-b")) -> list[Path]:
+    key = json.loads((out / "calibration" / "key.json").read_text(encoding="utf-8"))
+    paths = []
+    for i, name in enumerate(names):
+        path = tmp_path / f"rater-{i}.yaml"
+        scores = {item: int(e["judge_total"]) for item, e in key["items"].items()}
+        path.write_text(dump_yaml({"rater": name, "scores": scores}), encoding="utf-8")
+        paths.append(path)
+    return paths
+
+
+def test_calibration_needs_two_distinct_raters(tmp_path: Path, capsys):
+    """F5: one person's scores, passed twice or under one name, are not two raters."""
+    _, out = run(tmp_path, "business-analyst")
+    calibrate("export", "--report", str(out))
+    capsys.readouterr()
+    one, _ = rater_files(tmp_path, out)
+    assert calibrate("score", "--report", str(out), "--scores", str(one), "--scores", str(one)) == (
+        ExitCode.USAGE
+    )
+    assert "same file" in capsys.readouterr().err
+    first, second = rater_files(tmp_path, out, names=("one", "One "))
+    code = calibrate("score", "--report", str(out), "--scores", str(first), "--scores", str(second))
+    assert code == ExitCode.INVALID
+    assert "two different raters" in capsys.readouterr().err
+    assert not (out / "calibration" / "result.json").exists()
+
+
+def test_a_yes_no_score_is_not_a_number(tmp_path: Path, capsys):
+    _, out = run(tmp_path, "business-analyst")
+    calibrate("export", "--report", str(out))
+    first, second = rater_files(tmp_path, out)
+    data = yaml_scores(first)
+    data["scores"][next(iter(data["scores"]))] = True
+    first.write_text(dump_yaml(data), encoding="utf-8")
+    capsys.readouterr()
+    code = calibrate("score", "--report", str(out), "--scores", str(first), "--scores", str(second))
+    assert code == ExitCode.INVALID
+    assert "whole number" in capsys.readouterr().err
+
+
+def yaml_scores(path: Path) -> dict:
+    from agentic.yamlio import load_yaml
+
+    return load_yaml(path.read_text(encoding="utf-8"))[0]
+
+
+def test_calibration_result_names_what_it_calibrated(tmp_path: Path, capsys):
+    """F5: a gate must be able to match a calibration to a rubric sha and judge model."""
+    _, out = run(tmp_path, "business-analyst")
+    calibrate("export", "--report", str(out))
+    first, second = rater_files(tmp_path, out)
+    capsys.readouterr()
+    calibrate("score", "--report", str(out), "--scores", str(first), "--scores", str(second))
+    result = json.loads((out / "calibration" / "result.json").read_text(encoding="utf-8"))
+    report = EvalReport.model_validate_json((out / "report.json").read_bytes())
+    assert result["report_id"] == report.report_id
+    assert result["rubric_shas"] == sorted(report.judge.rubrics.values())
+    assert result["judge_models"] == [report.judge.model]
 
 
 def test_calibration_export_is_blind_and_scoring_accepts_an_agreeing_judge(tmp_path: Path, capsys):

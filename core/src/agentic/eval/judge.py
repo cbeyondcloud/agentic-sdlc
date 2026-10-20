@@ -299,20 +299,22 @@ def model_family(model_id: str, override: str | None = None) -> str:
 def resolve_judge(
     policy: OrgPolicy, candidate_models: Iterable[str], *, classification: str | None = None
 ) -> JudgeChoice:
-    """The judge for agents running on `candidate_models`, from tier `eval-judge`."""
+    """The judge for agents running on `candidate_models`, from tier `eval-judge`.
+    `classification` is the cases' data class; None means the org's default class (as
+    in ResolveContext) - the check is never skipped."""
     spec = policy.tiers.get(JUDGE_TIER)
     if spec is None:
         raise JudgeError(
             f"policy defines no '{JUDGE_TIER}' tier; an admin maps it in tiers.yaml to a model "
             "from a different family than the agents' models"
         )
-    if classification is not None:
-        rule = policy.classifications.get(classification)
-        if rule is None or JUDGE_TIER not in rule.allowed_tiers:
-            raise JudgeError(
-                f"tier '{JUDGE_TIER}' is not allowed for '{classification}' repos, so their "
-                "cases cannot be sent to the judge"
-            )
+    class_name = classification or policy.default_classification
+    rule = policy.classifications.get(class_name)
+    if rule is None or JUDGE_TIER not in rule.allowed_tiers:
+        raise JudgeError(
+            f"tier '{JUDGE_TIER}' is not allowed for '{class_name}' repos, so their "
+            "cases cannot be sent to the judge"
+        )
     overrides = {tier.model: tier.family for tier in policy.tiers.values() if tier.family}
     families = tuple(sorted({model_family(m, overrides.get(m)) for m in candidate_models}))
     family = model_family(spec.model, spec.family)

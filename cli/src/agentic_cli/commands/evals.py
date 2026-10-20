@@ -3,12 +3,14 @@
     agentic eval run --agent <name> [--corpus DIR] [--split holdout|dev|all] [--repeat N]
                      [--mode live|record|replay] [--budget-usd N] [--out DIR]
                      [--policy DIR] [--agents DIR] [--cassettes DIR] [--gateway URL]
+                     [--classification CLASS]
     agentic eval calibrate export --report DIR [--out FILE]
     agentic eval calibrate score  --report DIR --scores FILE --scores FILE
 
 Exit codes: 0 a report was written and measured; 1 the replay failed, a blinding leak
-voided the run, or nothing could be scored; 2 refused (no judge tier, no key, a judge
-that fails calibration); 3 an invalid corpus, policy or agent; 5 the budget cap stopped
+voided the run, or nothing could be scored; 2 refused (no judge tier, a class whose
+tiers exclude the agent's or the judge's, no key, a judge that fails calibration); 3 an
+invalid corpus, policy or agent, or cases of mixed classes; 5 the budget cap stopped
 the run. The report is written (and shown) even when the exit code is not 0.
 """
 
@@ -61,6 +63,12 @@ def register(app: typer.Typer) -> None:
         gateway: Annotated[str | None, typer.Option(help="TokenLean's URL.")] = None,
         seed: Annotated[int, typer.Option(help="Seed for run order and statistics.")] = 0,
         concurrency: Annotated[int, typer.Option(min=1, help="Runs at once.")] = 1,
+        classification: Annotated[
+            str | None,
+            typer.Option(
+                help="Data class of cases that name none (default: the org's default class)."
+            ),
+        ] = None,
     ) -> None:
         """Run an agent over an eval corpus and write a report."""
         output: Output = ctx.obj
@@ -79,6 +87,7 @@ def register(app: typer.Typer) -> None:
                 gateway=gateway,
                 seed=seed,
                 max_concurrency=concurrency,
+                classification=classification,
             )
         )
         data = evaluation.summary(result)

@@ -126,6 +126,42 @@ def test_extra_and_missing_calls_fail(tmp_path: Path):
     assert any("recorded 1 calls, the run made 0" in p for p in server.finish())
 
 
+def test_an_error_reply_is_never_recorded_over_good_cassettes(tmp_path: Path):
+    """F2: a bad key, an outage or a rate limit during record must not replace committed
+    cassettes with error bodies; the maintainer is told and nothing is written."""
+    with CassetteServer(tmp_path, "record", upstream=Scripted([chat_reply("good")])) as server:
+        run_agent(server, "family-a/m1", "first")
+    assert server.finish() == []
+    cassette = tmp_path / "c1" / "X" / "0.json"
+    good = cassette.read_bytes()
+
+    def refusing(request):
+        return UpstreamReply(401, b'{"error": "bad key"}', "application/json")
+
+    other = "c2/X/0"
+    with CassetteServer(tmp_path, "record", upstream=refusing) as server:
+        server.expect([KEY, other])
+        reply = httpx2.post(server.base_url(KEY) + "/v1/chat/completions", json={"m": 1})
+        assert reply.status_code == 401  # the client still sees the upstream's answer
+    problems = server.finish()
+    assert any("c1/X/0" in p and "401" in p for p in problems), problems
+    assert any(other in p and "no calls" in p for p in problems), problems
+    assert cassette.read_bytes() == good  # the committed cassette is untouched
+
+
+def test_a_partly_failed_recording_writes_nothing(tmp_path: Path):
+    calls = iter([UpstreamReply(200, json.dumps(chat_reply("ok")).encode(), "application/json")])
+
+    def flaky(request):
+        return next(calls, UpstreamReply(503, b"{}", "application/json"))
+
+    with CassetteServer(tmp_path, "record", upstream=flaky) as server:
+        httpx2.post(server.base_url("c1/X/0") + "/v1/chat/completions", json={"m": 1})
+        httpx2.post(server.base_url("c2/X/0") + "/v1/chat/completions", json={"m": 2})
+    assert any("503" in p for p in server.finish())
+    assert not (tmp_path / "c1").exists() and not (tmp_path / "c2").exists()
+
+
 def test_a_changed_prompt_is_stale_but_served(tmp_path: Path):
     with CassetteServer(tmp_path, "record", upstream=Scripted([chat_reply("hi")])) as server:
         run_agent(server, "family-a/m1", "original prompt")

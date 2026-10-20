@@ -216,3 +216,12 @@ def test_judge_tier_must_be_allowed_for_the_repo_class():
     org = policy(balanced={"model": "family-a/m1"}, **{JUDGE_TIER: {"model": "family-b/j"}})
     with pytest.raises(JudgeError, match="restricted"):
         resolve_judge(org, ["family-a/m1"], classification="restricted")
+
+
+def test_no_classification_means_the_org_default_never_no_check():
+    """F6: leaving the classification out must not skip the data-classification gate."""
+    org = policy(balanced={"model": "family-a/m1"}, **{JUDGE_TIER: {"model": "family-b/j"}})
+    strict = org.model_copy(update={"default_classification": "restricted"})
+    with pytest.raises(JudgeError, match="restricted"):
+        resolve_judge(strict, ["family-a/m1"])
+    assert resolve_judge(org, ["family-a/m1"]).model == "family-b/j"

@@ -25,6 +25,7 @@ import getpass
 import hashlib
 import json
 import math
+import os
 import random
 import secrets
 import shutil
@@ -32,7 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from statistics import fmean
 
 from agentic.agents.metering import CostLog, MeteringTransport
@@ -41,7 +42,8 @@ from agentic.auth.credentials import TOKENLEAN_KEY, CredentialError, Credentials
 from agentic.definitions import DefinitionError, load_agent
 from agentic.eval import stats
 from agentic.eval.blind import LeakCheck, Scrubber, assign_labels
-from agentic.eval.corpus import CorpusError, load_corpus
+from agentic.eval.cases import EvalCase
+from agentic.eval.corpus import CorpusError, load_corpus, rubric_path
 from agentic.eval.judge import (
     JUDGE_TIER,
     JudgeError,
@@ -92,6 +94,7 @@ class RunOptions:
     gateway: str | None = None
     seed: int = 0
     max_concurrency: int = 1
+    classification: str | None = None  # for cases that name none (default: the org's)
 
 
 @dataclass(frozen=True)
@@ -121,15 +124,6 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     agents_dir = _folder(options.agents, fixtures / "agents", "--agents", "agent definitions")
     policy = _load(lambda: load_policy(policy_dir))
     definition = _agent(agents_dir, options.agent)
-    resolved, violations = resolve_agent(definition, policy, ResolveContext())
-    if resolved is None:
-        reasons = "; ".join(f"{v.field}: {v.reason}" for v in violations)
-        raise CliError(f"policy refuses agent {options.agent}: {reasons}", ExitCode.REFUSED)
-    kind = resolved.produces
-    if kind is None:
-        raise CliError(
-            f"agent {options.agent} produces no handoff: nothing to score", ExitCode.INVALID
-        )
     split = None if options.split == "all" else options.split
     cases = corpus.select(agent=options.agent, split=split)  # type: ignore[arg-type]
     if not cases:
@@ -138,18 +132,30 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             ExitCode.INVALID,
             hint=f"cases name their agent in 'agent:'; corpus: {root}",
         )
+    classification = _classification(cases, options.classification, policy.default_classification)
+    context = ResolveContext(repo_classification=classification)
+    resolved, violations = resolve_agent(definition, policy, context)
+    if resolved is None:
+        reasons = "; ".join(f"{v.field}: {v.reason}" for v in violations)
+        raise CliError(
+            f"policy refuses agent {options.agent} for '{classification}' cases: {reasons}",
+            ExitCode.REFUSED,
+        )
+    kind = resolved.produces
+    if kind is None:
+        raise CliError(
+            f"agent {options.agent} produces no handoff: nothing to score", ExitCode.INVALID
+        )
     repeats = options.repeat or policy.eval.repeats
     budget = options.budget_usd or policy.eval.budget_for(options.agent)
     agent_id = f"{definition.name}@{definition.version}"
 
     rubric_ids = sorted({c.rubric for c in cases if c.rubric})
-    rubrics = {
-        r: _load(lambda r=r: load_rubric(root / "rubrics" / f"{r}.yaml")) for r in rubric_ids
-    }
+    rubrics = {r: _load(lambda r=r: load_rubric(corpus.path(rubric_path(r)))) for r in rubric_ids}
     choice = None
     if rubrics:
-        try:
-            choice = resolve_judge(policy, [resolved.model])
+        try:  # the cases' class must allow the judge's tier: restricted data stays put
+            choice = resolve_judge(policy, [resolved.model], classification=classification)
         except JudgeError as error:
             raise CliError(
                 str(error), ExitCode.REFUSED, hint="ask an admin for an eval-judge tier"
@@ -301,9 +307,9 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     )
     paths = write_report(report, folder, runset.runs)
     for rubric_id in rubric_ids:  # calibration shows people the rubric the judge used
-        target = folder / "rubrics" / f"{rubric_id}.yaml"
+        target = folder / PurePosixPath(rubric_path(rubric_id))
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(root / "rubrics" / f"{rubric_id}.yaml", target)
+        shutil.copyfile(corpus.path(rubric_path(rubric_id)), target)
     digest = "sha256:" + hashlib.sha256(paths["json"].read_bytes()).hexdigest()
     ledger("eval.report_written", report=digest, verdict=report.verdict)
     return RunResult(report, folder, paths)
@@ -504,7 +510,22 @@ def score_calibration(report_dir: Path, score_files: list[Path]) -> dict:
         raise CliError(
             "calibration needs two raters' scores", ExitCode.USAGE, hint="pass --scores twice"
         )
+    for i, path in enumerate(score_files):
+        if any(_same_file(path, other) for other in score_files[:i]):
+            raise CliError(
+                f"{path} is passed twice: the same file is not a second rater",
+                ExitCode.USAGE,
+                hint="pass each rater's own scores file once",
+            )
     raters = [_rater(path, set(key)) for path in score_files]
+    names = [name.strip().casefold() for name, _ in raters]
+    if len(set(names)) != len(names):
+        raise CliError(
+            "calibration needs two different raters, but two files name the same rater "
+            f"({', '.join(name for name, _ in raters)})",
+            ExitCode.INVALID,
+            hint="each rater scores on their own and puts their name in 'rater:'",
+        )
     items = sorted(set(key).intersection(*(set(scores) for _, scores in raters)))
     items = [i for i in items if key[i]["judge_total"] is not None]
     if not items:
@@ -530,15 +551,21 @@ def score_calibration(report_dir: Path, score_files: list[Path]) -> dict:
         verdict = "ACCEPTED"
     else:
         verdict = "REJECTED"
+    report = _report(report_dir)
+    rubric_keys = sorted({key[i]["rubric"] for i in items})
+    known_shas = report.judge.rubrics if report.judge is not None else {}
     result = {
         "verdict": verdict,
+        "report_id": report.report_id,
         "items": len(items),
         "raters": [name for name, _ in raters],
         "kappa_judge": round(kappa, 4),
         "within_1": round(within, 4),
         "kappa_raters": round(inter, 4),
+        # what was calibrated, so an A/B or gate can match it (abtest.Calibration)
         "judge_models": sorted({key[i]["judge_model"] for i in items}),
-        "rubrics": sorted({key[i]["rubric"] for i in items}),
+        "rubrics": rubric_keys,
+        "rubric_shas": sorted({known_shas[k] for k in rubric_keys if k in known_shas}),
     }
     _write(report_dir / "calibration" / "result.json", json.dumps(result, indent=2) + "\n")
     return result
@@ -556,6 +583,31 @@ def _corpus_root(given: Path | None) -> Path:
             hint="pass --corpus <folder>, e.g. --corpus library/eval for the fixture corpus",
         )
     return root
+
+
+def _classification(cases: list[EvalCase], given: str | None, default: str) -> str:
+    """The one data class the run's cases belong to. A case names its class in
+    `source.classification`; `--classification` (else the org default) covers the cases
+    that name none and can never relabel one that does. Policy does not rank classes,
+    so cases of two classes cannot be run under either: they are refused."""
+    named = {c.id: c.source.classification for c in cases if c.source.classification}
+    if given is not None and (other := sorted({v for v in named.values() if v != given})):
+        raise CliError(
+            f"--classification {given} cannot relabel cases classified "
+            f"{', '.join(repr(c) for c in other)}",
+            ExitCode.INVALID,
+            hint="drop --classification, or run those cases on their own",
+        )
+    fallback = given or default
+    classes = sorted({named.get(c.id, fallback) for c in cases})
+    if len(classes) > 1:
+        raise CliError(
+            f"the selected cases come from repos of different classes "
+            f"({', '.join(repr(c) for c in classes)}); each class's tiers differ",
+            ExitCode.INVALID,
+            hint="run each class's cases from their own corpus, or label them alike",
+        )
+    return classes[0]
 
 
 def _folder(given: Path | None, default: Path, flag: str, what: str) -> Path:
@@ -631,12 +683,21 @@ def _rater(path: Path, known: set[str]) -> tuple[str, dict[str, int]]:
             continue
         if item not in known:
             raise CliError(f"{path}: unknown item {item}", ExitCode.INVALID)
-        if not isinstance(value, int) or not 0 <= value <= 10:
+        # YAML reads yes/no/true/false as booleans, which Python counts as 0 and 1
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 10:
             raise CliError(
                 f"{path}: {item} must be a whole number 0-10, not {value!r}", ExitCode.INVALID
             )
         scores[item] = value
     return name, scores
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """One file under two spellings (case-insensitive file systems, '..', links)."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:  # a missing file: compare the spelling; reading it reports the error
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
 
 
 def _write(path: Path, text: str) -> None:

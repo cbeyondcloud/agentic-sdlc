@@ -55,6 +55,11 @@ def write_case(root: Path, data: dict, folder: str = "scoping") -> Path:
     path = root / "cases" / folder / f"{data['id']}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(dump_yaml(data).encode("utf-8"))
+    if isinstance(data.get("rubric"), str):  # a case's rubric must exist in the corpus
+        rubric = root / "rubrics" / f"{data['rubric']}.yaml"
+        rubric.parent.mkdir(exist_ok=True)
+        if not rubric.exists():
+            rubric.write_bytes(b"id: placeholder\n")
     return path
 
 
@@ -115,6 +120,20 @@ def test_a_reference_must_stay_inside_the_corpus(tmp_path: Path):
         load_corpus(tmp_path)
 
 
+@pytest.mark.parametrize("rubric", ["../../outside", "sub/ba", "sub\\ba", "/abs", "", "Up"])
+def test_a_rubric_id_is_a_slug_never_a_path(rubric):
+    """F1: the rubric id is joined into paths that are read and written."""
+    with pytest.raises(ValidationError, match="rubric"):
+        EvalCase.model_validate(scoping(rubric=rubric))
+
+
+def test_a_case_rubric_must_exist_in_the_corpus(tmp_path: Path):
+    write_case(tmp_path, scoping("s1"))
+    (tmp_path / "rubrics" / "ba-requirements.yaml").unlink()
+    with pytest.raises(CorpusError, match=r"'rubrics/ba-requirements.yaml' does not exist"):
+        load_corpus(tmp_path)
+
+
 def test_handoff_files_are_read_into_the_inputs(tmp_path: Path):
     (tmp_path / "golden").mkdir()
     (tmp_path / "golden" / "req.md").write_bytes(b"---\nkind: requirements\n---\r\nbody\r\n")
@@ -151,6 +170,14 @@ def test_public_corpus_holds_only_synthetic_or_permissive_cases(tmp_path: Path):
         load_corpus(tmp_path, public=True)
     write_case(tmp_path, scoping("gpl", source={**internal, "licence": "Apache-2.0"}))
     assert load_corpus(tmp_path, public=True).cases[0].id == "gpl"
+
+
+def test_a_synthetic_flag_does_not_excuse_a_copyleft_licence(tmp_path: Path):
+    """F15: `synthetic: true` on a case copied from a GPL repo must not pass decision 17."""
+    copied = {"repo": "github.com/acme/api", "synthetic": True, "licence": "GPL-3.0-only"}
+    write_case(tmp_path, scoping("copied", source=copied))
+    with pytest.raises(CorpusError, match="decision 17"):
+        load_corpus(tmp_path, public=True)
 
 
 def test_manifest_detects_edits_but_not_line_endings(tmp_path: Path):

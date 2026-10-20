@@ -14,6 +14,8 @@ keyed by (case, variant label, repeat, call index) and stored in
     scripted stand-in) and saved with the sha256 of its canonical request. Request
     headers are never saved, and of the response headers only the content type and
     TokenLean's `x-tokenlean-*` (cost, routed model) are kept - no secret reaches a file.
+    A non-2xx reply is passed to the client but never saved, and `finish` then writes
+    nothing: a bad key or an outage cannot replace good cassettes with error bodies.
   * **replay** - each call is answered from its cassette, in order. A missing cassette
     or a call beyond the recording FAILS (the plumbing broke); `finish` also fails a run
     that made fewer calls than recorded. A request whose hash differs from the recording
@@ -121,6 +123,7 @@ class CassetteServer:
         self._loaded: dict[str, list[dict] | None] = {}
         self._served: dict[str, int] = {}
         self._recorded: dict[str, list[dict]] = {}
+        self._failed: set[str] = set()  # record: keys whose upstream answered an error
         self._server: ThreadingHTTPServer | None = None
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
@@ -162,12 +165,23 @@ class CassetteServer:
                 self._served.setdefault(key, 0)
 
     def finish(self) -> list[str]:
-        """Record: write the cassettes. Replay: check every key used all its calls.
-        Returns every problem (empty: the replay was faithful)."""
+        """Record: write the cassettes - all of them, or none when any call failed or an
+        expected run made no call, so the committed set is never half replaced or
+        overwritten with error bodies. Replay: check every key used all its calls.
+        Returns every problem (empty: the recording or replay was faithful)."""
         with self._lock:
             if self.mode == "record":
-                for key, calls in sorted(self._recorded.items()):
-                    self._write(key, calls)
+                for key in sorted(self._served):  # the expected keys
+                    if key not in self._recorded and key not in self._failed:
+                        self.problems.append(f"{key}: the run made no calls, so nothing to record")
+                if self.problems:
+                    self.problems.append(
+                        "nothing was written: the existing cassettes are kept; fix the cause "
+                        "and record again"
+                    )
+                else:
+                    for key, calls in sorted(self._recorded.items()):
+                        self._write(key, calls)
             else:
                 for key, used in sorted(self._served.items()):
                     calls = self._cassette(key)
@@ -230,6 +244,12 @@ class CassetteServer:
             for k, v in reply.headers.items()
             if k.lower().startswith(KEPT_PREFIX) or k.lower() in KEPT_HEADERS
         }
+        if not 200 <= reply.status < 300:
+            # a bad key, an outage or a rate limit: the client sees it, no cassette keeps it
+            with self._lock:
+                self._failed.add(key)
+                self.problems.append(f"{key}: the upstream answered {reply.status}; not recorded")
+            return reply.status, UpstreamReply(reply.status, reply.body, reply.content_type, kept)
         call = {
             "path": route,
             "request_sha": request_sha(body),

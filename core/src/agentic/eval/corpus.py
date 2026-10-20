@@ -139,8 +139,9 @@ def load_corpus(root: Path, *, public: bool = False) -> Corpus:
         if public and not _public(case):
             problems.append(
                 f"{where}: a public corpus holds only synthetic or permissively licensed "
-                f"cases (decision 17); '{case.source.licence}' from {case.source.repo} belongs "
-                f"in the policy repo's eval/ folder"
+                f"cases, each under an allow-listed licence (decision 17); "
+                f"'{case.source.licence}' from {case.source.repo} belongs in the policy "
+                f"repo's eval/ folder"
             )
         cases[case.id] = case
     manifest = build_manifest(root)
@@ -210,10 +211,18 @@ def floor_shortfalls(
     return out
 
 
+def rubric_path(rubric_id: str) -> str:
+    """The corpus-relative path of a rubric (its id is a slug, checked by EvalCase)."""
+    return f"rubrics/{rubric_id}.yaml"
+
+
 def _reference_problems(root: Path, case: EvalCase) -> list[str]:
     problems = []
     resolved_root = root.resolve()
-    for reference in case.references():
+    references = case.references()
+    if case.rubric:  # read by the judge and copied next to the report: inside, and there
+        references.append(rubric_path(case.rubric))
+    for reference in references:
         pure = PurePosixPath(reference)
         target = (root / pure).resolve()
         if pure.is_absolute() or ".." in pure.parts or "\\" in reference:
@@ -241,7 +250,9 @@ def _scratch(part: str) -> bool:
 
 
 def _public(case: EvalCase) -> bool:
-    return case.source.synthetic or case.source.licence.upper() in PERMISSIVE
+    """Synthetic or not, the case's content must carry an allow-listed licence: a
+    `synthetic: true` flag on content copied from a copyleft repo must not pass."""
+    return case.source.licence.upper() in PERMISSIVE
 
 
 def _sha(files: Mapping[str, str]) -> str:
@@ -260,5 +271,6 @@ __all__ = [
     "file_digest",
     "floor_shortfalls",
     "load_corpus",
+    "rubric_path",
     "write_manifest",
 ]

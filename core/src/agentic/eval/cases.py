@@ -8,7 +8,7 @@ reference and key points for a rubric judge where it does not (BA, Design).
     agent: business-analyst          # the agent definition's name
     case_class: scoping              # scoping | review | defect | dev_task | qa
     split: holdout                   # dev: iterate on prompts and skills; holdout: gates, A/Bs
-    source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+    source: {repo: synthetic, synthetic: true, licence: CC0-1.0}   # + classification: <class>
     inputs:
       prompt: Add CSV export to the invoices page.
       handoffs: {requirements: "---\\nkind: requirements ..."}   # consumed handoffs, by kind
@@ -48,6 +48,9 @@ class CaseSource(_Strict):
     parent_sha: str | None = None  # the commit the agent starts from
     synthetic: bool
     licence: str  # SPDX id of the case content (CC0-1.0 for our synthetic cases)
+    # the data class of the repo the case comes from (org policy classifications); None:
+    # the org's default class. It decides which tiers - the judge's included - may see it.
+    classification: str | None = None
 
 
 class SeededDefect(_Strict):
@@ -105,6 +108,17 @@ class EvalCase(_Strict):
     def id_is_a_slug(cls, value: str) -> str:
         if not _ID.fullmatch(value):
             raise ValueError("a case id is lower-case letters, digits, '.', '_' or '-'")
+        return value
+
+    @field_validator("rubric")
+    @classmethod
+    def rubric_is_a_slug(cls, value: str | None) -> str | None:
+        """The id becomes `rubrics/<id>.yaml`, read from the corpus and copied next to the
+        report: a separator or '..' would reach outside both."""
+        if value is not None and (not _ID.fullmatch(value) or ".." in value):
+            raise ValueError(
+                "a rubric id is lower-case letters, digits, '.', '_' or '-' (rubrics/<id>.yaml)"
+            )
         return value
 
     @model_validator(mode="after")
