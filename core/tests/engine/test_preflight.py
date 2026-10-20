@@ -128,6 +128,7 @@ def test_non_native_backend(check):
     report = check(
         CLEAN,
         extra_agents={"dev": "type: developer\nconsumes: [design, review]\nbackend: claude-code\n"},
+        available_backends={"native"},  # an installation without the claude-code extra
     )
 
     problem = next(p for p in report.problems if p.check == "backend")
