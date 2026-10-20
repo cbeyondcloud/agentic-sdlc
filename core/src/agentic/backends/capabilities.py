@@ -41,6 +41,8 @@ class BackendCapabilities:
     approvals: bool  # can pause for a person's approval of a tool call
     children: bool  # can spawn child agents
     stuck_check: bool
+    # its model calls go through agentic.transport, so the secret scan (M1-41) sees them
+    secret_scan: bool = True
     notes: tuple[str, ...] = field(default=())
 
 
@@ -64,6 +66,8 @@ CAPABILITIES: dict[str, BackendCapabilities] = {
         approvals=False,
         children=False,
         stuck_check=False,
+        # Claude Code calls the model itself; only TokenLean sees its egress (DF-149)
+        secret_scan=False,
         notes=("spike S2",),
     ),
 }
@@ -71,7 +75,7 @@ CAPABILITIES: dict[str, BackendCapabilities] = {
 
 @dataclass(frozen=True)
 class Issue:
-    setting: str  # backend | tools | ask | temperature | effort
+    setting: str  # backend | tools | ask | temperature | effort | secret_scan
     action: Action
     detail: str
 
@@ -100,6 +104,10 @@ def backend_issues(
         found += _unhonoured(policy, "temperature", f"{agent.backend} / {agent.model}")
     if agent.effort is not None and not caps.effort:
         found += _unhonoured(policy, "effort", agent.backend)
+    if not caps.secret_scan:
+        found += _unhonoured(
+            policy, "secret_scan", f"{agent.backend} (it sends model calls itself, unscanned)"
+        )
     return found
 
 

@@ -224,10 +224,10 @@ class OrgPolicy(_Strict):
     sandbox: SandboxPolicy = SandboxPolicy()  # D38
     secret_scan: SecretScanPolicy = SecretScanPolicy()  # M1-41
     # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
-    unhonoured: dict[Literal["temperature", "effort"], Literal["ignore", "warn", "block"]] = {
-        "temperature": "warn",
-        "effort": "warn",
-    }
+    # (`secret_scan`: the backend calls the model itself, past the framework's scanner)
+    unhonoured: dict[
+        Literal["temperature", "effort", "secret_scan"], Literal["ignore", "warn", "block"]
+    ] = {"temperature": "warn", "effort": "warn", "secret_scan": "warn"}
 
     # --- model prices, for estimating costs TokenLean does not report ---
     prices: dict[str, ModelPrice] = {}
@@ -247,11 +247,16 @@ class OrgPolicy(_Strict):
     @model_validator(mode="before")
     @classmethod
     def unhonoured_defaults(cls, data: object) -> object:
-        """A policy naming one setting keeps the default for the other."""
+        """A policy naming some settings keeps the defaults for the others."""
         if isinstance(data, dict) and isinstance(data.get("unhonoured"), dict):
             data = {
                 **data,
-                "unhonoured": {"temperature": "warn", "effort": "warn", **data["unhonoured"]},
+                "unhonoured": {
+                    "temperature": "warn",
+                    "effort": "warn",
+                    "secret_scan": "warn",
+                    **data["unhonoured"],
+                },
             }
         return data
 

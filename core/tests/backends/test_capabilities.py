@@ -18,8 +18,11 @@ def on_claude_code(agent, **changes):
     )
 
 
-def issues(agent, policy, available=BOTH):
-    return [(i.setting, i.action) for i in backend_issues(agent, policy, available=available)]
+def issues(agent, policy, available=BOTH, skip=("secret_scan",)):
+    # claude-code always reports its unscanned egress (DF-149); tests of other settings
+    # skip it, and the secret_scan tests below look at it alone
+    found = backend_issues(agent, policy, available=available)
+    return [(i.setting, i.action) for i in found if i.setting not in skip]
 
 
 def test_temperature_on_claude_code_is_blocked_when_policy_says_block(resolved, policy):
@@ -61,7 +64,7 @@ def test_a_tool_the_backend_lacks_blocks(resolved, policy):
     tools = ["read_files", "spawn_agent", "codeintel"]
     agent = on_claude_code(resolved, tools=tools, temperature=None)
     found = backend_issues(agent, policy, available=BOTH)
-    assert [(i.setting, i.action) for i in found] == [("tools", "block")]
+    assert [(i.setting, i.action) for i in found] == [("tools", "block"), ("secret_scan", "warn")]
     assert "spawn_agent" in found[0].detail and "codeintel" in found[0].detail
 
 
@@ -73,7 +76,7 @@ def test_an_unavailable_backend_blocks(resolved, policy):
 def test_ask_rules_warn_on_a_backend_without_approvals(resolved, policy):
     agent = on_claude_code(resolved, temperature=None, ask_shell=["npm publish"])
     found = backend_issues(agent, policy, available=BOTH)
-    assert [(i.setting, i.action) for i in found] == [("ask", "warn")]
+    assert [(i.setting, i.action) for i in found] == [("ask", "warn"), ("secret_scan", "warn")]
     assert "refused" in found[0].detail
 
 
@@ -90,7 +93,27 @@ def test_unhonoured_policy_loads_from_org_yaml(fixtures, tmp_path: Path):
     org = root / "org.yaml"
     org.write_text(org.read_text(encoding="utf-8") + "unhonoured: {effort: ignore}\n", "utf-8")
     policy = load_policy(root)
-    assert policy.unhonoured == {"temperature": "warn", "effort": "ignore"}
+    assert policy.unhonoured == {"temperature": "warn", "effort": "ignore", "secret_scan": "warn"}
+
+
+def test_claude_code_egress_is_not_secret_scanned_and_warns_by_default(resolved, policy):
+    # DF-149 / decision 38: claude-code calls the model itself, past agentic.transport
+    agent = on_claude_code(resolved, temperature=None, effort=None)
+    found = backend_issues(agent, policy, available=BOTH)
+    assert [(i.setting, i.action) for i in found] == [("secret_scan", "warn")]
+    assert "claude-code" in found[0].detail
+
+
+def test_an_org_can_block_backends_whose_egress_is_not_scanned(resolved, policy):
+    policy.unhonoured["secret_scan"] = "block"
+    agent = on_claude_code(resolved, temperature=None, effort=None)
+    assert issues(agent, policy, skip=()) == [("secret_scan", "block")]
+
+
+def test_native_egress_is_scanned(resolved, policy):
+    policy.unhonoured["secret_scan"] = "block"
+    native = resolved.model_copy(update={"effort": None, "temperature": None})
+    assert issues(native, policy, skip=()) == []
 
 
 def test_claude_code_maps_only_the_tools_it_really_offers():  # review I5 (--bare)
