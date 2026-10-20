@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from agentic.codeintel.interface import CodeIntel  # re-exported: the tools take one
 from agentic.sandbox.process import ShellResult  # re-exported: tools return it
 
 # What a bad argument from the model raises inside a tool: a directory where a file
@@ -48,14 +49,6 @@ class Sandbox(Protocol):
     isolated: bool  # True only for a real OS sandbox
 
     async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult: ...
-
-
-class CodeIntel(Protocol):
-    def dependents(self, target: str) -> list[str]: ...
-
-    def impact(self, diff: str) -> list[str]: ...
-
-    def tests_for(self, path: str) -> list[str]: ...
 
 
 class SkillCatalog(Protocol):

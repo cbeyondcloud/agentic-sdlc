@@ -25,6 +25,7 @@ from agentic.agents.tools import (
     ToolContext,
     build_tools,
 )
+from agentic.codeintel import Candidates
 from sdlc_commons.guards import Guard
 from sdlc_commons.ledger import RunIdentity, RunLedger
 from sdlc_commons.worktrees import RunWorktrees
@@ -74,14 +75,20 @@ class FakeSandbox:
 
 
 class FakeCodeIntel:
-    def dependents(self, target: str) -> list[str]:
-        return [f"src/uses_{target}.py"]
+    name = "fake"
+    supports = frozenset({"dependents", "impact", "tests_for", "overview"})
 
-    def impact(self, diff: str) -> list[str]:
-        return ["src/app.py"]
+    def dependents(self, path: str) -> Candidates:
+        return Candidates((f"src/uses_{Path(path).stem}.py",), source=self.name)
 
-    def tests_for(self, path: str) -> list[str]:
-        return [f"tests/test_{Path(path).stem}.py"]
+    def impact(self, diff: str) -> Candidates:
+        return Candidates(("src/app.py",), source=self.name)
+
+    def tests_for(self, path: str) -> Candidates:
+        return Candidates((f"tests/test_{Path(path).stem}.py",), source=self.name)
+
+    def overview(self) -> str:
+        return "2 files"
 
 
 class FakeSkills:
@@ -349,7 +356,7 @@ def test_codeintel_tools_call_the_adapter(tree, resolved):
     tools = build_tools(agent_with(resolved, ["codeintel"]), context(tree, resolved))
 
     assert "tests/test_app.py" in call(tools, "tests_for", path="src/app.py")
-    assert "src/uses_handler.py" in call(tools, "dependents", target="handler")
+    assert "src/uses_app.py" in call(tools, "dependents", path="src/app.py")
 
 
 def test_activate_skill_only_for_the_agents_skills(tree, resolved):
@@ -376,6 +383,8 @@ def test_testmodel_sees_every_offered_tool(tree, resolved):
         "dependents",
         "impact",
         "tests_for",
+        "overview",
+        "context_pack",
     }
 
 

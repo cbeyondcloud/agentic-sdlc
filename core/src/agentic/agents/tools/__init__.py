@@ -18,35 +18,18 @@ from agentic.agents.tools.context import (
     SkillCatalog,
     ToolConfigError,
     ToolContext,
-    guarded,
     refused,
 )
 from agentic.agents.tools.files import edit_tools, read_tools, search_tools
 from agentic.agents.tools.shell import LocalProcessSandbox, shell_tools
+from agentic.codeintel import codeintel_tools
 from agentic.policy import ResolvedAgent
 
 
 def _codeintel_tools(ctx: ToolContext) -> list[Tool]:
     if ctx.codeintel is None:
         raise ToolConfigError("codeintel is allowed but no code intelligence adapter was given")
-    intel = ctx.codeintel
-
-    @guarded
-    def dependents(target: str) -> str:
-        """Files and symbols that depend on a file or symbol."""
-        return "\n".join(intel.dependents(target)) or "(none)"
-
-    @guarded
-    def impact(diff: str) -> str:
-        """What a unified diff may affect, tests included."""
-        return "\n".join(intel.impact(diff)) or "(none)"
-
-    @guarded
-    def tests_for(path: str) -> str:
-        """The tests that cover a file."""
-        return "\n".join(intel.tests_for(path)) or "(none)"
-
-    return [Tool(dependents), Tool(impact), Tool(tests_for)]
+    return codeintel_tools(ctx.codeintel, ctx.tree)  # only what the adapter supports (M1-34)
 
 
 def _skill_tools(agent: ResolvedAgent, ctx: ToolContext) -> list[Tool]:
