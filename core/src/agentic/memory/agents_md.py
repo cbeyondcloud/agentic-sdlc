@@ -18,6 +18,7 @@ from pathlib import Path
 
 from agentic.handoffs import HandoffError, parse_handoff
 from agentic.handoffs.schema import HandoffCatalog
+from agentic.security.untrusted import AGENTS_MD_TAG, fence
 
 FILE_NAME = "AGENTS.md"
 LIMIT = 32_000  # characters shown to the agent
@@ -51,9 +52,9 @@ def agents_md_knowledge(path: Path, root: Path, limit: int = LIMIT) -> str:
     text = Path(path).read_bytes().decode("utf-8", errors="replace")
     if len(text) > limit:
         text = text[:limit] + f"\n[... truncated: {len(text) - limit} more characters]"
-    text = text.replace("</agents-md", "<\\/agents-md")  # the file cannot close the block
     shown = Path(path).resolve().relative_to(Path(root).resolve()).as_posix()
-    return f'<agents-md path="{shown}">\n{text.strip()}\n</agents-md>\n\n{RULE}'
+    # the shared fence: the file can neither close this block nor forge another data block
+    return f"{fence(text.strip(), AGENTS_MD_TAG, path=shown)}\n\n{RULE}"
 
 
 def proposals(handoffs: Mapping[str, str], catalog: HandoffCatalog) -> list[tuple[str, str]]:
