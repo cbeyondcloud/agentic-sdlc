@@ -799,8 +799,11 @@ class _Run:
         if isinstance(step, ActionStep):
             fields["action"] = step.action
         else:
-            definition = self.e.definitions.agent(step.agent)
-            fields["agent"] = f"{definition.name}@{definition.version}"
+            try:
+                definition = self.e.definitions.agent(step.agent)
+                fields["agent"] = f"{definition.name}@{definition.version}"
+            except Exception:  # an unknown agent: the step itself reports it
+                fields["agent"] = step.agent
         return fields
 
     def _log_end(self, seen: int) -> None:
