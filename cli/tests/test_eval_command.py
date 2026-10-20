@@ -4,6 +4,7 @@ the tracker asks for: it runs on every `check.py` pass, on Windows and Linux."""
 
 import hashlib
 import json
+import socket
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,37 @@ def test_fixture_corpus_matches_expected_reports(tmp_path: Path, agent: str, cap
     assert report.stale_cassettes == 0 and report.verdict == "MEASURED"
     assert (out / "report.md").is_file()
     assert printed["verdict"] == "MEASURED" and printed["report"] == str(out / "report.json")
+
+
+def test_fixture_mode_makes_no_network_calls(tmp_path: Path, monkeypatch, capsys):
+    """DF-113: pydantic-evals, pydantic-ai and the harness reach nothing but the local
+    cassette server - no telemetry, no default model."""
+    attempts: list[object] = []
+    real_connect = socket.socket.connect
+
+    def guarded_connect(sock, address):
+        host = address[0] if isinstance(address, tuple) else address
+        if host not in ("127.0.0.1", "::1", "localhost"):
+            attempts.append(address)
+            raise OSError("network blocked by the test")
+        return real_connect(sock, address)
+
+    real_getaddrinfo = socket.getaddrinfo
+
+    def guarded_getaddrinfo(host, *args, **kwargs):
+        if host not in ("127.0.0.1", "::1", "localhost", None):
+            attempts.append(host)
+            raise OSError("name resolution blocked by the test")
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
+    code, _ = run(tmp_path, "business-analyst")  # agent and judge calls
+    assert code == ExitCode.OK
+    assert attempts == []
+    with pytest.raises(OSError):  # the guard itself works
+        socket.getaddrinfo("pypi.org", 443)
+    assert attempts == ["pypi.org"]
 
 
 def test_the_run_is_ledgered(tmp_path: Path, capsys):
