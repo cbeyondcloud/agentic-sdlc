@@ -27,10 +27,12 @@ dev = [
     "ruff>=0.7",
     "pre-commit>=4.0",
     "trustme>=1.2",
+    "import-linter==2.15",
+    "pip-audit==2.10.1",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["core/tests", "commons/tests", "cli/tests", "control-plane/tests"]
+testpaths = ["core/tests", "commons/tests", "cli/tests", "control-plane/tests", "scripts/tests"]
 addopts = "-q"
 
 [tool.ruff]
@@ -47,3 +49,52 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.ruff.lint.isort]
 # Our own packages: imports of these are grouped last, separate from third-party libraries.
 known-first-party = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+
+# Architecture rules (P0-03), checked by `lint-imports` in scripts/check.py. The "only in X"
+# rules restrict where the direct import sits (allow_indirect_imports): calling X is the point.
+[tool.importlinter]
+root_packages = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Core stays standalone: it never imports commons, the CLI, the control plane or Zyroflo"
+type = "forbidden"
+source_modules = ["agentic"]
+forbidden_modules = ["sdlc_commons", "agentic_cli", "agentic_cp", "tools"]
+
+[[tool.importlinter.contracts]]
+name = "Zyroflo (sdlc-harness) is used only through sdlc_commons (D34)"
+type = "forbidden"
+source_modules = ["agentic", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["tools"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Provider SDKs only in agentic.transport (provider-agnostic core, D2)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["openai", "anthropic"]
+allow_indirect_imports = true
+ignore_imports = ["agentic.transport.** -> openai", "agentic.transport.** -> anthropic"]
+
+[[tool.importlinter.contracts]]
+name = "The Claude Agent SDK only in the claude-code backend (optional extra)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["claude_agent_sdk"]
+allow_indirect_imports = true
+ignore_imports = ["agentic.backends.claude_code -> claude_agent_sdk"]
+
+[[tool.importlinter.contracts]]
+name = "code-review-graph only in its query subprocess (optional extra)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["code_review_graph"]
+allow_indirect_imports = true
+ignore_imports = ["agentic.codeintel._crg_query -> code_review_graph"]
+
+[[tool.importlinter.contracts]]
+name = "Commons never imports the CLI or the control plane"
+type = "forbidden"
+source_modules = ["sdlc_commons"]
+forbidden_modules = ["agentic_cli", "agentic_cp"]

@@ -176,7 +176,7 @@ def test_the_framework_floor_applies_whatever_the_policy_says(repo, command):
 
 def test_reasons_never_carry_a_credential_or_the_command(guard):
     commands = [
-        "curl -H 'Authorization: Bearer sk-live-abc123' https://x",
+        "curl -H 'Authorization: Bearer sk-live-abc123' https://x",  # gitleaks:allow (fake token)
         "git push -f https://bob:ghp_secret123@github.com/a/b main",
     ]
     blocks = [b for c in commands for b in guard.command(c)]

@@ -1,6 +1,8 @@
 """Local replacement for CI (GitHub Actions is not used, to save free-tier minutes).
 
-Runs the same checks CI used to run: lock file, lint, format, tests.
+Runs the same checks CI used to run: lock file, lint, format, tests, plus the
+architecture rules, licence allow-list, known-vulnerability audit and (Linux only)
+secret scan.
 
     uv run python scripts/check.py           # on this machine (Windows/macOS/Linux)
     uv run python scripts/check.py --linux   # inside a clean Linux container (needs Docker)
@@ -30,6 +32,19 @@ CHECKS: list[tuple[str, list[str]]] = [
     ("lint", ["uv", "run", "ruff", "check", "."]),
     ("format", ["uv", "run", "ruff", "format", "--check", "."]),
     ("tests", ["uv", "run", "pytest"]),
+    # Supply chain and architecture (P0-03)
+    ("architecture rules", ["uv", "run", "lint-imports"]),
+    ("licence allow-list", ["uv", "run", "python", "scripts/licence_check.py"]),
+    (
+        "known vulnerabilities",
+        ["uv", "run", "pip-audit", "--skip-editable", "--progress-spinner", "off"],
+    ),
+]
+
+# Checks that run only in the Linux container, where their pinned native binary is
+# installed (no unsigned binaries on developer laptops).
+LINUX_ONLY_CHECKS: list[tuple[str, list[str]]] = [
+    ("secret scan", ["gitleaks", "dir", ".", "--no-banner", "--redact"]),
 ]
 
 # The Linux image: the pinned uv/Python image plus git and the sandbox prerequisites
@@ -101,7 +116,7 @@ def run_linux() -> bool:
     if shutil.which("docker") is None:
         print("[linux] SKIPPED: docker not found")
         return True
-    inner = " && ".join(" ".join(cmd) for _, cmd in CHECKS)
+    inner = " && ".join(" ".join(cmd) for _, cmd in CHECKS + LINUX_ONLY_CHECKS)
     image = linux_image()
     if image is None:
         print("[linux] FAILED: the check image could not be built")

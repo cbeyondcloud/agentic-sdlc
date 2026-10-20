@@ -24,3 +24,6 @@ spikes/**/out/
 # --- OS noise ---
 .DS_Store
 Thumbs.db
+
+# Agent worktrees (parallel tracks, reviewers) live here while they run
+.claude/worktrees/
