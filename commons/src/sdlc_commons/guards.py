@@ -12,7 +12,10 @@ this module adds the framework's rules on top:
               command as typed AND of the spellings that hide a program from a
               tokenizer (quotes inside a word, a quoted Windows path, a leading
               redirect, `then`/`do`/`!`). Any hit refuses. A command longer than
-              MAX_COMMAND is refused unread;
+              MAX_COMMAND is refused unread. Files written past the file tools'
+              checks are refused too: git's output options (`git diff --output=f`)
+              for every agent, and any redirect into a file (`> f`) for an agent
+              with no file-writing tool (`writes_files=False`, e.g. a reviewer);
   * writes  - confined to the run's trees (`confinement`), never a path only
               Zyroflo's CLIs write (`protected`), never a framework-protected
               file or a path on the deny list - matched relative to the tree
@@ -87,6 +90,9 @@ FRAMEWORK_PROTECTED = (
 MAX_COMMAND = 16_384
 #: Zyroflo lists a repository's policy may extend but never shorten.
 _FLOOR_LISTS = ("deny_git", "deny_commands", "protected_paths")
+#: The policy capabilities that write files (agentic.agents.tools): an agent with none
+#: of them is read-only, and its commands may not write files either.
+FILE_WRITING_TOOLS = frozenset({"edit_files"})
 
 
 class GuardError(Exception):
@@ -117,9 +123,11 @@ class Guard:
         max_lines: int | None = None,
         allow_shell: Iterable[str] | None = None,
         ask_shell: Iterable[str] = (),
+        writes_files: bool = True,
     ) -> None:
         self.target = Path(target)
         self.run_id = run_id
+        self.writes_files = writes_files  # False: no command may redirect into a file
         self.deny_shell = _rules("deny_shell", deny_shell)
         self.deny_paths = _rules("deny_paths", deny_paths)
         # None = no allow-list check (adapter-level use); () = nothing is allowed
@@ -143,7 +151,9 @@ class Guard:
     @classmethod
     def for_agent(cls, target: Path, run_id: str, agent: object, **budget: int) -> "Guard":
         """A guard for a resolved agent: its deny lists (D31), its allowed command
-        prefixes (`shell`) and the prefixes a person approves each time (`ask_shell`)."""
+        prefixes (`shell`) and the prefixes a person approves each time (`ask_shell`).
+        An agent whose `tools` hold no file-writing tool is read-only (review F3)."""
+        tools = getattr(agent, "tools", None)
         return cls(
             target,
             run_id,
@@ -151,6 +161,7 @@ class Guard:
             deny_paths=agent.deny_paths,
             allow_shell=agent.shell,
             ask_shell=agent.ask_shell,
+            writes_files=tools is None or bool(FILE_WRITING_TOOLS & set(tools)),
             **budget,
         )
 
@@ -197,6 +208,20 @@ class Guard:
                 if _rule_hits(rule, commands):
                     why = f"the command matches the deny rule {rule!r} ({owner})"
                     blocks.setdefault((wall, why), Block(wall, why))
+        if any(_git_writes_file(args) for name, args in commands if _same_program(name, "git")):
+            why = (
+                "git's output options (--output, -o) write a file the file tools never "
+                "check - write files with the file tools (framework floor)"
+            )
+            blocks.setdefault(("framework", why), Block("framework", why))
+        if not self.writes_files and any(
+            _file_redirects(text) for text in dict.fromkeys((command, command.replace('""', '"')))
+        ):
+            why = (
+                "this agent writes no files, and the command redirects output into one - "
+                "only a null device (/dev/null, NUL, $null) may take it (framework floor)"
+            )
+            blocks.setdefault(("framework", why), Block("framework", why))
         if self.allow_shell is not None:  # every command must be allowed (DF-16)
             for block in self._allow_refusals(command):
                 blocks.setdefault((block.wall, block.why), block)
@@ -680,6 +705,70 @@ def _rule_hits(rule: str, commands: list[tuple[str, list[str]]]) -> bool:
         if all(any(_option_hit(alt, where, prefix) for alt in alts) for alts in options):
             return True
     return False
+
+
+#: git's options that write a file, and the subcommands where `-o` is one (review F3).
+_GIT_OUTPUT_OPTIONS = ("--output", "--output-directory")
+_GIT_SHORT_OUTPUT = frozenset({"format-patch", "archive"})
+#: Redirect targets that are not files.
+_NULL_DEVICES = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "nul", "nul:", "$null"})
+
+
+def _git_writes_file(args: list[str]) -> bool:
+    """Whether a git command's arguments name an output file: `--output`, `--output=f`,
+    an abbreviation git accepts (`--outp=f`), `--output-directory`, or `-o` / `-odir` for
+    `format-patch` and `archive`. `--output-indicator-new` writes nothing."""
+    short = bool(_GIT_SHORT_OUTPUT & {s.lower() for s in _subcommands(args)})
+    for arg in args:
+        option = arg.split("=", 1)[0].lower()
+        if option.startswith("--o") and any(o.startswith(option) for o in _GIT_OUTPUT_OPTIONS):
+            return True
+        if short and arg.startswith("-o"):
+            return True
+    return False
+
+
+def _file_redirects(text: str, depth: int = 0) -> list[str]:
+    """The files `text` redirects output into (`> f`, `>> f`, `2> f`, `&> f`, `>| f`,
+    `>& f`, `<> f`), also inside what an interpreter is told to run (`bash -c "..."`).
+    A copy of a stream (`2>&1`, `>&-`) and a null device are not files."""
+    tokens = _tokens(text)
+    found: list[str] = []
+    programs: set[str] = set()  # the segment's programs, to spot an interpreter
+    for i, token in enumerate(tokens):
+        if not token.sep:
+            previous = tokens[i - 1].text if i and not tokens[i - 1].sep else ""
+            if token.quoted and depth < _MAX_DEPTH and _runs_text(programs, previous):
+                found += _file_redirects(token.text, depth + 1)
+            programs.add(_program(token.text))
+            continue
+        if token.text not in "<>&":
+            programs = set()  # a new command
+        if token.text != ">" or (i and tokens[i - 1].text == ">" and tokens[i - 1].sep):
+            continue
+        j = i + 1
+        while j < len(tokens) and tokens[j].sep and tokens[j].text in ">|":
+            j += 1  # `>>`, `>|`
+        copy = j < len(tokens) and tokens[j].sep and tokens[j].text == "&"
+        j += copy
+        if j >= len(tokens) or tokens[j].sep:
+            continue
+        target = tokens[j].text
+        if copy and (target.isdigit() or target == "-"):
+            continue  # `2>&1`, `>&2`, `>&-`: a stream, not a file
+        if target.lower() not in _NULL_DEVICES:
+            found.append(target)
+    return found
+
+
+def _runs_text(programs: set[str], option: str) -> bool:
+    """Whether `option`, after these programs, hands the next word to an interpreter."""
+    lowered = option.lower()
+    return bool(
+        (programs & _SHELLS and _SHELL_RUN.fullmatch(option))
+        or ("cmd" in programs and lowered in ("/c", "/k", "/r"))
+        or (programs & _POWERSHELL and len(lowered) >= 2 and "-command".startswith(lowered))
+    )
 
 
 #: Shell builtins that run nothing and write nothing: allowed without listing them.

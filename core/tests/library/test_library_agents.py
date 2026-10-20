@@ -15,6 +15,7 @@ from agentic.handoffs.contract import HandoffContract
 from agentic.handoffs.schema import render_template
 from agentic.policy import ResolveContext, resolve_agent
 from agentic.transport import BudgetLedger
+from sdlc_commons.guards import Guard
 
 #: agent file -> (agent type, the handoff kind it writes)
 BUILTINS = {
@@ -85,6 +86,28 @@ def test_agents_ask_for_their_type_defaults_only(library, standalone_policy):
     for name in BUILTINS:
         agent = library.agent(name)
         assert (agent.tier, agent.model, agent.backend) == (None, None, None), name
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git diff --output=../escape.txt",
+        "git log --output=../escape.txt",
+        "git show --output=x HEAD",
+        "git diff > ../escape.txt",
+        "git log >> src/app.py",
+    ],
+)
+def test_the_reviewer_cannot_write_files_through_its_shell(
+    library, standalone_policy, tmp_path, command
+):
+    """Review F3: Code Review reads untrusted diffs, so its read-only git commands must
+    not write files (git's output options, shell redirects)."""
+    guard = Guard.for_agent(
+        tmp_path, "r-review", resolved(library, standalone_policy, "code-review")
+    )
+    assert guard.command("git diff HEAD~1") == []
+    assert guard.command(command) != []
 
 
 def test_review_loop_and_baseline_rules_are_in_the_instructions(library):
