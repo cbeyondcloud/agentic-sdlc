@@ -37,7 +37,9 @@ version = "0.1.0"
 source = { editable = "core" }
 dependencies = [
     { name = "cel-python" },
+    { name = "detect-secrets" },
     { name = "httpx2" },
+    { name = "keyring" },
     { name = "opentelemetry-api" },
     { name = "pydantic" },
     { name = "pydantic-ai-slim", extra = ["anthropic", "openai"] },
@@ -59,7 +61,9 @@ requires-dist = [
     { name = "cel-python", specifier = "==0.5.0" },
     { name = "claude-agent-sdk", marker = "extra == 'claude-code'", specifier = "==0.2.164" },
     { name = "code-review-graph", marker = "extra == 'codeintel'", specifier = "==2.3.9" },
+    { name = "detect-secrets", specifier = "==1.5.0" },
     { name = "httpx2", specifier = ">=2.13.1,<2.14" },
+    { name = "keyring", specifier = "==25.7.0" },
     { name = "opentelemetry-api", specifier = ">=1.45,<2" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-ai-slim", extras = ["anthropic", "openai"], specifier = "==2.54.0" },
@@ -424,6 +428,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/28/c1/3debeeb6e0eb74a51d6f8cf1f273ed7c479e3321631cbf89fb9700e65e28/cyclopts-5.2.0.tar.gz", hash = "sha256:b63c1b1beaadf3ead19214385a0f90b990f152c4107c174e1724c45dc71e9541", size = 246542, upload-time = "2026-10-06T15:02:39.212Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d4/dd/3f73d04c95f6acc6a54700011637e49362e337139b518be895edf4786f87/cyclopts-5.2.0-py3-none-any.whl", hash = "sha256:5da2a5d65164e03008621fc4795946b88a722b881398b5dfa58afa6218342cff", size = 289196, upload-time = "2026-10-06T15:02:37.57Z" },
+]
+
+[[package]]
+name = "detect-secrets"
+version = "1.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pyyaml" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/69/67/382a863fff94eae5a0cf05542179169a1c49a4c8784a9480621e2066ca7d/detect_secrets-1.5.0.tar.gz", hash = "sha256:6bb46dcc553c10df51475641bb30fd69d25645cc12339e46c824c1e0c388898a", size = 97351, upload-time = "2024-05-06T17:46:19.721Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4e/5e/4f5fe4b89fde1dc3ed0eb51bd4ce4c0bca406246673d370ea2ad0c58d747/detect_secrets-1.5.0-py3-none-any.whl", hash = "sha256:e24e7b9b5a35048c313e983f76c4bd09dad89f045ff059e354f9943bf45aa060", size = 120341, upload-time = "2024-05-06T17:46:16.628Z" },
 ]
 
 [[package]]

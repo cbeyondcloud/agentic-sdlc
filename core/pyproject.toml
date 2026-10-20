@@ -5,7 +5,9 @@ description = "Core library: definitions, policy, engine, agents"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cel-python==0.5.0",
+    "detect-secrets==1.5.0",
     "httpx2>=2.13.1,<2.14",
+    "keyring==25.7.0",
     "opentelemetry-api>=1.45,<2",
     "pydantic>=2.9",
     "pydantic-ai-slim[anthropic,openai]==2.54.0",
