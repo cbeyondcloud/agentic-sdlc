@@ -19,6 +19,7 @@
 
 ## Global Constraints
 
+- **Provider-agnostic (owner rule, 2026-10-20).** The framework works with Claude, Codex/OpenAI, Gemini and other providers. The native backend reaches any model through TokenLean by tier. Vendor agent CLIs (claude-code now; codex M2-40, opencode M2-57, ACP/Gemini E2-06) are optional backends behind the one neutral `Backend` protocol. Vendor names, flags and SDK types live only in that backend's module and data, never in the engine, policy model, protocols or capability code paths.
 - **TokenLean only.** Every model call goes through TokenLean (D2): the claude-code backend sets `ANTHROPIC_BASE_URL` to TokenLean and nothing else.
 - **Identity headers.** `X-Agentic-*` plus `traceparent`, never `X-Step-Name` / `X-Workflow-ID` / `X-Session-ID`; claude-code carries them via `ANTHROPIC_CUSTOM_HEADERS`.
 - **The SDK is an optional extra.** `claude-agent-sdk==0.2.164` is the extra `claude-code` of `agentic-core`, never a core dependency: its use is under Anthropic's Commercial Terms and it bundles a proprietary binary (S2). The dev group installs it so the tests run.
@@ -150,7 +151,9 @@ def test_unhonoured_policy_loads_from_org_yaml(...): ...                  # org.
 - [ ] **Step 1: Write the failing tests.** `test_native.py` runs every conformance case against `NativeBackend` with a `TestModel` / `FunctionModel`. Also:
   - `test_step_runners_dispatch_on_the_agents_backend` (a fake backend records the call);
   - `test_an_unknown_backend_is_an_engine_error`;
-  - `test_effort_reaches_model_settings_as_thinking`.
+  - `test_effort_reaches_model_settings_as_thinking`;
+  - `test_native_runs_any_provider_through_tokenlean`, parametrised over `anthropic/claude-sonnet`, `openai/gpt-5-mini` and `google/gemini-2.5-pro`: each builds a model whose calls go to the gateway's base URL, and runs the valid-handoff conformance case through a stand-in transport;
+  - `test_no_vendor_names_outside_backend_modules`: no `claude`/`anthropic`/`openai`/`gemini` names in `agentic/engine/` or `agentic/backends/base.py` or `capabilities.py` code paths, except as data keys in `CAPABILITIES`.
 - [ ] **Step 2: Run** `uv run pytest core/tests/backends core/tests/engine/test_factory.py -q`. Expected: FAIL (no `agentic.backends.native`).
 - [ ] **Step 3: Implement.** Move the code; behaviour unchanged except the dispatch and the effort mapping.
 - [ ] **Step 4: Run** `uv run pytest -q`. Expected: all PASS.
