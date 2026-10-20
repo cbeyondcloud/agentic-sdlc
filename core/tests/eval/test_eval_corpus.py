@@ -108,6 +108,28 @@ def test_a_reference_must_stay_inside_the_corpus(tmp_path: Path):
         load_corpus(tmp_path)
 
 
+def test_handoff_files_are_read_into_the_inputs(tmp_path: Path):
+    (tmp_path / "golden").mkdir()
+    (tmp_path / "golden" / "req.md").write_bytes(b"---\nkind: requirements\n---\r\nbody\r\n")
+    data = scoping(
+        inputs={"prompt": "Design it.", "handoff_files": {"requirements": "golden/req.md"}}
+    )
+    write_case(tmp_path, data)
+    case = load_corpus(tmp_path).cases[0]
+    assert case.inputs.handoffs == {"requirements": "---\nkind: requirements\n---\nbody\n"}
+    both = scoping(
+        "s2",
+        inputs={
+            "prompt": "x",
+            "handoffs": {"requirements": "inline"},
+            "handoff_files": {"requirements": "golden/req.md"},
+        },
+    )
+    write_case(tmp_path, both)
+    with pytest.raises(CorpusError, match="both inline and as a file"):
+        load_corpus(tmp_path)
+
+
 def test_a_missing_golden_file_is_refused(tmp_path: Path):
     write_case(tmp_path, scoping(expected={"golden": "golden/none.md"}))
     with pytest.raises(CorpusError, match="does not exist"):

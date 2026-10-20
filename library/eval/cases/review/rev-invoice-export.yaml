@@ -1,0 +1,49 @@
+id: rev-invoice-export
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: Review this change, which adds the invoice CSV writer and the export endpoint.
+  handoff_files:
+    design: golden/design/01-invoice-csv-export.md
+  diff: |
+    --- /dev/null
+    +++ b/billing/export.py
+    @@ -0,0 +1,12 @@
+    +"""Invoice CSV export."""
+    +
+    +COLUMNS = "invoice_number,issue_date,customer,net,tax,gross,currency"
+    +
+    +
+    +def write_invoice_csv(rows, out):
+    +    out.write(COLUMNS + "\n")
+    +    for row in rows:
+    +        fields = [row.number, row.issue_date.isoformat(), row.customer,
+    +                  str(row.net), str(row.tax), str(row.net + row.tax), row.currency]
+    +        out.write(",".join(fields) + "\n")
+    +    return out
+    --- /dev/null
+    +++ b/api/routes/exports.py
+    @@ -0,0 +1,9 @@
+    +from api.app import queue, router
+    +from billing.jobs import ExportInvoicesJob
+    +
+    +
+    +@router.post("/v1/invoice-exports")
+    +def create_export(request, month: str):
+    +    job = ExportInvoicesJob(user=request.user, month=month)
+    +    queue.enqueue(job)
+    +    return {"job_id": job.id}
+expected:
+  golden: golden/review/01-invoice-csv-export.md
+  seeded_defects:
+    - file: billing/export.py
+      lines: [9, 11]
+      category: logic
+      note: fields are joined without CSV quoting, so a comma in a customer name breaks the row
+    - file: api/routes/exports.py
+      lines: [6, 9]
+      category: security
+      note: no finance role check before enqueueing the export
+tags: [billing]

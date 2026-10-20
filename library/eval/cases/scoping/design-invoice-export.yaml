@@ -1,0 +1,18 @@
+id: design-invoice-export
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: Design the invoice CSV export described in the approved requirements.
+  handoff_files:
+    requirements: golden/requirements/01-invoice-csv-export.md
+expected:
+  golden: golden/design/01-invoice-csv-export.md
+  key_points:
+    - the export runs as a background job and the API returns a job id at once
+    - rows are streamed, so memory does not grow with the month
+    - the download link expires and is enforced without new services
+    - the role check sits in the API layer
+rubric: design
+tags: [billing]

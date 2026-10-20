@@ -12,6 +12,7 @@ reference and key points for a rubric judge where it does not (BA, Design).
     inputs:
       prompt: Add CSV export to the invoices page.
       handoffs: {requirements: "---\\nkind: requirements ..."}   # consumed handoffs, by kind
+      handoff_files: {design: golden/design/01-export.md}      # ... or files holding them
       diff: null                     # a review case's change, unified diff
       workspace: null                # a folder in the corpus with the starting files
     expected:
@@ -74,6 +75,8 @@ class TestTruth(_Strict):
 class CaseInputs(_Strict):
     prompt: str
     handoffs: dict[str, str] = {}  # consumed handoff documents, by kind
+    # ... or corpus-relative files holding them (read into `handoffs` on load)
+    handoff_files: dict[str, str] = {}
     diff: str | None = None
     workspace: str | None = None  # corpus-relative folder with the starting files
 
@@ -134,4 +137,5 @@ class EvalCase(_Strict):
 
     def references(self) -> list[str]:
         """Corpus-relative paths this case points at."""
-        return [p for p in (self.expected.golden, self.inputs.workspace) if p]
+        paths = [self.expected.golden, self.inputs.workspace, *self.inputs.handoff_files.values()]
+        return [p for p in paths if p]

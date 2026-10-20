@@ -125,7 +125,13 @@ def load_corpus(root: Path, *, public: bool = False) -> Corpus:
         if case.id in cases:
             problems.append(f"{where}: duplicate case id '{case.id}'")
             continue
-        problems += [f"{where}: {p}" for p in _reference_problems(root, case)]
+        reference_problems = _reference_problems(root, case)
+        problems += [f"{where}: {p}" for p in reference_problems]
+        if not reference_problems and case.inputs.handoff_files:
+            if both := sorted(case.inputs.handoffs.keys() & case.inputs.handoff_files.keys()):
+                problems.append(f"{where}: handoff {both[0]} given both inline and as a file")
+            else:
+                case = _with_handoff_files(root, case)
         if public and not _public(case):
             problems.append(
                 f"{where}: a public corpus holds only synthetic or permissively licensed "
@@ -162,7 +168,7 @@ def build_manifest(root: Path) -> CorpusManifest:
     files = {}
     for path in sorted(p for p in root.rglob("*") if p.is_file()):
         relative = path.relative_to(root)
-        if relative.parts[0] in NOT_IN_MANIFEST:
+        if relative.parts[0] in NOT_IN_MANIFEST or any(_scratch(p) for p in relative.parts):
             continue
         files[relative.as_posix()] = file_digest(path)
     return CorpusManifest(files=files, sha=_sha(files))
@@ -213,6 +219,21 @@ def _reference_problems(root: Path, case: EvalCase) -> list[str]:
         elif not target.exists():
             problems.append(f"'{reference}' does not exist in the corpus")
     return problems
+
+
+def _with_handoff_files(root: Path, case: EvalCase) -> EvalCase:
+    """The case with its handoff files read (LF) into `inputs.handoffs`."""
+    read = {
+        kind: read_text(root / PurePosixPath(path)).replace("\r\n", "\n")
+        for kind, path in case.inputs.handoff_files.items()
+    }
+    inputs = case.inputs.model_copy(update={"handoffs": {**case.inputs.handoffs, **read}})
+    return case.model_copy(update={"inputs": inputs})
+
+
+def _scratch(part: str) -> bool:
+    """Caches and hidden files (running a workspace's tests leaves __pycache__ behind)."""
+    return part == "__pycache__" or part.startswith(".")
 
 
 def _public(case: EvalCase) -> bool:

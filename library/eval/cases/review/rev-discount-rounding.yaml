@@ -1,0 +1,27 @@
+id: rev-discount-rounding
+agent: code-review
+case_class: review
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: Review this change, which caps discounts at 100 percent.
+  diff: |
+    --- a/billing/discounts.py
+    +++ b/billing/discounts.py
+    @@ -1,2 +1,4 @@
+     def apply_discount(total, percent):
+    -    return total * (1 - percent / 100)
+    +    if percent > 100:
+    +        percent = 100
+    +    return round(total * (1 - percent / 100))
+expected:
+  seeded_defects:
+    - file: billing/discounts.py
+      lines: [4, 4]
+      category: logic
+      note: rounding to a whole number drops the cents from every discounted total
+    - file: billing/discounts.py
+      lines: [2, 3]
+      category: validation
+      note: a negative percent is not rejected and increases the total
+tags: [billing]

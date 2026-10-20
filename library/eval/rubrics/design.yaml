@@ -1,0 +1,41 @@
+# Rubric for the Design agent's design handoff (spike S10: 5 criteria x 0-2 = 10).
+# Seeded from Zyroflo's P2 design SOP and MADR. Change any anchor => bump the version and
+# re-calibrate the judge (agentic eval calibrate).
+id: design
+version: 1
+kind: design
+instructions: |
+  Grade a design handoff written from approved requirements. The reference (when given)
+  is a good answer, not the only good answer: credit equivalent designs. The key points
+  are what any good design for this case must address.
+criteria:
+  - id: options
+    title: Options considered
+    anchors:
+      0: One option presented as the only possibility.
+      1: Alternatives listed without saying why they lose.
+      2: At least two real alternatives, each with the reason it was or was not chosen.
+  - id: rationale
+    title: Decisions trace to drivers
+    anchors:
+      0: Decisions without reasons, or reasons unrelated to the requirements.
+      1: Reasons given, but not tied to the requirements or decision drivers.
+      2: Every decision's rationale cites a requirement, driver or constraint.
+  - id: impact
+    title: Impact identified
+    anchors:
+      0: No modules, interfaces or tests named.
+      1: Some impact named, but interfaces or tests missing.
+      2: Modules, interfaces and the tests that confirm the change are all named.
+  - id: risks
+    title: Risks with mitigations
+    anchors:
+      0: No risks.
+      1: Risks listed without mitigations.
+      2: The material risks are listed, each with a mitigation or an explicit acceptance.
+  - id: coverage
+    title: Covers the key points
+    anchors:
+      0: Misses most key points.
+      1: Covers some key points, or only implicitly.
+      2: Addresses every key point explicitly.
