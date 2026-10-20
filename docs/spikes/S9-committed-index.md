@@ -62,7 +62,7 @@ Spec §10.3 has a nightly bot commit the index to `main` at `.agentic/index/`, a
 - **Fidelity:** equal, apart from list ordering and 5 of 1,447 community labels on flask.
 - **Constraint:** the importer must be pinned to the tool and schema version recorded in the manifest.
 
-## Decision (proposed; changes spec §10.3, so it needs the owner's approval)
+## Decision (approved by the owner 2026-10-20: D39, spec §10.3 rewritten)
 
 1. **Never commit the raw database.** It is tied to the checkout path, rewritten whole every night, past GitHub's file-size warning on a modest Java repo, and it can't be merged safely.
 2. **Default: build and update locally.** On first use `codeintel` runs a full build of 4–7 s on these repos. After each `git pull`, or before a step, it runs `update` (1–3 s). The index lives in the git-ignored `.agentic/local/index/`. Nothing goes on `main`, so there is no bot commit, no branch-protection bypass, no merge driver and no LFS.

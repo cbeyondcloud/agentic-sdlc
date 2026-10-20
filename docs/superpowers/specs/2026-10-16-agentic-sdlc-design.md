@@ -6,7 +6,7 @@
 | Date | 2026-10-16 |
 | Owner | Sumit Gupta |
 | Supporting research | [OSS reuse report](../../../reports/Agentic%20SDLC%20OSS%20reuse.md) · [research notes](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/) · [Zyroflo comparison](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/sdlc_harness_comparison.md) |
-| Revision | r3 (2026-10-18): decisions D26-D35 folded in; new §23 Users and roles, §24 Developer onboarding (init, skills, custom skills, learning loop), §25 Deployment landscape (incl. TokenLean LITE), §26 Executive cost breakdown, §27 Enterprise coverage; §5 agent types and deny lists; §19 milestones. Since r3: D36 (httpx2), D37 (handoff templates inherit a base, extend-only layering, §7.4), D38 (sandbox: `srt` on every OS, Windows via WSL2, spike S6) |
+| Revision | r3 (2026-10-18): decisions D26-D35 folded in; new §23 Users and roles, §24 Developer onboarding (init, skills, custom skills, learning loop), §25 Deployment landscape (incl. TokenLean LITE), §26 Executive cost breakdown, §27 Enterprise coverage; §5 agent types and deny lists; §19 milestones. Since r3: D36 (httpx2), D37 (handoff templates inherit a base, extend-only layering, §7.4), D38 (sandbox: `srt` on every OS, Windows via WSL2, spike S6), D39 (code-intelligence index built locally; opt-in export outside `main`, spike S9) |
 | Earlier | r2 (2026-10-17): Zyroflo (sdlc-harness) artefacts folded in — §1.4, D16, D25, §6, §7, §9.2, §10, §14.5, §16, §18–§21 |
 
 ---
@@ -109,6 +109,7 @@ Decisions agreed during requirements clarification (2026-10-16).
 | D36 | HTTP client | `agentic.transport` is built on **httpx2** (the Pydantic team's maintained successor to httpx, BSD-3): the Anthropic SDK requires it and Pydantic AI drops plain httpx in v3; cost capture is a wrapping transport under the identity client (spike S1) |
 | D37 | Handoff templates | Every handoff kind inherits one **generic base template** (fields and body sections). Org, team and repo layers may **add** fields and sections and **tighten** existing ones (optional → required, fewer choices), never remove, rename, loosen or retype them; new kinds (inheriting the base) only at org and team level; repo extensions are changed by PR approved by the repo maintainers (§7.4) |
 | D38 | Sandbox | Anthropic `srt` (sandbox-runtime, Apache-2.0, pinned) on every OS behind one `agentic` sandbox interface: macOS Seatbelt, Linux bubblewrap, **Windows = `srt` Linux mode inside WSL2**. No unsigned binary is installed on developer machines, so native `srt-win` is excluded unless the org builds and signs it; a container backend is the later Windows alternative. With no sandbox, org policy decides per regime (default: team and regulated refuse; solo runs on policy guards with a warning - owner decision 2026-10-20, DF-72). Engine, gates, ledger, model calls, commits and pushes stay outside the sandbox (spike S6) |
+| D39 | Code-intelligence index | The symbol index (code-review-graph, spike S5) is **built and updated locally** in `.agentic/local/index/`; nothing is committed to `main`. Repos whose full local build is too slow opt in to a nightly CI job that publishes a deterministic sharded text export outside `main` (artifact or `agentic-index` ref) for developers to import. A generated index is never merged (spike S9, §10.3) |
 
 **Confirmed assumptions**: agents request a **capability tier** by default (exact model optional, admins can override); **preflight** validates every step before a run starts; **child agents inherit and can only narrow** their parent's tools, budget and limits.
 
@@ -583,13 +584,12 @@ Graph answers are **candidates**: the Design handoff lists impact as `confidence
 
 Always available (read/search tools). If no index exists for a language, agents fall back to exploration.
 
-### 10.3 Shared index committed to `main`
+### 10.3 Index: built locally; an opt-in export for large repos (D39, spike S9)
 
-- Path `.agentic/index/`; **only the nightly bot commits it** (developers' incremental updates go to the git-ignored overlay `.agentic/local/index-overlay/`).
-- Format and freshness follow Zyroflo's snapshot design: per-component **shards** stamped with sha256 and parser version, `--check-fresh` to detect stale shards and `--incremental` rebuilds, so nightly commits only touch changed shards. Zyroflo's `snapshot-publish.yml` is the starting point for the nightly workflow (schedule changed from weekly to nightly).
-- `.gitattributes`: index files `binary`, `merge=ours`; bot commits use `[skip ci]`.
-- **Nightly refresh**: GitHub Actions scheduled workflow (service account) rebuilds from latest `main` and commits; optional on-merge refresh per repo.
-- Git LFS optional per repo if the index grows large.
+- **Local by default.** `codeintel` builds the symbol index on first use (4–7 s on the S9 repos) into the git-ignored `.agentic/local/index/`. It refreshes with an incremental `update` whenever the index's recorded commit is not the checked-out HEAD (1–3 s after a pull). Nothing is committed to `main`: no bot commits, no branch-protection bypass, no merge driver, no LFS.
+- **Never commit the raw index.** code-review-graph's database stores absolute paths (another checkout refuses it), is rewritten whole every night (timestamps), and grows about 2.7 MB per night on a modest Java repo (S9).
+- **Opt-in export for slow repos.** When a repo's full local build is too slow (a policy threshold, proposed at 60 s), a nightly CI job (service account) builds once and publishes a **deterministic, path-independent sharded text export** (one sorted JSONL file per source file, `${ROOT}` for the repo root, a manifest with sha256 values and the tool and schema version) **outside `main`**: a CI artifact or an `agentic-index` ref. Developers import it (seconds) and run `update`.
+- **A generated index is never merged.** If an org nevertheless commits the export, it is marked `linguist-generated -diff` and written only by the bot; on a conflict either side is taken and the index regenerated. `merge=union` silently corrupts it (S9).
 
 ### 10.4 Memory
 
