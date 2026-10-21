@@ -60,6 +60,11 @@ class LoadedPolicy:
         """Put a freshly fetched (org) or assembled (standalone template) policy repo in
         its place under `~/.agentic`; called only after the guard passed."""
         if self._pending is not None and self._install is not None:
+            if self._install.exists():  # made meanwhile (another init): theirs is kept
+                self.discard()
+                root, folder = _layout(self._install)
+                self.policy, self.root = _load(folder), root
+                return
             self._install.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(self._pending), str(self._install))
             shutil.rmtree(self._pending.parent, ignore_errors=True)  # the scratch folder

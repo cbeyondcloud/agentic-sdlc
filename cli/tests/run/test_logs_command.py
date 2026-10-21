@@ -130,3 +130,14 @@ def test_a_terminal_control_sequence_in_a_log_is_made_inert(workspace, cli):
     log(run_dir, "build", 1, "title \x1b]0;pwned\x07 done")
     result = cli("logs", "r-esc")
     assert "\x1b" not in result.out and "\x07" not in result.out
+
+
+def test_a_half_written_line_of_a_running_run_is_not_shown_as_an_error(workspace, cli):
+    run_dir = save_run(workspace, "r-run", "running")
+    log(run_dir, "build", 1, "whole")
+    with (run_dir / "logs" / "build-1.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write('{"at": "2026-10-21T10:00:01')  # the writer is mid-record
+    records = cli("--json", "logs", "r-run").json()
+    assert [r["message"] for r in records] == ["whole"]
+    save_run(workspace, "r-run", "failed")  # it stopped there: now the line is shown
+    assert len(cli("--json", "logs", "r-run").json()) == 2

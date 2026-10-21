@@ -30,7 +30,7 @@ from typing import Annotated
 import typer
 
 from agentic.engine.state import RunState, RunStateError
-from agentic.telemetry.logs import LEVELS, LogTail, read_logs, redact_record, render_logs
+from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
 from agentic_cli.driving import (
     drive,
     engine_errors,
@@ -186,13 +186,14 @@ def register(app: typer.Typer) -> None:
         if level is not None and level.lower() not in LEVELS:
             raise CliError(f"--level is one of {', '.join(LEVELS)}", ExitCode.USAGE)
         rt = Runtime(Workspace.load())
-        _load(rt, run_id)
+        running = _load(rt, run_id).status == "running"
         redact = _log_redactor(rt)
-        run_dir = rt.store.path(run_id).parent
+        tail = LogTail(rt.store.path(run_id).parent, step, level)
         if follow:
-            _follow(out, rt, run_id, LogTail(run_dir, step, level), redact)
+            _follow(out, rt, run_id, tail, redact)
             return
-        records = [redact_record(r, redact) for r in read_logs(run_dir, step, level)]
+        # a running step's last line may be half written: show it once the run stopped
+        records = [redact_record(r, redact) for r in tail.poll(final=not running)]
         out.result(records, lambda c: c.print(render_logs(records), markup=False, end=""))
 
 

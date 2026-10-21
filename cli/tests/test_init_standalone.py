@@ -6,6 +6,7 @@ Temporary HOME/AGENTIC_HOME and git repos; the machine (which, run) and the inde
 builder are fakes."""
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -157,3 +158,16 @@ def test_windows_without_wsl2_is_told_exactly_how_to_install_it(
     assert sandbox and all(c["status"] == "warn" for c in sandbox)  # solo still runs
     assert any("wsl --install" in c["fix"] for c in sandbox)
     assert any("team, regulated runs refuse without it" in c["detail"] for c in sandbox)
+
+
+def test_a_copy_installed_meanwhile_is_kept(home, deps, tmp_path):
+    from agentic_cli.policy_source import resolve_policy
+
+    loaded = resolve_policy(standalone=True, policy_path=None, home=agentic_home(), config={})
+    theirs = installed()
+    theirs.parent.mkdir(parents=True)
+    shutil.copytree(loaded.root, theirs)  # another init finished first
+    (theirs / "mine.txt").write_text("kept\n", encoding="utf-8")
+    loaded.commit()
+    assert loaded.root == theirs and (theirs / "mine.txt").is_file()
+    assert not (theirs / "repo").exists()  # nothing moved inside it
