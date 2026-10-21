@@ -62,4 +62,11 @@ prompt, an agent stand-in or a fixture case, re-record with
 review the diff of the expected reports.
 
 A live run uses the whole corpus: `agentic eval run --agent <name> --corpus library/eval
---mode live --gateway <TokenLean URL>` (holdout split by default).
+--mode live --gateway <TokenLean URL>` (holdout split by default). Developer runs work in
+a copy of each task's workspace with their file and shell tools, and the task's tests then
+run there (`tests_pass`); review runs have the `eval-judge` model rule on findings that
+match no seeded defect (`false_finding_rate`, rulings in `judged/<run>.findings.json`).
+
+The M1-64 gate compares one live report per agent with policy `eval.targets` (default:
+the M1-64 initial targets): `agentic eval gate --report <dir> --report <dir> ...` writes
+`gate.json` and `gate.md`.

@@ -127,7 +127,13 @@
 
 - [ ] RED: a dev task run with a tool-using model edits its workspace copy and `tests_pass` is 1.0; a run that changes nothing scores 0.0. GREEN.
 
-### Task 12: Re-record fixtures and finish
+### Task 12: False findings adjudicated (DF-244)
+
+**Files:** `core/src/agentic/eval/judge.py` (`FindingJudge`), `metrics.py` (`FalseFindingMetric`), `report.py` (pooled `false_finding_rate`, rulings written per run), `cli/src/agentic_cli/evaluation.py`, `scripts/record_eval_fixtures.py`; tests.
+
+- [ ] RED: unmatched findings judged not real count as false; a real one does not; a wrong verdict count is re-asked then unmeasured; the fixture review report has a false-finding rate. GREEN.
+
+### Task 13: Re-record fixtures and finish
 
 - [ ] `uv run python scripts/record_eval_fixtures.py`; review the expected-report diff.
 - [ ] `uv run python scripts/check.py --all` green.

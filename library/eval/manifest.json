@@ -1,6 +1,6 @@
 {
   "files": {
-    "README.md": "sha256:2916f69378b4619d6df0d630b8872a26c1fb569400a6675447c631c1e6a40663",
+    "README.md": "sha256:fedf9a8f8dd9766c5e87d38e2b3faaed620c20acd2d473ec4e365ac2bbaad126",
     "cases/dev_task/dev-atomic-write.yaml": "sha256:b43fb81535302b17b6eed29cd05f230db4893256e63047bd6ee4b81bf2d5989d",
     "cases/dev_task/dev-backoff-cap.yaml": "sha256:375b6e68e4062490375ce5528da1eccf57e1c04fda155a8ba6edc18704e8d8c4",
     "cases/dev_task/dev-business-days.yaml": "sha256:bfab105bc2f2a6dfe6f0e0a7c68e6cd29256e5dc2d1c5827acafd9ca380df70e",
@@ -210,5 +210,5 @@
     "workspaces/dev-waitlist-order/tests/test_waitlist.py": "sha256:341fd0813140750994525d2b6acdf96a77f83d48d721755dce2443492227df3d",
     "workspaces/dev-waitlist-order/waitlist.py": "sha256:79688f0ff8a159d6debd491e692766a80240d4a8afebedcabc4e5148bc1be53f"
   },
-  "sha": "sha256:523778543577edb59d60e082e7fc8754446ce49b1852966c50ce75011d425e61"
+  "sha": "sha256:a85292ea39c86f6b665faeb28f963ad33d7ea56e3e090d7edc31e8515ad304d4"
 }
