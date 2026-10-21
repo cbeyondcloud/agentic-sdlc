@@ -79,6 +79,13 @@ _BLANKED_PREFIXES = (
     "CLAUDE_CODE_USE_",
 )
 _BLANKED = {"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS"}
+#: The token counts of one model call's usage, as Claude Code streams them.
+_USAGE_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
 
 
 def _blanked(name: str) -> bool:
@@ -273,21 +280,26 @@ class ClaudeCodeRunner:
 
         await client.query(prompt)
         text = ""
-        seen = {"input_tokens": 0, "output_tokens": 0}  # per model call, as streamed
+        # per model call (its message id), as streamed: one message per content block, each
+        # with its call's usage - so the largest counts win, never their sum (DF-77)
+        streamed: dict[str, dict[str, int]] = {}
         async for message in client.receive_response():
             if isinstance(message, AssistantMessage):
                 said = "".join(b.text for b in message.content if isinstance(b, TextBlock))
                 if said:
                     text = self._last_text = said
-                for key in seen:
-                    seen[key] += int((message.usage or {}).get(key) or 0)
+                call = streamed.setdefault(message.message_id or f"#{len(streamed)}", {})
+                for key in _USAGE_KEYS:
+                    value = int((message.usage or {}).get(key) or 0)
+                    call[key] = max(call.get(key, 0), value)
             elif isinstance(message, ResultMessage):
                 usage = message.usage or {}
                 reported = int(usage.get("input_tokens") or 0) + int(
                     usage.get("output_tokens") or 0
                 )
                 # A run Claude Code stopped itself reports no usage: charge what was streamed.
-                self._charge(usage if reported else seen)
+                seen = {key: sum(c.get(key, 0) for c in streamed.values()) for key in _USAGE_KEYS}
+                self._charge(usage if reported else seen, calls=max(len(streamed), 1))
                 if message.result:
                     text = self._last_text = message.result
                 self._ended(message)
@@ -308,8 +320,9 @@ class ClaudeCodeRunner:
         if result.is_error:
             raise RuntimeError(f"Claude Code ended the step with {kind}: {result.result or ''}")
 
-    def _charge(self, usage: dict) -> None:
-        """Charge one answer's usage to the step at policy's price (LimitHit past the slice)."""
+    def _charge(self, usage: dict, calls: int = 1) -> None:
+        """Charge one answer's usage to the step at policy's price (LimitHit past the slice).
+        Unpriced, it is `fallback_estimate_usd` for each of its `calls` model calls."""
         fresh = int(usage.get("input_tokens") or 0)
         read = int(usage.get("cache_read_input_tokens") or 0)
         write = int(usage.get("cache_creation_input_tokens") or 0)
@@ -334,7 +347,7 @@ class ClaudeCodeRunner:
                 None,
                 reason="no price for this model",
             )
-            estimate = self.fallback_estimate_usd
+            estimate = self.fallback_estimate_usd * calls
         else:
             estimate = estimate_usd(price, tokens_in, tokens_out, read, write)
             cost = CallCost(
@@ -390,9 +403,11 @@ class ClaudeCodeBackend:
         prices: Pricer,
         permissions_for: Callable[["StepContext"], dict],
         wrap_for: Callable[["StepContext"], Sequence[str] | None] = lambda step: None,
+        fallback_estimate_usd: Decimal = Decimal("0.01"),  # per call of an unpriced model
     ) -> None:
         self.settings, self.identity_for, self.prices = settings, identity_for, prices
         self.permissions_for, self.wrap_for = permissions_for, wrap_for
+        self.fallback_estimate_usd = fallback_estimate_usd
 
     def runner(
         self,
@@ -420,6 +435,7 @@ class ClaudeCodeBackend:
             contract=step.contract,
             time_limit_s=None,
             wrap=self.wrap_for(step),
+            fallback_estimate_usd=self.fallback_estimate_usd,
         )
 
 

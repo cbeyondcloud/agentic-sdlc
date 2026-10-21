@@ -1,9 +1,12 @@
 """The native backend (Pydantic AI over TokenLean): conformance, dispatch and provider
 neutrality (M1-28; owner rule: provider-agnostic)."""
 
+import ast
 import asyncio
+import io
 import json
 import re
+import tokenize
 from decimal import Decimal
 from pathlib import Path
 
@@ -316,14 +319,44 @@ def test_a_childs_answer_reaches_the_parent_as_data(resolved, tmp_path):  # M1-4
 VENDOR = re.compile(r"claude|anthropic|openai|gemini|codex", re.IGNORECASE)
 
 
-def test_no_vendor_names_outside_backend_modules():
+def _code_lines(path: Path) -> list[str]:
+    """The lines of `path` that hold code: docstrings and comments left out by parsing,
+    so a vendor name in code on a line that also holds a docstring quote still counts."""
+    source = path.read_text(encoding="utf-8")
+    prose: set[int] = set()
+    for node in ast.walk(ast.parse(source)):
+        body = getattr(node, "body", None)
+        if isinstance(body, list) and body and isinstance(body[0], ast.Expr):
+            value = body[0].value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                prose.update(range(value.lineno, value.end_lineno + 1))
+    lines = source.splitlines()
+    for token in tokenize.generate_tokens(io.StringIO(source).readline):
+        if token.type == tokenize.COMMENT:
+            row, column = token.start
+            lines[row - 1] = lines[row - 1][:column]
+    return [line for number, line in enumerate(lines, 1) if number not in prose]
+
+
+def test_no_vendor_names_outside_backend_modules():  # DF-79: policy, agents, handoffs too
     core = Path(__file__).resolve().parents[2] / "src" / "agentic"
-    neutral = [*sorted((core / "engine").glob("*.py")), core / "backends" / "base.py"]
-    for path in neutral:
-        code = [
-            line
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.strip() and not line.strip().startswith("#")
-        ]
-        hits = [line for line in code if VENDOR.search(line) and '"""' not in line]
+    folders = ("engine", "policy", "handoffs", "agents")
+    routing = {core / "agents" / "models.py"}  # maps a model id to its gateway route
+    neutral = [p for f in folders for p in sorted((core / f).glob("*.py")) if p not in routing]
+    for path in [*neutral, core / "backends" / "base.py"]:
+        hits = [line for line in _code_lines(path) if VENDOR.search(line)]
         assert hits == [], f"{path.name} names a vendor: {hits[:3]}"
+
+
+def test_the_vendor_guard_sees_code_beside_a_docstring_quote(tmp_path):
+    """The old guard skipped any line holding triple quotes (DF-79)."""
+    sample = tmp_path / "sample.py"
+    sample.write_text(
+        '"""A module."""\nNAME = "openai"  # a comment naming claude\nX = """anthropic"""\n',
+        encoding="utf-8",
+    )
+
+    assert [line for line in _code_lines(sample) if VENDOR.search(line)] == [
+        'NAME = "openai"  ',
+        'X = """anthropic"""',
+    ]
