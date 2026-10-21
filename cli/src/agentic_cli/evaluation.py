@@ -38,12 +38,14 @@ from statistics import fmean
 
 from agentic.agents.metering import CostLog, MeteringTransport
 from agentic.agents.models import GatewaySettings, build_model_for, metered_model
+from agentic.agents.tools import LocalProcessSandbox, ToolContext, build_tools
 from agentic.auth.credentials import TOKENLEAN_KEY, CredentialError, Credentials
 from agentic.definitions import DefinitionError, load_agent
 from agentic.eval import stats
 from agentic.eval.blind import LeakCheck, Scrubber, assign_labels
 from agentic.eval.cases import EvalCase
 from agentic.eval.corpus import CorpusError, load_corpus, rubric_path
+from agentic.eval.devtask import copy_workspace
 from agentic.eval.gate import GATE_AGENTS, GateReport, evaluate_gate, render_gate
 from agentic.eval.judge import (
     JUDGE_TIER,
@@ -57,14 +59,31 @@ from agentic.eval.metrics import ObjectiveMetrics, RubricMetric
 from agentic.eval.records import RunRequest
 from agentic.eval.replay import CassetteServer, Upstream, http_upstream
 from agentic.eval.report import EvalReport, JudgeInfo, build_report, write_report
-from agentic.eval.runner import BUDGET_STOP, AgentCaseRunner, run_eval
+from agentic.eval.runner import (
+    BUDGET_STOP,
+    AgentCaseRunner,
+    PrepareWorkspace,
+    Workspace,
+    run_eval,
+)
 from agentic.handoffs import BUILTIN_CATALOG
-from agentic.policy import PolicyError, ResolveContext, load_policy, resolve_agent
+from agentic.policy import (
+    OrgPolicy,
+    PolicyError,
+    ResolveContext,
+    ResolvedAgent,
+    load_policy,
+    resolve_agent,
+)
+from agentic.sandbox import SandboxRules, SrtSandbox, expand_home
+from agentic.sandbox.readiness import decide_sandbox
 from agentic.transport import BudgetLedger, CallIdentity, NetworkSettings, make_network_transport
 from agentic.yamlio import YamlFileError, dump_yaml, load_yaml, read_text
 from agentic_cli.config import agentic_home, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.runtime import machine_readiness
+from sdlc_commons.guards import Guard
 from sdlc_commons.ledger import LedgerError, RunIdentity, RunLedger
 
 MODES = ("live", "record", "replay")
@@ -258,6 +277,10 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             return None
         return read_text(corpus.path(case.expected.golden)).replace("\r\n", "\n")
 
+    notes: list[str] = []
+    prepare = None
+    if any(c.inputs.workspace for c in cases):  # dev tasks: tools on a copy, tests after
+        prepare, resolved, notes = _workspaces(resolved, folder, options.mode, policy)
     runner = AgentCaseRunner(
         resolved,
         model_for,
@@ -265,6 +288,8 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
         state_root=folder / "state",
         budget=money,
         clock=None if options.mode == "live" else (lambda: FIXTURE_TIME),
+        corpus_root=root,
+        prepare=prepare,
     )
     evaluators = [
         ObjectiveMetrics(),
@@ -332,6 +357,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             stale_cassettes=server.stale if server is not None else 0,
             problems=problems,
             judge_cost_usd=_reported_total(judge_costs),
+            warnings=notes,
         )
         paths = write_report(report, folder, runset.runs)
         for rubric_id in rubric_ids:  # calibration shows people the rubric the judge used
@@ -362,7 +388,10 @@ def summary(result: RunResult) -> dict:
         "stale_cassettes": report.stale_cassettes,
         "problems": report.problems,
         "leaks": report.leaks,
-        "warnings": list(report.judge.warnings) if report.judge is not None else [],
+        "warnings": [
+            *(report.judge.warnings if report.judge is not None else []),
+            *report.warnings,
+        ],
     }
 
 
@@ -737,6 +766,59 @@ def _agent(folder: Path, name: str):
             hint=f"known agents: {known}",
         )
     return _load(lambda: load_agent(path))
+
+
+#: The tools an eval can give an agent on a dev task's tree; the others (code
+#: intelligence, skills) need a run's repository and installed skills.
+EVAL_TOOLS = ("read_files", "search", "edit_files", "run_shell")
+
+
+def _workspaces(
+    resolved: ResolvedAgent, folder: Path, mode: str, policy: OrgPolicy
+) -> tuple[PrepareWorkspace, ResolvedAgent, list[str]]:
+    """How each dev-task run gets its tree (DF-241): a copy of the workspace under a
+    guard confined to it, and the agent's file and shell tools on it, sandboxed as a
+    solo run would be - srt when this machine has it ready, else a plain process on
+    the guards (org policy decides whether that is allowed). A replay always uses a
+    plain process: its tool calls are recorded, and the result must not depend on
+    the machine. Returns the agent with the tools the eval can give it, and notes."""
+    notes = []
+    usable = [t for t in resolved.tools if t in EVAL_TOOLS]
+    if dropped := [t for t in resolved.tools if t not in EVAL_TOOLS]:
+        notes.append(
+            f"dev tasks run {resolved.definition.name} without {', '.join(dropped)}: those "
+            "tools need a run's repository; the tests measure the change without them"
+        )
+    agent = resolved.model_copy(update={"tools": usable})
+    use_srt = False
+    if mode != "replay":
+        decision = decide_sandbox(machine_readiness(), "solo", policy.sandbox)
+        if decision.refusal:
+            raise CliError(decision.refusal, ExitCode.REFUSED)
+        if decision.warning:  # the first line; `agentic doctor` shows the remedy in full
+            notes.append(
+                f"dev tasks: {decision.warning.splitlines()[0]} (the agent's commands and "
+                "the case's tests run as plain processes)"
+            )
+        use_srt = decision.use_srt
+
+    def prepare(request: RunRequest, source: Path) -> Workspace:
+        target = folder / "workspaces" / request.run_id
+        target.mkdir(parents=True, exist_ok=True)
+        guard = Guard.for_agent(target, request.run_id, agent)
+        tree = copy_workspace(source, guard.trees_root / "tree")
+        sandbox = LocalProcessSandbox()
+        if use_srt:
+            rules = SandboxRules(
+                write=(tree,),
+                deny_read=expand_home(policy.sandbox.effective_deny_read, Path.home()),
+                allowed_domains=tuple(policy.sandbox.allowed_domains),
+            )
+            sandbox = SrtSandbox(rules, folder / "sandbox" / request.run_id)
+        context = ToolContext(tree=tree, guard=guard, sandbox=sandbox, allow_unisolated=not use_srt)
+        return Workspace(tree, build_tools(agent, context), sandbox if use_srt else None)
+
+    return prepare, agent, notes
 
 
 def _team() -> str:

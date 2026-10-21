@@ -390,5 +390,6 @@
   "verbosity_r": {
     "X": 0.9957929668850208
   },
-  "verdict": "MEASURED"
+  "verdict": "MEASURED",
+  "warnings": []
 }

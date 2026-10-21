@@ -50,7 +50,10 @@ class ScriptedUpstream:
         self.calls[request.key] += 1
         if role == "agent":
             answers = self.script["answers"][case_id]
-            text = read_text(LIBRARY / answers[min(index, len(answers) - 1)])
+            answer = answers[min(index, len(answers) - 1)]
+            if isinstance(answer, dict):  # a tool call, e.g. write_file with a corpus file
+                return self._reply(body, _tool_call(case_id, index, answer), "tool_calls")
+            text = read_text(LIBRARY / answer)
             message = {"role": "assistant", "content": text.replace("\r\n", "\n")}
             return self._reply(body, message, "stop")
         prompt = _last_user_text(body)
@@ -89,8 +92,25 @@ class ScriptedUpstream:
         return UpstreamReply(200, json.dumps(reply).encode("utf-8"), "application/json", headers)
 
 
+def _tool_call(case_id: str, index: int, answer: dict) -> dict:
+    """{tool: {args}} as an assistant tool call; an argument `from` names a corpus file
+    whose text becomes the `text` argument (LF line endings)."""
+    ((tool, args),) = answer.items()
+    args = dict(args)
+    if "from" in args:
+        args["text"] = read_text(LIBRARY / args.pop("from")).replace("\r\n", "\n")
+    call = {
+        "id": f"call_{case_id}_{index}",
+        "type": "function",
+        "function": {"name": tool, "arguments": json.dumps(args)},
+    }
+    return {"role": "assistant", "content": None, "tool_calls": [call]}
+
+
 def _without_mode(data: dict) -> dict:
-    return {k: v for k, v in data.items() if k != "mode"}
+    """The report minus what differs between a recording and its replay by design: the
+    mode, and the recording machine's sandbox note (a replay never sandboxes)."""
+    return {k: v for k, v in data.items() if k not in ("mode", "warnings")}
 
 
 def _last_user_text(body: dict) -> str:

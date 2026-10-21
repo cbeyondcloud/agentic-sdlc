@@ -64,6 +64,19 @@ def test_fixture_corpus_matches_expected_reports(tmp_path: Path, agent: str, cap
     assert printed["verdict"] == "MEASURED" and printed["report"] == str(out / "report.json")
 
 
+def test_fixture_developer_runs_execute_their_tests(tmp_path: Path, capsys):
+    """DF-241: the Developer edits its workspace copy (recorded tool calls) and the
+    case's tests then run there, so tests_pass is measured."""
+    code, out = run(tmp_path, "developer")
+    assert code == ExitCode.OK, capsys.readouterr().err
+    report = EvalReport.model_validate_json((out / "report.json").read_bytes())
+    tests_pass = report.aggregates["X"]["tests_pass"]
+    assert tests_pass.value == 1.0 and tests_pass.n_scored == 2 and tests_pass.unscored == []
+    assert all(r.metrics["tests_pass"] == 1.0 for r in report.runs)
+    original = (LIBRARY / "workspaces" / "dev-slugify" / "textutil.py").read_text(encoding="utf-8")
+    assert "unicodedata" not in original  # the corpus is never edited
+
+
 def test_fixture_mode_makes_no_network_calls(tmp_path: Path, monkeypatch, capsys):
     """DF-113: pydantic-evals, pydantic-ai and the harness reach nothing but the local
     cassette server - no telemetry, no default model."""

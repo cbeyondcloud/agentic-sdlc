@@ -140,6 +140,7 @@ class EvalReport(_Model):
     verbosity_r: dict[str, float | None]  # label -> Pearson r(rubric, output length)
     verdict: Verdict
     problems: list[str]
+    warnings: list[str] = []  # how the harness ran that a reader should know (tools, sandbox)
 
     @property
     def n(self) -> int:
@@ -164,6 +165,7 @@ def build_report(
     stale_cassettes: int = 0,
     problems: Sequence[str] = (),
     judge_cost_usd: float | None = None,
+    warnings: Sequence[str] = (),
 ) -> EvalReport:
     runs = [_eval_run(r) for r in runset.runs]
     cases = sorted({r.case_id for r in runs})
@@ -229,6 +231,7 @@ def build_report(
         verbosity_r={label: _verbosity(items, runset) for label, items in sorted(by_label.items())},
         verdict=verdict,
         problems=problems,
+        warnings=list(warnings),
     )
 
 
@@ -288,6 +291,7 @@ def render_markdown(report: EvalReport) -> str:
         notes.append(f"Blinding leak (the evaluation is void): {', '.join(report.leaks)}.")
     if report.problems:
         notes += [f"Problem: {p}" for p in report.problems]
+    notes += [f"Warning: {w}" for w in report.warnings]
     if report.stale_cassettes:
         notes.append(
             f"{report.stale_cassettes} stale cassettes: prompts changed since recording; "

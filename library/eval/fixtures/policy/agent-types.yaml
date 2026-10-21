@@ -1,4 +1,5 @@
-# One type per built-in agent kind; no tools, since fixture runs only answer from their inputs.
+# One type per built-in agent kind. Only the developer has tools: on a dev task it edits
+# its copy of the workspace (the edits are recorded tool calls), then the tests run.
 types:
   business-analyst:
     description: Turns a request into requirements.
@@ -22,6 +23,7 @@ types:
     description: Implements a design.
     tier: balanced
     backends: [native]
+    tools: [read_files, search, edit_files]  # dev tasks: the agent edits its workspace copy
     consumes: [design, review]
     produces: dev-report
     limits:
