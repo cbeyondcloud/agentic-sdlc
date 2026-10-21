@@ -162,6 +162,17 @@ def test_a_missing_golden_file_is_refused(tmp_path: Path):
         load_corpus(tmp_path)
 
 
+@pytest.mark.parametrize("reference", ["Golden/req.md", "golden/Req.md", "golden/req.MD"])
+def test_a_reference_must_match_the_files_case_exactly(tmp_path: Path, reference: str):
+    """DF-255: Path.exists() ignores case on Windows and macOS, so a case-mismatched path
+    passed on a laptop and failed only on the Linux runner; now it fails everywhere."""
+    (tmp_path / "golden").mkdir()
+    (tmp_path / "golden" / "req.md").write_bytes(b"x\n")
+    write_case(tmp_path, scoping(expected={"golden": reference}))
+    with pytest.raises(CorpusError, match=f"'{reference}' does not exist"):
+        load_corpus(tmp_path)
+
+
 def test_public_corpus_holds_only_synthetic_or_permissive_cases(tmp_path: Path):
     internal = {"repo": "github.com/acme/api", "sha": "a" * 40, "synthetic": False}
     write_case(tmp_path, scoping("gpl", source={**internal, "licence": "GPL-3.0-only"}))
