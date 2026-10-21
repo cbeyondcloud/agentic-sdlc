@@ -232,6 +232,52 @@ def test_tools_are_fetched_and_audited(setup_repo, policy_repo, deps, monkeypatc
     assert b"\r\n" not in audit.read_bytes()
 
 
+def test_the_tool_audit_records_the_org_signed_attestation(
+    setup_repo, policy_repo, deps, monkeypatch, capsys
+):  # DF-208: Windows trust comes from the org manifest, not a local signature check
+    init(setup_repo, policy_repo, monkeypatch)
+    audit = setup_repo / ".agentic" / "local" / "audit" / "init-events.jsonl"
+    events = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+    fetched = next(e for e in events if e["event"] == "init.tool_fetched")
+    assert fetched["fields"]["signed_per_org_manifest"] is False  # the linux pin is unmarked
+
+
+def test_standalone_skills_honour_allow_repo_pipelines(
+    setup_repo, policy_repo, deps, monkeypatch, capsys
+):  # DF-204: the run side honours it, so init must choose skills the same way
+    seen: list[bool] = []
+    real = dev_init.DefinitionSet.discover
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["allow_repo_pipelines"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(dev_init.DefinitionSet, "discover", spy)
+    init(setup_repo, policy_repo, monkeypatch)  # the fixture policy: allow_repo_pipelines false
+    assert seen == [False]
+
+
+def test_a_broken_repo_pipeline_leaves_the_org_pipelines_their_skills(
+    setup_repo, policy_repo, deps, monkeypatch, capsys
+):  # DF-204: one bad repo file must not leave every agent without skills
+    org = policy_repo / "policy" / "org.yaml"
+    org.write_text(
+        org.read_text(encoding="utf-8").replace(
+            "allow_repo_pipelines: false", "allow_repo_pipelines: true"
+        ),
+        encoding="utf-8",
+    )
+    broken = setup_repo / ".agentic" / "pipelines" / "broken.yaml"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("name: broken\nsteps: [\n", encoding="utf-8")
+    init(setup_repo, policy_repo, monkeypatch)
+    report = report_of(capsys)
+    assert item(report, "skills: definitions")["status"] == "warn"
+    skills = setup_repo / ".agentic" / "local" / "skills"
+    installed = {f"{s.parent.name}/{s.name}" for s in skills.glob("*/*") if s.is_dir()}
+    assert DEV_SKILLS <= installed
+
+
 def test_a_second_init_uses_the_cache_offline(setup_repo, policy_repo, deps, monkeypatch, capsys):
     init(setup_repo, policy_repo, monkeypatch)
     capsys.readouterr()

@@ -162,13 +162,22 @@ def _container_engine(which, run) -> Item:
 
 
 def _git_bash(which) -> Item:
-    found = which("bash")
-    if found is None and GIT_BASH_DEFAULT.is_file():
-        found = str(GIT_BASH_DEFAULT)
+    """Git for Windows' bash: next to the git on PATH, the default install, or a `bash`
+    on PATH that is not System32's - that one is the WSL launcher, not Git Bash (DF-209)."""
+    git = which("git")
+    candidates = [Path(git).parent.parent / "bin" / "bash.exe"] if git else []
+    candidates.append(GIT_BASH_DEFAULT)
+    found = next((str(path) for path in candidates if path.is_file()), None)
+    on_path = which("bash")
+    launcher = bool(on_path) and Path(on_path).parent.name.lower() == "system32"
+    if found is None and on_path and not launcher:
+        found = on_path
     fix = (
         "install Git for Windows (it includes Git Bash): backends that delegate a step to a "
         "command-line coding agent run its shell commands through bash"
     )
+    if found is None and launcher:
+        return Item("git bash", "warn", f"only the WSL launcher ({on_path}), not Git Bash", fix)
     return Item("git bash", "ok" if found else "warn", found or "not found", fix)
 
 
