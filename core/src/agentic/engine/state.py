@@ -13,12 +13,15 @@ leaves the previous state whole. It lives next to Zyroflo's `events.jsonl`,
 
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
 RUN_FILE = "run.json"
+_REPLACE_TRIES = 10  # with _REPLACE_WAIT_S: a reader may hold run.json for up to 0.5 s
+_REPLACE_WAIT_S = 0.05
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 RunStatus = Literal["running", "awaiting_gate", "paused", "completed", "failed", "stopped"]
@@ -140,7 +143,7 @@ class RunStore:
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, path)
+            _replace(temporary, path)
         except BaseException:
             temporary.unlink(missing_ok=True)
             raise
@@ -154,6 +157,19 @@ class RunStore:
             return RunState.model_validate_json(path.read_bytes().decode("utf-8"))
         except (OSError, UnicodeDecodeError, ValidationError) as error:
             raise RunStateError(f"{path}: cannot be read ({error})") from error
+
+
+def _replace(source: Path, target: Path) -> None:
+    """`os.replace`, retried briefly while another process has `target` open: Windows
+    refuses the rename then (`agentic status` or `logs --follow` reading run.json)."""
+    for attempt in range(_REPLACE_TRIES):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if attempt == _REPLACE_TRIES - 1:
+                raise
+            time.sleep(_REPLACE_WAIT_S)
 
 
 def _sync_folder(folder: Path) -> None:
