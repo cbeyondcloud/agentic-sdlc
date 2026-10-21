@@ -5,6 +5,7 @@ commons adapter) with the REAL SP2 guard - not paths a test assembled by hand.
 """
 
 import asyncio
+import logging
 import os
 import subprocess
 import sys
@@ -284,6 +285,93 @@ def test_a_shell_command_runs_in_the_tree(tree, resolved):
 
     assert f"ran in {tree[1].name}" in call(tools, "run_shell", command="pytest -q")
     assert sandbox.ran == ["pytest -q"]
+
+
+class PytestSandbox(FakeSandbox):
+    async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
+        self.ran.append(command)
+        out = "....F\nFAILED tests/test_split.py::test_first\n1 failed, 4 passed in 0.12s\n\n"
+        return ShellResult(exit_code=1, stdout=out, stderr="", timed_out=False)
+
+
+def test_each_tool_call_is_logged_for_the_step_without_file_contents(
+    tree, resolved, caplog
+):  # M1-68: `agentic logs` must show what an agent did, e.g. the tests QA ran
+    caplog.set_level(logging.INFO, logger="agentic.tools")
+    tools = build_tools(
+        agent_with(resolved, ["edit_files", "run_shell"]),
+        context(tree, resolved, sandbox=PytestSandbox()),
+    )
+    call(tools, "write_file", path="src/new.py", text="BODY_NOT_LOGGED = 1\n")
+    call(tools, "run_shell", command="pytest -q")
+    call(tools, "run_shell", command="git push origin main")
+
+    records = [r for r in caplog.records if r.name == "agentic.tools"]
+    assert [r.getMessage() for r in records] == [
+        "tool write_file: ok",
+        "tool run_shell: exit 1 - 1 failed, 4 passed in 0.12s",
+        "tool run_shell: refused",
+    ]
+    assert records[0].fields == {"tool": "write_file", "path": "src/new.py", "text": "<20 chars>"}
+    assert records[1].fields == {"tool": "run_shell", "command": "pytest -q"}
+    assert "push" in records[2].fields["refused"]
+    assert "BODY_NOT_LOGGED" not in caplog.text
+
+
+class PrintingSandbox(FakeSandbox):
+    """A command whose last printed line is whatever the test gives it."""
+
+    def __init__(self, last_line: str) -> None:
+        super().__init__()
+        self.last_line = last_line
+
+    async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
+        self.ran.append(command)
+        out = f"[deploy]\n{self.last_line}\n"
+        return ShellResult(exit_code=0, stdout=out, stderr="", timed_out=False)
+
+
+SECRET_LINES = [  # built from pieces so no scanner mistakes the test for a leak
+    "postgres://admin:" + "hunter2" * 2 + "@db.internal/prod",
+    "-----BEGIN RSA " + "PRIVATE KEY-----",
+    "password: " + "correct-horse-battery",
+    "ssn 123-45-6789 alice@example.com",
+]
+
+
+@pytest.mark.parametrize("line", SECRET_LINES)
+def test_a_command_s_output_never_reaches_the_step_log(tree, resolved, caplog, line):
+    # review F1: the log is written before the output is secret-scanned, so it may
+    # name the command and its exit status, never what the command printed
+    caplog.set_level(logging.DEBUG, logger="agentic.tools")
+    tools = build_tools(
+        agent_with(resolved, ["run_shell"]), context(tree, resolved, sandbox=PrintingSandbox(line))
+    )
+    call(tools, "run_shell", command="cat deploy.cfg")
+
+    (record,) = [r for r in caplog.records if r.name == "agentic.tools"]
+    assert record.getMessage() == "tool run_shell: exit 0"
+    assert line not in caplog.text and "[deploy]" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "1 failed, 4 passed in 0.12s",
+        "========= 2 passed, 1 skipped, 3 warnings in 1.05s =========",
+        "5 passed in 61.20s (0:01:01)",
+        "no tests ran in 0.01s",
+    ],
+)
+def test_a_test_run_s_summary_line_is_logged(tree, resolved, caplog, line):
+    caplog.set_level(logging.INFO, logger="agentic.tools")
+    tools = build_tools(
+        agent_with(resolved, ["run_shell"]), context(tree, resolved, sandbox=PrintingSandbox(line))
+    )
+    call(tools, "run_shell", command="pytest -q")
+
+    (record,) = [r for r in caplog.records if r.name == "agentic.tools"]
+    assert record.getMessage() == f"tool run_shell: exit 0 - {line}"
 
 
 def test_the_shell_needs_an_isolated_sandbox_unless_allowed(tree, resolved):

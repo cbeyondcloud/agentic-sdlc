@@ -8,6 +8,8 @@ on the Zyroflo-backed commons package: the engine passes the real
 
 import functools
 import inspect
+import logging
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,24 +98,79 @@ def refused(reason: str) -> str:
 
 def guarded[F: Callable](tool: F) -> F:
     """`tool`, returning a refusal instead of raising on a bad argument - an exception
-    would end the whole run, a refusal lets the model read why and try again."""
+    would end the whole run, a refusal lets the model read why and try again. Every call
+    is logged (`agentic.tools`, into the step's log): see `_log_call`."""
 
     if inspect.iscoroutinefunction(tool):
 
         @functools.wraps(tool)
         async def run_async(*args, **kwargs):
             try:
-                return await tool(*args, **kwargs)
+                result = await tool(*args, **kwargs)
             except TOOL_ERRORS as error:
-                return refused(f"{type(error).__name__}: {error}")
+                result = refused(f"{type(error).__name__}: {error}")
+            _log_call(tool, args, kwargs, result)
+            return result
 
         return run_async  # type: ignore[return-value]
 
     @functools.wraps(tool)
     def run(*args, **kwargs):
         try:
-            return tool(*args, **kwargs)
+            result = tool(*args, **kwargs)
         except TOOL_ERRORS as error:
-            return refused(f"{type(error).__name__}: {error}")
+            result = refused(f"{type(error).__name__}: {error}")
+        _log_call(tool, args, kwargs, result)
+        return result
 
     return run  # type: ignore[return-value]
+
+
+_LOG = logging.getLogger("agentic.tools")
+#: Arguments that carry file contents: logged as their length, never their text.
+CONTENT_ARGS = frozenset({"text", "old", "new"})
+SHOWN_CHARS = 200
+#: The first line of a `run_shell` result (agentic.agents.tools.shell): "exit N" or
+#: "timed out", then "stdout:" and "stderr:" sections.
+_SHELL_STATUS = re.compile(r"exit -?\d+|timed out")
+#: The only printed line ever logged: a test run's summary ("1 failed, 4 passed in
+#: 0.12s", with or without pytest's "=" rule). The log is written before the output is
+#: secret-scanned (`protect_tools`), so anything else a command prints stays out (F1).
+_COUNT = r"\d+ (?:passed|failed|skipped|deselected|xfailed|xpassed|errors?|warnings?|rerun)"
+_TEST_SUMMARY = re.compile(
+    rf"=*\s*(?:{_COUNT}(?:, {_COUNT})*|no tests ran)"
+    r"(?: in \d+(?:\.\d+)?s(?: \(\d+:\d\d:\d\d\))?)?\s*=*"
+)
+
+
+def _log_call(tool: Callable, args: tuple, kwargs: dict, result: object) -> None:
+    """One record per tool call - what was asked (paths, commands, patterns; never file
+    text) and how it ended (ok, refused and why, or a command's exit status - plus its
+    last printed line only when that is a test run's summary). The step log redacts."""
+    fields: dict[str, object] = {"tool": tool.__name__}
+    try:
+        bound = inspect.signature(tool).bind(*args, **kwargs).arguments
+    except TypeError:
+        bound = {}
+    for name, value in bound.items():
+        if isinstance(value, str):
+            fields[name] = f"<{len(value)} chars>" if name in CONTENT_ARGS else _short(value)
+        elif value is None or isinstance(value, int | float):
+            fields[name] = value
+    if isinstance(result, Refusal):
+        fields["refused"] = _short(str(result).removeprefix("REFUSED: "))
+        _LOG.warning("tool %s: refused", tool.__name__, extra={"fields": fields})
+        return
+    outcome = "ok"
+    if isinstance(result, str):
+        first, _, rest = result.partition("\n")
+        if _SHELL_STATUS.fullmatch(first):
+            printed = rest.removeprefix("stdout:\n").split("\nstderr:\n", 1)[0]
+            last = next((line for line in reversed(printed.splitlines()) if line.strip()), "")
+            summary = _TEST_SUMMARY.fullmatch(last.strip())
+            outcome = f"{first} - {last.strip()}" if summary else first
+    _LOG.info("tool %s: %s", tool.__name__, outcome, extra={"fields": fields})
+
+
+def _short(text: str) -> str:
+    return text if len(text) <= SHOWN_CHARS else text[:SHOWN_CHARS] + "..."

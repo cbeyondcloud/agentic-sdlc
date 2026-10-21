@@ -19,6 +19,7 @@ responses (`cassettes/`), expected reports (`expected/`) and nested corpora
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -229,9 +230,24 @@ def _reference_problems(root: Path, case: EvalCase) -> list[str]:
             problems.append(f"'{reference}' must be a relative path inside the corpus")
         elif not target.is_relative_to(resolved_root):
             problems.append(f"'{reference}' must be a relative path inside the corpus")
-        elif not target.exists():
+        elif not _exists_exactly(root, pure):
             problems.append(f"'{reference}' does not exist in the corpus")
     return problems
+
+
+def _exists_exactly(root: Path, relative: PurePosixPath) -> bool:
+    """`root / relative` exists with every component spelled as on disk. Path.exists()
+    ignores case on Windows and macOS: a mismatch would pass on a laptop and fail on
+    the Linux runner (DF-255)."""
+    here = root
+    for part in relative.parts:
+        try:
+            if part not in os.listdir(here):
+                return False
+        except OSError:  # not a folder, or unreadable
+            return False
+        here = here / part
+    return True
 
 
 def _with_handoff_files(root: Path, case: EvalCase) -> EvalCase:

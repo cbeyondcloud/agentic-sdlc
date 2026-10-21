@@ -19,13 +19,15 @@ is `none`, so every commit carries all six and a reader never guesses.
 Values come partly from people (the starter, an approver), so each is made one line:
 a newline in a value cannot add a trailer of its own.
 
-The PR body links the run and every handoff it wrote (with its digest), lists the
-approvals, and shows the AGENTS.md additions agents proposed for review (M1-46).
+The PR body links the run and every handoff it wrote (with its digest), says what the
+run cost and where its logs are (M1-68), lists the approvals, and shows the AGENTS.md
+additions agents proposed for review (M1-46).
 """
 
 import re
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from decimal import Decimal
 
 from agentic.engine.state import RunState
 
@@ -93,12 +95,16 @@ def pr_body(
     handoff_link: Callable[[str], str | None] = lambda rel: rel,
     proposals: Iterable[tuple[str, str]] = (),
     run_folder: str = "",
+    cost_usd: Decimal | None = None,
+    logs: str | None = None,
 ) -> str:
     """The pull request's description: the run, its handoffs (the why), its approvals.
 
     With no `run_link` (no control plane to link to), the run id is shown as code; a
     handoff whose `handoff_link` is None is shown as its path, under `run_folder` when
-    given (DF-166): a link into the starter's git-ignored run folder would be broken."""
+    given (DF-166): a link into the starter's git-ignored run folder would be broken.
+    `cost_usd` (what the run spent so far) and `logs` (where to read its step logs, as
+    Markdown) add a line each when given."""
     title = f"[{state.run_id}]({run_link})" if run_link else f"`{_line(state.run_id)}`"
 
     def shown(label: str, rel: str) -> str:
@@ -115,10 +121,12 @@ def pr_body(
         f"- Started by: {_line(state.starter)}",
         f"- Policy version: `{state.policy_version}`",
         f"- Status: {state.status}",
-        "",
-        "### Handoffs",
-        "",
     ]
+    if cost_usd is not None:
+        lines.append(f"- Cost: ${cost_usd}")
+    if logs:
+        lines.append(f"- Logs: {_line(logs)}")
+    lines += ["", "### Handoffs", ""]
     written = [r for r in state.history if r.handoff and not r.handoff.endswith(".invalid.md")]
     for record in written:
         label = record.step if record.iteration <= 1 else f"{record.step} #{record.iteration}"

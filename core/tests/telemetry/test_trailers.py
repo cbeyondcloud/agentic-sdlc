@@ -2,6 +2,7 @@
 (M1-45; spec §14.5)."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from agentic.engine.state import ApprovalMark, Cursor, RunState, StepRecord
 from agentic.telemetry.trailers import (
@@ -128,6 +129,18 @@ def test_pr_body_with_nothing_to_link_shows_the_run_and_paths_as_code():
     assert "## Agentic run `r-pr`" in body
     assert f"- design `{folder}/handoffs/design-1.md`" in body
     assert "](" not in body  # no markdown link anywhere
+
+
+def test_pr_body_shows_the_cost_and_where_the_logs_are():  # M1-68 acceptance
+    body = pr_body(state(), run_link=None, cost_usd=Decimal("0.3250"), logs="`agentic logs r-pr`")
+    assert "- Cost: $0.3250\n" in body
+    assert "- Logs: `agentic logs r-pr`\n" in body
+    assert body.index("- Status:") < body.index("- Cost:") < body.index("### Handoffs")
+
+
+def test_pr_body_without_cost_or_logs_leaves_their_lines_out():
+    body = pr_body(state(), run_link=None)
+    assert "Cost:" not in body and "Logs:" not in body
 
 
 def test_pr_body_marks_an_approval_a_rejection_superseded():

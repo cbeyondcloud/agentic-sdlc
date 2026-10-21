@@ -47,6 +47,17 @@ def test_syntax_error_reports_the_broken_line():
     assert "started at line 4" in str(error.value)
 
 
+def test_a_colon_in_plain_text_says_to_quote_the_value():  # M1-69 acceptance
+    """A plain-English description with ': ' in it is the commonest slip in an agent
+    file; the message names the line and the fix, not only the parser's words."""
+    header = "name: docs-writer\ndescription: Keeps the README in step: one example each.\n"
+    with pytest.raises(YamlFileError) as error:
+        load_yaml(header, first_line=2)
+    message = str(error.value)
+    assert message.startswith("line 3: ")
+    assert "put the value in quotes" in message and "': '" in message
+
+
 def test_bom_is_ignored(tmp_path: Path):
     path = tmp_path / "f.yaml"
     path.write_bytes("﻿name: a\n".encode())

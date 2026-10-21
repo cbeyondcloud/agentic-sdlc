@@ -1,0 +1,159 @@
+{
+ "key": "m1-70/acceptance/1",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:20a8eba2a7579c6aae6f2b165c77554eac5d2d87f0d9164505606ebb56e60a9d",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-requirements-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_requirements_1\", \"type\": \"function\", \"function\": {\"name\": \"list_dir\", \"arguments\": \"{\\\"path\\\": \\\".\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:9d6e5fafe068cf1c1edbe6668c9c80ab0f3ab778da6aa16e676fc1057d13f57f",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-requirements-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: A greeting library with one function.\\nsize: trivial\\nitems:\\n  - id: REQ-1\\n    statement: greet(name) returns a greeting for the name.\\n    acceptance_criteria:\\n      - WHEN greet is called with Ada THE system SHALL return Hello, Ada!\\n  - id: REQ-2\\n    statement: A blank name is refused.\\n    acceptance_criteria:\\n      - WHEN the name is blank THE system SHALL raise ValueError.\\nopen_questions: []\\n---\\n# Requirements: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## User scenarios\\n<!-- One story per journey, most important first, each marked P1, P2 or P3: who wants what and why, why it has that priority, and how it can be tested on its own. Under each story list its acceptance criteria in EARS form (WHEN <trigger> THE system SHALL <response>), matching the items above. -->\\n\\n## Edge cases\\n<!-- Boundary conditions and failures to handle: empty or huge inputs, missing permissions, timeouts, concurrent use. -->\\n\\n## Functional requirements\\n<!-- One bullet per item above, by id: \\\"REQ-1: The system MUST ...\\\". -->\\n\\n## Success criteria\\n<!-- Measurable outcomes that show the feature works, independent of how it is built (times, rates, counts). -->\\n\\n## Assumptions\\nA new Python package; pytest for its tests.\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:a36aebbefb6928af5416897913777448ab4fc3f9d26500968986058e0c35ad6b",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-baseline-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_baseline_1\", \"type\": \"function\", \"function\": {\"name\": \"run_shell\", \"arguments\": \"{\\\"command\\\": \\\"python -m pytest -q\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:6a456c3fe9c0c3607cb688b6363ba0b91768706f86b51b9e9b48e5a18fc9cbb7",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-baseline-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: 'Baseline: the new repository has no tests yet.'\\nverdict: pass\\ntests:\\n  passed: 0\\n  failed: 0\\n  skipped: 0\\nfailures: []\\nbaseline_failures: []\\nacceptance_results: []\\ndependency_scan:\\n  blocked_licences: []\\n  vulnerabilities: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Test report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Verdict\\nPass.\\n\\n## Test results\\n<!-- The suites run, their counts, the baseline they were judged against, and every failure with its cause, new failures first. -->\\n\\n## Acceptance criteria\\n<!-- Each criterion by id: pass or fail, with the evidence (a test, a log, a manual check). -->\\n\\n## Dependency scan\\n<!-- New dependencies with their licences, blocked licences and known vulnerabilities found. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:de0d658b9b421e7be0baf2ef53ca95c5fc8f82dd9138b630b5a97afe0531235b",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-design-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"deep-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Create the greeter package, its tests and pyproject.toml.\\ndecisions:\\n  - id: D1\\n    choice: A greeter package with greet() in greeter/core.py.\\n    rationale: The smallest layout that installs and tests cleanly.\\nimpact:\\n  modules:\\n    - greeter/core.py\\n  interfaces:\\n    - greet(name)\\n  tests:\\n    - tests/test_core.py\\n  confidence: candidate\\nrisks: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Design: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Context and problem statement\\n<!-- The problem this design solves and the forces at play, in two to four sentences; link the requirements it answers. -->\\n\\n## Decision drivers\\n<!-- What the choice must satisfy: requirements, constraints, qualities such as latency, cost or ease of change. -->\\n\\n## Considered options\\n<!-- Every option seriously considered, one bullet each, including \\\"do nothing\\\" when it is one. -->\\n\\n## Decision outcome\\n### D1: package greeter, pytest configured in pyproject\\n\\n## Impact\\n<!-- Modules, interfaces and tests the change touches. Lists taken from the code graph are candidates for Review and QA to confirm. -->\\n\\n## Risks\\n<!-- What could go wrong and how it is mitigated or watched. -->\\n\\n## Confirmation\\n<!-- How the implementation will be checked against this design: tests, review points, measurements. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:712a015f3acf976eaa9dfcaf9779827ace6a1fb603cdfa03b76419462256c74a",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_1\", \"type\": \"function\", \"function\": {\"name\": \"write_file\", \"arguments\": \"{\\\"path\\\": \\\"pyproject.toml\\\", \\\"text\\\": \\\"[project]\\\\nname = \\\\\\\"greeter\\\\\\\"\\\\nversion = \\\\\\\"0.1.0\\\\\\\"\\\\nrequires-python = \\\\\\\">=3.10\\\\\\\"\\\\n\\\\n[tool.pytest.ini_options]\\\\ntestpaths = [\\\\\\\"tests\\\\\\\"]\\\\npythonpath = [\\\\\\\".\\\\\\\"]\\\\naddopts = \\\\\\\"-p no:cacheprovider\\\\\\\"\\\\n\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:b8ca0f8725cb85e25762eae961a29ca83cc3136a9759b2b7f185453c90fe5283",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_2\", \"type\": \"function\", \"function\": {\"name\": \"write_file\", \"arguments\": \"{\\\"path\\\": \\\"greeter/__init__.py\\\", \\\"text\\\": \\\"\\\\\\\"\\\\\\\"\\\\\\\"A tiny greeting library.\\\\\\\"\\\\\\\"\\\\\\\"\\\\n\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:a584547c165c5d39f441e65036522ec977d4e7f3668d03d23062ceea9e12f955",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-3\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_3\", \"type\": \"function\", \"function\": {\"name\": \"write_file\", \"arguments\": \"{\\\"path\\\": \\\"greeter/core.py\\\", \\\"text\\\": \\\"\\\\\\\"\\\\\\\"\\\\\\\"Greetings.\\\\\\\"\\\\\\\"\\\\\\\"\\\\n\\\\n\\\\ndef greet(name: str) -> str:\\\\n    \\\\\\\"\\\\\\\"\\\\\\\"'Hello, Ada!' for 'Ada'; a blank name is refused.\\\\\\\"\\\\\\\"\\\\\\\"\\\\n    if not name.strip():\\\\n        raise ValueError(\\\\\\\"name must not be blank\\\\\\\")\\\\n    return f\\\\\\\"Hello, {name.strip()}!\\\\\\\"\\\\n\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:e1dec005d7189fea9617d08b9a54cc895669d1a86ad8e87f07bec0ed5b3f4985",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-4\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_4\", \"type\": \"function\", \"function\": {\"name\": \"write_file\", \"arguments\": \"{\\\"path\\\": \\\"tests/test_core.py\\\", \\\"text\\\": \\\"import pytest\\\\n\\\\nfrom greeter.core import greet\\\\n\\\\n\\\\ndef test_greet_says_hello():\\\\n    assert greet(\\\\\\\"Ada\\\\\\\") == \\\\\\\"Hello, Ada!\\\\\\\"\\\\n\\\\n\\\\ndef test_a_blank_name_is_refused():\\\\n    with pytest.raises(ValueError):\\\\n        greet(\\\\\\\"  \\\\\\\")\\\\n\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:57bf1f4967b14444fc1370d2820fcded1be0fb1f2fc74cf94f6dafa9fcb5c0a8",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-5\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_5\", \"type\": \"function\", \"function\": {\"name\": \"run_shell\", \"arguments\": \"{\\\"command\\\": \\\"python -m pytest -q\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:be7fa6d68e8cc80bae8173c47f0db61838d266f54024791edaeba62585729a0c",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-6\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Created greeter with greet() and two tests.\\ncommits: []\\nfiles_changed:\\n  - pyproject.toml\\n  - greeter/core.py\\n  - tests/test_core.py\\ntests_run:\\n  passed: 2\\n  failed: 0\\n  skipped: 0\\ndeviations_from_design: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Development report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## What changed\\nNew package, tests and pytest configuration.\\n\\n## Tests run\\n<!-- The commands run and their results; the tests added or changed and what each one proves. -->\\n\\n## Deviations from the design\\n<!-- Each place the code differs from the design, with the reason; write \\\"None.\\\" when it follows the design exactly. -->\\n\\n## Notes for review\\n<!-- Where a reviewer should look hardest: tricky logic, trade-offs, anything not yet covered by tests. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:8babb5500d173a1dce49dcdebd30d1c34755fcb9a8464a6085577d2dde97354b",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-review-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: 'Clean: small and tested.'\\nfindings: []\\nscore: 9.0\\nprepass_results: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Review: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Findings\\n<!-- One line per finding, most severe first: severity \\u2014 file:line \\u2014 the issue \\u2192 the fix. Mark each open, resolved or accepted. -->\\n\\n## Category breakdown\\n<!-- The rubric categories and their scores, and the final score. The score is reported only; it never decides whether the review passes. -->\\n\\n## Pre-pass results\\n<!-- What the deterministic tools found (secrets, rule matches, vulnerable dependencies) and what was done about each. -->\\n\\n## Verdict\\nNothing open.\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:af977920f1d13fc457023c62beca1012cf3ff81c22636fafd6b79cb860f0a9b2",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-qa-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_qa_1\", \"type\": \"function\", \"function\": {\"name\": \"run_shell\", \"arguments\": \"{\\\"command\\\": \\\"python -m pytest -q\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:ed168d8a423c2e195c98c81fbb96ac401452d70290d46b0c41c7c897cce7e56e",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-qa-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Both tests pass; REQ-1 and REQ-2 hold.\\nverdict: pass\\ntests:\\n  passed: 2\\n  failed: 0\\n  skipped: 0\\nfailures: []\\nbaseline_failures: []\\nacceptance_results:\\n  - criterion_id: REQ-1\\n    passed: true\\n    evidence: tests/test_core.py\\n  - criterion_id: REQ-2\\n    passed: true\\n    evidence: tests/test_core.py\\ndependency_scan:\\n  blocked_licences: []\\n  vulnerabilities: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Test report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Verdict\\nPass.\\n\\n## Test results\\n<!-- The suites run, their counts, the baseline they were judged against, and every failure with its cause, new failures first. -->\\n\\n## Acceptance criteria\\n<!-- Each criterion by id: pass or fail, with the evidence (a test, a log, a manual check). -->\\n\\n## Dependency scan\\n<!-- New dependencies with their licences, blocked licences and known vulnerabilities found. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  }
+ ]
+}
