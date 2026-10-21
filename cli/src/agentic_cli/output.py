@@ -72,8 +72,10 @@ def table(*columns: str) -> Table:
 class Output:
     def __init__(self, json_mode: bool = False, color: bool = True) -> None:
         self.json_mode = json_mode
-        self.out = _Console(no_color=not color, highlight=False, soft_wrap=True)
-        self.err = _Console(stderr=True, no_color=not color, highlight=False, soft_wrap=True)
+        # None lets Rich read NO_COLOR; an explicit False would override it (DF-252)
+        no_color = None if color else True
+        self.out = _Console(no_color=no_color, highlight=False, soft_wrap=True)
+        self.err = _Console(stderr=True, no_color=no_color, highlight=False, soft_wrap=True)
 
     def result(self, data: Any, human: Callable[[Console], None] | None = None) -> None:
         """Show a command's result: `data` as JSON, or `human(console)` (default: str)."""

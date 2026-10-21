@@ -117,3 +117,58 @@ def test_a_broken_user_config_is_an_invalid_error_naming_the_file(tmp_path: Path
     with pytest.raises(CliError) as caught:
         user_config(tmp_path)
     assert caught.value.code == ExitCode.INVALID and "config.yaml" in str(caught.value)
+
+
+# --- M1 close-out (DF-252, DF-196, DF-298) ---
+
+
+def test_an_unreadable_user_config_is_an_invalid_error(tmp_path: Path, monkeypatch):
+    """DF-252 (i): permission denied (or a folder named config.yaml) is exit 3 with a
+    hint, not an unexpected PermissionError."""
+    import agentic_cli.config as config
+
+    (tmp_path / "config.yaml").write_text("org: acme\n", encoding="utf-8")
+
+    def denied(path):
+        raise PermissionError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(config, "read_text", denied)
+    with pytest.raises(CliError) as caught:
+        user_config(tmp_path)
+    assert caught.value.code == ExitCode.INVALID and "config.yaml" in str(caught.value)
+    assert caught.value.hint
+
+
+def test_no_color_from_the_environment_is_honoured(monkeypatch):
+    """DF-252 (b): passing no_color=False to Rich overrode NO_COLOR."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    out = Output()
+    assert out.out.no_color and out.err.no_color
+    monkeypatch.delenv("NO_COLOR")
+    assert not Output().out.no_color and Output(color=False).out.no_color
+
+
+def test_a_usage_error_is_json_under_json(capsys):
+    """DF-252 (f): scripts parse stderr as JSON with --json, usage errors included."""
+    assert main(["--json", "no-such-command"]) == ExitCode.USAGE
+    error = json.loads(capsys.readouterr().err)
+    assert error["exit_code"] == 64 and "no-such-command" in error["error"]
+
+
+def test_a_non_usage_click_error_is_exit_1_without_a_traceback(capsys):
+    """DF-252 (c): a Click error whose own code is not 2 (FileError, ClickException), as
+    Typer's vendored Click raises it for a FileText parameter."""
+    from typer._click.exceptions import FileError
+
+    def broken(_out: Output) -> None:
+        raise FileError("plan.yaml", hint="it is locked")
+
+    assert main(["boom"], app=_app_with(broken)) == ExitCode.ERROR
+    err = capsys.readouterr().err
+    assert "plan.yaml" in err and "it is locked" in err and "Traceback" not in err
+
+
+def test_the_exit_code_table_says_what_else_exit_1_means():
+    """DF-196, DF-298: 'init finished but not ready' and 'CI is not green' are exit 1."""
+    meaning = dict(EXIT_CODE_TABLE)[ExitCode.ERROR]
+    assert "not ready" in meaning and "not green" in meaning and "--json" in meaning

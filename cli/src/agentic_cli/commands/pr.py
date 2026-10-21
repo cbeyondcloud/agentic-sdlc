@@ -72,7 +72,9 @@ def checks(
         int, typer.Option("--interval", min=1, help="With --watch: seconds between reads.")
     ] = DEFAULT_INTERVAL_SECONDS,
 ) -> None:
-    """What CI says about the run's pull request (exit 0 only when green)."""
+    """What CI says about the run's pull request: exit 0 only when green; exit 1 when CI
+    is not green or the host could not be read (with --json, a result with `state` means
+    CI answered; an error object means the host did not)."""
     out: Output = ctx.obj
     rt = Runtime(Workspace.load())
     _load(rt, run_id)
