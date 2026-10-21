@@ -105,6 +105,41 @@ def test_finish_commits_each_step_on_the_run_branch(repo):
     ]
 
 
+def test_finish_leaves_test_run_caches_out_of_the_checkpoint(repo):  # M1-68 finding
+    """Running the tests in the tree writes bytecode and tool caches; a repository with no
+    .gitignore for them must not get them committed on the run branch (and in its PR)."""
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    git(tree, "rm", "-q", "--cached", ".gitignore")  # a repository that ignores nothing
+    git(tree, *["-c", "commit.gpgsign=false"], "commit", "-qm", "no ignores")
+    (tree / ".gitignore").unlink()
+    (tree / "vendor" / "node_modules").mkdir(parents=True)
+    (tree / "vendor" / "node_modules" / "kept.js").write_text("v = 1\n", encoding="utf-8")
+    git(tree, "add", "-A")
+    git(tree, *["-c", "commit.gpgsign=false"], "commit", "-qm", "vendored on purpose")
+    checkpoints.begin(fresh=True)
+
+    (tree / "split.py").write_text("y = 2\n", encoding="utf-8")
+    for junk in (
+        "__pycache__/app.cpython-312.pyc",
+        "pkg/__pycache__/mod.cpython-312.pyc",
+        "legacy.pyc",
+        ".pytest_cache/v/cache/lastfailed",
+        ".mypy_cache/3.12/app.meta.json",
+        ".ruff_cache/0.7/x",
+        ".hypothesis/examples/1",
+        ".coverage",
+        "web/node_modules/left-pad/index.js",
+    ):
+        (tree / junk).parent.mkdir(parents=True, exist_ok=True)
+        (tree / junk).write_bytes(b"\x00generated")
+    (tree / "vendor" / "node_modules" / "kept.js").write_text("v = 2\n", encoding="utf-8")
+    commit = checkpoints.finish("agentic: qa #1 (r-ckpt-1)")
+
+    changed = git(tree, "show", "--name-only", "--format=", commit["repo"]).split()
+    assert sorted(changed) == ["split.py", "vendor/node_modules/kept.js"]  # tracked: kept
+
+
 def test_finish_with_no_change_returns_head_unchanged(repo):
     checkpoints = open_run(repo)
     checkpoints.prepare()
