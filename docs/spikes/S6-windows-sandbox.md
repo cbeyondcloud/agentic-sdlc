@@ -121,3 +121,26 @@ Wrapping one command costs about **0.18 s** (median of 5, `true`, inside the con
 
 - **Swapping the implementation.** `srt` sits behind one sandbox interface, so a container or Codex-sandbox implementation replaces one module and its tests.
 - **If WSL2 network blocking proves unreliable**, Windows falls back to the container alternative. That makes S12 (licensing) blocking for Windows.
+
+## DF-60 result: `srt` in WSL2 (2026-10-21)
+
+Run by the coordinator on the owner's laptop with the owner's go-ahead: `python -m agentic.sandbox.probe` as a **normal user** (uid 1000) in a fresh Debian 13.7 WSL2 distro (the installed WSL 2.2.4 does not offer Ubuntu 24.04 by name; Ubuntu 20.04's bubblewrap 0.4.0 is too old to be representative). Kernel 5.15.153.1-microsoft-standard-WSL2, Node 20.20.2, `srt` 0.0.78, bubblewrap 0.12.0, socat 1.8.0.3, ripgrep 14.1.1; repository on the WSL disk.
+
+| case | want | got |
+|---|---|---|
+| write inside worktree | allowed | allowed |
+| write outside worktree | blocked | blocked (read-only file system) |
+| write from a grandchild | blocked | blocked |
+| write denied path in worktree (`.env`) | blocked | blocked (permission denied) |
+| write git hook in worktree | blocked | blocked |
+| write git config in worktree | blocked | blocked |
+| read denied folder | blocked | blocked |
+| HTTPS to allowed host | allowed | allowed |
+| HTTPS to other host | blocked | blocked (proxy 403) |
+| HTTPS ignoring the proxy | blocked | blocked (no DNS) |
+| raw TCP to an IP | blocked | blocked (network unreachable) |
+| DNS lookup | blocked | blocked |
+| git status / commit in worktree | allowed | allowed |
+| unix socket to host | blocked | blocked (operation not permitted) |
+
+All 15 cases behaved as required (exit 0). The `--unsandboxed` control failed 11 of them (exit 1), so the probe tells the difference. **D38 holds on Windows**: the public report of unreliable network blocking under WSL2 did not reproduce. Organisations should keep WSL2 up to date (`wsl --update`); the macOS run is DF-61.
