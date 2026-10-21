@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Literal
 
 from rich.console import Console
-from rich.markup import escape
 
 from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials, env_var
 from agentic.policy import OrgPolicy
@@ -70,7 +69,8 @@ class Report:
         console.print(f"Readiness: {head}", markup=True)
         for item in self.items:
             mark = _MARK.get(item.status, "[blue]info[/blue]")
-            console.print(f"  \\[{mark}] {escape(item.name)}: ", end="", markup=True)
+            console.print(f"  \\[{mark}] ", end="", markup=True)
+            console.print(f"{item.name}: ", end="", markup=False)
             console.print(item.detail, markup=False)
             if item.fix and item.status != "ok":
                 for line in item.fix.splitlines():

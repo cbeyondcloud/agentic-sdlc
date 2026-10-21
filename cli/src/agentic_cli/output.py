@@ -10,9 +10,12 @@
   never reaches the terminal as control sequences: every string Rich renders goes
   through `printable` (which `Syntax` and `Markdown` callers apply themselves), and
   JSON escapes the C1 controls a terminal would act on.
-* Rich markup is off by default, so square brackets in a run id, path or reason print
-  as they are (`[/x]` would raise MarkupError, `[bold]x` would vanish; DF-218). A styled
-  line passes `markup=True` and puts any such text through `escape`.
+* Rich markup and emoji codes are off by default, so square brackets and `:name:` in a
+  run id, path or reason print as they are (`[/x]` would raise MarkupError, `[bold]x`
+  would vanish, `:x:` would become an emoji; DF-218). A styled line passes
+  `markup=True` for its own tags and prints the text it carries in a separate plain
+  call (`escape` doubles a trailing backslash: a Windows folder ending a message would
+  gain one).
 * Non-UTF-8 streams (a Windows pipe or redirect expects the ANSI code page). What
   ships: Zyroflo's `tools` package, imported with the commands, reconfigures stdout
   and stderr to UTF-8 (errors replaced) in place, so human text goes out as UTF-8
@@ -30,7 +33,6 @@ from collections.abc import Callable
 from typing import Any, TextIO
 
 from rich.console import Console
-from rich.markup import escape
 from rich.table import Table
 
 from agentic_cli import ORIGINAL_STREAMS
@@ -49,10 +51,10 @@ def printable(text: str) -> str:
 
 class _Console(Console):
     """A Console that renders every string through `printable` (cells, rules, lines),
-    with markup off unless a call turns it on."""
+    with markup off unless a call turns it on, and emoji codes never replaced."""
 
     def __init__(self, **kwargs) -> None:
-        super().__init__(markup=False, **kwargs)
+        super().__init__(markup=False, emoji=False, **kwargs)
 
     def render_str(self, text: str, **kwargs):
         return super().render_str(printable(text), **kwargs)
@@ -98,7 +100,8 @@ class Output:
 
     def warn(self, message: str) -> None:
         if not self.json_mode:
-            self.err.print(f"[yellow]warning:[/yellow] {escape(message)}", markup=True)
+            self.err.print("[yellow]warning:[/yellow] ", end="", markup=True)
+            self.err.print(message, markup=False)
 
     def error(self, error: CliError) -> None:
         if self.json_mode:
@@ -106,7 +109,8 @@ class Output:
             text = json.dumps(body, ensure_ascii=not _exact("stderr"))
             self.err.print(text, markup=False, highlight=False)
             return
-        self.err.print(f"[red]error:[/red] {escape(str(error))}", markup=True)
+        self.err.print("[red]error:[/red] ", end="", markup=True)
+        self.err.print(str(error), markup=False)
         if error.hint:
             self.err.print(f"  {error.hint}", markup=False)
 

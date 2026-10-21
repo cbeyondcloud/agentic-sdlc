@@ -49,6 +49,34 @@ def test_show_prints_a_bracketed_reason_and_path_literally(capsys):
     assert "handoffs/[/x].md" in printed
 
 
+def test_emoji_codes_in_user_text_are_not_replaced(capsys):
+    """A step named `build:ok:2` or a reason with `:x:` prints as written, not as emoji."""
+    out = Output(color=False)
+    out.out.print("run build:ok:2 failed :x: id :id:")
+    shown = output_table("run")
+    shown.add_row("fix:tada:1")
+    out.out.print(shown)
+    out.warn("reason :x:")
+    out.error(CliError("step :tada: failed", ExitCode.ERROR, hint="see :id:"))
+    captured = capsys.readouterr()
+    assert "run build:ok:2 failed :x: id :id:" in captured.out and "fix:tada:1" in captured.out
+    assert captured.err == "warning: reason :x:\nerror: step :tada: failed\n  see :id:\n"
+
+
+def test_a_message_ending_in_a_backslash_keeps_one(capsys):
+    """A Windows folder at the end of a warning or error is shown as it is."""
+    Output(color=False).warn("cannot write C:\\work\\")
+    Output(color=False).error(CliError("no policy in D:\\p\\", ExitCode.REFUSED))
+    assert (
+        capsys.readouterr().err == "warning: cannot write C:\\work\\\nerror: no policy in D:\\p\\\n"
+    )
+
+
+def test_a_readiness_name_ending_in_a_backslash_keeps_one(capsys):
+    Report([Item("tool: C:\\bin\\", "ok", "found :x:")]).show(Output(color=False).out)
+    assert "[ok] tool: C:\\bin\\: found :x:" in capsys.readouterr().out
+
+
 def test_readiness_names_are_literal_and_marks_still_render():
     console = Console(record=True, width=200, no_color=True)
     Report([Item("tool: [/x]", "ok", "found [bold]it")]).show(console)
