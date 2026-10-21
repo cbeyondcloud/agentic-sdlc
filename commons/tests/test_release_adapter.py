@@ -44,3 +44,20 @@ def test_a_word_nobody_knows_is_unknown_not_green():
 def test_red_wins_over_pending():
     found = ci_verdict([row("a", conclusion="failure"), row("b", status="queued", conclusion=None)])
     assert found["state"] == RED
+
+
+@pytest.mark.parametrize("conclusion", ["skipped", "neutral"])
+def test_a_skipped_check_is_named_as_skipped_not_as_still_running(conclusion):
+    found = ci_verdict([row("build"), row("deploy", conclusion=conclusion)])
+    assert found["state"] == PENDING  # Zyroflo's rule: not a pass, a question for a person
+    assert (found["running"], found["skipped"]) == ([], ["deploy"])
+    assert "skipped" in found["why"] and "deploy" in found["why"]
+    assert "still running" not in found["why"]
+
+
+def test_running_and_skipped_checks_are_told_apart():
+    found = ci_verdict(
+        [row("e2e", status="in_progress", conclusion=None), row("deploy", conclusion="skipped")]
+    )
+    assert (found["running"], found["skipped"]) == (["e2e"], ["deploy"])
+    assert "1 check(s) still running" in found["why"] and "deploy" in found["why"]

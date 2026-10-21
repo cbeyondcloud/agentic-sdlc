@@ -26,7 +26,18 @@ from typing import Protocol
 
 class HostingError(Exception):
     """A hosting call failed or was refused. The message never holds a token or a
-    credential from a URL, and says what to do where it can."""
+    credential from a URL, and says what to do where it can.
+
+    `transient`: trying again later may succeed (the network, a 5xx, a rate limit) - a
+    watch retries those and fails at once on anything else; `retry_after`: the seconds
+    the host asked for before the next try, when it said."""
+
+    def __init__(
+        self, message: str, *, transient: bool = False, retry_after: float | None = None
+    ) -> None:
+        super().__init__(message)
+        self.transient = transient
+        self.retry_after = retry_after
 
 
 @dataclass(frozen=True)

@@ -90,6 +90,18 @@ def test_a_missing_token_says_how_to_provide_one(repo):
     assert raised.value.code == ExitCode.REFUSED
     assert "AGENTIC_GITHUB_TOKEN" in str(raised.value) + raised.value.hint
     assert "agentic login --for github" in raised.value.hint
+    # the message alone (all an engine pause reason keeps) names the right login too
+    assert "agentic login --for github" in str(raised.value)
+    assert "`agentic login` " not in str(raised.value)
+
+
+def test_a_missing_enterprise_token_names_its_host_login(repo):
+    git(repo, "remote", "set-url", "origin", "https://ghe.example.com/team/svc.git")
+    settings = {"git_hosts": {"ghe.example.com": {"kind": "github", "credential": "ghe_token"}}}
+    with pytest.raises(CliError) as raised:
+        connect(repo, settings, credentials=creds())
+    assert "agentic login --for ghe.example.com" in str(raised.value)
+    assert "AGENTIC_GHE_TOKEN" in str(raised.value)
 
 
 def test_a_local_origin_is_not_a_hosted_repository(repo, tmp_path):

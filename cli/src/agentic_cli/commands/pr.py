@@ -82,7 +82,7 @@ def checks(
 
     def show(console) -> None:
         console.print(f"CI: {result['state']} - {result['why']}", markup=False)
-        if result.get("timed_out"):
+        if watch and result.get("timed_out"):
             console.print(f"  gave up waiting after {timeout}s", markup=False)
         failing = set(result["failed"]) | set(result["pending"])
         for row in result["rows"]:

@@ -29,6 +29,8 @@ class FakeGitHub:
         self.statuses: list[dict] = []
         self.requests: list[dict] = []
         self.fail: dict[str, tuple[int, str]] = {}  # "POST pulls" -> (status, message)
+        #: like `fail`, but each matching request uses up the first answer in the list
+        self.fail_next: dict[str, list[tuple[int, str]]] = {}
         self._lock = threading.Lock()
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -58,6 +60,11 @@ class FakeGitHub:
             )
             if auth != f"Bearer {self.token}":
                 return 401, {"message": f"Bad credentials (got {auth})"}
+            for key, answers in self.fail_next.items():
+                verb, _, tail = key.partition(" ")
+                if verb == method and path.endswith(tail) and answers:
+                    status, message = answers.pop(0)
+                    return status, {"message": f"{message} (request had {auth})"}
             for key, (status, message) in self.fail.items():
                 verb, _, tail = key.partition(" ")
                 if verb == method and path.endswith(tail):

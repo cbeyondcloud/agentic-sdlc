@@ -12,6 +12,7 @@ from _cli_support import FakeGateway, answer, git, write
 from fake_github import FakeGitHub
 
 from agentic_cli import publishing, runtime
+from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 
 KEY = "tl-" + "fake-gateway-key-0058"  # gitleaks:allow (not a real key)
@@ -171,6 +172,69 @@ def test_watch_gives_up_at_the_timeout_and_says_so(workspace, github, monkeypatc
     assert result.json()["state"] == "pending" and result.json()["timed_out"] is True
 
 
+def test_a_single_read_of_pending_ci_did_not_wait_and_does_not_say_so(workspace, github, cli):
+    _, run_id = ship(cli)
+    github.check_runs = [[{"name": "e2e", "status": "in_progress", "conclusion": None}]]
+    shown = cli("--json", "pr", "checks", run_id).json()
+    assert shown["state"] == "pending" and shown["timed_out"] is False
+    recorded = json.loads((run_folder(workspace, run_id) / "ci.json").read_text("utf-8"))
+    assert recorded["timed_out"] is False
+    human = cli("pr", "checks", run_id)
+    assert human.code == ExitCode.ERROR
+    assert "still running" in human.out and "gave up" not in human.out
+
+
+@pytest.mark.parametrize("conclusion", ["skipped", "neutral"])
+def test_watch_settles_on_a_skipped_check_and_names_it(
+    workspace, github, monkeypatch, cli, conclusion
+):
+    _, run_id = ship(cli)
+    skipped = {"name": "deploy", "status": "completed", "conclusion": conclusion}
+    github.check_runs = [[success("build"), skipped]]
+    naps = []
+    clock = iter(range(0, 100_000, 30))
+    monkeypatch.setattr(publishing, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(publishing, "sleep", naps.append)
+    result = cli("--json", "pr", "checks", run_id, "--watch", "--interval", "5")
+    shown = result.json()
+    assert result.code == ExitCode.ERROR  # skipped is not a pass (Zyroflo's rule)...
+    assert shown["timed_out"] is False and naps == []  # ...but nothing is left to wait for
+    assert shown["skipped"] == ["deploy"] and shown["running"] == []
+    assert "skipped" in shown["why"] and "still running" not in shown["why"]
+
+
+def test_watch_rides_out_a_passing_host_failure(workspace, github, monkeypatch, cli):
+    _, run_id = ship(cli)
+    github.check_runs = [[success("build")]]
+    github.fail_next["GET check-runs"] = [(502, "bad gateway"), (503, "unavailable")]
+    naps = []
+    monkeypatch.setattr(publishing, "sleep", naps.append)
+    result = cli("--json", "pr", "checks", run_id, "--watch", "--interval", "5")
+    assert result.code == ExitCode.OK, result.err
+    assert result.json()["state"] == "green" and naps == [5, 5]
+
+
+def test_watch_gives_up_when_the_host_keeps_failing(workspace, github, monkeypatch, cli):
+    _, run_id = ship(cli)
+    github.fail["GET check-runs"] = (502, "bad gateway")
+    monkeypatch.setattr(publishing, "sleep", lambda seconds: None)
+    result = cli("--json", "pr", "checks", run_id, "--watch", "--interval", "5")
+    assert result.code == ExitCode.ERROR
+    error = json.loads(result.err)
+    assert "HTTP 502" in error["error"] and "try again" in error["hint"]
+    reads = [p for p in github.paths() if p.endswith("/check-runs")]
+    assert len(reads) == publishing.MAX_TRANSIENT_FAILURES
+
+
+def test_watch_stops_at_once_on_a_refusal(workspace, github, monkeypatch, cli):
+    _, run_id = ship(cli)
+    github.fail["GET check-runs"] = (404, "Not Found")
+    monkeypatch.setattr(publishing, "sleep", lambda seconds: None)
+    result = cli("--json", "pr", "checks", run_id, "--watch")
+    assert result.code == ExitCode.ERROR and "HTTP 404" in json.loads(result.err)["error"]
+    assert len([p for p in github.paths() if p.endswith("/check-runs")]) == 1
+
+
 def test_the_push_wall_refuses_before_pushing(workspace, github, bare, cli):
     write(workspace / ".sdlc" / "policy.yml", "push_remote: upstream\n")
     git(workspace, "add", "-A")
@@ -209,6 +273,41 @@ def test_a_rejected_token_says_how_to_fix_it(workspace, github, monkeypatch, cli
     assert result.code == ExitCode.ERROR
     error = json.loads(result.err)
     assert "rejected" in error["error"] and "AGENTIC_GITHUB_TOKEN" in error["hint"]
+
+
+def test_a_missing_token_stops_the_run_before_anything_is_spent(
+    workspace, github, monkeypatch, cli
+):
+    monkeypatch.delenv("AGENTIC_GITHUB_TOKEN")
+    gateway = FakeGateway({"ba": [answer("requirements")]})
+    monkeypatch.setattr(runtime, "network_transport", gateway.transport)
+    result = cli("--json", "run", "ship", "--input", "request=CSV export")
+    assert result.code == ExitCode.INVALID
+    assert "publish" in result.out and "agentic login --for github" in result.out
+    assert gateway.requests == []  # no model call was paid for
+    assert github.requests == [] and github.pulls == []
+
+
+def test_an_unknown_host_stops_the_run_before_anything_is_spent(
+    workspace, github, monkeypatch, cli
+):
+    git(workspace, "remote", "set-url", "origin", "https://git.unknown.example/acme/app.git")
+    gateway = FakeGateway({"ba": [answer("requirements")]})
+    monkeypatch.setattr(runtime, "network_transport", gateway.transport)
+    result = cli("--json", "run", "ship", "--input", "request=CSV export")
+    assert result.code == ExitCode.INVALID
+    assert "git.unknown.example" in result.out and "git_hosts" in result.out
+    assert gateway.requests == []
+
+
+def test_a_failed_publish_step_keeps_what_to_do_in_its_reason(workspace, github, monkeypatch, cli):
+    def refused(*args, **kwargs):
+        raise CliError("no token for github.example.test", ExitCode.REFUSED, hint="do this")
+
+    monkeypatch.setattr(publishing, "publish_run", refused)
+    result, _ = ship(cli)
+    reason = result.json()["pending"]["reason"]
+    assert "no token for github.example.test" in reason and "do this" in reason
 
 
 def test_pr_checks_before_any_pull_request_says_what_to_do(workspace, github, cli):

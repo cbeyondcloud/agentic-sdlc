@@ -241,6 +241,45 @@ def test_a_network_failure_is_a_hosting_error():
         host(handler).default_branch(REPO)
 
 
+@pytest.mark.parametrize(
+    "status, headers, transient, retry_after",
+    [
+        (502, {}, True, None),
+        (503, {"retry-after": "12"}, True, 12.0),
+        (429, {"retry-after": "7"}, True, 7.0),
+        (403, {"x-ratelimit-remaining": "0"}, True, None),
+        (403, {"retry-after": "30"}, True, 30.0),  # a secondary rate limit
+        (401, {}, False, None),
+        (403, {}, False, None),
+        (404, {}, False, None),
+        (422, {}, False, None),
+    ],
+)
+def test_an_error_says_whether_trying_again_may_help(status, headers, transient, retry_after):
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(status, headers=headers, json={"message": "nope"})
+
+    with pytest.raises(HostingError) as raised:
+        host(handler).default_branch(REPO)
+    assert (raised.value.transient, raised.value.retry_after) == (transient, retry_after)
+
+
+def test_a_network_failure_may_pass_on_its_own():
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        raise httpx2.ReadTimeout("slow proxy", request=request)
+
+    with pytest.raises(HostingError) as raised:
+        host(handler).default_branch(REPO)
+    assert raised.value.transient is True
+
+
+def test_a_refusal_is_not_transient_by_default():
+    assert (HostingError("refused").transient, HostingError("refused").retry_after) == (
+        False,
+        None,
+    )
+
+
 def test_redirects_are_not_followed():
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(301, headers={"location": "https://elsewhere.example.com/x"})

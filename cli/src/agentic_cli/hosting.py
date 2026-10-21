@@ -74,11 +74,15 @@ class Connection:
     token_hint: str = ""  # how to provide (or replace) the token
 
     @contextmanager
-    def errors(self) -> Iterator[None]:
-        """A failed hosting call (push or API) as a CliError, with what to do about it."""
+    def errors(self, *, keep_transient: bool = False) -> Iterator[None]:
+        """A failed hosting call (push or API) as a CliError, with what to do about it.
+        `keep_transient` lets a failure that may pass on its own through unchanged, for
+        a caller that tries again (a CI watch)."""
         try:
             yield
         except HostingError as error:
+            if keep_transient and error.transient:
+                raise
             status = getattr(error, "status", None)
             hint = self.token_hint if status in (401, 403) else None
             raise CliError(str(error), ExitCode.ERROR, hint=hint) from error
@@ -175,17 +179,22 @@ def login_names(settings: Mapping[str, Any]) -> dict[str, str]:
 
 def _token(config: HostConfig, found_in: Credentials):
     try:
-        return found_in.get(config.credential)
+        return found_in.get(config.credential, login=_login(config))
     except CredentialError as error:
         raise CliError(
             f"no token for {config.host}: {error}", ExitCode.REFUSED, hint=_token_hint(config)
         ) from error
 
 
+def _login(config: HostConfig) -> str:
+    """The command that stores this host's token."""
+    name = config.kind if config.credential == _default(config.kind) else config.host
+    return f"agentic login --for {name}"
+
+
 def _token_hint(config: HostConfig) -> str:
-    login = config.kind if config.credential == _default(config.kind) else config.host
     return (
-        f"set {env_var(config.credential)}, or run `agentic login --for {login}` "
+        f"set {env_var(config.credential)}, or run `{_login(config)}` "
         f"(a token that may open pull requests on {config.host})"
     )
 

@@ -30,16 +30,21 @@ GREEN, RED, PENDING, NONE, UNKNOWN = (
 
 def ci_verdict(rows: Iterable[Mapping[str, object]]) -> dict:
     """What the checks add up to: Zyroflo's verdict (`state`, `checks`, `failed`,
-    `pending`, `unknown`, `why`)."""
-    translated = []
+    `pending`, `unknown`, `why`), plus Zyroflo's `pending` split in two - `running` (no
+    conclusion yet) and `skipped` (finished skipped or neutral: not a pass, but nothing
+    to wait for, so a watch settles on it and `why` says "skipped", not "running")."""
+    translated, running, skipped = [], [], []
     for row in rows:
         # `_rest_bucket` reads Zyroflo's `gh --jq` shape: `bucket` = conclusion, `state` = status
         rest = {"bucket": row.get("conclusion"), "state": row.get("status")}
-        translated.append(
-            {
-                "name": str(row.get("name") or "?"),
-                "bucket": zyroflo._rest_bucket(rest),
-                "link": str(row.get("link") or ""),
-            }
-        )
-    return zyroflo.verdict(translated)
+        name = str(row.get("name") or "?")
+        bucket = zyroflo._rest_bucket(rest)
+        if zyroflo.BUCKETS.get(bucket) == PENDING:
+            (running if bucket == "pending" else skipped).append(name)
+        translated.append({"name": name, "bucket": bucket, "link": str(row.get("link") or "")})
+    found = zyroflo.verdict(translated)
+    if found["state"] == PENDING and skipped:
+        said = f"{len(skipped)} check(s) skipped or neutral, which is not a pass: "
+        said += ", ".join(skipped)
+        found["why"] = f"{len(running)} check(s) still running; {said}" if running else said
+    return {**found, "running": running, "skipped": skipped}

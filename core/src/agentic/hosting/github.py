@@ -43,8 +43,15 @@ _STATUS_STATES = {
 class HostingApiError(HostingError):
     """The API answered with an error status (`status`)."""
 
-    def __init__(self, message: str, status: int) -> None:
-        super().__init__(message)
+    def __init__(
+        self,
+        message: str,
+        status: int,
+        *,
+        transient: bool = False,
+        retry_after: float | None = None,
+    ) -> None:
+        super().__init__(message, transient=transient, retry_after=retry_after)
         self.status = status
 
 
@@ -201,9 +208,14 @@ class GitHubHost:
         except httpx2.HTTPError as error:
             reason = f"{type(error).__name__}: {error}"
             message = f"GitHub API {where}: could not reach {self._origin.host} ({reason})"
-            raise HostingError(self._scrub(message)) from None
+            raise HostingError(self._scrub(message), transient=True) from None
         if response.status_code >= 300:
-            raise HostingApiError(self._scrub(_explain(where, response)), response.status_code)
+            raise HostingApiError(
+                self._scrub(_explain(where, response)),
+                response.status_code,
+                transient=_transient(response),
+                retry_after=_retry_after(response),
+            )
         return response
 
     def _same_origin(self, url: httpx2.URL) -> bool:
@@ -253,6 +265,28 @@ def _body(response: httpx2.Response) -> Any:
         ) from None
 
 
+def _rate_limited(response: httpx2.Response) -> bool:
+    """429, or GitHub's 403 rate limits: the primary one (no requests left) and the
+    secondary one (a `Retry-After` on a 403)."""
+    status, headers = response.status_code, response.headers
+    return status == 429 or (
+        status == 403 and (headers.get("x-ratelimit-remaining") == "0" or "retry-after" in headers)
+    )
+
+
+def _transient(response: httpx2.Response) -> bool:
+    return response.status_code >= 500 or _rate_limited(response)
+
+
+def _retry_after(response: httpx2.Response) -> float | None:
+    """`Retry-After` in seconds (GitHub sends seconds; an HTTP date is not used)."""
+    try:
+        seconds = float(response.headers.get("retry-after", ""))
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
+
+
 def _explain(where: str, response: httpx2.Response) -> str:
     status = response.status_code
     try:
@@ -267,12 +301,9 @@ def _explain(where: str, response: httpx2.Response) -> str:
         if isinstance(e, dict)
     ]
     said = "; ".join(p for p in [said, *details] if p)
-    rate_limited = status == 429 or (
-        status == 403 and response.headers.get("x-ratelimit-remaining") == "0"
-    )
     if status == 401:
         meaning = "the token was rejected (expired, revoked or for another host)"
-    elif rate_limited:
+    elif _rate_limited(response):
         meaning = "rate limited by the API; try again later"
     elif status == 403:
         meaning = "the token lacks permission for this repository (needs pull request write)"

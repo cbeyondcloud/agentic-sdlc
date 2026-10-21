@@ -70,12 +70,14 @@ def _publish(kind: str | None) -> Callable[["Runtime"], Callable]:
     return make
 
 
-#: Built-in actions, by the name a pipeline step gives: name -> (Runtime -> action). M1-58:
-#: push the run's branch and open its pull request - on a GitHub host (`github.open_pr`,
-#: the spec's name), or on whatever host `origin` is (`open_pr`).
+#: The publishing actions (M1-58), by name -> the provider kind they insist on: push the
+#: run's branch and open its pull request - on a GitHub host (`github.open_pr`, the
+#: spec's name), or on whatever host `origin` is (`open_pr`). Preflight checks their host
+#: and token before a run starts.
+PUBLISH_ACTIONS: dict[str, str | None] = {"github.open_pr": "github", "open_pr": None}
+#: Built-in actions, by the name a pipeline step gives: name -> (Runtime -> action).
 ACTIONS: dict[str, Callable[["Runtime"], Callable]] = {
-    "github.open_pr": _publish("github"),
-    "open_pr": _publish(None),
+    name: _publish(kind) for name, kind in PUBLISH_ACTIONS.items()
 }
 SKILLS = Path(".agentic") / "local" / "skills"
 STATE = Path(".agentic") / "local" / "state"
@@ -217,7 +219,29 @@ class Runtime:
                         "extra is not installed (agentic-core[codeintel])"
                     )
                     report.problems.append(Problem(None, "codeintel", detail))
+        report.problems += self._publish_problems(pipeline)
         return report
+
+    def _publish_problems(self, pipeline: PipelineDefinition) -> list[Problem]:
+        """A publishing step whose host or token is missing fails here, before any spend
+        (an error; a warning when the step has a `when` and may not run)."""
+        from agentic_cli.publishing import publish_check  # it imports this module's peers
+
+        steps = [
+            inner
+            for step in pipeline.steps
+            for inner in (step.loop.steps if isinstance(step, LoopStep) else [step])
+            if isinstance(inner, ActionStep) and inner.action in PUBLISH_ACTIONS
+        ]
+        problems, checked = [], {}
+        for step in steps:
+            kind = PUBLISH_ACTIONS[step.action]
+            if kind not in checked:
+                checked[kind] = publish_check(self.ws, kind)
+            if checked[kind]:
+                severity = "warning" if step.when else "error"
+                problems.append(Problem(step.id, "publish", checked[kind], severity=severity))
+        return problems
 
     def unenforced(self, name: str, report: PreflightReport) -> dict[str, list[str]]:
         """Per agent, its deny globs the OS sandbox cannot enforce (the file tools still

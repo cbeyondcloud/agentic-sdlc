@@ -100,9 +100,10 @@ class Credentials:
                 return name
         return None
 
-    def find(self, name: str) -> Credential | None:
+    def find(self, name: str, *, login: str = "agentic login") -> Credential | None:
         """The credential, or None if neither place has it. Raises CredentialError
-        when the keyring cannot be used."""
+        when the keyring cannot be used; `login` is the command its message names for
+        storing this credential."""
         value = self.environ.get(env_var(name), "").strip()
         if value:
             return Credential(value, "env")
@@ -113,14 +114,15 @@ class Credentials:
         except _KEYRING_ERRORS as error:
             raise CredentialError(
                 f"the OS keyring could not be read ({type(error).__name__}). Set "
-                f"{env_var(name)} instead, or fix the keyring and run `agentic login`."
+                f"{env_var(name)} instead, or fix the keyring and run `{login}`."
             ) from error
         stored = (stored or "").strip()
         return Credential(stored, "keyring") if stored else None
 
-    def get(self, name: str) -> Credential:
-        """The credential; a CredentialError saying how to provide it when absent."""
-        found = self.find(name)
+    def get(self, name: str, *, login: str = "agentic login") -> Credential:
+        """The credential; a CredentialError saying how to provide it when absent (with
+        `login`, the command that stores this credential, e.g. `agentic login --for X`)."""
+        found = self.find(name, login=login)
         if found is not None:
             return found
         if self.in_ci:
@@ -131,7 +133,7 @@ class Credentials:
             )
         raise CredentialError(
             f"no {name} found: set the {env_var(name)} environment variable, or run "
-            f"`agentic login` to store it in the OS keyring."
+            f"`{login}` to store it in the OS keyring."
         )
 
     def store(self, name: str, value: str) -> None:

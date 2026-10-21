@@ -11,9 +11,10 @@ Zyroflo's release flow (`tools.sdlc.release`, P8), followed step by step:
      additions agents proposed), masked by the commons redactor. Publishing again
      updates the open pull request's body instead of opening another;
   4. **watch** - `watch_ci` reads every check until none is still running and judges
-     them with Zyroflo's verdict (`sdlc_commons.release`): only green passes. No checks
-     at all is answered `none` only after a grace period, because a host registers a
-     push's checks a little after the push.
+     them with Zyroflo's verdict (`sdlc_commons.release`): only green passes (a skipped
+     check settles the watch but is not a pass). No checks at all is answered `none`
+     only after a grace period, because a host registers a push's checks a little after
+     the push. A failed read that may pass (network, 5xx, rate limit) is tried again.
 
 Nothing here merges: a person does. What was published is recorded in the run folder
 (`pr.json`), and the last CI verdict next to it (`ci.json`); neither holds the token.
@@ -32,7 +33,7 @@ from pathlib import Path
 from time import monotonic, sleep
 
 from agentic.engine.state import RunState
-from agentic.hosting import CheckRun
+from agentic.hosting import CheckRun, HostingError
 from agentic.hosting.git import push_branch
 from agentic.memory.agents_md import proposals
 from agentic.telemetry.trailers import pr_body
@@ -53,6 +54,8 @@ REMOTE = "origin"
 NONE_GRACE_SECONDS = 60
 DEFAULT_TIMEOUT_SECONDS = 1800
 DEFAULT_INTERVAL_SECONDS = 15
+#: A watch survives this many failed reads in a row (a proxy blip, a 502, a rate limit).
+MAX_TRANSIENT_FAILURES = 5
 TITLE_LIMIT = 100
 
 
@@ -114,12 +117,37 @@ def publish_action(ws: Workspace, store_root: Path, kind: str | None) -> Callabl
     """The engine action (`github.open_pr`, `open_pr`): publish, and say what was done."""
 
     def action(state: RunState) -> str:
-        record = publish_run(ws, store_root, state, kind=kind)
+        try:
+            record = publish_run(ws, store_root, state, kind=kind)
+        except CliError as error:
+            # the engine keeps only the message as the pause reason: what to do goes in it
+            raise CliError(with_hint(error), error.code, hint=error.hint) from error
         return "; ".join(
             f"{'opened' if p['created'] else 'updated'} {p['url']}" for p in record["pull_requests"]
         )
 
     return action
+
+
+def publish_check(ws: Workspace, kind: str | None) -> str | None:
+    """Why a publish step of this workspace would be refused - origin not on a known
+    host, no token, a host of another kind - or None. Checked at preflight, so a run
+    does not spend its budget on agents only to fail at the last step."""
+    try:
+        with connect(ws.repo, ws.settings, remote=REMOTE) as conn:
+            if kind is not None and conn.kind != kind:
+                return (
+                    f"this step opens a {kind} pull request, but {conn.repo.host} is a "
+                    f"{conn.kind} host (use `action: open_pr`)"
+                )
+    except CliError as error:
+        return with_hint(error)
+    return None
+
+
+def with_hint(error: CliError) -> str:
+    """The error's message with its hint, for places that keep only one line."""
+    return f"{str(error).rstrip('.')}. {error.hint}" if error.hint else str(error)
 
 
 def published(store_root: Path, run_id: str) -> dict:
@@ -166,17 +194,28 @@ def run_checks(
             commits.clear()
             rows: list[CheckRun] = []
             for entry, conn in connections:
-                with conn.errors():
+                with conn.errors(keep_transient=True):  # `watch_ci` may try again
                     current = conn.provider.find_pull_request(conn.repo, entry["branch"])
                     sha = current.head_sha if current is not None else entry["head_sha"]
                     commits.append({"component": entry["component"], "sha": sha})
                     rows += conn.provider.checks(conn.repo, sha)
             return rows
 
-        if watch:
-            verdict = watch_ci(read, timeout=timeout, interval=interval)
-        else:
-            verdict = watch_ci(read, timeout=0, interval=0, none_grace=0)
+        try:
+            if watch:
+                verdict = watch_ci(read, timeout=timeout, interval=interval)
+            else:  # one read: nothing waited, so nothing timed out
+                verdict = {
+                    **watch_ci(read, timeout=0, interval=0, none_grace=0),
+                    "timed_out": False,
+                }
+        except HostingError as error:
+            raise CliError(
+                str(error),
+                ExitCode.ERROR,
+                hint="the host did not answer properly; try again later "
+                "(`agentic pr checks --watch` rides out short outages)",
+            ) from error
     finally:
         for _, conn in connections:
             conn.close()
@@ -198,16 +237,35 @@ def watch_ci(
     interval: float,
     none_grace: float = NONE_GRACE_SECONDS,
 ) -> dict:
-    """Read the checks until they settle (nothing pending, and checks present or the
-    grace period over) or `timeout` passes; Zyroflo's verdict, plus `timed_out` and the
-    rows read last."""
+    """Read the checks until they settle (no check still running, and checks present or
+    the grace period over) or `timeout` passes; Zyroflo's verdict, plus `timed_out` and
+    the rows read last. A skipped check is not a pass, but nothing is left to wait for.
+
+    A read that fails with a transient `HostingError` (the network, a 5xx, a rate limit)
+    is tried again after `interval` (or the host's `Retry-After`, if longer), up to
+    `MAX_TRANSIENT_FAILURES` in a row and never past `timeout`; then, and on any other
+    error, the error is raised."""
     started = monotonic()
+    failures = 0
     while True:
-        rows = read()
+        try:
+            rows = read()
+        except HostingError as error:
+            failures += 1
+            spent = monotonic() - started
+            if not error.transient or failures >= MAX_TRANSIENT_FAILURES or spent >= timeout:
+                raise
+            sleep(max(interval, min(error.retry_after or 0, timeout - spent)))
+            continue
+        failures = 0
         verdict = ci_verdict(asdict(row) for row in rows)
         waited = monotonic() - started
         state = verdict["state"]
-        settled = state not in (PENDING, NONE) or (state == NONE and waited >= none_grace)
+        settled = (
+            state not in (PENDING, NONE)
+            or (state == PENDING and not verdict["running"])
+            or (state == NONE and waited >= none_grace)
+        )
         if settled or waited >= timeout:
             return {**verdict, "timed_out": not settled, "rows": [asdict(r) for r in rows]}
         sleep(interval)
