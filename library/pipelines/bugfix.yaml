@@ -1,9 +1,12 @@
 # bugfix: a defect becomes a reviewed, tested fix with a regression test (spec §6.2).
 # intake (BA, with the reproduction) -> [intake gate] -> test baseline -> fix plan
-# (Design: root cause and the smallest fix) -> Developer <-> Code Review -> [review
-# gate] -> QA -> pull request. The Developer writes the failing regression test first.
-# A QA `fail` opens no PR: the skipped publish step records the condition that
-# stopped it (an on-fail route back to the Developer is M2-23).
+# (Design: root cause and the smallest fix) -> Developer <-> Code Review <-> QA ->
+# [review gate] -> pull request. The Developer writes the failing regression test first.
+# A QA `fail` routes the work back to the Developer, with the QA report among its
+# inputs (DF-238): the fix loop ends only on a clean review and a QA pass. Still
+# failing after 3 rounds, the run waits at the loop's gate, where a bare approval is
+# refused: a person edits the report (an attributable acceptance), rejects with
+# feedback for another round, or stops the run.
 name: bugfix
 version: 1.0.0
 regime: team
@@ -26,20 +29,21 @@ steps:
   - loop:
       id: fix-review
       max_iterations: 3
-      until: "review.open_blocking == 0"   # Zyroflo's exit rule: the score never gates
+      # Zyroflo's exit rule (the score never gates), and QA's verdict: a fail loops back
+      until: "review.open_blocking == 0 && test_report.verdict == 'pass'"
       on_exhausted: gate
       steps:
         - id: develop
           agent: developer
         - id: review
           agent: code-review
+        - id: qa                           # no new failures, the regression test passes -
+          agent: qa                        # only on a fix review passed
+          when: "review.open_blocking == 0"
 
-  - gate: review-approval               # a person reads the fix (and its plan) before QA
+  - gate: review-approval               # a person reads the fix (and its plan) with its QA report
     approver_role: approver
-
-  - id: qa                              # no new failures, the regression test passes
-    agent: qa
 
   - id: publish
     action: github.open_pr
-    when: "test_report.verdict == 'pass'"
+    when: "test_report.verdict == 'pass'"   # always true after the loop; kept as a guard
