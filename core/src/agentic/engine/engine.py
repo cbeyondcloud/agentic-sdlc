@@ -33,7 +33,7 @@ import logging
 import os
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -61,6 +61,7 @@ from agentic.engine.gates import Approve, Authorizer, Decision, Edit, GateRefuse
 from agentic.engine.state import ApprovalMark, Cursor, Pending, RunState, RunStore, StepRecord
 from agentic.handoffs import (
     EnvelopeStamp,
+    Handoff,
     HandoffContract,
     HandoffError,
     finalise_handoff,
@@ -379,7 +380,12 @@ class _Run:
             return self._pause(problem.pause_id, problem.reason)
         if failures:
             reason = "the run cannot complete while a handoff reports a failure: "
-            return self._pause(FAILING_PAUSE, reason + "; ".join(failures))
+            # pinned, so `agentic show` shows the failing handoffs themselves (DF-268)
+            pinned = {
+                rel: self.state.digests.get(rel) or self.recorder.digest(rel) for rel in failures
+            }
+            reason += "; ".join(failures.values())
+            return self._pause(FAILING_PAUSE, reason, artefacts=pinned)
         return self._close("completed")
 
     async def resume(
@@ -550,6 +556,7 @@ class _Run:
         approver = decision.approver.strip()
         if not approver:
             raise GateRefused("a decision names the person who took it")
+        decision = replace(decision, approver=approver)  # recorded as named (DF-58)
         if state.regime != "solo" or approver.lower() != state.starter.lower():
             if not authorizer.holds(approver, role):
                 raise GateRefused(
@@ -560,22 +567,22 @@ class _Run:
         if state.regime == "regulated" or (gate is not None and gate.four_eyes):
             if refusal := self_approval(approver, state.starter):
                 raise GateRefused(f"four-eyes: {refusal} (someone else must approve your own run)")
-        edited = self._edit(decision) if isinstance(decision, Edit) else None
-        if edited is None and pending.id == "invalid-output":
+        proposed = self._check_edit(decision) if isinstance(decision, Edit) else None
+        if proposed is None and pending.id == "invalid-output":
             raise GateRefused(
                 "an invalid answer cannot be approved as it is: edit it into "
                 "a valid handoff, or reject it"
             )
-        return await self._approve(decision, edited)
+        return await self._approve(decision, proposed)
 
     def _gate_step(self, gate_id: str) -> GateStep | None:
         return next(
             (s for s in self.pipeline.steps if isinstance(s, GateStep) and s.gate == gate_id), None
         )
 
-    def _edit(self, decision: Edit) -> tuple[str, str, str]:
-        """Validate the edited text, keep the original, write the edit and repin it.
-        Returns (path, digest, kind) of the edited file."""
+    def _check_edit(self, decision: Edit) -> "_Proposed":
+        """Validate the edited text; nothing is written until the approval it is part of
+        is accepted (DF-50, DF-267)."""
         pending = self.state.pending
         if decision.path not in pending.artefacts:
             raise GateRefused(
@@ -603,22 +610,35 @@ class _Run:
             raise GateRefused(
                 "the edit is not a valid handoff:\n" + "\n".join(error.errors)
             ) from error
-        folder = self.recorder.run_dir / Path(decision.path).parent
-        count = len(list(folder.glob(f"{Path(decision.path).name}.edited-*.md"))) + 1
-        rel = f"{decision.path}.edited-{count}.md"
-        digest = self.recorder.write_artifact(rel, text)
-        del pending.artefacts[decision.path]
+        return _Proposed(decision.path, text, handoff)
+
+    def _write_edit(self, proposed: "_Proposed") -> tuple[str, str, str]:
+        """Keep the original, write the edit and repin it.
+        Returns (path, digest, kind) of the edited file."""
+        pending, original = self.state.pending, proposed.path
+        folder = self.recorder.run_dir / Path(original).parent
+        count = len(list(folder.glob(f"{Path(original).name}.edited-*.md"))) + 1
+        rel = f"{original}.edited-{count}.md"
+        digest = self.recorder.write_artifact(rel, proposed.text)
+        del pending.artefacts[original]
         pending.artefacts[rel] = digest
-        kind = handoff.envelope.kind
-        if pending.id == "invalid-output" or self.state.latest.get(kind) == decision.path:
+        kind = proposed.kind
+        if self._repoints(proposed):
             self.state.latest[kind] = rel
-        self.state.unpinned.pop(decision.path, None)
+        self.state.unpinned.pop(original, None)
         self.state.unpinned[rel] = digest
         self.state.digests[rel] = digest
         self.save()
         return rel, digest, kind
 
-    async def _approve(self, decision: Approve | Edit, edited: tuple | None) -> RunState:
+    def _repoints(self, proposed: "_Proposed") -> bool:
+        """Whether the edit becomes the newest handoff of its kind."""
+        pending = self.state.pending
+        return pending.id == "invalid-output" or self.state.latest.get(proposed.kind) == (
+            proposed.path
+        )
+
+    async def _approve(self, decision: Approve | Edit, proposed: "_Proposed | None") -> RunState:
         state, pending = self.state, self.state.pending
         changed, invalid = [], []
         for rel, digest in list(pending.artefacts.items()):
@@ -641,8 +661,10 @@ class _Run:
             if invalid:
                 message += " - not a valid handoff:\n" + "\n".join(invalid)
             raise GateRefused(message + " - review them and decide again")
-        if refusal := self._loop_still_failing(pending):
+        if refusal := self._loop_still_failing(pending, proposed):
             raise GateRefused(refusal)
+        # every check passed: only now is a person's edit written and pinned (DF-50)
+        edited = self._write_edit(proposed) if proposed is not None else None
         self.gates.record(
             pending.id,
             "approve",
@@ -687,19 +709,23 @@ class _Run:
             self.save()
         return await self.go()
 
-    def _loop_still_failing(self, pending: Pending) -> str | None:
+    def _loop_still_failing(self, pending: Pending, proposed: "_Proposed | None") -> str | None:
         """Why an exhausted loop may not be approved yet, or None (DF-238): its `until`
         must hold over the current handoffs - a person's edit can make it hold (marking a
         finding accepted, or a failing test in `accepted_failures`), a bare approval cannot
-        wave a failure through."""
+        wave a failure through. A `proposed` edit is judged in place, before it is written
+        (DF-267)."""
         if not pending.id.endswith("-exhausted") or self._gate_step(pending.id) is not None:
             return None
         top = self.pipeline.steps[self.state.cursor.index]
         if not isinstance(top, LoopStep):
             return None
         loop = top.loop
+        instead = {}
+        if proposed is not None and self._repoints(proposed):
+            instead[proposed.kind] = proposed.handoff
         try:
-            if compile_condition(loop.until).evaluate(self._context()):
+            if compile_condition(loop.until).evaluate(self._context(instead)):
                 return None
             why = "still does not hold"
         except ExpressionError as error:
@@ -760,6 +786,12 @@ class _Run:
         for mark in self.state.approvals:
             if mark.history_len is not None and mark.history_len > index:
                 mark.superseded = True
+        # the handoffs of the attempts sent back (and edits of them) are no longer the
+        # work a gate decides on: the next gate pins only what replaces them (DF-56)
+        gone = {record.handoff for record in history[index:] if record.handoff}
+        for rel in list(self.state.unpinned):
+            if rel in gone or rel.split(".edited-")[0] in gone:
+                del self.state.unpinned[rel]
 
     def _reject_target(self, gate: GateStep) -> tuple[str, Cursor]:
         """Where a rejection sends the work: `on_reject`, else the step before the gate."""
@@ -1035,9 +1067,11 @@ class _Run:
             return False
         self._marks = (step.id, iteration, base, None)
         try:
-            budget = self.budget.open_slice(name) or self.budget.run.open(
-                name, "step", _usd(agent.limits.budget_usd)
-            )
+            budget = self.budget.open_slice(name)  # restored: a crash cut the step off
+            if budget is not None:
+                budget.close_children()  # their spend counts, their hold ends (DF-52)
+            else:
+                budget = self.budget.run.open(name, "step", _usd(agent.limits.budget_usd))
         except LimitHit as hit:
             self._pause(_budget_pause(hit), str(hit), step=step.id)
             return False
@@ -1218,6 +1252,8 @@ class _Run:
             return False
         # stopped: budget, turns, time (the step's time limit), stuck
         reason = outcome.detail or f"the step stopped: {outcome.stopped}"
+        if outcome.errors:  # the limit came before a refused answer could be retried (DF-37)
+            reason += "; its last answer was not a valid handoff: " + "; ".join(outcome.errors)
         self._history(
             step,
             iteration,
@@ -1233,24 +1269,28 @@ class _Run:
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
-    def _context(self) -> dict[str, dict]:
-        """The front-matter fields of the newest handoff of each kind, for conditions.
+    def _context(self, instead: Mapping[str, Handoff] | None = None) -> dict[str, dict]:
+        """The front-matter fields of the newest handoff of each kind, for conditions
+        (`instead`: a handoff to use for its kind, e.g. a person's edit not yet written).
         A handoff that changed on disk, or no longer parses, pauses the run (I7)."""
         context = {}
         for kind, rel in self.state.latest.items():
-            self._check_unchanged(rel)
-            try:
-                handoff = self._read(rel)
-            except (OSError, HandoffError) as error:
-                raise _Unusable("handoff-invalid", f"{rel} cannot be read: {error}") from error
+            handoff = (instead or {}).get(kind)
+            if handoff is None:
+                self._check_unchanged(rel)
+                try:
+                    handoff = self._read(rel)
+                except (OSError, HandoffError) as error:
+                    reason = f"{rel} cannot be read: {error}"
+                    raise _Unusable("handoff-invalid", reason) from error
             fields = handoff.data.model_dump(mode="json")
             context[kind] = {**fields, "status": handoff.envelope.status}
         return context
 
-    def _failures(self) -> list[str]:
+    def _failures(self) -> dict[str, str]:
         """Each newest handoff that reports a failure (a QA `fail`, open blocking review
-        findings), as `kind (path): reason`. Unreadable or changed: it pauses (I7)."""
-        failures = []
+        findings): its path -> `kind (path): reason`. Unreadable or changed: it pauses (I7)."""
+        failures = {}
         for kind, rel in sorted(self.state.latest.items()):
             self._check_unchanged(rel)
             try:
@@ -1258,7 +1298,7 @@ class _Run:
             except (OSError, HandoffError) as error:
                 raise _Unusable("handoff-invalid", f"{rel} cannot be read: {error}") from error
             if reason := handoff.data.failure():  # type: ignore[attr-defined]
-                failures.append(f"{kind} ({rel}): {reason}")
+                failures[rel] = f"{kind} ({rel}): {reason}"
         return failures
 
     def _read(self, rel: str):
@@ -1405,11 +1445,19 @@ class _Run:
         minutes = self.state.max_minutes + self.state.extra_minutes  # type: ignore[operator]
         return f"run time limit of {minutes} min reached"
 
-    def _pause(self, pause_id: str, reason: str, *, step: str | None = None) -> RunState:
+    def _pause(
+        self,
+        pause_id: str,
+        reason: str,
+        *,
+        step: str | None = None,
+        artefacts: dict[str, str] | None = None,
+    ) -> RunState:
         self.state.pending = Pending(
             kind="pause",
             id=pause_id,
             reason=self.e.redact(reason),
+            artefacts=artefacts or {},
             since=self.e.clock.now(),
             step=step,
         )
@@ -1430,6 +1478,19 @@ class _Run:
     def save(self) -> None:
         self.state.updated_at = self.e.clock.now()
         self.e.store.save(self.state)
+
+
+@dataclass(frozen=True)
+class _Proposed:
+    """A person's edit at a gate, validated but not yet written."""
+
+    path: str  # the pinned file it replaces
+    text: str  # the final document
+    handoff: Handoff
+
+    @property
+    def kind(self) -> str:
+        return self.handoff.envelope.kind
 
 
 class _Unusable(Exception):

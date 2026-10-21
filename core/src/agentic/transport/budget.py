@@ -223,6 +223,21 @@ class BudgetSlice:
             self._close()
             self._changed()
 
+    def close_children(self) -> None:
+        """Close every child slice still open - a crash cut them off: what they spent
+        stays counted here, what they held is released. Refused, changing nothing, while
+        any call below is in flight."""
+        with self._lock:
+            if any(child._in_flight() for child in self._open_children):
+                raise BudgetError(
+                    f"{self.scope} {self.name!r} has a child with calls in flight - "
+                    "settle or release them first"
+                )
+            if self._open_children:
+                for child in list(self._open_children):
+                    child._close()
+                self._changed()
+
     def _close(self) -> None:
         for child in list(self._open_children):
             child._close()
