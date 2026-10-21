@@ -7,6 +7,7 @@ from _skill_helpers import entry, make_dir_link, make_skill, write_catalog
 
 from agentic.skills import Catalog, SkillEntry, skill_digest
 from agentic.skills.admission import admit, admit_catalog, telemetry_urls
+from agentic.skills.catalog import AdmissionLimits
 
 KEY = "acme/careful-change"
 
@@ -38,6 +39,29 @@ def test_licence_not_allowed_rejected(tmp_path: Path):
     folder = make_skill(tmp_path, KEY)
     assert checks(folder, licence="GPL-3.0-only") == {"licence"}
     assert "GPL-3.0-only" in reasons(folder, licence="GPL-3.0-only")
+
+
+def test_a_catalog_cannot_widen_the_licence_list_it_is_admitted_under(tmp_path: Path):
+    """One policy-repo PR adding a GPL skill and also allowing GPL in catalog.yaml must
+    not pass: the allowed licences come from org policy, the catalog only narrows them
+    (DF-143, DF-189)."""
+    folder = make_skill(tmp_path, KEY)
+    data = entry(skill_digest(folder), licence="GPL-3.0-only")
+    widened = Catalog(skills={KEY: SkillEntry(**data)}, licences=["MIT", "GPL-3.0-only"])
+
+    found = admit(folder, KEY, widened)
+    assert {r.check for r in found} == {"licence"}
+    assert "org policy" in found[0].reason
+
+    allowed = admit(folder, KEY, widened, licences=["MIT", "GPL-3.0-only"])
+    assert allowed == []  # the org allows it: admitted
+
+
+def test_a_catalog_cannot_raise_the_size_limits(tmp_path: Path):  # DF-143
+    folder = make_skill(tmp_path, KEY, body="word " * 6000)  # about 10,000 tokens
+    assert checks(folder, limits={"max_skill_tokens": 100_000}) == {"size"}
+    roomy = catalog_for(folder, limits={"max_skill_tokens": 100_000})
+    assert admit(folder, KEY, roomy, limits=AdmissionLimits(max_skill_tokens=20_000)) == []
 
 
 def test_missing_licence_file_rejected(tmp_path: Path):

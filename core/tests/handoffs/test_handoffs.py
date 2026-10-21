@@ -113,6 +113,24 @@ def test_naming_one_baseline_failure_twice_does_not_cover_a_second_failure():
         parse_handoff(handoff("test-report", fields))
 
 
+@pytest.mark.parametrize(
+    ("counts", "failures"),
+    [
+        (
+            "{passed: 40, failed: 1}",
+            "[tests/test_legacy.py::test_flaky_clock, tests/test_legacy.py::test_flaky_clock]",
+        ),  # one failure named twice
+        ("{passed: 40, failed: 0}", "[tests/test_legacy.py::test_flaky_clock]"),  # 0 vs 1
+        ("{passed: 40, failed: 2}", "[tests/test_legacy.py::test_flaky_clock]"),  # 2 vs 1
+    ],
+    ids=["duplicate", "named-but-none-failed", "fewer-names-than-failures"],
+)
+def test_a_pass_must_name_each_failure_exactly_once(counts: str, failures: str):  # DF-230
+    fields = f"verdict: pass\ntests: {counts}\nfailures: {failures}\n" + BASELINE_RED
+    with pytest.raises(HandoffError, match="once"):
+        parse_handoff(handoff("test-report", fields))
+
+
 def test_a_fail_verdict_needs_no_names():
     result = parse_handoff(handoff("test-report", "verdict: fail\ntests: {passed: 1, failed: 3}\n"))
 

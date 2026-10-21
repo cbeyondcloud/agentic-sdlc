@@ -15,6 +15,7 @@ rounded up - more than any common tokenizer counts for English text.
 """
 
 import math
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import TYPE_CHECKING
@@ -58,14 +59,25 @@ class InstalledSkills:
         """The skill's instructions (front matter removed) and its bundled files."""
         return self.load(name)
 
-    def load(self, name: str, *, list_files: bool = True) -> str:
-        """`get`; without `list_files` for an agent that cannot read bundled files."""
-        folder = self._checked(name)
+    def load(
+        self,
+        name: str,
+        *,
+        list_files: bool = True,
+        inline_files: bool = False,
+        folder: Path | None = None,
+    ) -> str:
+        """`get`; without `list_files` for an agent that cannot read bundled files, which
+        gets the bundled Markdown inlined instead (`inline_files`, DF-214). `folder`: the
+        skill's folder, already verified by the caller (not hashed again)."""
+        folder = folder if folder is not None else self._checked(name)
         body = self._parts(folder)[1]
         text = f"# Skill: {name}\n\n{body}"
         if list_files and (files := self.files(name)):
             listed = "\n".join(f"- {path}" for path in files)
             text += f"\n\nBundled files (read one with activate_skill(name, file=...)):\n{listed}"
+        elif inline_files:
+            text += self._inlined(name, folder)
         entry = self.catalog.skills[name]
         self.record(
             "skills.activated",
@@ -105,13 +117,36 @@ class InstalledSkills:
     def unavailable(self, name: str) -> str | None:
         """Why `name` cannot be put in a context now (not catalogued, not installed,
         changed since it was installed), or None when it can."""
+        return self.verified(name)[1]
+
+    def verified(self, name: str) -> tuple[Path | None, str | None]:
+        """(the skill's folder, None) when it is installed as pinned; else (None, why)."""
         if name not in self.catalog.skills:
-            return "not in the skills catalog"
+            return None, "not in the skills catalog"
         try:
-            self._checked(name)
+            return self._checked(name), None
         except SkillsError as error:
-            return str(error)
-        return None
+            return None, str(error)
+
+    def _inlined(self, name: str, folder: Path) -> str:
+        """The skill's bundled Markdown files as text, within the catalog's per-skill
+        token budget; a file that does not fit is named, not cut."""
+        budget = self.catalog.limits.max_skill_tokens
+        parts: list[str] = []
+        for path in self.files(name):
+            if not path.lower().endswith(".md"):
+                continue
+            try:
+                content = read_text(folder / path)
+            except YamlFileError:
+                continue  # not UTF-8 text
+            cost = estimate_tokens(content)
+            if cost > budget:
+                parts.append(f"## Bundled file: {path}\n\n(not inlined: over the size budget)")
+                continue
+            budget -= cost
+            parts.append(f"## Bundled file: {path}\n\n{content.strip()}")
+        return "".join(f"\n\n{part}" for part in parts)
 
     def files(self, name: str) -> list[str]:
         folder = skill_folder(self.root, name)
@@ -121,9 +156,9 @@ class InstalledSkills:
             if path.is_file() and path.relative_to(folder).as_posix() not in _NOT_LISTED
         )
 
-    def catalog_line(self, name: str) -> str:
+    def catalog_line(self, name: str, *, folder: Path | None = None) -> str:
         """`- <key>: <description>`, cut at a word to fit the catalog token limit."""
-        header = self._parts(self._checked(name))[0]
+        header = self._parts(folder if folder is not None else self._checked(name))[0]
         description = " ".join(str(header.get("description", "")).split())
         line = f"- {name}: {description}"
         limit = self.catalog.limits.max_catalog_tokens
@@ -137,9 +172,19 @@ class InstalledSkills:
     def _checked(self, name: str) -> Path:
         entry = self.catalog.entry(name)
         folder = skill_folder(self.root, name)
+        # a link at the skill's folder or its publisher's is followed by every file call
+        # below and reported by none (DF-232): refused before anything is read
+        if any(p.is_symlink() or p.is_junction() for p in (folder, folder.parent)):
+            raise SkillsError(
+                f"the skill {name} is installed through a link; `agentic init` restores it"
+            )
         if not folder.is_dir():
             raise SkillsError(f"the skill {name} is not installed; run `agentic init`")
-        if skill_digest(folder) != entry.sha256:
+        try:
+            digest = skill_digest(folder)
+        except SkillsError as error:  # a link planted inside the skill
+            raise SkillsError(f"{error}; `agentic init` restores it") from error
+        if digest != entry.sha256:
             raise SkillsError(
                 f"the skill {name} changed since it was installed; `agentic init` restores it"
             )
@@ -159,13 +204,16 @@ class InstalledSkills:
 
 def skill_prompt(agent: "ResolvedAgent", library: InstalledSkills, *, preload_all: bool) -> str:
     """The skill block appended to an agent's instructions ("" when it has no skills).
-    A skill that is not installed as pinned is left out and recorded, never loaded."""
-    usable = []
+    A skill that is not installed as pinned is left out and recorded, never loaded.
+    Each skill's folder is verified once and used from there (DF-146)."""
+    folders: dict[str, Path] = {}
     for name in agent.skills:
-        if (why := library.unavailable(name)) is None:
-            usable.append(name)
+        folder, why = library.verified(name)
+        if folder is not None:
+            folders[name] = folder
         else:
             library.record("skills.unavailable", {"skill": name, "reason": why})
+    usable = list(folders)
     has_tool = "activate_skill" in agent.tools
     inline_all = preload_all or not has_tool
     catalog = library.catalog.skills
@@ -176,23 +224,32 @@ def skill_prompt(agent: "ResolvedAgent", library: InstalledSkills, *, preload_al
         for name in wanted[MAX_PRELOADED:]:
             library.record("skills.truncated", {"skill": name, "max_preloaded": MAX_PRELOADED})
     parts = []
-    if pre:
-        loaded = (library.load(n, list_files=has_tool) for n in pre)
+    if pre:  # an agent that cannot fetch a bundled file gets it inlined (DF-214)
+        loaded = (
+            library.load(n, list_files=has_tool, inline_files=not has_tool, folder=folders[n])
+            for n in pre
+        )
         parts.append("\n\n".join([PRELOADED_HEADER, *loaded]))
     if rest and has_tool:
-        parts.append("\n".join([CATALOG_HEADER, *(library.catalog_line(n) for n in rest)]))
+        lines = (library.catalog_line(n, folder=folders[n]) for n in rest)
+        parts.append("\n".join([CATALOG_HEADER, *lines]))
     return "\n\n".join([SKILLS_HEADER, *parts]) if parts else ""
 
 
 class SkillPromptRunner:
     """A step's runner whose agent instructions end with the agent's skill block. A
-    resume passes straight through: the paused state already holds the instructions."""
+    resume passes straight through: the paused state already holds the instructions.
+    `prompt` may be a function, called when the step runs: building a runner (for a
+    resume, say) then verifies and records nothing (DF-146)."""
 
-    def __init__(self, runner: "AgentRunner", prompt: str) -> None:
+    def __init__(self, runner: "AgentRunner", prompt: str | Callable[[], str]) -> None:
         self.runner, self.prompt = runner, prompt
 
     async def run(self, task: "AgentTask") -> "AgentOutcome":
-        instructions = f"{task.instructions.rstrip()}\n\n{self.prompt}"
+        prompt = self.prompt() if callable(self.prompt) else self.prompt
+        if not prompt:
+            return await self.runner.run(task)
+        instructions = f"{task.instructions.rstrip()}\n\n{prompt}"
         return await self.runner.run(replace(task, instructions=instructions))
 
     async def resume(

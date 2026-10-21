@@ -195,7 +195,11 @@ class TestReportData(HandoffBase):
     @model_validator(mode="after")
     def a_pass_has_no_new_failures(self) -> "TestReportData":
         if self.verdict == "pass":
-            if self.tests.failed and len(set(self.failures)) != self.tests.failed:
+            named = len(self.failures)
+            # each failure named once, and as many names as failures (DF-230)
+            if named != len(set(self.failures)) or (
+                (self.tests.failed or named) and named != self.tests.failed
+            ):
                 raise ValueError(
                     f"verdict: 'pass' but {self.tests.failed} test(s) failed; a pass with "
                     "failures must name each one, once, in `failures`"

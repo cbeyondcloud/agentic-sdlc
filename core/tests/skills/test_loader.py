@@ -1,11 +1,12 @@
 """Tests for the skill loader: catalog injection, activate_skill, pre-load (M1-38)."""
 
 import asyncio
+import shutil
 import stat
 from pathlib import Path
 
 import pytest
-from _skill_helpers import entry, make_skill, write_catalog
+from _skill_helpers import entry, make_dir_link, make_skill, write_catalog
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -309,3 +310,84 @@ def test_step_runner_without_skills_is_not_wrapped(resolved, tmp_path):
         {"native": backend}, tools_for=lambda ctx: None, state_dir_for=lambda ctx: tmp_path
     )
     assert runners(StepContext("r-1", "develop", 1, agent, None, None)) is backend.made
+
+
+# ── M1 close-out (DF-146, DF-214, DF-232) ────────────────────────────────────
+
+
+def test_each_skill_folder_is_hashed_once_per_prompt(installed, resolved, monkeypatch):
+    """unavailable, load and catalog_line each hashed the folder again (DF-146)."""
+    from agentic.skills import loader
+
+    hashed: list[str] = []
+    real = loader.skill_digest
+
+    def counting(folder):
+        hashed.append(Path(folder).name)
+        return real(folder)
+
+    monkeypatch.setattr(loader, "skill_digest", counting)
+    skill_prompt(developer(resolved), installed, preload_all=False)
+    assert sorted(hashed) == sorted(set(hashed)) and len(hashed) == 3
+
+
+def test_a_runner_records_skills_when_it_runs_not_when_it_is_built(
+    catalog_root, tmp_path, resolved
+):
+    """A resume (or any rebuild of the step's runner) re-recorded every pre-load (DF-146)."""
+    events = Events()
+    catalog = load_catalog(catalog_root)
+    sync_skills(catalog, catalog_root, tmp_path / "dest", list(catalog.skills))
+    library = InstalledSkills(catalog, tmp_path / "dest", record=events)
+    backend = OneRunnerBackend()
+    agent = developer(resolved).model_copy(update={"backend": "native"})
+    context = ToolContext(tree=tmp_path, guard=NoGuard(), skills=library)
+    runners = StepRunners(
+        {"native": backend}, tools_for=lambda ctx: context, state_dir_for=lambda ctx: tmp_path
+    )
+
+    runner = runners(StepContext("r-1", "develop", 1, agent, None, None))
+    asyncio.run(runner.resume(Path("s.json"), {}, "d"))
+    assert events.seen == []
+
+    asyncio.run(runner.run(AgentTask(instructions="Dev.", inputs={}, prompt="Go.")))
+    assert [e for e, _ in events.seen] == ["skills.activated"]  # TDD, the pre-load
+
+
+def test_an_agent_without_the_tool_gets_bundled_checklists_inlined(installed, resolved):
+    """A no-tool agent cannot fetch writing-good-tests.md: it is put in the prompt (DF-214)."""
+    prompt = skill_prompt(developer(resolved, tools=["read_files"]), installed, preload_all=False)
+    assert "writing-good-tests.md" in prompt and "Test behaviour." in prompt
+    assert "activate_skill" not in prompt
+
+
+def test_an_agent_with_the_tool_gets_only_the_list_of_bundled_files(installed, resolved):
+    prompt = skill_prompt(developer(resolved), installed, preload_all=False)
+    assert "writing-good-tests.md" in prompt and "Test behaviour." not in prompt
+
+
+def _relink(folder: Path, elsewhere: Path) -> None:
+    shutil.move(str(folder), str(elsewhere))
+    make_dir_link(folder, elsewhere)
+
+
+@pytest.mark.parametrize("level", ["skill", "publisher"])
+def test_a_linked_skill_or_publisher_folder_is_refused_with_the_init_hint(
+    installed, tmp_path, level
+):  # DF-232
+    skill = installed.root / "superpowers" / "systematic-debugging"
+    folder = skill if level == "skill" else skill.parent
+    _relink(folder, tmp_path / "elsewhere")
+
+    why = installed.unavailable(DEBUG)
+    assert why and "link" in why and "agentic init" in why
+
+
+def test_a_link_planted_inside_a_skill_names_the_init_fix(installed, tmp_path):  # DF-232
+    (tmp_path / "outside").mkdir()
+    make_dir_link(
+        installed.root / "superpowers" / "systematic-debugging" / "refs", tmp_path / "outside"
+    )
+
+    why = installed.unavailable(DEBUG)
+    assert why and "link" in why and "agentic init" in why

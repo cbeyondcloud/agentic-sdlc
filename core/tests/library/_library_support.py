@@ -27,3 +27,14 @@ def library() -> DefinitionSet:
 @pytest.fixture(scope="module")
 def standalone_policy():
     return load_policy(STANDALONE_POLICY)
+
+
+@pytest.fixture(scope="module")
+def edited_policy(standalone_policy):
+    """The standalone template after its user put real model ids in tiers.yaml: preflight
+    refuses the shipped `change-me` placeholders (DF-225)."""
+    tiers = {
+        name: tier.model_copy(update={"model": tier.model.replace("change-me", "acme")})
+        for name, tier in standalone_policy.tiers.items()
+    }
+    return standalone_policy.model_copy(update={"tiers": tiers})
