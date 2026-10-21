@@ -42,7 +42,7 @@ from agentic.engine.state import RunStore
 from agentic.policy import ResolvedAgent
 from agentic.sandbox.readiness import Readiness, SandboxDecision, decide_sandbox, readiness
 from agentic.skills.catalog import CatalogError, load_catalog
-from agentic.skills.install import sync_skills
+from agentic.skills.install import log_record, sync_skills
 from agentic.skills.loader import InstalledSkills
 from agentic.skills.select import pipeline_skills
 from agentic.telemetry.logs import StepLogs
@@ -50,6 +50,7 @@ from agentic.telemetry.sinks import ForwardingRecorder
 from agentic.transport import CallIdentity
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.standalone import PLACEHOLDER
 from agentic_cli.wiring import StepWiring, production_scanner
 from agentic_cli.workspace import RUNS, Workspace
 from sdlc_commons.gates import ZyrofloGates, regime_block_on
@@ -152,6 +153,7 @@ class Runtime:
         self._pipelines: dict[str, str] = {}
         self._library: InstalledSkills | None | bool = False  # False: not looked up yet
         self._gateway_key: str | None = None  # the key `redact` masks once it is known
+        self._restored: list[str] = []  # skills the last sync restored (a local edit)
 
     @property
     def user(self) -> str:
@@ -211,16 +213,35 @@ class Runtime:
             isinstance(step, GateStep) and step.four_eyes for step in pipeline.steps
         ):
             report.problems.append(Problem(None, "identity", UNVERIFIED, severity="warning"))
-        if not codeintel_index.available():
-            for agent_name, agent in sorted(report.resolved.items()):
-                if "codeintel" in agent.tools:
-                    detail = (
-                        f"agent {agent_name} may use codeintel, but the code intelligence "
-                        "extra is not installed (agentic-core[codeintel])"
-                    )
-                    report.problems.append(Problem(None, "codeintel", detail))
+        tiers = (self.ws.policy_repo or Path("<policy repo>")) / "policy" / "tiers.yaml"
+        for agent_name, agent in sorted(report.resolved.items()):
+            if PLACEHOLDER in agent.model:  # the gateway would refuse it on the first call
+                detail = (
+                    f"agent {agent_name} would call '{agent.model}' (tier {agent.tier}), the "
+                    f"template's placeholder: set a model your gateway serves in {tiers}"
+                )
+                report.problems.append(Problem(None, "model", detail))  # DF-225
+            if "codeintel" in agent.tools and self._codeintel_missing():
+                detail = (
+                    f"agent {agent_name} may use codeintel, but the code intelligence extra "
+                    "is not installed (agentic-core[codeintel]): it runs without it and uses "
+                    "search instead"
+                )  # DF-226: an optional extra must not refuse the run
+                report.problems.append(Problem(None, "codeintel", detail, severity="warning"))
+        for skill in self._restored:  # DF-186: a local edit was put back before the run
+            detail = f"skill {skill} had been changed locally; it was restored as pinned"
+            report.problems.append(Problem(None, "skills", detail, severity="warning"))
         report.problems += self._publish_problems(pipeline)
         return report
+
+    def _codeintel_off(self) -> bool:
+        """The repo turned code intelligence off (`codeintel.adapter: none`)."""
+        settings = self.ws.config.get("codeintel")
+        return isinstance(settings, dict) and settings.get("adapter") == "none"
+
+    def _codeintel_missing(self) -> bool:
+        """Wanted by the repo, but the extra is not installed on this machine."""
+        return not self._codeintel_off() and not codeintel_index.available()
 
     def _publish_problems(self, pipeline: PipelineDefinition) -> list[Problem]:
         """A publishing step whose host or token is missing fails here, before any spend
@@ -453,8 +474,8 @@ class Runtime:
     # ── helpers ──────────────────────────────────────────────────────────────
 
     def _wiring(self, decision: SandboxDecision) -> StepWiring:
-        codeintel_for = None
-        if codeintel_index.available():
+        codeintel_for = None  # agents then get no codeintel tools (wiring.NO_CODEINTEL)
+        if codeintel_index.available() and not self._codeintel_off():
             from agentic.codeintel.crg import CodeReviewGraph
 
             def codeintel_for(tree: Path, data: Path):
@@ -500,7 +521,13 @@ class Runtime:
         )
         known = [name for name in wanted if name in library.catalog.skills]
         if known:  # sync before every run: restores a locally edited skill (M1-37)
-            sync_skills(library.catalog, self._catalog_root(), library.root, known)
+
+            def record(event: str, fields: dict[str, object]) -> None:
+                log_record(event, fields)  # the audit log, as before
+                if event == "skills.tamper_restored":  # and preflight shows it (DF-186)
+                    self._restored.append(str(fields.get("skill")))
+
+            sync_skills(library.catalog, self._catalog_root(), library.root, known, record=record)
         return library
 
 

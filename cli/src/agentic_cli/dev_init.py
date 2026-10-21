@@ -51,6 +51,7 @@ from agentic_cli.exit_codes import ExitCode
 from agentic_cli.policy_source import LoadedPolicy
 from agentic_cli.readiness import Item, Report
 from agentic_cli.repo_guard import RepoRoot
+from agentic_cli.standalone import PLACEHOLDER
 from agentic_cli.workspace import Workspace
 from sdlc_commons.tool_fetch import FetchResult, ToolFetcher, ToolFetchError
 
@@ -61,8 +62,6 @@ LOCAL_WRITES = tuple(
     Path(rel) for rel in ("audit", AUDIT_REL, "skills", "index", "init.json", ".gitignore")
 )
 BUNDLED_SKILLS = Path(__file__).resolve().parents[3] / "library" / "skills"  # dev checkout
-#: The model name the standalone template uses until the person picks real models.
-PLACEHOLDER = "change-me"
 
 
 class IndexSkipped(Exception):

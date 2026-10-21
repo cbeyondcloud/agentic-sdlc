@@ -204,6 +204,17 @@ def test_tools_carry_the_skills_and_a_codeintel_index_of_the_run_tree(repo, tmp_
     assert without.codeintel is None and len(made) == 1
 
 
+def test_without_code_intelligence_the_agent_runs_without_its_tools(repo, tmp_path, agent):
+    """DF-226: no codeintel extra (or adapter none): the step still runs, with no
+    codeintel tool listed to the model - never a ToolConfigError mid-run."""
+    w = wiring(repo, tmp_path)  # no codeintel_for
+    with_codeintel = agent.model_copy(update={"tools": ["read_files", "codeintel"]})
+    context = w.tools_for(step(with_codeintel))
+    assert context.codeintel is not None and context.codeintel.supports == frozenset()
+    names = {tool.name for tool in build_tools(with_codeintel, context)}
+    assert names and not names & {"dependents", "impact", "tests_for", "overview", "context_pack"}
+
+
 def test_unenforced_preview_creates_nothing(repo, tmp_path, agent):
     w = wiring(repo, tmp_path)
     assert w.unenforced_preview(agent) == ["**/*.pem"]
