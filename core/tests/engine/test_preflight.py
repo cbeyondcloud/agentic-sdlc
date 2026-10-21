@@ -224,3 +224,37 @@ def test_a_sandbox_warning_is_reported_but_passes(check):
 def test_a_ready_sandbox_adds_nothing(check):
     report = check(CLEAN, sandbox=SandboxDecision(True, "srt 0.0.78", None, None))
     assert sandbox_problems(report) == []
+
+
+# ── M1-81 hardening (DF-265) ─────────────────────────────────────────────────
+
+REVIEW_OUTSIDE_A_LOOP = """\
+name: test
+version: 1.0.0
+steps:
+  - id: requirements
+    agent: ba
+  - id: design
+    agent: designer
+  - id: develop
+    agent: dev
+  - id: review
+    agent: reviewer
+"""
+
+
+def test_a_judging_step_outside_a_loop_is_warned_about(check):
+    """A failing review outside a loop cannot be sent back to the Developer: the run
+    can only pause at its end. Said up front, as a warning (DF-265)."""
+    report = check(
+        REVIEW_OUTSIDE_A_LOOP, extra_agents={"dev": "type: developer\nconsumes: [design]\n"}
+    )
+
+    assert report.passed, report.text()
+    [problem] = [p for p in report.problems if p.check == "judging-step"]
+    assert (problem.step, problem.severity) == ("review", "warning")
+    assert "review" in problem.detail and "failing-handoff" in problem.detail
+
+
+def test_a_judging_step_inside_a_loop_is_not_warned_about(check):
+    assert "judging-step" not in checks(check(CLEAN))
