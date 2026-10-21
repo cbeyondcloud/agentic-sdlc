@@ -67,8 +67,11 @@ class LoadedPolicy:
                 root, folder = _layout(self._install)
                 self.policy, self.root = _load(folder), root
                 return
-            self._install.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(self._pending), str(self._install))
+            if not _install_atomically(self._pending, self._install):
+                self.discard()  # another init installed it meanwhile: theirs is kept
+                root, folder = _layout(self._install)
+                self.policy, self.root = _load(folder), root
+                return
             shutil.rmtree(self._pending.parent, ignore_errors=True)  # the scratch folder
             self.root, self._pending = self._install, None
             return
@@ -216,6 +219,25 @@ def _clone(source: str, dest: Path) -> str | None:
         lines = [line for line in done.stderr.strip().splitlines() if line.strip()]
         return lines[-1][:160] if lines else f"git clone exit {done.returncode}"
     return None
+
+
+def _install_atomically(source: Path, target: Path) -> bool:
+    """Copy `source` beside `target` (same folder, so same volume), then rename it into
+    place: `target` is either absent or whole, never half-copied (DF-281). False when
+    `target` appeared meanwhile (another init); nothing of ours is then left behind."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+    if staged.exists():  # left by a killed init with this pid
+        shutil.rmtree(staged, onexc=_writable_and_retry)
+    try:
+        shutil.copytree(source, staged)
+        os.replace(staged, target)
+    except OSError:
+        shutil.rmtree(staged, ignore_errors=True)
+        if target.is_dir():
+            return False
+        raise
+    return True
 
 
 def _writable_and_retry(func, path, _error) -> None:

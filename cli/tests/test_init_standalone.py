@@ -179,6 +179,38 @@ def test_windows_without_wsl2_is_told_exactly_how_to_install_it(
     assert any("team, regulated runs refuse without it" in c["detail"] for c in sandbox)
 
 
+def test_a_failed_install_leaves_no_partial_policy(home, deps, monkeypatch):
+    """The scratch folder and ~/.agentic can be on different volumes (a redirected
+    profile, AGENTIC_HOME on another drive): the copy can fail part-way. A half-copied
+    standalone/ would be taken as installed and never rebuilt (DF-281)."""
+    from agentic_cli.policy_source import resolve_policy
+
+    loaded = resolve_policy(standalone=True, policy_path=None, home=agentic_home(), config={})
+    copied, copytree = [], shutil.copytree
+
+    def copy_then_fail(src, dst, **kwargs):
+        if len(copied) >= 5:
+            raise OSError(28, "No space left on device")
+        copied.append(src)
+        return shutil.copyfile(src, dst)
+
+    def copytree_failing(src, dst, *args, **kwargs):
+        if args:  # copytree's own recursion: our copy function is already in args
+            return copytree(src, dst, *args, **kwargs)
+        return copytree(src, dst, **{**kwargs, "copy_function": copy_then_fail})
+
+    def other_volume(src, dst):
+        raise OSError(18, "Invalid cross-device link")
+
+    with monkeypatch.context() as patched, pytest.raises(OSError):
+        patched.setattr(shutil, "copytree", copytree_failing)
+        patched.setattr(os, "rename", other_volume)
+        loaded.commit()
+    assert not installed().exists()
+    assert [p.name for p in installed().parent.iterdir()] == []  # no temporary folder left
+    loaded.discard()
+
+
 def test_standalone_reads_the_same_local_policy_keys_as_later_commands(home, policy_repo):
     from agentic_cli.policy_source import resolve_policy
 
