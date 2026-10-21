@@ -1,6 +1,6 @@
 # P0-04 Spike review (draft for owner sign-off)
 
-Status: **draft, 2026-10-21**, prepared overnight. P0-04 is done when the owner signs off the go/no-go, the re-estimate and the spec amendments below.
+Status: **signed off by the owner 2026-10-21** (Go; re-estimate, spec amendments and every recommendation in the owner-decision table accepted).
 
 ## Recommendation
 
