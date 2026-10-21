@@ -204,6 +204,23 @@ def test_ordinary_urls_are_not_telemetry():
     assert telemetry_urls(text) == []
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://docs.python.org/3/library/gc.html#gc.collect",
+        "https://example.com/guide#metrics",
+        "https://example.com/guide#how-we-track-releases",
+    ],
+)
+def test_a_fragment_is_never_judged(url: str):  # DF-139: it never leaves the machine
+    assert telemetry_urls(f"See {url} for details.") == []
+
+
+def test_a_telemetry_path_before_a_fragment_is_still_found():
+    url = "https://example.com/collect?v=1#top"
+    assert telemetry_urls(url) == [url]
+
+
 # ── a whole catalog folder ───────────────────────────────────────────────────
 
 
