@@ -44,7 +44,7 @@
     "qa-reset-limits",
     "qa-webhook-retries"
   ],
-  "corpus_manifest_sha": "sha256:54d6680d6ea36537f742b89a969db9684e2abcfec66a772477d3b54762c7eecb",
+  "corpus_manifest_sha": "sha256:381f9d83224a489293b28e7fd4af5cd7879c0f83f87edd3b4a8c5aa919a17739",
   "cost_total_usd": 0.0126,
   "cost_unmeasured_runs": 0,
   "judge": null,

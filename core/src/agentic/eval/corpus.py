@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from agentic.definitions import DefinitionError
 from agentic.eval.cases import CaseClass, EvalCase, Split
+from agentic.eval.validate import case_problems
 from agentic.yamlio import YamlFileError, load_yaml, read_text
 
 MANIFEST = "manifest.json"
@@ -145,6 +146,8 @@ def load_corpus(root: Path, *, public: bool = False) -> Corpus:
                 problems.append(f"{where}: handoff {both[0]} given both inline and as a file")
             else:
                 case = _with_handoff_files(root, case)
+        if not reference_problems:
+            problems += [f"{where}: {p}" for p in case_problems(root, case)]
         if public and not _public(case):
             problems.append(
                 f"{where}: a public corpus holds only synthetic or permissively licensed "

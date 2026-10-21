@@ -1,8 +1,8 @@
 {
   "files": {
     "README.md": "sha256:d7236ed65f9be6a0951cb02d40b6c78c871ae3a6bc8602f5bf69d7fc8764ace2",
-    "cases/dev_task/dev-money-split.yaml": "sha256:6b642c4d7d155ef8da2764ab9292612bc8b2d5ae1f84c14ba2c5aec318ce49f0",
-    "cases/dev_task/dev-slugify.yaml": "sha256:021c2b1cb6d1dc7d9497547295b6f39ee9bb64265420b89d0770d6a700f6f153",
+    "cases/dev_task/dev-money-split.yaml": "sha256:ab83e8cfcc602e23fd99eff7bd1e68ae276dd0517ad0e65e63c038dedaa38906",
+    "cases/dev_task/dev-slugify.yaml": "sha256:befeba32e1b74caff01dbdef7440803234c569c9f9ec17ba41bf916edeae0f83",
     "cases/qa/qa-invoice-export.yaml": "sha256:705ce5db8d80ab0e36180bdfb2bb00e380d3f8b4a7c6540d4d5fa1096eccf193",
     "cases/qa/qa-reset-limits.yaml": "sha256:22fe98d5e99790aea15fc81c4192ddbc73c08f8f93a44b5a754d363df5db78c1",
     "cases/qa/qa-webhook-retries.yaml": "sha256:83743e057a2164fe9385b5d7753e618d8eb645ba5015881ea7051bf98d165c2c",
@@ -35,10 +35,12 @@
     "golden/test-report/03-webhook-retries.md": "sha256:55ea156a58414eba86acf3d0ccfbec6976efd16d4d587f9dced40196805c96d8",
     "rubrics/ba-requirements.yaml": "sha256:8c3ed2830bd8bf0c87bf0686627247c5df836ad0c0ecb87c177e63b6b0d09cf0",
     "rubrics/design.yaml": "sha256:2dfed62281100d890ff9c6b4e40d06efa5ea9e7724a986a71d87916426e27091",
+    "solutions/dev-money-split/money.py": "sha256:f51550210142f6f9c00ad8085bc8bae9dd76fbf862a4be89226750ae459ba77b",
+    "solutions/dev-slugify/textutil.py": "sha256:1c36ff6078f534121d68509bc1d96adef3532c1b03946d5702317235fac4cb49",
     "workspaces/dev-money-split/money.py": "sha256:0db6424b154c9352c5a996b342d03c7f755629c8c181c7f168df1a814b484464",
     "workspaces/dev-money-split/tests/test_money.py": "sha256:6392bd4e51245f5887f007ed4665475fc75df876bd97d0b1ba9a042c8a712584",
     "workspaces/dev-slugify/tests/test_textutil.py": "sha256:0ae1270ac954170fa06da25661b10d2b269b87b979b7f6892c2b434ebaa1160e",
     "workspaces/dev-slugify/textutil.py": "sha256:a97fcf8443eb5acbb418da20e8e2e0ffde24aaa651ac7d9b1e5aaa27f65c3e0f"
   },
-  "sha": "sha256:54d6680d6ea36537f742b89a969db9684e2abcfec66a772477d3b54762c7eecb"
+  "sha": "sha256:381f9d83224a489293b28e7fd4af5cd7879c0f83f87edd3b4a8c5aa919a17739"
 }

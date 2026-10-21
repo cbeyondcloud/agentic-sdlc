@@ -10,6 +10,7 @@ inputs:
     pass without breaking the others.
   workspace: workspaces/dev-slugify
 expected:
+  solution: solutions/dev-slugify
   tests:
     fail_to_pass: [tests/test_textutil.py::test_slugify_strips_accents]
     pass_to_pass: [tests/test_textutil.py::test_slugify_basic]

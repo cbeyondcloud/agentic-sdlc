@@ -33,13 +33,15 @@ def scoping(case_id: str = "s1", split: str = "holdout", **extra) -> dict:
 
 
 def review(case_id: str = "r1", defects: int = 2) -> dict:
+    added = "".join(f"+line {n}\n" for n in range(10, 13 + defects))
+    diff = f"--- a/x.py\n+++ b/x.py\n@@ -9,0 +10,{3 + defects} @@\n{added}"
     return {
         "id": case_id,
         "agent": "code-review",
         "case_class": "review",
         "split": "holdout",
         "source": SOURCE,
-        "inputs": {"prompt": "Review this change.", "diff": "--- a/x.py\n+++ b/x.py\n"},
+        "inputs": {"prompt": "Review this change.", "diff": diff},
         "expected": {
             "seeded_defects": [
                 {"file": "x.py", "lines": [10 + i, 12 + i], "category": "logic"}
@@ -136,13 +138,17 @@ def test_a_case_rubric_must_exist_in_the_corpus(tmp_path: Path):
 
 def test_handoff_files_are_read_into_the_inputs(tmp_path: Path):
     (tmp_path / "golden").mkdir()
-    (tmp_path / "golden" / "req.md").write_bytes(b"---\nkind: requirements\n---\r\nbody\r\n")
+    front = (
+        "---\r\nkind: requirements\r\nsummary: s\r\nsize: small\r\nitems:\r\n"
+        "  - {id: REQ-1, statement: s, acceptance_criteria: [c]}\r\n---\r\nbody\r\n"
+    )
+    (tmp_path / "golden" / "req.md").write_bytes(front.encode("utf-8"))
     data = scoping(
         inputs={"prompt": "Design it.", "handoff_files": {"requirements": "golden/req.md"}}
     )
     write_case(tmp_path, data)
     case = load_corpus(tmp_path).cases[0]
-    assert case.inputs.handoffs == {"requirements": "---\nkind: requirements\n---\nbody\n"}
+    assert case.inputs.handoffs == {"requirements": front.replace("\r\n", "\n")}
     both = scoping(
         "s2",
         inputs={
