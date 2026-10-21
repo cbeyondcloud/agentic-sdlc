@@ -178,6 +178,10 @@ def _apply(schema: HandoffSchema, ext: HandoffExtension, problems: list[str]) ->
                 old = examples.get(spec.name)
                 if spec.values is not None and old not in spec.values:
                     examples[spec.name] = spec.values[0]  # the template stays valid
+        elif hasattr(schema.model, spec.name):  # failure(), a validator: the engine calls them
+            problems.append(
+                f"{spec.name}: clashes with a name the handoff model uses; choose another{where}"
+            )
         else:
             added = _add(spec, where, problems)
             if added is not None:

@@ -222,6 +222,34 @@ def test_a_field_name_the_model_uses_is_refused_clearly(tmp_path, name, recwarn)
     assert not [w for w in recwarn if "shadows" in str(w.message)]
 
 
+@pytest.mark.parametrize(
+    ("kind", "name"),
+    [
+        ("requirements", "failure"),
+        ("review", "failure"),
+        ("review", "summary_not_blank"),
+        ("test-report", "a_pass_has_no_new_failures"),
+    ],
+)
+def test_a_field_name_a_handoff_method_uses_is_refused(tmp_path, kind, name, recwarn):
+    """A field named after a method of the kind's model (`failure`, a validator) would
+    replace the method: the engine's `handoff.data.failure()` at the end of the run then
+    crashes with "'str' object is not callable" after every step was paid for."""
+    with pytest.raises(DefinitionError) as error:
+        extend_catalog(BUILTIN_CATALOG, [ext(tmp_path, kind, _new_field(name))])
+
+    assert f"{name}: clashes with a name the handoff model uses" in str(error.value)
+    assert not [w for w in recwarn if "shadows" in str(w.message)]
+
+
+def test_a_new_kind_cannot_define_a_field_named_failure(tmp_path):
+    """A new kind starts from the base template, which has `failure()` too."""
+    text = "new_kind: true\ntitle: Threat model\n" + _new_field("failure")
+
+    with pytest.raises(DefinitionError, match="failure: clashes with a name"):
+        extend_catalog(BUILTIN_CATALOG, [ext(tmp_path, "threat-model", text, layer="org")])
+
+
 def test_a_section_heading_with_a_line_break_is_refused(tmp_path):
     """A heading with a line break can never be matched in a body line, so every answer
     of the kind would be refused (DF-32)."""
