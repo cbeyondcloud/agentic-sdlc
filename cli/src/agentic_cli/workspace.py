@@ -3,10 +3,13 @@ repo, the team and the person.
 
   * repository   - the nearest folder holding `.git` (a folder, or a file in a worktree);
   * repo config  - `.agentic/config.yaml` (committed): `classification`;
-  * policy repo  - `AGENTIC_POLICY_REPO`, else the user config's `policy_repo`, else the
-                   policy cache `~/.agentic/policy/<org>/repo/` (user config `org`;
-                   written by `agentic init`), else the standalone `.agentic/local/policy/`,
-                   else `~/.agentic/policy/standalone/` (`agentic init --standalone`);
+  * policy repo  - `AGENTIC_POLICY_REPO`; else, with `org` in the user config, the policy
+                   cache `~/.agentic/policy/<org>/repo/` written by `agentic init` (the
+                   config's `policy_repo` is then where init fetches it from, often a
+                   URL); else the config's local `policy` or `policy_repo` folder; else
+                   the policy `init --standalone [--policy X]` recorded for this repo in
+                   `.agentic/local/init.json` (only a folder outside the repo); else the
+                   standalone `.agentic/local/policy/`, else `~/.agentic/policy/standalone/`;
                    its `policy/` folder is the org policy, its root the org layer of
                    agents and pipelines, `teams/<team>/` the team layer;
   * team         - `AGENTIC_TEAM`, else the user config's `team`;
@@ -18,6 +21,7 @@ Everything is read lazily, so `agentic runs` works without a policy and a broken
 definition is reported by the command that needs it.
 """
 
+import json
 import os
 import subprocess
 from collections.abc import Mapping
@@ -29,7 +33,7 @@ from typing import Any
 from agentic.definitions import DefinitionError, DefinitionSet
 from agentic.policy import OrgPolicy, ResolveContext, load_policy
 from agentic.yamlio import YamlFileError, load_yaml, read_text
-from agentic_cli.config import agentic_home, user_config
+from agentic_cli.config import agentic_home, local_policy_setting, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.standalone import STANDALONE_DIR
@@ -37,6 +41,7 @@ from agentic_cli.standalone import STANDALONE_DIR
 REPO_CONFIG = Path(".agentic") / "config.yaml"
 RUNS = Path(".agentic") / "local" / "runs"
 STANDALONE_POLICY = Path(".agentic") / "local" / "policy"
+INIT_STATE = Path(".agentic") / "local" / "init.json"  # written by `agentic init`
 
 
 def find_repo(start: Path) -> Path:
@@ -95,10 +100,19 @@ class Workspace:
 
     @cached_property
     def policy_repo(self) -> Path | None:
-        given = self.env.get("AGENTIC_POLICY_REPO", "").strip() or self.settings.get("policy_repo")
-        if given:
-            return Path(str(given)).expanduser()
+        return self.policy_repo_with(recorded_policy(self.repo))
+
+    def policy_repo_with(self, recorded: Path | None) -> Path | None:
+        """The policy repo, given the policy `agentic init --standalone` recorded for this
+        repository (`recorded_policy`): used after the explicit settings, and only when it
+        is an absolute folder outside the repository, so a repo cannot point the policy
+        at its own files."""
         org = self.settings.get("org")
+        given = self.env.get("AGENTIC_POLICY_REPO", "").strip()
+        if not given and not org:
+            given = local_policy_setting(self.settings) or ""
+        if given:
+            return Path(given).expanduser()
         if org:
             cached = self.home / "policy" / str(org)
             if (cached / "repo").is_dir():  # where `agentic init` caches the policy repo
@@ -108,6 +122,8 @@ class Workspace:
             # an org user never gets a personal policy (no org governance) in its place,
             # silently: the org policy is reported missing (review F3)
             return cached / "repo"
+        if recorded is not None and (root := _outside_policy_root(recorded, self.repo)):
+            return root
         if (self.repo / STANDALONE_POLICY).is_dir():
             return self.repo / STANDALONE_POLICY
         if (self.home / STANDALONE_DIR).is_dir():  # `agentic init --standalone` (M1-62)
@@ -171,6 +187,36 @@ class Workspace:
                 hint="set git config user.email (or AGENTIC_USER)",
             )
         return self._cache["user"]
+
+
+def recorded_policy(repo: Path) -> Path | None:
+    """The local policy `agentic init --standalone` used for `repo`, from the init state
+    it saved (`.agentic/local/init.json`); None for an org init or when there is none."""
+    try:
+        state = json.loads((repo / INIT_STATE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(state, dict) or state.get("mode") != "standalone":
+        return None
+    source = state.get("policy_source")
+    if not isinstance(source, str) or not source.strip():
+        return None
+    return Path(source.strip()).expanduser()
+
+
+def _outside_policy_root(path: Path, repo: Path) -> Path | None:
+    """The policy repo root `path` names (the root, or its `policy/` folder), when it is
+    an absolute folder outside `repo`."""
+    if not path.is_absolute():
+        return None
+    root = path.parent if path.name == "policy" and not (path / "policy").is_dir() else path
+    try:
+        resolved, top = root.resolve(), repo.resolve()
+    except OSError:
+        return None
+    if resolved == top or top in resolved.parents or not (root / "policy").is_dir():
+        return None
+    return root
 
 
 def _git_email(repo: Path) -> str:

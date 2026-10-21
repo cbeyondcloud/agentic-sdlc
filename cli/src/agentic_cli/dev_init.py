@@ -149,7 +149,7 @@ def run_dev_init(
     )
     items += _policy_items(loaded)
     if loaded.mode == "standalone":
-        items.append(_runs_policy(root.path, home, loaded.root))
+        items.append(_runs_policy(root.path, home, loaded.root, loaded.source))
     items += _skills(root.path, local, loaded, config, deps.roles, audit)
     tools = _Tools(home, policy, deps, audit)
     items += tools.required()
@@ -236,9 +236,10 @@ def _policy_items(loaded: LoadedPolicy) -> list[Item]:
     return items
 
 
-def _runs_policy(repo: Path, home: Path, policy_root: Path) -> Item:
-    """Whether later commands in this repo (`agentic run`...) will use this policy."""
-    found = Workspace.load(repo, home=home).policy_repo
+def _runs_policy(repo: Path, home: Path, policy_root: Path, source: str) -> Item:
+    """Whether later commands in this repo (`agentic run`...) will use this policy, once
+    init has recorded `source` for the repo in init.json (DF-274)."""
+    found = Workspace.load(repo, home=home).policy_repo_with(Path(source))
     if found is not None and _same_folder(found, policy_root):
         return Item("policy: runs", "info", f"later commands use {policy_root}")
     using = f"use {found}" if found is not None else "find no policy"

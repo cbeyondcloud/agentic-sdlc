@@ -6,6 +6,7 @@ Temporary HOME/AGENTIC_HOME and git repos; the machine (which, run) and the inde
 builder are fakes."""
 
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -142,12 +143,28 @@ def test_later_commands_find_the_installed_policy(setup_repo, deps, monkeypatch,
     assert code == ExitCode.OK
 
 
-def test_a_policy_later_commands_will_not_find_is_reported(
+def test_a_custom_policy_is_remembered_for_this_repo(
     setup_repo, deps, policy_repo, monkeypatch, capsys
 ):
+    """`init --standalone --policy X` (even a relative X) is what later commands in this
+    repo use, with nothing to set by hand (DF-274)."""
+    relative = os.path.relpath(policy_repo, setup_repo)  # init runs from the repo root
+    _, report = init(setup_repo, monkeypatch, capsys, "--policy", relative)
+    runs = item(report, "policy: runs")
+    assert runs["status"] == "info", runs
+    found = Workspace.load(setup_repo, env={}, home=agentic_home()).policy_repo
+    assert found is not None and found.resolve() == policy_repo.resolve()
+
+
+def test_a_policy_later_commands_will_not_find_is_reported(
+    setup_repo, deps, policy_repo, tmp_path, monkeypatch, capsys
+):
+    other = tmp_path / "elsewhere"
+    monkeypatch.setenv("AGENTIC_POLICY_REPO", str(other))  # an explicit setting wins
     _, report = init(setup_repo, monkeypatch, capsys, "--policy", str(policy_repo))
     runs = item(report, "policy: runs")
     assert runs["status"] == "warn" and "AGENTIC_POLICY_REPO" in runs["fix"]
+    assert str(other) in runs["detail"]
 
 
 def test_windows_without_wsl2_is_told_exactly_how_to_install_it(
@@ -160,6 +177,21 @@ def test_windows_without_wsl2_is_told_exactly_how_to_install_it(
     assert sandbox and all(c["status"] == "warn" for c in sandbox)  # solo still runs
     assert any("wsl --install" in c["fix"] for c in sandbox)
     assert any("team, regulated runs refuse without it" in c["detail"] for c in sandbox)
+
+
+def test_standalone_reads_the_same_local_policy_keys_as_later_commands(home, policy_repo):
+    from agentic_cli.policy_source import resolve_policy
+
+    for key in ("policy", "policy_repo"):
+        config = {key: str(policy_repo)}
+        loaded = resolve_policy(standalone=True, policy_path=None, home=home, config=config)
+        assert loaded.root == policy_repo, key
+    org = {"org": "acme", "policy_repo": "https://github.com/acme/agentic-org-policy.git"}
+    loaded = resolve_policy(standalone=True, policy_path=None, home=home, config=org)
+    try:  # an org's policy_repo is a fetch source, not a local policy: the template
+        assert loaded.source == str(home / STANDALONE_DIR)
+    finally:
+        loaded.discard()
 
 
 def test_a_copy_installed_meanwhile_is_kept(home, deps, tmp_path):

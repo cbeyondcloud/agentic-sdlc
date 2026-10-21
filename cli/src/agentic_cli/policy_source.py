@@ -4,7 +4,8 @@ Standalone (`--standalone --policy PATH`, spec §24): a local policy, no control
 no RBAC. PATH is a policy repo (a folder holding `policy/`, and optionally `skills/`,
 `agents/`, `pipelines/`, `teams/`) or a `policy/` folder itself.
 
-Standalone with no PATH (and no `policy:` in the user config) uses the framework's
+Standalone with no PATH (and no local `policy:` or, without `org:`, `policy_repo:` in
+the user config: `config.local_policy_setting`) uses the framework's
 template (M1-62): `~/.agentic/policy/standalone/` when it exists - the person's own copy,
 never overwritten - else a fresh one assembled in a scratch folder
 (`agentic_cli.standalone`) that `LoadedPolicy.commit()` installs there after the guard.
@@ -34,6 +35,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from agentic.policy import OrgPolicy, PolicyError, load_policy
+from agentic_cli.config import local_policy_setting
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.standalone import STANDALONE_DIR, assemble
@@ -101,10 +103,12 @@ def resolve_policy(
 ) -> LoadedPolicy:
     """Load the policy for this init without writing anything (see `commit`)."""
     if standalone:
-        path = policy_path or (Path(config["policy"]) if config.get("policy") else None)
+        setting = local_policy_setting(config)
+        path = policy_path or (Path(setting) if setting else None)
         if path is None:
             return _standalone_template(home)
-        root, folder = _layout(Path(path).expanduser())
+        path = Path(path).expanduser().absolute()  # init.json records it for later commands
+        root, folder = _layout(path)
         return LoadedPolicy(_load(folder), root, "standalone", str(path))
     if policy_path is not None:
         raise CliError("--policy is for --standalone", ExitCode.USAGE)
