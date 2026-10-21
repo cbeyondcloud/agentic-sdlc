@@ -1,0 +1,7 @@
+# OpenRouter list prices (USD per million tokens, read 2026-10-21), used only when TokenLean
+# reports no cost for a call (e.g. a model newer than its price table).
+prices:
+  openrouter/anthropic/claude-opus-5.5: { input_per_mtok: 4.00, output_per_mtok: 20.00 }
+  openrouter/anthropic/claude-sonnet-5.5: { input_per_mtok: 2.00, output_per_mtok: 10.00 }
+  openrouter/anthropic/claude-haiku-5.5: { input_per_mtok: 0.10, output_per_mtok: 0.50 }
+  openrouter/openai/gpt-6.1-sol: { input_per_mtok: 2.00, output_per_mtok: 10.00 }

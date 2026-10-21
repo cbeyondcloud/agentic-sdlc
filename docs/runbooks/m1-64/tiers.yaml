@@ -1,0 +1,11 @@
+# M1-64 quality-gate run (owner decisions 63-64): every tier through the owner's local
+# TokenLean LITE and one OpenRouter key (LLM_KEY_OPENROUTER). TokenLean names OpenRouter
+# models "openrouter/<vendor>/<model>". `family:` is set explicitly because the shared
+# "openrouter/" prefix would otherwise make every model look like one family (S10/D41:
+# the judge must come from a different family than the agents).
+tiers:
+  deep-reasoning: { model: openrouter/anthropic/claude-opus-5.5, effort: high, family: anthropic }
+  balanced: { model: openrouter/anthropic/claude-sonnet-5.5, effort: medium, family: anthropic }
+  fast: { model: openrouter/anthropic/claude-haiku-5.5, effort: low, family: anthropic }
+  local: { model: local/change-me }
+  eval-judge: { model: openrouter/openai/gpt-6.1-sol, family: openai }
