@@ -182,6 +182,21 @@ def test_a_bad_agent_identity_is_refused_and_nothing_is_appended(tmp_path: Path,
     assert [e["event"] for e in ledger.events()] == ["run_opened"]
 
 
+@pytest.mark.parametrize(
+    "name", ["qa", "3d-modeler", "2fa-checker", "a" * 64, "qa-baseline-2", "9", "x-"]
+)
+def test_every_name_the_agent_rule_accepts_is_recordable(tmp_path: Path, name: str):
+    """An agent that loads must not fail mid-run on its first ledger event (review F1)."""
+    from agentic.agents.children import CHILD_NAME
+    from agentic.definitions.agent import valid_agent_name
+
+    ledger = open_ledger(tmp_path)
+    for accepted in (valid_agent_name(name), CHILD_NAME.fullmatch(name) is not None):
+        if accepted:
+            agent = AgentIdentity(name=name, version="1.0.0", parent="lead@1.0.0")
+            ledger.record("step_started", phase="build", agent=agent, attempt=1, actor="a")
+
+
 def test_an_event_written_outside_the_framework_is_reported_as_unlabelled(tmp_path: Path):
     ledger = open_ledger(tmp_path)
     ledger_module._IDENTITIES.clear()  # e.g. a person running the Zyroflo CLI directly

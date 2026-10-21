@@ -87,7 +87,8 @@ def test_a_pre_push_hook_never_sees_the_frameworks_secrets(pair, tmp_path, monke
     """A husky hook, credential helper or ssh wrapper runs inside `git push`: it gets the
     person's own credentials (an SSH agent), never the framework's tokens (DF-294)."""
     work, _ = pair
-    secrets = ["AGENTIC_GITHUB_TOKEN", "AGENTIC_TOKENLEAN_API_KEY"]
+    # a credential's name is the org's choice (`acme_ghe`): it need not look secret (F3)
+    secrets = ["AGENTIC_GITHUB_TOKEN", "AGENTIC_TOKENLEAN_API_KEY", "AGENTIC_ACME_GHE"]
     for name in secrets:
         monkeypatch.setenv(name, "x" * 16)
     monkeypatch.setenv("AGENTIC_HOME", "/home/dev/.agentic")

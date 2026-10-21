@@ -30,10 +30,11 @@ SECRET_NAME = re.compile(
 # A value carrying a credential, whatever its name: a URL with `user:password@`, or with
 # a long user part (`https://<token>@host`); `ssh://git@host` is a user name, not a secret.
 # A scheme starts only where no scheme character precedes it, and the userinfo parts are
-# bounded, so a long value is scanned in linear time (DF-333).
+# possessive (never given back), so a long value is scanned in linear time (DF-333) with
+# no length cap that a long credential could slip past (review F4).
 _URL_CREDENTIAL = re.compile(
-    r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]*://"
-    r"(?:[^/\s@:]{0,256}:[^/\s@]{1,4096}|[^/\s@:]{20,4096})@"
+    r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]*+://"
+    r"(?:[^/\s@:]*+:[^/\s@]++|[^/\s@:]{20,}+)@"
 )
 # Windows: `cmd.exe` and CreateProcess search the working folder before PATH unless this
 # is set, so an agent's `pytest.cmd` in the tree would run in place of the real one (DF-68).

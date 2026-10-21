@@ -125,10 +125,13 @@ PR_BODY_START = "<!-- agentic:run -->"
 PR_BODY_END = "<!-- /agentic:run -->"
 
 
-def _marked(text: str) -> tuple[int, int] | None:
-    """Where the generated part of `text` starts and ends (markers included), or None."""
+def _marked(text: str, *, last_end: bool = False) -> tuple[int, int] | None:
+    """Where the generated part of `text` starts and ends (markers included), or None.
+    With `last_end` (text that is all ours), the part runs to the last end marker."""
     start = text.find(PR_BODY_START)
-    end = text.find(PR_BODY_END, start + len(PR_BODY_START)) if start >= 0 else -1
+    after = start + len(PR_BODY_START)
+    find = text.rfind if last_end else text.find
+    end = find(PR_BODY_END, after) if start >= 0 else -1
     return (start, end + len(PR_BODY_END)) if end >= 0 else None
 
 
@@ -137,7 +140,7 @@ def splice_body(current: str | None, generated: str) -> str:
     only the marked part changes, and the text a person wrote before or after it stays.
     A description without both markers (an old one, or one whose markers a person
     deleted) is replaced whole."""
-    new, old = _marked(generated), _marked(current or "")
+    new, old = _marked(generated, last_end=True), _marked(current or "")
     if new is None or old is None or current is None:
         return generated
     return current[: old[0]] + generated[new[0] : new[1]] + current[old[1] :]

@@ -132,6 +132,24 @@ def test_credentials_are_still_found():
     assert not secret_value("ssh://git@github.com/org/repo")
 
 
+def test_a_long_credential_is_still_found():  # review F4: no length lets one through
+    long = "p" * 5_000
+    assert secret_value(f"https://user:{long}@host/x")
+    assert secret_value(f"https://{long}@host/x")  # a long token as the user part
+    assert secret_value(f"https://{'u' * 300}:{PASSWORD}@host/x")  # a long user name
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["a://b:" + "c:" * 20_000, ("a://b:" + "c" * 50) * 2_000, "a://" + "u" * 40_000],
+    ids=["password-colons", "many-urls", "long-user"],
+)
+def test_unbounded_credential_detection_stays_linear(value):  # review F4
+    started = time.monotonic()
+    assert not secret_value(value)
+    assert time.monotonic() - started < 0.25
+
+
 def test_a_quoted_absolute_path_entry_is_kept():  # DF-336
     folder = "C:\\Program Files\\Tool" if os.name == "nt" else "/opt/my tools/bin"
     other = "C:\\Windows" if os.name == "nt" else "/usr/bin"

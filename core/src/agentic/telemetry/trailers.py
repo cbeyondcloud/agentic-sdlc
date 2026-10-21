@@ -44,6 +44,9 @@ NONE = "none"
 #: Proposed AGENTS.md additions are agent text: shown as inline code, bounded (DF-177).
 MAX_PROPOSALS = 20
 MAX_PROPOSAL_CHARS = 500
+#: `<!--` with a zero-width space inside: it reads the same, but opens no comment and
+#: so can never form a generated-part marker.
+_INERT_COMMENT = "<!\u200b--"
 _TRAILER = re.compile(r"([A-Za-z0-9][A-Za-z0-9-]*): (.*)")
 
 
@@ -157,8 +160,10 @@ def pr_body(
             lines.append(f"- {_code(_cut(_line(text)))} (from {shown('handoff', rel)})")
         if len(proposed) > MAX_PROPOSALS:
             lines.append(f"- ... {len(proposed) - MAX_PROPOSALS} more in the run's handoffs")
-    lines.append(PR_BODY_END)
-    return "\n".join(lines) + "\n"
+    # agent text (proposals, names) may hold an HTML comment opener: one would end the
+    # generated part early on a re-publish, or hide the rest of the description (F2)
+    inner = [line.replace("<!--", _INERT_COMMENT) for line in lines[1:]]
+    return "\n".join([PR_BODY_START, *inner, PR_BODY_END]) + "\n"
 
 
 def _line(value: object) -> str:

@@ -96,6 +96,17 @@ def test_an_update_replaces_only_the_generated_part():  # DF-296
     assert "- Status: completed" in spliced and "- Status: running" not in spliced
 
 
+def test_the_generated_part_runs_to_its_last_end_marker():  # review F2
+    """The generated text is ours: an end marker inside it (agent text the body failed to
+    neutralise) must not cut the new part short."""
+    generated = f"{PR_BODY_START}\nnew {PR_BODY_END} inside\nnew tail\n{PR_BODY_END}\n"
+    current = f"mine\n{PR_BODY_START}\nold\n{PR_BODY_END}\ntheirs"
+
+    spliced = splice_body(current, generated)
+
+    assert spliced == "mine\n" + generated.removesuffix("\n") + "\ntheirs"
+
+
 @pytest.mark.parametrize("current", [None, "", "an old description with no markers"])
 def test_a_description_without_markers_is_replaced_whole(current):
     assert splice_body(current, BODY) == BODY

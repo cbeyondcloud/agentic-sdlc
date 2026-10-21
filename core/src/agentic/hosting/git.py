@@ -14,7 +14,6 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from agentic.hosting.base import HostingError, scrub_url_credentials
-from agentic.sandbox.process import SECRET_NAME
 
 _GIT = ("git", "-c", "core.fsmonitor=false")
 
@@ -67,15 +66,23 @@ def push_branch(
         raise HostingError(_scrub(f"git push of {branch} to {remote} failed: {tail}", known))
 
 
+#: The framework's plain settings, which a nested `agentic` call in a hook reads: every
+#: other `AGENTIC_*` variable may be a credential (`AGENTIC_<NAME>`, any name an org picks).
+_PLAIN_SETTINGS = frozenset(
+    {"AGENTIC_HOME", "AGENTIC_TEAM", "AGENTIC_USER", "AGENTIC_DEBUG", "AGENTIC_TRACES"}
+)
+
+
 def _env() -> dict[str, str]:
-    """This process's environment without the framework's own secrets (`AGENTIC_*` with a
-    secret-like name): hooks, credential helpers and ssh wrappers run inside git and can
-    read what it gets (DF-294). The person's own credentials - an SSH agent, a helper's
-    token - stay: pushing needs them."""
+    """This process's environment without the framework's own variables (`AGENTIC_*`, all
+    but its plain settings): hooks, credential helpers and ssh wrappers run inside git and
+    can read what it gets (DF-294). A credential's name need not look secret (`acme_ghe`),
+    so only the named settings pass. The person's own credentials - an SSH agent, a
+    helper's token - stay: pushing needs them."""
     kept = {
         name: value
         for name, value in os.environ.items()
-        if not (name.upper().startswith("AGENTIC_") and SECRET_NAME.search(name))
+        if not name.upper().startswith("AGENTIC_") or name.upper() in _PLAIN_SETTINGS
     }
     return {**kept, "GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"}
 

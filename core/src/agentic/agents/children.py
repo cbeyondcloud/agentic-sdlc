@@ -43,7 +43,8 @@ from agentic.transport import BudgetError, BudgetSlice, LimitHit
 
 # (child, its budget slice, its own spawner - for its spawn_agent tool) -> runner
 RunnerFactory = Callable[[ResolvedAgent, BudgetSlice, "ChildSpawner"], AgentRunner]
-CHILD_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+# letter first, like an agent's name: the run ledger records it only in that shape
+CHILD_NAME = re.compile(r"[a-z][a-z0-9-]{0,39}")
 
 
 @dataclass(frozen=True)
@@ -103,7 +104,7 @@ class ChildSpawner:
         if not CHILD_NAME.fullmatch(spec.name):
             return _refused(
                 "a child's name is 1-40 lowercase letters, digits and dashes, "
-                f"starting with a letter or digit: {spec.name[:60]!r}"
+                f"starting with a letter: {spec.name[:60]!r}"
             )
         if self.depth + 1 > self.max_depth:
             return _refused(

@@ -26,8 +26,9 @@ from agentic.yamlio import YamlFileError, load_yaml, read_text, split_front_matt
 #   acp:<agent>     -> any Agent Client Protocol agent via one generic adapter (acp:antigravity)
 #   remote:<service> -> hosted agents such as Devin (submit / poll / collect)
 BACKEND_PATTERN = r"^(native|claude-code|codex|opencode|acp:.+|remote:.+)$"
-# An agent's name: lower-case letters, digits and dashes (DF-07).
-AGENT_NAME = r"^[a-z0-9][a-z0-9-]{0,63}$"
+# An agent's name: lower-case letters, digits and dashes (DF-07), starting with a letter
+# - the run ledger records `<name>@<version>` only in that shape (review F1).
+AGENT_NAME = r"^[a-z][a-z0-9-]{0,63}$"
 # Names Windows maps to devices in every folder, with or without an extension: a file
 # named after one cannot be created there (DF-324, DF-180).
 WINDOWS_DEVICE_NAMES = frozenset(
@@ -137,8 +138,8 @@ class AgentDefinition(BaseModel):
     def name_is_a_file_name(cls, value: str) -> str:
         if re.fullmatch(AGENT_NAME, value) is None:
             raise ValueError(
-                "use lower-case letters, digits and dashes, starting with a letter or "
-                "digit, at most 64 characters - the name is also a file name"
+                "use lower-case letters, digits and dashes, starting with a letter, "
+                "at most 64 characters - the name is also a file name"
             )
         if windows_device_name(value):
             raise ValueError(f"{value!r} is a Windows device name, so no file can carry it")
