@@ -188,6 +188,9 @@ class TestReportData(HandoffBase):
     # failures). Optional, so a report written before these fields existed stays valid.
     failures: list[str] = []  # the failing tests, by name
     baseline_failures: list[str] = []  # tests already failing at intake (the baseline report)
+    # Failing tests and acceptance criteria (by id) a person accepted at a gate: they stay
+    # named as failures, nothing claims they failed at intake. Never an agent's (review F3).
+    accepted_failures: list[str] = []
 
     @model_validator(mode="after")
     def a_pass_has_no_new_failures(self) -> "TestReportData":
@@ -197,13 +200,18 @@ class TestReportData(HandoffBase):
                     f"verdict: 'pass' but {self.tests.failed} test(s) failed; a pass with "
                     "failures must name each one, once, in `failures`"
                 )
-            if new := [name for name in self.failures if name not in self.baseline_failures]:
+            known = {*self.baseline_failures, *self.accepted_failures}
+            if new := [name for name in self.failures if name not in known]:
                 raise ValueError(
                     f"verdict: 'pass' but {', '.join(new)} failed and was not failing at "
-                    "intake (`baseline_failures`)"
+                    "intake (`baseline_failures`) nor accepted by a person (`accepted_failures`)"
                 )
-            if failed := [r.criterion_id for r in self.acceptance_results if not r.passed]:
-                raise ValueError(f"verdict: 'pass' but acceptance criterion {failed[0]} failed")
+            failed = [r.criterion_id for r in self.acceptance_results if not r.passed]
+            if failed := [c for c in failed if c not in self.accepted_failures]:
+                raise ValueError(
+                    f"verdict: 'pass' but acceptance criterion {failed[0]} failed and was not "
+                    "accepted by a person (`accepted_failures`)"
+                )
         return self
 
     def failure(self) -> str | None:

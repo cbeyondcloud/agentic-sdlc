@@ -680,7 +680,8 @@ class _Run:
     def _loop_still_failing(self, pending: Pending) -> str | None:
         """Why an exhausted loop may not be approved yet, or None (DF-238): its `until`
         must hold over the current handoffs - a person's edit can make it hold (marking a
-        finding accepted, say), a bare approval cannot wave a failure through."""
+        finding accepted, or a failing test in `accepted_failures`), a bare approval cannot
+        wave a failure through."""
         if not pending.id.endswith("-exhausted") or self._gate_step(pending.id) is not None:
             return None
         top = self.pipeline.steps[self.state.cursor.index]
@@ -697,8 +698,9 @@ class _Run:
             why = f"cannot be evaluated ({problem.reason})"
         return (
             f"{loop.id}: its exit condition {loop.until!r} {why} - edit a pinned handoff so "
-            "that it holds (a person may mark a finding accepted), reject with feedback for "
-            "another pass, or stop the run"
+            "that it holds (a person may mark a review finding accepted, or name a failing "
+            "test or criterion in a test report's accepted_failures and set its verdict to "
+            "pass), reject with feedback for another pass, or stop the run"
         )
 
     async def _reject(self, decision: Reject, gate: GateStep | None) -> RunState:
@@ -856,7 +858,9 @@ class _Run:
             self.save()
 
     def _oscillating(self, loop: LoopSpec) -> str | None:
-        """An open finding of this iteration that repeats one of the last two (§8.5)."""
+        """An open blocking finding of this iteration that repeats one of the last two
+        (§8.5). A non-blocking one may stay open while the work goes round for another
+        reason (a QA failure, say): it decides nothing, so it is no oscillation (review F2)."""
         body = {step.id for step in loop.steps}
         by_iteration: dict[int, list[str]] = {}
         for record in self.state.history[self.state.loop_pass_start :]:
@@ -878,7 +882,9 @@ class _Run:
             return None
         if handoff.envelope.kind != "review":
             return None
-        return [f.issue for f in handoff.data.findings if f.status == "open"]  # type: ignore[attr-defined]
+        blocking = self.e.block_on_for(self.state.regime)
+        findings = handoff.data.findings  # type: ignore[attr-defined]
+        return [f.issue for f in findings if f.status == "open" and f.severity in blocking]
 
     # ── one step ─────────────────────────────────────────────────────────────
 

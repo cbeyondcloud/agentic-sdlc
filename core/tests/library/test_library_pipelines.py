@@ -17,7 +17,7 @@ from agentic.agents.models import GatewaySettings
 from agentic.definitions.pipeline import AgentStep, GateStep, LoopStep
 from agentic.engine.engine import Engine
 from agentic.engine.factory import PydanticStepRunners
-from agentic.engine.gates import Approve, GateRefused, StandaloneAuthorizer
+from agentic.engine.gates import Approve, Edit, GateRefused, StandaloneAuthorizer
 from agentic.engine.preflight import preflight
 from agentic.engine.state import RunStore
 from agentic.handoffs import check_compatibility, parse_handoff
@@ -29,8 +29,8 @@ from sdlc_commons.ledger import RunIdentity, RunLedger
 
 PIPELINES = ["bugfix", "feature-delivery"]
 ACTIONS = {"github.open_pr"}
-#: the build loop's steps when a blocking review loops once: QA waits for a clean review
-LOOPED = ["develop", "review", "qa:skipped", "develop", "review", "qa"]
+#: the build loop's steps when a blocking review loops once: QA tests every round's change
+LOOPED = ["develop", "review", "qa", "develop", "review", "qa"]
 #: the steps each run takes, with the gates it stops at
 EXPECTED = {
     "feature-delivery": (
@@ -119,14 +119,15 @@ def test_baseline_runs_before_any_code_changes(library, name):
 def test_qa_runs_inside_the_build_loop(library, name):
     """DF-238: a QA `fail` routes the work back to the Developer, because QA is the last
     step of the build loop and the loop ends only on a clean review AND a QA pass. A
-    person reads the change with its QA report at the gate after the loop."""
+    person reads the change with its QA report at the gate after the loop. QA runs in every
+    round (review F1): the report the loop ends on is always about the current change."""
     steps = library.pipeline(name).steps
     index, loop = next((i, s.loop) for i, s in enumerate(steps) if isinstance(s, LoopStep))
     body = [(s.id, s.agent, s.when) for s in loop.steps]
     assert body == [
         ("develop", "developer", None),
         ("review", "code-review", None),
-        ("qa", "qa", "review.open_blocking == 0"),
+        ("qa", "qa", None),
     ]
     assert loop.until == "review.open_blocking == 0 && test_report.verdict == 'pass'"
     assert (loop.id, loop.on_exhausted) == (LOOP_ID[name], "gate")
@@ -232,6 +233,7 @@ def dry_run(library, standalone_policy, name: str, tmp_path: Path, script: dict)
         "published": published,
         "ledger": ledgers[run_id],
         "seen": seen,
+        "engine": engine,
     }
 
 
@@ -298,3 +300,57 @@ def test_qa_that_keeps_failing_ends_at_a_gate_never_completed(
     assert [r.step for r in state.history].count("qa") == 3
     assert run["published"] == []
     assert run["ledger"].verify() == []
+
+
+def accept_the_review(run, name: str):
+    """At the gate of a loop exhausted on a review that always blocks, a person accepts
+    the review's findings by editing it. Returns the state after the decision."""
+    state = run["state"]
+    assert state.pending.id == f"{LOOP_ID[name]}-exhausted", state.pending
+    path = state.latest["review"]
+    text = (run["ledger"].run_dir / path).read_text(encoding="utf-8")
+    accepted = text.replace("status: open", "status: accepted").replace(
+        "open_blocking: 1", "open_blocking: 0"
+    )
+    assert accepted != text
+    return asyncio.run(
+        run["engine"].decide(
+            state.run_id,
+            Edit(state.pending.id, "lead@example.com", path, accepted),
+            authorizer=StandaloneAuthorizer(),
+            self_approval=self_approval_refusal,
+        )
+    )
+
+
+@pytest.mark.parametrize("name", PIPELINES)
+def test_accepting_the_review_never_ends_the_loop_on_a_stale_test_report(
+    library, standalone_policy, name, tmp_path: Path
+):
+    """Review F1: QA tests every round's change, so when a person accepts the review's
+    findings at the loop's gate, the loop's `until` reads this round's QA report - never
+    the intake baseline's `pass` - and a failing QA still holds the loop."""
+    script = {**SCRIPT, "code-review": [answer("review", findings=BLOCKING)], "qa": QA_FAILS}
+    run = dry_run(library, standalone_policy, name, tmp_path, script)
+    steps = [r.step for r in run["state"].history]
+    assert steps.count("qa") == steps.count("review") >= 2  # one QA report per round
+
+    with pytest.raises(GateRefused, match="test_report.verdict == 'pass'"):
+        accept_the_review(run, name)
+    assert run["published"] == []
+
+
+@pytest.mark.parametrize("name", PIPELINES)
+def test_accepting_the_review_ends_the_loop_on_this_rounds_qa_report(
+    library, standalone_policy, name, tmp_path: Path
+):
+    script = {**SCRIPT, "code-review": [answer("review", findings=BLOCKING)]}
+    run = dry_run(library, standalone_policy, name, tmp_path, script)
+
+    state = accept_the_review(run, name)
+    assert (state.status, state.pending.id) == ("awaiting_gate", "review-approval")
+    report = parse_handoff(
+        (run["ledger"].run_dir / state.latest["test-report"]).read_text(encoding="utf-8"),
+        library.handoffs,
+    )
+    assert report.envelope.step == "qa"  # QA's report on the last round, not the baseline

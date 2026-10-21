@@ -11,8 +11,9 @@ gate stand after you. You work in the run's own worktree; the framework commits
 your work at the end of the step.
 
 You read the requirements, the approved design, the baseline test report from
-intake and, from the second round on, the last review. When QA sent the work
-back, the test report among your inputs is QA's, not the baseline: see "After QA".
+intake and, from the second round on, the last review. From the second round on,
+the test report among your inputs is QA's from that round, not the baseline: see
+"After QA".
 
 ## How you work
 

@@ -48,6 +48,25 @@ steps:
     when: "test_report.verdict == 'pass'"
 """
 
+LOOP_WITH_QA = """\
+name: test
+version: 1.0.0
+steps:
+  - id: design
+    agent: designer
+  - loop:
+      id: build-review
+      max_iterations: 3
+      until: "review.open_blocking == 0 && test_report.verdict == 'pass'"
+      steps:
+        - id: develop
+          agent: dev
+        - id: review
+          agent: reviewer
+        - id: qa
+          agent: qa
+"""
+
 QA_FAILS = answer(
     "test-report",
     summary="red",
@@ -137,6 +156,47 @@ def test_reject_at_an_exhausted_gate_still_runs_another_pass(make_harness):
 
     state = decide(h, Reject("build-review-exhausted", LEAD, "smaller change"))
     assert state.status == "completed", state.pending
+
+
+def test_a_non_blocking_finding_left_open_is_not_oscillation(make_harness, with_qa):
+    """Review F2: while the Developer fixes a QA failure, a low finding stays open from
+    round to round. Only blocking findings decide the loop, so only they can make it
+    oscillate: the loop uses all its rounds and says why it stopped."""
+    low = [{"severity": "low", "issue": "rename helper", "status": "open"}]
+    h = make_harness(
+        LOOP_WITH_QA,
+        {**SCRIPT, "reviewer": [answer("review", findings=low)], "qa": [QA_FAILS]},
+    )
+
+    state = start(h)
+    assert (state.status, state.pending.id) == ("awaiting_gate", "build-review-exhausted")
+    assert "oscillat" not in state.pending.reason
+    assert "max_iterations 3" in state.pending.reason
+    assert [r.step for r in state.history].count("qa") == 3
+
+
+def test_a_person_accepts_a_qa_failure_without_rewriting_history(make_harness, with_qa):
+    """Review F3: a person accepts a failing test by naming it in `accepted_failures` -
+    the report keeps saying it failed, nothing claims it failed at intake - and the
+    acceptance is theirs in the approvals ledger."""
+    h = make_harness(LOOP_WITH_QA, {**SCRIPT, "reviewer": [review()], "qa": [QA_FAILS]})
+    state = start(h)
+    assert state.pending.id == "build-review-exhausted"
+
+    with pytest.raises(GateRefused, match="accepted_failures"):
+        decide(h, Approve("build-review-exhausted", LEAD))
+    path = state.latest["test-report"]
+    text = (h.ledger("r-1").run_dir / path).read_text(encoding="utf-8")
+    accepted = text.replace(
+        "verdict: fail\n", "verdict: pass\naccepted_failures:\n- tests/test_export.py::test_csv\n"
+    )
+
+    state = decide(h, Edit("build-review-exhausted", LEAD, path, accepted))
+    assert state.status == "completed", state.pending
+    [entry] = h.gates["r-1"].entries
+    assert entry["verdict"] == "approve" and entry["approver"] == LEAD
+    edited = (h.ledger("r-1").run_dir / state.latest["test-report"]).read_text(encoding="utf-8")
+    assert "baseline_failures: []" in edited  # nobody claims it was failing at intake
 
 
 # ── the end of the run ────────────────────────────────────────────────────────

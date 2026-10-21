@@ -5,7 +5,8 @@
 # A QA `fail` routes the work back to the Developer, with the QA report among its
 # inputs (DF-238): the build loop ends only on a clean review and a QA pass. Still
 # failing after 3 rounds, the run waits at the loop's gate, where a bare approval is
-# refused: a person edits the report (an attributable acceptance), rejects with
+# refused: a person edits a handoff (marks a review finding accepted, or names a failing
+# test in the QA report's accepted_failures - an attributable acceptance), rejects with
 # feedback for another round, or stops the run.
 name: feature-delivery
 version: 1.0.0
@@ -41,8 +42,8 @@ steps:
         - id: review
           agent: code-review
         - id: qa                           # tests against the baseline, every acceptance
-          agent: qa                        # criterion - only on a change review passed
-          when: "review.open_blocking == 0"
+          agent: qa                        # criterion - every round, so the loop always
+                                           # ends on a QA report about the current change
 
   - gate: review-approval               # a person reads the change and its QA report
     approver_role: approver

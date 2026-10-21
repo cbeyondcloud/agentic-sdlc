@@ -69,3 +69,39 @@ def test_an_extended_kind_keeps_the_rule(tmp_path: Path):
 
     report = model(summary="red", verdict="fail", tests=COUNTS)
     assert report.failure() == "verdict 'fail'"
+
+
+# ── a person's honest acceptance of a QA failure (review F3) ─────────────────
+
+
+def test_a_pass_may_carry_failures_a_person_accepted():
+    """A person accepts a failing test or criterion by naming it in `accepted_failures`:
+    the report still says it failed - nothing claims it was failing at intake."""
+    report = TestReportData(
+        summary="accepted",
+        verdict="pass",
+        tests=COUNTS,
+        failures=["tests/test_export.py::test_csv"],
+        acceptance_results=[{"criterion_id": "REQ-2", "passed": False}],
+        accepted_failures=["tests/test_export.py::test_csv", "REQ-2"],
+    )
+    assert report.failure() is None
+    assert report.baseline_failures == []
+
+
+@pytest.mark.parametrize(
+    ("fields", "named"),
+    [
+        ({"failures": ["tests/test_export.py::test_csv"]}, "tests/test_export.py::test_csv"),
+        ({"acceptance_results": [{"criterion_id": "REQ-2", "passed": False}]}, "REQ-2"),
+    ],
+)
+def test_a_pass_with_a_failure_nobody_accepted_is_still_invalid(fields, named):
+    with pytest.raises(ValueError, match=named):
+        TestReportData(
+            summary="s",
+            verdict="pass",
+            tests=COUNTS if "failures" in fields else {"passed": 3, "failed": 0},
+            accepted_failures=["tests/other.py::test_other"],
+            **fields,
+        )

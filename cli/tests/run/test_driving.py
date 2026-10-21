@@ -52,3 +52,4 @@ def test_refusing_a_bare_approval_of_an_exhausted_loop_hints_at_edit_reject_and_
             raise GateRefused(message)
     assert refused.value.code == ExitCode.REFUSED
     assert all(word in refused.value.hint for word in ("agentic edit", "reject", "agentic stop"))
+    assert "accepted_failures" in refused.value.hint  # review F3: how a QA failure is accepted

@@ -55,7 +55,8 @@ def _hint(message: str) -> str | None:
         return "wait for the other command to finish"
     if "exit condition" in message:  # an exhausted loop is not approved as it stands
         return (
-            "`agentic edit` the pinned handoff (e.g. mark a finding accepted), "
+            "`agentic edit` the pinned handoff (mark a review finding accepted, or name a "
+            "failing test in the test report's accepted_failures and set its verdict to pass), "
             "`agentic reject --feedback` for another pass, or `agentic stop`"
         )
     return None

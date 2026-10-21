@@ -205,3 +205,19 @@ def test_an_agent_cannot_accept_a_blocking_finding():  # DF-41 (owner 2026-10-20
     document, handoff = finalise_handoff(agent_answer, schema=REVIEW, stamp=STAMP, person=True)
     assert handoff.data.open_blocking == 0
     assert parse_handoff(document).data.findings[0].status == "accepted"
+
+
+def test_an_agent_cannot_accept_a_failing_test():  # review F3: like DF-41, for QA
+    report = BUILTIN_CATALOG.schema("test-report")
+    fields = (
+        "status: complete\nsummary: s\nverdict: pass\n"
+        "tests: {passed: 41, failed: 1, skipped: 0}\n"
+        "failures: [tests/test_export.py::test_csv]\n"
+        "accepted_failures: [tests/test_export.py::test_csv]\n"
+    )
+    agent_answer = answer(fields, body_of(report))
+
+    with pytest.raises(HandoffError, match="only a person can accept a failure"):
+        finalise_handoff(agent_answer, schema=report, stamp=STAMP)
+    _, handoff = finalise_handoff(agent_answer, schema=report, stamp=STAMP, person=True)
+    assert handoff.data.accepted_failures == ["tests/test_export.py::test_csv"]
