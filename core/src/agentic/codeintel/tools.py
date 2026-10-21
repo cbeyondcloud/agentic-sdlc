@@ -27,6 +27,7 @@ from agentic.codeintel.interface import Candidates, CodeIntel
 MAX_LISTED = 50
 MAX_BUDGET_CHARS = 100_000
 _DRIVE = re.compile(r"^[A-Za-z]:")
+_SHORT_GIT = re.compile(r"git~\d+")
 
 ReadRefusal = Callable[[Path], str | None]
 
@@ -55,13 +56,23 @@ def tree_path(tree: Path, raw: str) -> str | None:
         relative = posixpath.normpath(text)
         if relative == ".." or relative.startswith("../"):
             return None
-    if relative == "." or ".git" in relative.lower().split("/"):
+    if relative == "." or any(_names_git(part) for part in relative.split("/")):
         return None  # git's metadata is not code: a worktree's `.git` names the main repo
     try:
-        (root / relative).resolve().relative_to(root)
+        opened = (root / relative).resolve().relative_to(root)
     except (ValueError, OSError):
         return None
+    if any(_names_git(part) for part in opened.parts):  # a link to `.git`, or a short name
+        return None
     return relative
+
+
+def _names_git(part: str) -> bool:
+    """Whether a path component can open `.git`: in any case, with the trailing dots and
+    spaces or the `:stream` Windows ignores, or as an 8.3 short name (`GIT~1`) - refused
+    on every OS, the safe side (final review F1)."""
+    name = part.split(":", 1)[0].rstrip(". ").lower()
+    return name == ".git" or _SHORT_GIT.fullmatch(name) is not None
 
 
 def _label(source: str) -> str:

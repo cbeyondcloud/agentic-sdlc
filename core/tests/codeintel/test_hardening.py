@@ -173,6 +173,43 @@ def test_a_name_that_only_starts_with_git_is_a_tree_path(tmp_path):
     assert tree_path(tmp_path, ".gitignore") == ".gitignore"
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [".git.", ".GIT.", ".git ", ".git. ./config", ".git::$INDEX_ALLOCATION", "GIT~1", "git~2/x"],
+)
+def test_an_alias_spelling_of_git_is_not_a_tree_path(tmp_path, raw):
+    """Windows opens `.git.`, `.git ` and the 8.3 name `GIT~1` as `.git` (final review F1):
+    every spelling that can name it is refused, on every OS (the safe side)."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("[remote]\n", encoding="utf-8")
+    assert tree_path(tmp_path, raw) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="8.3 short names are a Windows feature")
+def test_the_short_name_windows_gives_git_is_not_a_tree_path(tmp_path):
+    (tmp_path / ".git").write_text("gitdir: C:/elsewhere/.git/worktrees/x\n", encoding="utf-8")
+    short = next(
+        (n for n in ("GIT~1", "GIT~2", "GIT~3") if (tmp_path / n).exists()),
+        None,
+    )
+    if short is None:
+        pytest.skip("8.3 short names are off on this volume")
+    assert tree_path(tmp_path, short) is None
+    assert tree_path(tmp_path, short.lower()) is None
+
+
+def test_a_link_to_git_is_not_a_tree_path(tmp_path):
+    """A symlink is judged by what it opens, not by its spelling (final review F1)."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "config").write_text("[remote]\n", encoding="utf-8")
+    try:
+        (tmp_path / "meta").symlink_to(tmp_path / ".git", target_is_directory=True)
+    except OSError:
+        pytest.skip("this machine cannot make symbolic links")
+    assert tree_path(tmp_path, "meta") is None
+    assert tree_path(tmp_path, "meta/config") is None
+
+
 # ── DF-94: test gaps ───────────────────────────────────────────────────────────
 
 
