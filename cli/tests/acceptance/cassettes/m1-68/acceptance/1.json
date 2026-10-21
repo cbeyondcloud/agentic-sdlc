@@ -1,0 +1,291 @@
+{
+ "key": "m1-68/acceptance/1",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:fa51c9601d5344ad8ed287af6935381703126aac9986804fdca471f8a7e2a07d",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-requirements-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_requirements_1\", \"type\": \"function\", \"function\": {\"name\": \"read_file\", \"arguments\": \"{\\\"path\\\": \\\"invoices/money.py\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:9f8ebcd01a78ace73d362c414c7481ef3b8defb78826cad51d96e92a1fcb666f",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-requirements-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Split a total evenly between payers.\\nsize: small\\nitems:\\n  - id: REQ-1\\n    statement: An invoice total can be split evenly between several payers.\\n    acceptance_criteria:\\n      - WHEN a total is split between N payers THE system SHALL return N shares that add up to the total.\\nopen_questions:\\n  - When the total does not divide evenly, who pays the extra cents?\\n---\\n# Requirements: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## User scenarios\\n<!-- One story per journey, most important first, each marked P1, P2 or P3: who wants what and why, why it has that priority, and how it can be tested on its own. Under each story list its acceptance criteria in EARS form (WHEN <trigger> THE system SHALL <response>), matching the items above. -->\\n\\n## Edge cases\\n<!-- Boundary conditions and failures to handle: empty or huge inputs, missing permissions, timeouts, concurrent use. -->\\n\\n## Functional requirements\\n<!-- One bullet per item above, by id: \\\"REQ-1: The system MUST ...\\\". -->\\n\\n## Success criteria\\n<!-- Measurable outcomes that show the feature works, independent of how it is built (times, rates, counts). -->\\n\\n## Assumptions\\n<!-- Defaults you chose where the request was silent, and what the work depends on. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:466c0ffd41969186ce864143b4b4652e44c1c96a1e7dbf060444e5b92b078d4c",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-requirements-3\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Split a total evenly; the first payers take the extra cents.\\nsize: small\\nitems:\\n  - id: REQ-1\\n    statement: An invoice total can be split evenly between several payers.\\n    acceptance_criteria:\\n      - WHEN a total is split between N payers THE system SHALL return N shares that add up to the total.\\n  - id: REQ-2\\n    statement: Shares are whole cents and differ by at most one cent.\\n    acceptance_criteria:\\n      - WHEN a total does not divide evenly THE system SHALL give the extra cents to the first payers.\\nopen_questions: []\\n---\\n# Requirements: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## User scenarios\\n<!-- One story per journey, most important first, each marked P1, P2 or P3: who wants what and why, why it has that priority, and how it can be tested on its own. Under each story list its acceptance criteria in EARS form (WHEN <trigger> THE system SHALL <response>), matching the items above. -->\\n\\n## Edge cases\\n<!-- Boundary conditions and failures to handle: empty or huge inputs, missing permissions, timeouts, concurrent use. -->\\n\\n## Functional requirements\\n<!-- One bullet per item above, by id: \\\"REQ-1: The system MUST ...\\\". -->\\n\\n## Success criteria\\n<!-- Measurable outcomes that show the feature works, independent of how it is built (times, rates, counts). -->\\n\\n## Assumptions\\nAmounts are whole cents, as in invoices.money.\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:c1fb59e1c006fb327ae057a0d484f5caf5c2eafa5df54ed7d5b1e00bef73161c",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-baseline-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_baseline_1\", \"type\": \"function\", \"function\": {\"name\": \"run_shell\", \"arguments\": \"{\\\"command\\\": \\\"python -m pytest -q\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:58cee791a5a161c5e79d5bf0ce2011c470e518d0ec4eaba9f90653029e85a2e7",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-baseline-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: 'Baseline: 2 tests pass on the untouched tree.'\\nverdict: pass\\ntests:\\n  passed: 2\\n  failed: 0\\n  skipped: 0\\nfailures: []\\nbaseline_failures: []\\nacceptance_results: []\\ndependency_scan:\\n  blocked_licences: []\\n  vulnerabilities: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Test report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Verdict\\nPass: every test passes and every criterion holds.\\n\\n## Test results\\n<!-- The suites run, their counts, the baseline they were judged against, and every failure with its cause, new failures first. -->\\n\\n## Acceptance criteria\\n<!-- Each criterion by id: pass or fail, with the evidence (a test, a log, a manual check). -->\\n\\n## Dependency scan\\n<!-- New dependencies with their licences, blocked licences and known vulnerabilities found. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:95bc1c0975a4462f553a0df2acb3a06463b14a92ba0c64efca347cb4abbcb802",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-design-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"deep-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_design_1\", \"type\": \"function\", \"function\": {\"name\": \"list_dir\", \"arguments\": \"{\\\"path\\\": \\\"invoices\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:f0a6391b53780c57649e7195fc03d45d24a4e765d962a917d241d44f4f4c98aa",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-design-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"deep-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Add invoices/split.py with split_evenly(cents, ways).\\ndecisions:\\n  - id: D1\\n    choice: A new function split_evenly in invoices/split.py.\\n    rationale: Splitting is separate from totals; money.py stays small.\\nimpact:\\n  modules:\\n    - invoices/split.py\\n  interfaces:\\n    - split_evenly(cents, ways)\\n  tests:\\n    - tests/test_split.py\\n  confidence: candidate\\nrisks:\\n  - Callers may pass zero payers.\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Design: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Context and problem statement\\n<!-- The problem this design solves and the forces at play, in two to four sentences; link the requirements it answers. -->\\n\\n## Decision drivers\\n<!-- What the choice must satisfy: requirements, constraints, qualities such as latency, cost or ease of change. -->\\n\\n## Considered options\\n<!-- Every option seriously considered, one bullet each, including \\\"do nothing\\\" when it is one. -->\\n\\n## Decision outcome\\n### D1: a new module invoices/split.py\\n\\n## Impact\\n<!-- Modules, interfaces and tests the change touches. Lists taken from the code graph are candidates for Review and QA to confirm. -->\\n\\n## Risks\\n<!-- What could go wrong and how it is mitigated or watched. -->\\n\\n## Confirmation\\n<!-- How the implementation will be checked against this design: tests, review points, measurements. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:5bb04439df57f75c13d12bfdd56a5c6f8846b87dd4cab617c93f8229daa9995c",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_1\", \"type\": \"function\", \"function\": {\"name\": \"write_file\", \"arguments\": \"{\\\"path\\\": \\\"invoices/split.py\\\", \\\"text\\\": \\\"\\\\\\\"\\\\\\\"\\\\\\\"Splitting an amount between payers.\\\\\\\"\\\\\\\"\\\\\\\"\\\\n\\\\n\\\\ndef split_evenly(cents: int, ways: int) -> list[int]:\\\\n    \\\\\\\"\\\\\\\"\\\\\\\"Split `cents` into `ways` shares that differ by at most one cent; the first\\\\n    payers take the extra cents.\\\\\\\"\\\\\\\"\\\\\\\"\\\\n    share, extra = divmod(cents, ways)\\\\n    return [share + 1 if i < extra else share for i in range(ways)]\\\\n\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:d11716cd7007360c2c0a87f198a9ad11dedcb280977d8ebe3ccbe8a2ef63ee4c",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_2\", \"type\": \"function\", \"function\": {\"name\": \"write_file\", \"arguments\": \"{\\\"path\\\": \\\"tests/test_split.py\\\", \\\"text\\\": \\\"from invoices.split import split_evenly\\\\n\\\\n\\\\ndef test_shares_add_up_to_the_total():\\\\n    assert sum(split_evenly(1000, 3)) == 1000\\\\n\\\\n\\\\ndef test_remainder_goes_to_first_payers():\\\\n    assert split_evenly(1000, 3) == [334, 333, 333]\\\\n\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:d689796e335d8a38cfd63085642e91ed13f07d653197efa763f9b6d0e5d447c0",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-3\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_3\", \"type\": \"function\", \"function\": {\"name\": \"run_shell\", \"arguments\": \"{\\\"command\\\": \\\"python -m pytest -q\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:7e6fb197c4d62a4cea1b1fc1f21a5171fb3df0270b649a614ba1ccc0e6174e3b",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-4\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Added split_evenly with two tests.\\ncommits: []\\nfiles_changed:\\n  - invoices/split.py\\ntests_run:\\n  passed: 4\\n  failed: 0\\n  skipped: 0\\ndeviations_from_design: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Development report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## What changed\\nAdded split_evenly with two tests.\\n\\n## Tests run\\n<!-- The commands run and their results; the tests added or changed and what each one proves. -->\\n\\n## Deviations from the design\\nNone.\\n\\n## Notes for review\\n<!-- Where a reviewer should look hardest: tricky logic, trade-offs, anything not yet covered by tests. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:9396b669ddd51e5291bb5cbb03a314ff4163bb561b7767f687d97ba08fe2be82",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-review-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: 'One blocking finding: zero payers.'\\nfindings:\\n  - severity: high\\n    file: invoices/split.py\\n    line: 7\\n    issue: split_evenly(1000, 0) raises ZeroDivisionError; refuse ways < 1 with a ValueError.\\n    status: open\\nscore: 7.0\\nprepass_results: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Review: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Findings\\n<!-- One line per finding, most severe first: severity \\u2014 file:line \\u2014 the issue \\u2192 the fix. Mark each open, resolved or accepted. -->\\n\\n## Category breakdown\\n<!-- The rubric categories and their scores, and the final score. The score is reported only; it never decides whether the review passes. -->\\n\\n## Pre-pass results\\n<!-- What the deterministic tools found (secrets, rule matches, vulnerable dependencies) and what was done about each. -->\\n\\n## Verdict\\nSee findings.\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:4dbed007ebda84358aabdae1e2cee50df1926cae5d343052c98d710900a9f188",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-qa-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_qa_1\", \"type\": \"function\", \"function\": {\"name\": \"run_shell\", \"arguments\": \"{\\\"command\\\": \\\"python -m pytest -q\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:335ce3de68964da72f5b96954d841fe32d08434933377e38893317af34977e52",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-qa-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: All 4 tests pass; REQ-1 and REQ-2 hold.\\nverdict: pass\\ntests:\\n  passed: 4\\n  failed: 0\\n  skipped: 0\\nfailures: []\\nbaseline_failures: []\\nacceptance_results:\\n  - criterion_id: REQ-1\\n    passed: true\\n    evidence: tests/test_split.py\\n  - criterion_id: REQ-2\\n    passed: true\\n    evidence: tests/test_split.py\\ndependency_scan:\\n  blocked_licences: []\\n  vulnerabilities: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Test report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Verdict\\nPass: every test passes and every criterion holds.\\n\\n## Test results\\n<!-- The suites run, their counts, the baseline they were judged against, and every failure with its cause, new failures first. -->\\n\\n## Acceptance criteria\\n<!-- Each criterion by id: pass or fail, with the evidence (a test, a log, a manual check). -->\\n\\n## Dependency scan\\n<!-- New dependencies with their licences, blocked licences and known vulnerabilities found. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:31e5374f0eb817ccea68270536f08763de68e80bf9aa17be09cecc66caf60037",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-5\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_5\", \"type\": \"function\", \"function\": {\"name\": \"edit_file\", \"arguments\": \"{\\\"path\\\": \\\"invoices/split.py\\\", \\\"old\\\": \\\"    share, extra = divmod(cents, ways)\\\\n    return [share + 1 if i < extra else share for i in range(ways)]\\\\n\\\", \\\"new\\\": \\\"    if ways < 1:\\\\n        raise ValueError(\\\\\\\"ways must be at least 1\\\\\\\")\\\\n    share, extra = divmod(cents, ways)\\\\n    return [share] * (ways - extra) + [share + 1] * extra\\\\n\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:56b17bc07ad863d6654d271046c7ec107c12190da46f65c04f01a2f920d6a452",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-6\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_6\", \"type\": \"function\", \"function\": {\"name\": \"write_file\", \"arguments\": \"{\\\"path\\\": \\\"tests/test_split.py\\\", \\\"text\\\": \\\"import pytest\\\\n\\\\nfrom invoices.split import split_evenly\\\\n\\\\n\\\\ndef test_shares_add_up_to_the_total():\\\\n    assert sum(split_evenly(1000, 3)) == 1000\\\\n\\\\n\\\\ndef test_remainder_goes_to_first_payers():\\\\n    assert split_evenly(1000, 3) == [334, 333, 333]\\\\n\\\\n\\\\ndef test_zero_ways_is_refused():\\\\n    with pytest.raises(ValueError):\\\\n        split_evenly(1000, 0)\\\\n\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:da46844324b3fac24e7e8ca32f6fe289a7bc7f97275b87370ff843345540d575",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-7\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Refuse ways < 1; simpler share list.\\ncommits: []\\nfiles_changed:\\n  - invoices/split.py\\ntests_run: null\\ndeviations_from_design: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Development report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## What changed\\nRefuse ways < 1; simpler share list.\\n\\n## Tests run\\n<!-- The commands run and their results; the tests added or changed and what each one proves. -->\\n\\n## Deviations from the design\\nNone.\\n\\n## Notes for review\\n<!-- Where a reviewer should look hardest: tricky logic, trade-offs, anything not yet covered by tests. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:1aa0ea28e76a73be49d85d4ecb75394fe0e1a1f60962f6315b88450109c72016",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-review-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: The zero-payers finding is resolved.\\nfindings:\\n  - severity: high\\n    file: invoices/split.py\\n    line: 7\\n    issue: split_evenly(1000, 0) raises ZeroDivisionError; refuse ways < 1 with a ValueError.\\n    status: resolved\\nscore: 9.0\\nprepass_results: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Review: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Findings\\n<!-- One line per finding, most severe first: severity \\u2014 file:line \\u2014 the issue \\u2192 the fix. Mark each open, resolved or accepted. -->\\n\\n## Category breakdown\\n<!-- The rubric categories and their scores, and the final score. The score is reported only; it never decides whether the review passes. -->\\n\\n## Pre-pass results\\n<!-- What the deterministic tools found (secrets, rule matches, vulnerable dependencies) and what was done about each. -->\\n\\n## Verdict\\nSee findings.\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:5340f94f2a98e3195447ce82b68fc80f540d72a2f42bd067e249eefb2f9615d0",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-qa-3\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_qa_3\", \"type\": \"function\", \"function\": {\"name\": \"run_shell\", \"arguments\": \"{\\\"command\\\": \\\"python -m pytest -q\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:3564ca3aa311212c188da049dbffcaaa4eeeb7e576568e55a8ec2731646b56db",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-qa-4\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: '1 test fails: the extra cents go to the last payers.'\\nverdict: fail\\ntests:\\n  passed: 4\\n  failed: 1\\n  skipped: 0\\nfailures:\\n  - tests/test_split.py::test_remainder_goes_to_first_payers\\nbaseline_failures: []\\nacceptance_results:\\n  - criterion_id: REQ-1\\n    passed: true\\n    evidence: tests/test_split.py\\n  - criterion_id: REQ-2\\n    passed: false\\n    evidence: tests/test_split.py::test_remainder_goes_to_first_payers\\ndependency_scan:\\n  blocked_licences: []\\n  vulnerabilities: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Test report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Verdict\\nFail: the extra cents now go to the last payers (REQ-2).\\n\\n## Test results\\n<!-- The suites run, their counts, the baseline they were judged against, and every failure with its cause, new failures first. -->\\n\\n## Acceptance criteria\\n<!-- Each criterion by id: pass or fail, with the evidence (a test, a log, a manual check). -->\\n\\n## Dependency scan\\n<!-- New dependencies with their licences, blocked licences and known vulnerabilities found. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:7eed9e9d573eb202e34e8436a24945af30c71c4b66b8b88f53f4570d88cc57d1",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-8\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_8\", \"type\": \"function\", \"function\": {\"name\": \"edit_file\", \"arguments\": \"{\\\"path\\\": \\\"invoices/split.py\\\", \\\"old\\\": \\\"    return [share] * (ways - extra) + [share + 1] * extra\\\\n\\\", \\\"new\\\": \\\"    return [share + 1 if i < extra else share for i in range(ways)]\\\\n\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:6af66e8350c0b0ba7de7a18e961d8408912b72710d593896777c2e8d423efae0",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-9\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_develop_9\", \"type\": \"function\", \"function\": {\"name\": \"run_shell\", \"arguments\": \"{\\\"command\\\": \\\"python -m pytest -q\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:09f77f51fa6c0d6747b85ac2b8f9c5ed4f8e0efb7134ab39b2a9371c34913aee",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-develop-10\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: The first payers take the extra cents again.\\ncommits: []\\nfiles_changed:\\n  - invoices/split.py\\ntests_run:\\n  passed: 5\\n  failed: 0\\n  skipped: 0\\ndeviations_from_design: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Development report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## What changed\\nThe first payers take the extra cents again.\\n\\n## Tests run\\n<!-- The commands run and their results; the tests added or changed and what each one proves. -->\\n\\n## Deviations from the design\\nNone.\\n\\n## Notes for review\\n<!-- Where a reviewer should look hardest: tricky logic, trade-offs, anything not yet covered by tests. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:3525a31a3dacea414f4c4c0e707118643ef1d15b934358cf088b4a24e9164502",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-review-3\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: 'Clean: nothing open.'\\nfindings:\\n  - severity: high\\n    file: invoices/split.py\\n    line: 7\\n    issue: split_evenly(1000, 0) raises ZeroDivisionError; refuse ways < 1 with a ValueError.\\n    status: resolved\\nscore: 9.0\\nprepass_results: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Review: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Findings\\n<!-- One line per finding, most severe first: severity \\u2014 file:line \\u2014 the issue \\u2192 the fix. Mark each open, resolved or accepted. -->\\n\\n## Category breakdown\\n<!-- The rubric categories and their scores, and the final score. The score is reported only; it never decides whether the review passes. -->\\n\\n## Pre-pass results\\n<!-- What the deterministic tools found (secrets, rule matches, vulnerable dependencies) and what was done about each. -->\\n\\n## Verdict\\nSee findings.\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:c130534a91e64bd7593422c6366acea376b55bec2f097c2b78522fb14e0542d3",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-qa-5\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_qa_5\", \"type\": \"function\", \"function\": {\"name\": \"run_shell\", \"arguments\": \"{\\\"command\\\": \\\"python -m pytest -q\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:f933ebd0b9b2954f3aa58595654e6a6d983fe4ab3e02dfe922fd65572da23bd8",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-qa-6\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: All 5 tests pass; REQ-1 and REQ-2 hold.\\nverdict: pass\\ntests:\\n  passed: 5\\n  failed: 0\\n  skipped: 0\\nfailures: []\\nbaseline_failures: []\\nacceptance_results:\\n  - criterion_id: REQ-1\\n    passed: true\\n    evidence: tests/test_split.py\\n  - criterion_id: REQ-2\\n    passed: true\\n    evidence: tests/test_split.py\\ndependency_scan:\\n  blocked_licences: []\\n  vulnerabilities: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Test report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Verdict\\nPass: every test passes and every criterion holds.\\n\\n## Test results\\n<!-- The suites run, their counts, the baseline they were judged against, and every failure with its cause, new failures first. -->\\n\\n## Acceptance criteria\\n<!-- Each criterion by id: pass or fail, with the evidence (a test, a log, a manual check). -->\\n\\n## Dependency scan\\n<!-- New dependencies with their licences, blocked licences and known vulnerabilities found. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  }
+ ]
+}
