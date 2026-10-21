@@ -19,7 +19,7 @@ from pathlib import Path
 
 from agentic.agents.runner import ResumeError
 from agentic.definitions import DefinitionError, UnknownDefinitionError
-from agentic.engine.engine import EngineError
+from agentic.engine.engine import FAILING_PAUSE, EngineError
 from agentic.engine.expressions import ExpressionError
 from agentic.engine.gates import GateRefused
 from agentic.engine.state import RunState, RunStateError
@@ -53,6 +53,11 @@ def _hint(message: str) -> str | None:
         return "decide with `agentic approve`, `agentic reject --feedback` or `agentic edit`"
     if "busy" in message:
         return "wait for the other command to finish"
+    if "exit condition" in message:  # an exhausted loop is not approved as it stands
+        return (
+            "`agentic edit` the pinned handoff (e.g. mark a finding accepted), "
+            "`agentic reject --feedback` for another pass, or `agentic stop`"
+        )
     return None
 
 
@@ -161,6 +166,8 @@ def next_steps(state: RunState) -> list[str]:
         return [f"agentic resume {run} --extra-minutes <N>", f"agentic stop {run} --reason ..."]
     if pending.id == "condition":
         return [f"agentic resume {run} --skip", f"agentic stop {run} --reason ..."]
+    if pending.id == FAILING_PAUSE:  # resume would only pause again (DF-238)
+        return [f"agentic show {run}", f"agentic stop {run} --reason ..."]
     return [f"agentic resume {run}", f"agentic stop {run} --reason ..."]
 
 
