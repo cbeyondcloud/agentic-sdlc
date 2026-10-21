@@ -199,3 +199,66 @@ def test_values_only_apply_to_an_enum(tmp_path):  # review M5
 
     with pytest.raises(DefinitionError, match="enum"):
         extend_catalog(BUILTIN_CATALOG, [ext(tmp_path, "review", text)])
+
+
+# ── M1-81 hardening (DF-31, DF-32, DF-33) ────────────────────────────────────
+
+
+def _new_field(name: str, *, kind: str = "string", required: bool = False) -> str:
+    return (
+        f"fields:\n  {name}:\n    type: {kind}\n    required: {str(required).lower()}\n"
+        f"    description: d\n    example: x\n"
+    )
+
+
+@pytest.mark.parametrize("name", ["json", "copy", "model_dump", "model_config", "schema"])
+def test_a_field_name_the_model_uses_is_refused_clearly(tmp_path, name, recwarn):
+    """`json` or `model_config` would shadow Pydantic's own attributes: a raw error or a
+    warning for an admin. Refused with a message instead (DF-31)."""
+    with pytest.raises(DefinitionError) as error:
+        extend_catalog(BUILTIN_CATALOG, [ext(tmp_path, "review", _new_field(name))])
+
+    assert f"{name}: clashes with a name the handoff model uses" in str(error.value)
+    assert not [w for w in recwarn if "shadows" in str(w.message)]
+
+
+def test_a_section_heading_with_a_line_break_is_refused(tmp_path):
+    """A heading with a line break can never be matched in a body line, so every answer
+    of the kind would be refused (DF-32)."""
+    text = 'sections:\n  - heading: "Rollback\\nplan"\n    guidance: How to undo it.\n'
+
+    with pytest.raises(DefinitionError, match="heading"):
+        ext(tmp_path, "review", text)
+
+
+@pytest.mark.parametrize("guidance", ["see --> here", "nested <!-- comment"])
+def test_guidance_that_would_break_the_rendered_comment_is_refused(tmp_path, guidance):
+    """Guidance is rendered inside <!-- ... -->: a `-->` in it ends the comment early and
+    shows the rest to the agent as text (DF-32)."""
+    text = f"sections:\n  - heading: Rollback plan\n    guidance: '{guidance}'\n"
+
+    with pytest.raises(DefinitionError, match="guidance"):
+        ext(tmp_path, "review", text)
+
+
+@pytest.mark.parametrize("blank", ["''", "'   '"])
+def test_a_required_string_field_refuses_a_blank_value(tmp_path, blank):
+    """A required field left blank says nothing: refused like a missing one (DF-33)."""
+    catalog = extend_catalog(BUILTIN_CATALOG, [ext(tmp_path, "review", JIRA_AND_ROLLBACK)])
+    review = catalog.schema("review")
+    document, _ = finalise_handoff(render_template(review), schema=review, stamp=STAMP)
+
+    with pytest.raises(Exception, match="jira_ticket: .*blank"):
+        parse_handoff(document.replace("jira_ticket: PAY-123", f"jira_ticket: {blank}"), catalog)
+
+
+def test_blank_check_does_not_change_the_digest(tmp_path):
+    """The blank check is a validator, not a schema change: a run paused before this
+    release still finds the catalog it was started with."""
+    catalog = extend_catalog(BUILTIN_CATALOG, [ext(tmp_path, "review", JIRA_AND_ROLLBACK)])
+    schema = catalog.schema("review").model.model_json_schema()
+
+    assert schema["properties"]["jira_ticket"] == {
+        "title": "Jira Ticket",
+        "type": "string",
+    }
