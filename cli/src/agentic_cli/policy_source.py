@@ -4,6 +4,11 @@ Standalone (`--standalone --policy PATH`, spec §24): a local policy, no control
 no RBAC. PATH is a policy repo (a folder holding `policy/`, and optionally `skills/`,
 `agents/`, `pipelines/`, `teams/`) or a `policy/` folder itself.
 
+Standalone with no PATH (and no `policy:` in the user config) uses the framework's
+template (M1-62): `~/.agentic/policy/standalone/` when it exists - the person's own copy,
+never overwritten - else a fresh one assembled in a scratch folder
+(`agentic_cli.standalone`) that `LoadedPolicy.commit()` installs there after the guard.
+
 Org mode: the user config (`~/.agentic/config.yaml`) names the org and its policy repo:
 
     org: acme
@@ -31,6 +36,7 @@ from typing import Any, Literal
 from agentic.policy import OrgPolicy, PolicyError, load_policy
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.standalone import STANDALONE_DIR, assemble
 
 DEFAULT_CACHE_HOURS = 24
 _ORG = re.compile(r"[a-z][a-z0-9-]{0,63}")
@@ -44,12 +50,26 @@ class LoadedPolicy:
     source: str
     org: str | None = None
     warnings: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)  # for the person to know (report: info)
     _pending: Path | None = field(default=None, repr=False)  # a fresh clone not yet cached
     _cache: Path | None = field(default=None, repr=False)
+    _install: Path | None = field(default=None, repr=False)  # standalone template target
     _hours: int = DEFAULT_CACHE_HOURS
 
     def commit(self) -> None:
-        """Org mode: put a freshly fetched policy repo into the cache (after the guard)."""
+        """Put a freshly fetched (org) or assembled (standalone template) policy repo in
+        its place under `~/.agentic`; called only after the guard passed."""
+        if self._pending is not None and self._install is not None:
+            if self._install.exists():  # made meanwhile (another init): theirs is kept
+                self.discard()
+                root, folder = _layout(self._install)
+                self.policy, self.root = _load(folder), root
+                return
+            self._install.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(self._pending), str(self._install))
+            shutil.rmtree(self._pending.parent, ignore_errors=True)  # the scratch folder
+            self.root, self._pending = self._install, None
+            return
         if self._pending is None or self._cache is None:
             return
         target = self._cache / "repo"
@@ -83,16 +103,33 @@ def resolve_policy(
     if standalone:
         path = policy_path or (Path(config["policy"]) if config.get("policy") else None)
         if path is None:
-            raise CliError(
-                "--standalone needs a local policy",
-                ExitCode.USAGE,
-                hint="pass --policy <policy repo or policy folder>",
-            )
+            return _standalone_template(home)
         root, folder = _layout(Path(path).expanduser())
         return LoadedPolicy(_load(folder), root, "standalone", str(path))
     if policy_path is not None:
         raise CliError("--policy is for --standalone", ExitCode.USAGE)
     return _org_policy(home, config)
+
+
+def _standalone_template(home: Path) -> LoadedPolicy:
+    """The person's standalone policy repo, or the framework template ready to install."""
+    target = home / STANDALONE_DIR
+    if target.is_dir():
+        root, folder = _layout(target)
+        return LoadedPolicy(_load(folder), root, "standalone", str(target))
+    scratch = Path(tempfile.mkdtemp(prefix="agentic-standalone-"))
+    try:
+        built = assemble(scratch / "repo")
+        loaded = LoadedPolicy(_load(built / "policy"), built, "standalone", str(target))
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
+    loaded._pending, loaded._install = built, target
+    loaded.notes.append(
+        f"installed the framework's standalone template into {target}; it is your copy: "
+        "edit it there (init never overwrites it)"
+    )
+    return loaded
 
 
 def _layout(path: Path) -> tuple[Path, Path]:

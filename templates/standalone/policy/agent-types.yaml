@@ -40,8 +40,14 @@ types:
     tier: balanced
     backends: [native]                  # add an approved agent-CLI backend here (templates/agent/agent.md)
     tools: [read_files, search, edit_files, run_shell, codeintel, spawn_agent, activate_skill]
-    shell: [pytest, "python -m pytest", "uv run pytest", "npm test", "npm run lint",
-            "mvn -q test", "gradle test", "go test", "cargo test", "dotnet test", ruff,
+    # Command prefixes, word by word: "make test" allows `make test -j4`, never
+    # `make install`. To allow another test command, add its prefix here (README).
+    shell: [pytest, "python -m pytest", "uv run pytest", "coverage run -m pytest",
+            "coverage run -m unittest", tox,
+            "npm test", "npm run test", "npm run lint", "yarn test", "pnpm test",
+            "mvn test", "mvn -q test", "./mvnw test", "./mvnw -q test",
+            "gradle test", "./gradlew test", "make test",
+            "go test", "cargo test", "dotnet test", ruff,
             "git status", "git diff", "git log"]
     skills: [superpowers/test-driven-development, superpowers/verification-before-completion,
              superpowers/systematic-debugging, addyosmani/incremental-implementation,
@@ -73,8 +79,14 @@ types:
     tier: balanced
     backends: [native]
     tools: [read_files, search, run_shell, codeintel, activate_skill]
-    shell: [pytest, "python -m pytest", "uv run pytest", "npm test", "mvn -q test",
-            "gradle test", "go test", "cargo test", "dotnet test", "pip-audit", "npm audit",
+    # The same test runners as the developer, plus the dependency audits; their
+    # fixing and file-writing forms are denied for every agent in tools.yaml.
+    shell: [pytest, "python -m pytest", "uv run pytest", "coverage run -m pytest",
+            "coverage run -m unittest", tox,
+            "npm test", "npm run test", "yarn test", "pnpm test",
+            "mvn test", "mvn -q test", "./mvnw test", "./mvnw -q test",
+            "gradle test", "./gradlew test", "make test",
+            "go test", "cargo test", "dotnet test", "pip-audit", "npm audit",
             "git status", "git diff", "git log"]
     skills: [superpowers/verification-before-completion,
              addyosmani/browser-testing-with-devtools]

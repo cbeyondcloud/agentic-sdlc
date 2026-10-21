@@ -44,6 +44,38 @@ def test_policy_repo_from_user_config_then_org_cache_then_standalone(repo, polic
     assert Workspace.load(repo, env={}, home=home).policy_repo == local
 
 
+def test_the_org_cache_is_read_where_init_writes_it(repo, tmp_path):
+    home = tmp_path / "home"
+    write(home / "config.yaml", "org: acme\n")
+    (home / "policy" / "acme" / "repo" / "policy").mkdir(parents=True)
+    assert Workspace.load(repo, env={}, home=home).policy_repo == home / "policy" / "acme" / "repo"
+
+
+def test_the_installed_standalone_policy_comes_last(repo, tmp_path):
+    home = tmp_path / "home"
+    installed = home / "policy" / "standalone"
+    installed.mkdir(parents=True)
+    assert Workspace.load(repo, env={}, home=home).policy_repo == installed
+    local = repo / ".agentic" / "local" / "policy"
+    local.mkdir(parents=True)
+    assert Workspace.load(repo, env={}, home=home).policy_repo == local
+
+
+def test_an_org_user_never_falls_back_to_a_personal_policy(repo, tmp_path):
+    """With `org:` set and its cache missing, the template policy (no org governance)
+    is never used in its place, silently (review F3): the org policy is reported missing."""
+    home = tmp_path / "home"
+    write(home / "config.yaml", "org: acme\n")
+    (home / "policy" / "standalone" / "policy").mkdir(parents=True)
+    (repo / ".agentic" / "local" / "policy").mkdir(parents=True)
+    ws = Workspace.load(repo, env={}, home=home)
+    assert ws.policy_repo == home / "policy" / "acme" / "repo"
+    with pytest.raises(CliError) as caught:
+        ws.policy()
+    assert caught.value.code == ExitCode.REFUSED
+    assert "no org policy found" in str(caught.value) and "agentic init" in caught.value.hint
+
+
 def test_no_policy_is_refused_with_a_hint(repo, tmp_path):
     with pytest.raises(CliError) as caught:
         Workspace.load(repo, env={}, home=tmp_path / "home").policy()

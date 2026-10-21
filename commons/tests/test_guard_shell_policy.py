@@ -75,6 +75,33 @@ def test_a_denied_command_is_refused_even_if_allowed(repo):
     assert g.command("git status") == []
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "tool -o out.txt",
+        "tool --output=out.txt",
+        "tool -oout.txt",  # attached value
+        "tool -vo out.txt",  # clustered with another flag
+        "tool --out out.txt",  # a unique prefix argparse accepts
+        "tool --outp=out.txt",
+        "tool --o x",
+    ],
+)
+def test_a_denied_option_is_matched_as_getopt_and_argparse_read_it(repo, command):
+    """A deny rule's option also hits its attached, clustered and abbreviated spellings,
+    or the program runs it anyway (review F1)."""
+    g = Guard(repo, RUN, deny_shell=["tool -o|--output"])
+    assert walls(g.command(command)) == {"denied-command"}, command
+
+
+@pytest.mark.parametrize(
+    "command", ["tool", "tool -v", "tool --verbose", "tool --outline", "tool -", "tool --"]
+)
+def test_other_options_are_not_taken_for_a_denied_one(repo, command):
+    g = Guard(repo, RUN, deny_shell=["tool -o|--output"])
+    assert g.command(command) == [], command
+
+
 def test_refusal_never_quotes_the_command(repo):
     blocks = Guard(repo, RUN, allow_shell=[]).command("curl -H 'Authorization: s3cret' x")
     assert blocks and all("s3cret" not in b.why for b in blocks)
