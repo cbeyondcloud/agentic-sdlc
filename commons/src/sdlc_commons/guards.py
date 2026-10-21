@@ -866,12 +866,35 @@ def _subcommands(args: list[str]) -> list[str]:
 
 
 def _option_hit(alt: str, words: list[str], prefix: bool) -> bool:
+    """Whether a word gives the option `alt`: as written, with `=value`, or as getopt and
+    argparse also read it (review F1) - a short option attached to its value or clustered
+    after other flags (`-ofile`, `-vo`), a long option cut to a prefix (`--out` for
+    `--output`). An ambiguous prefix is refused too: the safe side. PowerShell (`prefix`)
+    takes any prefix of a parameter name and never clusters."""
+    short = len(alt) == 2 and alt[0] == "-" and alt[1] != "-"
     for word in words:
         if word == alt or word.startswith(alt + "="):
             return True
-        if prefix and len(word) >= 2 and word.startswith("-") and alt.startswith(word):
+        if prefix:
+            if len(word) >= 2 and word.startswith("-") and alt.startswith(word):
+                return True
+            continue
+        cluster = _CLUSTER.match(word) if short else None  # a value starts at a symbol
+        if cluster and alt[1] in cluster.group(1):
+            return True
+        name = word.split("=", 1)[0]
+        if (
+            alt.startswith("--")
+            and len(name) > 2
+            and name.startswith("--")
+            and alt.startswith(name)
+        ):
             return True
     return False
+
+
+#: A word of short flags, maybe ending in an attached value: `-vo`, `-ofile`, `-lo`.
+_CLUSTER = re.compile(r"-([A-Za-z0-9]+)")
 
 
 def _same_program(name: str, wanted: str) -> bool:

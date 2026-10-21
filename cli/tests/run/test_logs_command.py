@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from agentic.engine.state import Cursor, RunState, RunStore
+from agentic.telemetry.logs import LogTail
 from agentic_cli.commands import runs
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.workspace import RUNS
@@ -109,6 +110,34 @@ def test_follow_prints_records_written_while_running_then_stops(workspace, cli, 
     lines = [json.loads(line) for line in result.out.splitlines()]  # JSON Lines
     assert [r["message"] for r in lines] == ["before follow", "while running", "last words"]
     assert no_sleep == []  # both callbacks ran: it kept following while running
+
+
+def test_follow_reads_the_status_before_the_poll_so_the_last_records_are_kept(
+    workspace, cli, no_sleep, monkeypatch
+):
+    """The run writes its last records and stops right AFTER a poll returned (review F2):
+    a follow that polled first and read the status second would stop without them."""
+    run_dir = save_run(workspace, "r-race", "running")
+    log(run_dir, "build", 1, "before follow")
+    original = LogTail.poll
+    finished: list[bool] = []
+
+    def poll(self, final: bool = False) -> list[dict]:
+        records = original(self, final)
+        if not finished:  # the run finishes between this poll and the next status read
+            finished.append(True)
+            log(run_dir, "build", 2, "late record")
+            log(run_dir, "build", 3, "last line, no newline")
+            path = run_dir / "logs" / "build-1.jsonl"
+            path.write_bytes(path.read_bytes().rstrip(b"\n"))  # the writer is mid-flush
+            save_run(workspace, "r-race", "completed")
+        return records
+
+    monkeypatch.setattr(LogTail, "poll", poll)
+    result = cli("--json", "logs", "r-race", "--follow")
+    assert result.code == ExitCode.OK, result.err
+    messages = [json.loads(line)["message"] for line in result.out.splitlines()]
+    assert messages == ["before follow", "late record", "last line, no newline"]
 
 
 def test_follow_with_a_step_and_level_filter(workspace, cli, no_sleep):

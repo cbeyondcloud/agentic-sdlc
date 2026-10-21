@@ -27,6 +27,7 @@ RUNNERS = (
     "pnpm test",
     "make test",
     "coverage run -m pytest",
+    "coverage run -m unittest discover",
     "tox",
     "tox -e py312",
     "uv run pytest -q",
@@ -65,6 +66,13 @@ def test_common_test_runners_are_allowed(agent: str, command: str, target: Path)
         "pip-audit -r requirements.txt --fix",
         "pip-audit -o report.json",
         "pip-audit --output=report.json",
+        # argparse also reads an attached short option and a unique long prefix (review F1)
+        "pip-audit -ofoo.json",
+        "pip-audit -r r.txt -ox.json",
+        "pip-audit --out x.json",
+        "pip-audit --outp=x.json",
+        "pip-audit --fi",
+        "pip-audit -lo x.json",
     ],
 )
 def test_audit_commands_that_modify_or_write_are_refused(agent: str, command: str, target: Path):
@@ -82,3 +90,19 @@ def test_a_runner_does_not_open_other_subcommands(target: Path):
     guard = guard_for("developer", target)
     for command in ("./mvnw deploy", "./gradlew publish", "make install", "yarn publish"):
         assert guard.command(command) != [], command
+
+
+@pytest.mark.parametrize("agent", ["developer", "qa", "qa-baseline"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "coverage run -m pip install requests",
+        "coverage run -m http.server",
+        "coverage run evil.py",
+        "coverage run -m pytestx",
+    ],
+)
+def test_coverage_runs_only_a_test_runner(agent: str, command: str, target: Path):
+    """`coverage run` runs any module or script: only the test runners under it are
+    allowed (review F4), so it cannot install packages around QA's audit denies."""
+    assert guard_for(agent, target).command(command) != [], command

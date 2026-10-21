@@ -105,6 +105,9 @@ class Workspace:
                 return cached / "repo"
             if cached.is_dir():
                 return cached
+            # an org user never gets a personal policy (no org governance) in its place,
+            # silently: the org policy is reported missing (review F3)
+            return cached / "repo"
         if (self.repo / STANDALONE_POLICY).is_dir():
             return self.repo / STANDALONE_POLICY
         if (self.home / STANDALONE_DIR).is_dir():  # `agentic init --standalone` (M1-62)
