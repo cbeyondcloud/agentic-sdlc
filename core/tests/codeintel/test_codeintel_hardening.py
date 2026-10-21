@@ -255,6 +255,31 @@ def test_a_committed_file_is_indexed_after_the_commit(fixture_repo, tmp_path):
     assert "pkg/extra.py" in index.indexed_files()
 
 
+@pytest.mark.parametrize("message", ["database is locked", "database table is locked: nodes"])
+def test_a_busy_index_is_not_thrown_away(fixture_repo, tmp_path, monkeypatch, message):
+    """'locked' or 'busy' means another process is using a valid index: discarding it
+    costs a full rebuild, and on Windows the open file cannot be removed (DF-337)."""
+    index = index_for(fixture_repo, tmp_path)
+    index.data_dir.mkdir(parents=True)
+    index.db.write_bytes(b"stands for a valid graph")
+
+    def busy(*args, **kwargs):
+        raise sqlite3.OperationalError(message)
+
+    monkeypatch.setattr(index_module.sqlite3, "connect", busy)
+    assert index._readable() is True
+
+
+def test_a_missing_table_is_still_corrupt(fixture_repo, tmp_path, monkeypatch):  # DF-337
+    index = index_for(fixture_repo, tmp_path)
+
+    def broken(*args, **kwargs):
+        raise sqlite3.OperationalError("no such table: nodes")
+
+    monkeypatch.setattr(index_module.sqlite3, "connect", broken)
+    assert index._readable() is False
+
+
 @needs_crg
 def test_an_unchanged_dirty_tree_is_not_updated_again(fixture_repo, tmp_path):  # DF-84
     index = index_for(fixture_repo, tmp_path)
