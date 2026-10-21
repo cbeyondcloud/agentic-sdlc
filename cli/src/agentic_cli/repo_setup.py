@@ -16,8 +16,9 @@ pipeline is added later by `agentic pipelines new`, which honours `allow_repo_pi
 `commit_on_branch` builds the commit with git plumbing and a scratch index - read the
 base tree, add the files' blobs, write the tree, commit it - and points a new branch at
 it. The working tree, the real index and the current branch never change, and no git
-hook runs. Pushing and opening the pull request are left to the person (or to the
-GitHub adapter, M1-58): `next_steps` says how.
+hook runs. `agentic init --repo` then pushes the branch and opens its pull request
+through the hosting adapter (M1-58, DF-183; `pr_body` describes the files); without a
+token or a known host - or with `--no-pr` - `next_steps` says how to do it by hand.
 """
 
 import os
@@ -166,6 +167,36 @@ def commit_on_branch(repo: Path, files: dict[str, str], message: str) -> tuple[s
             _git_run(repo, None, "update-ref", f"refs/heads/{branch}", commit, "0" * 40)
             return branch, commit
     raise CliError(f"too many {BRANCH}-<n> branches already exist", ExitCode.ERROR)
+
+
+PR_TITLE = "Set up agentic for this repository"
+#: What each proposed file is, for the pull request's description.
+FILE_PURPOSES = {
+    CONFIG_REL: "the repository's classification, owning team and enabled pipelines",
+    "AGENTS.md": "a first draft from a scan of the repository - please edit it before merging",
+    ".gitattributes": "an agentic block: LF endings for definitions, the index marked generated",
+    WORKFLOW_REL: "the nightly code-intelligence index export (org policy turns it on)",
+}
+
+
+def pr_body(files: list[str], kept: list[str]) -> str:
+    """The description of the pull request `agentic init --repo` opens."""
+    lines = [
+        "## Set up agentic for this repository",
+        "",
+        "Opened by `agentic init --repo`. It adds the repository's shared agentic files and",
+        "changes nothing else.",
+        "",
+    ]
+    lines += [f"- `{path}` - {FILE_PURPOSES.get(path, 'a shared agentic file')}" for path in files]
+    if kept:
+        lines += ["", "Kept as they are (no draft proposed): " + ", ".join(f"`{k}`" for k in kept)]
+    lines += [
+        "",
+        "Review the files, edit what needs editing on this branch, and merge when ready.",
+        "Pipelines are managed in the org policy repository, not here.",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 def next_steps(origin: str | None, default_branch: str, branch: str) -> dict[str, str]:
