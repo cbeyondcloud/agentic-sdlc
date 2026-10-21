@@ -96,7 +96,7 @@ def check_repo(
         _allowed_by_policy(origin, policy)
     # 6
     committed = _git(top, "cat-file", "-p", f"HEAD:{CONFIG_REL}")
-    config = _check_config(mode, committed, policy)
+    config = _check_config(mode, committed, policy, org_mode)
     # 7
     default_branch = _default_branch(top)
     if mode == "repo":
@@ -171,7 +171,9 @@ def _allowed_by_policy(origin: str | None, policy: OrgPolicy | None) -> None:
         raise GuardRefusal(5, f"Repo not approved for agentic use ({origin})", hint=hint)
 
 
-def _check_config(mode: Mode, committed: str, policy: OrgPolicy | None) -> RepoConfig | None:
+def _check_config(
+    mode: Mode, committed: str, policy: OrgPolicy | None, org_mode: bool = True
+) -> RepoConfig | None:
     if mode == "repo":
         if committed:
             raise GuardRefusal(
@@ -181,6 +183,13 @@ def _check_config(mode: Mode, committed: str, policy: OrgPolicy | None) -> RepoC
             )
         return None
     if not committed:
+        if not org_mode:  # trying it alone: the person sets the repo up themselves
+            raise GuardRefusal(
+                6,
+                "Repo not initialised - run `agentic init --repo --standalone` first",
+                hint="it prepares the shared files on a branch (agentic/init); then run "
+                "`agentic init --standalone` again",
+            )
         raise GuardRefusal(
             6, "Repo not initialised - run `agentic init --repo` (or ask your team lead)"
         )

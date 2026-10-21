@@ -83,7 +83,7 @@ def test_native_windows_reports_the_wsl_guidance_with_the_org_pin(policy):  # DF
         update={"sandbox": policy.sandbox.model_copy(update={"srt_version": "0.0.90"})}
     )
     items = checks(pinned, system="Windows", present={"git", "bash"})
-    sandbox = items["sandbox: sandbox"]
+    sandbox = items["sandbox"]
     assert sandbox.status == "warn" and "wsl --install" in sandbox.fix and "0.0.90" in sandbox.fix
 
 
@@ -91,7 +91,7 @@ def test_a_sandbox_required_for_solo_runs_is_missing(policy):
     strict = policy.model_copy(
         update={"sandbox": policy.sandbox.model_copy(update={"required_for": ["solo", "team"]})}
     )
-    assert checks(strict, system="Windows", present={"git"})["sandbox: sandbox"].status == "missing"
+    assert checks(strict, system="Windows", present={"git"})["sandbox"].status == "missing"
 
 
 def test_git_bash_is_checked_on_windows(policy, monkeypatch, tmp_path):  # DF-73

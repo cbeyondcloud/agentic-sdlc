@@ -103,6 +103,15 @@ def test_init_installs_the_template_and_asks_for_real_models(setup_repo, deps, m
     assert "installed" in item(report, "policy: standalone")["detail"]
 
 
+def test_not_ready_names_what_to_fix_not_a_machine_failure(setup_repo, deps, monkeypatch, capsys):
+    """With only placeholder models to fix, the message says so (DF-284)."""
+    monkeypatch.chdir(setup_repo)
+    code = main(["--json", "init", "--standalone"])
+    error = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
+    assert code == ExitCode.ERROR
+    assert "policy: models" in error["error"] and "machine" not in error["error"]
+
+
 def test_an_edited_copy_is_kept_and_init_is_then_ready(setup_repo, deps, monkeypatch, capsys):
     init(setup_repo, monkeypatch, capsys)
     edit_models()
@@ -141,6 +150,18 @@ def test_later_commands_find_the_installed_policy(setup_repo, deps, monkeypatch,
     assert problems == [("publish", "publish", "warning")], plan["preflight"]
     assert "agentic login --for github" in plan["preflight"]["problems"][0]["detail"]
     assert code == ExitCode.OK
+
+
+def test_a_standalone_plan_does_not_claim_an_org(setup_repo, deps, monkeypatch, capsys):
+    """With no org configured the policy repo's layer is shown as 'policy' (DF-286)."""
+    init(setup_repo, monkeypatch, capsys)
+    edit_models()
+    monkeypatch.setenv("AGENTIC_USER", USER)
+    monkeypatch.setenv("AGENTIC_TRACES", "off")
+    monkeypatch.setattr(runtime, "machine_readiness", lambda: Readiness("macos", ()))
+    main(["--no-color", "run", "feature-delivery", "--input", "request=x", "--dry-run"])
+    printed = capsys.readouterr().out
+    assert "(policy)" in printed and "(org)" not in printed and ", org)" not in printed
 
 
 def test_a_custom_policy_is_remembered_for_this_repo(

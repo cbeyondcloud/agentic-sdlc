@@ -199,12 +199,19 @@ def pr_body(files: list[str], kept: list[str]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def next_steps(origin: str | None, default_branch: str, branch: str) -> dict[str, str]:
-    steps = {"push": f"git push -u origin {branch}"}
+def next_steps(
+    origin: str | None, default_branch: str, branch: str, *, local: bool = False
+) -> dict[str, str]:
+    """How the branch reaches the default branch: push it and open a pull request; with
+    `local` (standalone, or no origin), merging it into this clone is offered as well."""
+    push = f"git push -u origin {branch}"
+    steps = {"push": push if origin else f"git remote add origin <url>, then {push}"}
     if origin and origin.startswith("github.com/"):
         steps["pull_request"] = f"https://{origin}/compare/{default_branch}...{branch}?expand=1"
     else:
         steps["pull_request"] = f"open a pull request from {branch} into {default_branch}"
+    if local or not origin:
+        steps["merge"] = f"git merge {branch}"
     return steps
 
 

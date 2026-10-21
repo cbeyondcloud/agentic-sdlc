@@ -106,10 +106,11 @@ def _init_developer(
     )
     out.result(report.to_json(), report.show)
     if not report.ready:
+        missing = [item.name for item in report.items if item.status == "missing"]
         raise CliError(
-            "init finished, but this machine is not ready",
+            f"init finished, but agents cannot run until this is fixed: {', '.join(missing)}",
             ExitCode.ERROR,
-            hint="fix the items marked missing above, then run `agentic init` again",
+            hint="each item marked missing above says how to fix it; then run `agentic init` again",
         )
 
 
@@ -147,12 +148,19 @@ def _init_repo(
     branch, commit = repo_setup.commit_on_branch(
         root.path, files, "chore: set up agentic for this repository (agentic init --repo)"
     )
-    steps = repo_setup.next_steps(root.origin, root.default_branch or "main", branch)
+    steps = repo_setup.next_steps(
+        root.origin,
+        root.default_branch or "main",
+        branch,
+        local=loaded.mode == "standalone",
+    )
     data = {"branch": branch, "commit": commit, "files": sorted(files), "kept": kept}
     data["next"] = steps
     failure: CliError | None = None
     if settings is None:
         data["pull_request"] = {"opened": False, "why": "--no-pr"}
+    elif root.origin is None:  # nothing to push to: the local merge is the way
+        data["pull_request"] = {"opened": False, "why": "no origin remote"}
     else:
         try:
             data["pull_request"] = _open_pull_request(root.path, branch, data, settings)
@@ -179,9 +187,12 @@ def _init_repo(
             verb = "Opened" if pull["created"] else "Updated"
             console.print(f"{verb} the pull request: {pull['url']}", markup=False)
             return
-        console.print("Next:")
+        console.print("Next, to share it with your team:")
         console.print(f"  {steps['push']}", markup=False)
         console.print(f"  {steps['pull_request']}", markup=False)
+        if "merge" in steps:
+            console.print("Or, to use it in this clone only:")
+            console.print(f"  {steps['merge']}", markup=False)
 
     out.result(data, show)
     if failure is not None:

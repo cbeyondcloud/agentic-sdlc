@@ -138,7 +138,7 @@ def _sandbox(policy, which, run, system, kernel_release, tree) -> list[Item]:
     refusing = ", ".join(policy.sandbox.required_for) or "no"
     items = []
     for check in report.checks:
-        name = f"sandbox: {check.name}"
+        name = "sandbox" if check.name == "sandbox" else f"sandbox: {check.name}"
         if check.ok:
             items.append(Item(name, "ok", check.detail, check.fix))
         else:

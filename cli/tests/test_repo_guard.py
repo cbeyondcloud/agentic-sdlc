@@ -161,6 +161,15 @@ def test_6_developer_init_before_init_repo(repo: Path, policy: OrgPolicy):
     assert "agentic init --repo" in str(error)
 
 
+def test_6_a_standalone_developer_is_told_the_standalone_command(repo: Path, policy: OrgPolicy):
+    """A person trying agentic alone owns the repo setup too: `init --repo` alone would
+    look for an org (DF-284)."""
+    error = refused(6, repo, mode="developer", policy=policy, org_mode=False)
+    assert "agentic init --repo --standalone" in str(error)
+    error = refused(6, repo, mode="developer", policy=policy, org_mode=True)
+    assert "agentic init --repo" in str(error) and "--standalone" not in str(error)
+
+
 def test_6_an_uncommitted_config_does_not_count(repo: Path, policy: OrgPolicy):
     (repo / ".agentic").mkdir()
     (repo / ".agentic" / "config.yaml").write_text(CONFIG, encoding="utf-8")

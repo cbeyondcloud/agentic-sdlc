@@ -314,13 +314,17 @@ def _list(out: Output, rt: Runtime, *, show_all: bool, limit: int | None = None)
 
 
 def _show_plan(plan: dict):
+    def layer(name: str) -> str:  # a standalone policy repo is not an org (DF-286)
+        return "policy" if name == "org" and not plan.get("org") else name
+
     def agent_line(step: dict, indent: str) -> str:
         if not step.get("resolved"):
             return f"{indent}{step['id']}: agent {step['agent']} (does not resolve, see below)"
         limits = step["limits"]
         line = (
             f"{indent}{step['id']}: {step['agent']}@{step['version']} ({step['type']}, "
-            f"{step['layer']}) - tier {step['tier']} -> {step['model']} on {step['backend']}; "
+            f"{layer(step['layer'])}) - tier {step['tier']} -> {step['model']} on "
+            f"{step['backend']}; "
             f"budget ${limits['budget_usd']:g}, {limits['max_turns']} turns, "
             f"{limits['max_minutes']} min, {limits['children']} children"
         )
@@ -335,7 +339,7 @@ def _show_plan(plan: dict):
 
     def show(console) -> None:
         console.print(
-            f"plan for {plan['pipeline']} {plan['version']} ({plan['layer']}): "
+            f"plan for {plan['pipeline']} {plan['version']} ({layer(plan['layer'])}): "
             f"regime {plan['regime']}, sandbox {plan['sandbox']}, policy {plan['policy_version']}",
             markup=False,
         )

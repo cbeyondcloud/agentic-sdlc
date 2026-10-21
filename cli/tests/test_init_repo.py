@@ -51,6 +51,28 @@ def test_the_branch_holds_exactly_the_allowed_files(repo, policy_repo, monkeypat
     )
 
 
+def test_standalone_also_offers_a_local_merge(repo, policy_repo, monkeypatch, capsys):
+    """Trying agentic alone, the shared files can simply be merged into this clone
+    (DF-284); the push and pull-request steps stay for sharing them."""
+    monkeypatch.chdir(repo)
+    assert main(["init", "--repo", "--standalone", "--policy", str(policy_repo)]) == 0
+    printed = capsys.readouterr().out
+    assert "git merge agentic/init" in printed and "git push -u origin agentic/init" in printed
+
+
+def test_without_an_origin_no_pull_request_is_tried(tmp_path, policy_repo, monkeypatch, capsys):
+    from cli_helpers import make_repo
+
+    local = make_repo(tmp_path / "local-only", origin=None)
+    assert init_repo(local, policy_repo, monkeypatch) == ExitCode.OK
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert out["next"]["merge"] == "git merge agentic/init"
+    assert out["pull_request"] == {"opened": False, "why": "no origin remote"}
+    assert "git remote add origin" in out["next"]["push"]
+    assert "warning" not in captured.err
+
+
 def test_the_checkout_and_current_branch_never_change(repo, policy_repo, monkeypatch):
     before = snapshot(repo)
     assert init_repo(repo, policy_repo, monkeypatch) == ExitCode.OK
