@@ -106,7 +106,7 @@ def test_follow_prints_records_written_while_running_then_stops(workspace, cli, 
 
     no_sleep.extend([more, finish])
     result = cli("--json", "logs", "r-live", "--follow")
-    assert result.code == ExitCode.OK, result.err
+    assert result.code == ExitCode.PAUSED, result.err  # the run's own exit code (DF-285)
     lines = [json.loads(line) for line in result.out.splitlines()]  # JSON Lines
     assert [r["message"] for r in lines] == ["before follow", "while running", "last words"]
     assert no_sleep == []  # both callbacks ran: it kept following while running
@@ -138,6 +138,20 @@ def test_follow_reads_the_status_before_the_poll_so_the_last_records_are_kept(
     assert result.code == ExitCode.OK, result.err
     messages = [json.loads(line)["message"] for line in result.out.splitlines()]
     assert messages == ["before follow", "late record", "last line, no newline"]
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [("failed", ExitCode.ERROR), ("stopped", ExitCode.STOPPED), ("completed", ExitCode.OK)],
+)
+def test_follow_exits_with_how_the_run_ended(workspace, cli, no_sleep, status, code):
+    """A script waiting on `logs --follow` learns the outcome from the exit code, as it
+    would from `run` (DF-285 a); plain `logs` is a read and exits 0."""
+    run_dir = save_run(workspace, f"r-{status}", status)
+    log(run_dir, "build", 1, "done")
+    assert cli("--json", "logs", f"r-{status}", "--follow").code == code
+    assert cli("logs", f"r-{status}", "--follow").code == code
+    assert cli("logs", f"r-{status}").code == ExitCode.OK
 
 
 def test_follow_with_a_step_and_level_filter(workspace, cli, no_sleep):

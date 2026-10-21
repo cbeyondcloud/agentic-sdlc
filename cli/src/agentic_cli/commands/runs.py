@@ -9,7 +9,8 @@
     agentic logs <run> [--step ID] [--level LEVEL] [--follow]   (M1-47's command)
 
 `logs` shows the run's per-step logs, redacted once more on read. `--follow` keeps
-printing new records until the run stops running (`--json --follow`: JSON Lines).
+printing new records until the run stops running (`--json --follow`: JSON Lines), then
+exits with the run's exit code.
 
 A run that waits for a person exits 4, one stopped (or paused at a limit) exits 5, a
 dry run whose preflight fails exits 3 with the report.
@@ -185,7 +186,10 @@ def register(app: typer.Typer) -> None:
         follow: Annotated[
             bool,
             typer.Option(
-                "--follow", "-f", help="Keep printing new records until the run stops running."
+                "--follow",
+                "-f",
+                help="Keep printing new records until the run stops running; then exit "
+                "with the run's exit code.",
             ),
         ] = False,
     ) -> None:
@@ -228,9 +232,11 @@ def _follow(
     The status is read BEFORE each poll: once a status read says the run stopped
     running, the poll after it has every record written before that, so the last
     records are never missed. A run whose process died stays `running`: Ctrl-C ends
-    the follow (exit 130)."""
+    the follow (exit 130). It exits with the run's own exit code, as `run` would (0
+    completed, 1 failed, 4 waiting for a person, 5 stopped; DF-285)."""
     while True:
-        status = _load(rt, run_id).status
+        state = _load(rt, run_id)
+        status = state.status
         for record in tail.poll(final=status != "running"):
             clean = redact_record(record, redact)
             out.stream(clean, render_logs([clean]))
@@ -239,6 +245,7 @@ def _follow(
         _sleep(FOLLOW_INTERVAL_S)
     if not out.json_mode:
         out.err.print(f"run {run_id} is {status}", markup=False)
+    raise typer.Exit(exit_code_for(state))
 
 
 def _inputs(pairs: list[str]) -> dict[str, str]:
