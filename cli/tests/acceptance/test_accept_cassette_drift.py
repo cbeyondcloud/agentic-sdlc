@@ -3,7 +3,8 @@ call order, and the requests carry per-run values (run ids, temporary paths, com
 ids), so request hashes cannot show drift. Each cassette instead records a fingerprint
 of what the prompts are made of - the library agents and pipelines, the standalone
 policy and the handoff templates; a different fingerprint at replay warns, and fails
-when AGENTIC_ACCEPTANCE_STRICT=1."""
+when AGENTIC_ACCEPTANCE_STRICT=1. The committed-cassette check below always fails on
+drift, so CI (plain pytest) catches a prompt change that was not re-recorded."""
 
 from pathlib import Path
 
@@ -40,10 +41,25 @@ def test_a_changed_prompt_fails_in_strict_mode(monkeypatch):
     assert "record_acceptance.py" in problem
 
 
-@pytest.mark.parametrize("scenario", SCENARIOS)
-def test_the_committed_cassettes_match_the_current_prompts(scenario: str):
-    """The cassettes in the repository were recorded from the prompts in the repository
-    (a warning when not; a failure with AGENTIC_ACCEPTANCE_STRICT=1)."""
+def committed_drift(scenario: str, current: str, monkeypatch) -> list[str]:
+    """The drift between `scenario`'s committed cassette and the `current` prompts, always
+    in strict mode: CI sets no variable, and this check is what stops a prompt change that
+    was not re-recorded (the scenario replays themselves keep warning locally)."""
+    monkeypatch.setenv("AGENTIC_ACCEPTANCE_STRICT", "1")
     stamp = CASSETTES / scenario / "acceptance" / "prompts.sha256"
     recorded = stamp.read_text("utf-8").strip() if stamp.is_file() else None
-    assert prompt_drift(recorded, prompt_fingerprint()) == []
+    return prompt_drift(recorded, current)
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS)
+def test_the_committed_cassettes_match_the_current_prompts(scenario: str, monkeypatch):
+    """The cassettes in the repository were recorded from the prompts in the repository."""
+    assert committed_drift(scenario, prompt_fingerprint(), monkeypatch) == []
+
+
+def test_committed_cassette_drift_fails_without_the_strict_variable(monkeypatch):
+    """Review F2: CI runs plain pytest, so the committed-cassette check must fail on drift
+    by itself; a warning there would let a prompt change without a re-record pass CI."""
+    monkeypatch.delenv("AGENTIC_ACCEPTANCE_STRICT", raising=False)
+    [problem] = committed_drift(SCENARIOS[0], "sha256:" + "0" * 64, monkeypatch)
+    assert "record_acceptance.py" in problem

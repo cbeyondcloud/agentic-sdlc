@@ -94,7 +94,7 @@ def publish_run(ws: Workspace, store_root: Path, state: RunState, kind: str | No
                 pull = provider.update_pull_request(repo, existing.number, body=body)
             else:
                 base = provider.default_branch(repo)
-                title = redact(_title(state))  # a run input may hold a secret (DF-295)
+                title = _title(state, redact)  # a run input may hold a secret (DF-295)
                 pull = provider.open_pull_request(
                     repo, head=tree.branch, base=base, title=title, body=block
                 )
@@ -375,10 +375,13 @@ def _marked(body: str) -> str:
     return f"{BODY_BEGIN}\n{body.rstrip()}\n{BODY_END}\n"
 
 
-def _title(state: RunState) -> str:
+def _title(state: RunState, redact: Callable[[str], str]) -> str:
+    """The PR title, redacted whole before it is cut: a secret straddling the limit would
+    no longer be a whole value for the redactor to match (review F1)."""
     request = next((v for v in state.inputs.values() if str(v).strip()), "")
     first = " ".join(str(request).split())
     title = f"{state.pipeline}: {first}" if first else f"{state.pipeline} run {state.run_id}"
+    title = redact(title)
     return title if len(title) <= TITLE_LIMIT else title[: TITLE_LIMIT - 3].rstrip() + "..."
 
 

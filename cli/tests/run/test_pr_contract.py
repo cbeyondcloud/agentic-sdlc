@@ -133,6 +133,21 @@ def test_the_pull_request_title_goes_through_the_redactor(workspace, github, mon
     assert secret not in title and title.startswith("ship: CSV export")
 
 
+def test_a_secret_across_the_title_length_limit_is_redacted_before_the_cut(
+    workspace, github, monkeypatch, cli
+):
+    """Review F1: the title is cut to 100 characters; redacting after the cut would leave
+    the head of a secret that straddles the limit (no longer a whole value to match)."""
+    secret = "correct-horse-" + "battery-staple-42"  # gitleaks:allow (not a real secret)
+    monkeypatch.setenv("ACME_DEPLOY_PASSWORD", secret)
+    request = "x" * 78 + " " + secret  # the secret starts at title position 85
+    result = cli("--json", "run", "ship", "--input", f"request={request}")
+    assert result.code == ExitCode.OK, result.err
+    title = github.pulls[0]["title"]
+    assert secret[:8] not in title, title
+    assert len(title) <= publishing.TITLE_LIMIT and title.startswith("ship: xxx")
+
+
 def test_an_ssh_alias_remote_is_told_how_to_declare_it(workspace, github, monkeypatch, cli):
     """DF-299: `git@github.com-work:` (an alias for a second account in ~/.ssh/config) is
     not a host anyone named; the hint says how to declare it with kind and api_url."""
