@@ -14,6 +14,8 @@ from agentic_cli.main import main
 from agentic_cli.repo_setup import (
     AGENTIC_BLOCK_BEGIN,
     AGENTIC_BLOCK_END,
+    agents_md,
+    commit_on_branch,
     merge_gitattributes,
     shared_files,
 )
@@ -234,3 +236,58 @@ def test_org_mode_is_refused_until_roles_can_be_checked(repo, policy_repo, monke
     assert main(["--json", "init", "--repo"]) == ExitCode.REFUSED
     assert "agent.edit.repo" in json.loads(capsys.readouterr().err)["error"]
     assert snapshot(repo, home) == before
+
+
+# --- M1 close-out (DF-210, DF-195) ---
+
+
+def test_the_branch_is_created_in_a_sha256_repository(tmp_path: Path):
+    """DF-210: the create-only update-ref must not use a 40-zero (SHA-1) old value."""
+    repo = tmp_path / "sha256"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    git(repo, "init", "-q", "--object-format=sha256", "-b", "main")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base")
+    branch, commit = commit_on_branch(repo, {"AGENTS.md": "# AGENTS.md\n"}, "set up")
+    assert branch == "agentic/init" and len(commit) == 64
+    assert git(repo, "rev-parse", f"refs/heads/{branch}") == commit
+
+
+def test_the_commit_is_signed_when_the_person_signs_commits(repo: Path, monkeypatch):
+    """DF-210: `commit-tree` ignores commit.gpgSign (it is plumbing), so a repository
+    whose branch protection wants signed commits would reject the init branch."""
+    import agentic_cli.repo_setup as setup
+
+    git(repo, "config", "commit.gpgSign", "true")
+    seen: list[tuple[str, ...]] = []
+    real = setup._git_run
+
+    def spy(where, env, *args, data=None):
+        seen.append(args)
+        if args[0] == "commit-tree":  # no signing key in a test: sign nothing, record it
+            args = tuple(a for a in args if a != "-S")
+        return real(where, env, *args, data=data)
+
+    monkeypatch.setattr(setup, "_git_run", spy)
+    commit_on_branch(repo, {"AGENTS.md": "# AGENTS.md\n"}, "set up")
+    assert any(args[0] == "commit-tree" and "-S" in args for args in seen)
+
+
+def test_an_unsigning_person_gets_an_unsigned_commit(repo: Path, monkeypatch):
+    import agentic_cli.repo_setup as setup
+
+    seen: list[tuple[str, ...]] = []
+    real = setup._git_run
+    monkeypatch.setattr(
+        setup, "_git_run", lambda w, e, *a, data=None: seen.append(a) or real(w, e, *a, data=data)
+    )
+    commit_on_branch(repo, {"AGENTS.md": "# AGENTS.md\n"}, "set up")
+    assert all("-S" not in args for args in seen)
+
+
+def test_the_agents_md_draft_reads_non_ascii_folders(repo: Path):
+    """DF-195: git C-quotes such paths by default ("caf\\303\\251/x.py")."""
+    commit_file(repo, "café/x.py", "x = 1\n")
+    draft = agents_md(repo)
+    assert "`café/`" in draft and '"' not in draft.split("## Layout")[1].split("##")[0]
