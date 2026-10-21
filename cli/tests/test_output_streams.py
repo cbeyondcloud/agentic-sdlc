@@ -4,6 +4,9 @@ macOS terminals)."""
 
 import io
 import json
+import os
+import subprocess
+import sys
 
 from agentic_cli import output
 from agentic_cli.output import Output, safe_streams
@@ -45,3 +48,42 @@ def test_stream_prints_one_compact_json_line_per_record(capsys):
 def test_stream_prints_the_text_without_json(capsys):
     Output(json_mode=False, color=False).stream({"a": 1}, "a line\n")
     assert capsys.readouterr().out == "a line\n"
+
+
+ENTRY = "from agentic_cli.main import run\nrun()\n"
+
+
+def test_json_through_a_cp1252_pipe_is_exact_end_to_end(tmp_path):
+    """The whole command, as a Windows pipe runs it: Zyroflo's `tools` package turns the
+    streams to UTF-8 when it is imported, so the decision is taken from the encoding the
+    process started with (DF-283). A folder named with non-ASCII letters and spaces (a
+    user name like José) comes back exactly."""
+    folder, done = _status_from_a_non_ascii_folder(tmp_path, "cp1252")
+    assert done.returncode == 2, done.stderr
+    assert done.stderr.isascii(), done.stderr
+    error = json.loads(done.stderr.decode("ascii"))
+    assert str(folder) in error["error"] and error["exit_code"] == 2
+
+
+def test_json_through_a_utf8_pipe_keeps_the_text_readable(tmp_path):
+    """A macOS or Linux pipe (UTF-8) gets the characters themselves, as before."""
+    folder, done = _status_from_a_non_ascii_folder(tmp_path, "utf-8")
+    assert done.returncode == 2, done.stderr
+    assert "Jösé Ünïcode 日本" in done.stderr.decode("utf-8")
+    assert str(folder) in json.loads(done.stderr.decode("utf-8"))["error"]
+
+
+def _status_from_a_non_ascii_folder(tmp_path, encoding: str):
+    entry = tmp_path / "entry.py"
+    entry.write_text(ENTRY, encoding="utf-8")
+    folder = tmp_path / "Jösé Ünïcode 日本"
+    folder.mkdir()
+    env = {**os.environ, "PYTHONIOENCODING": encoding, "PYTHONUTF8": "0"}
+    done = subprocess.run(
+        [sys.executable, str(entry), "--json", "status"],
+        cwd=folder,
+        env=env,
+        capture_output=True,
+        timeout=120,
+    )
+    return folder, done

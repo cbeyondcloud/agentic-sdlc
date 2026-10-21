@@ -13,9 +13,14 @@
 * Rich markup is off by default, so square brackets in a run id, path or reason print
   as they are (`[/x]` would raise MarkupError, `[bold]x` would vanish; DF-218). A styled
   line passes `markup=True` and puts any such text through `escape`.
-* A stdout or stderr that is not UTF-8 (a Windows pipe or redirect, a legacy code
-  page) shows characters it cannot encode as `?` instead of crashing the command
-  (`safe_streams`, called by `main`), and JSON on it is ASCII-escaped, so it stays exact.
+* Non-UTF-8 streams (a Windows pipe or redirect expects the ANSI code page). What
+  ships: Zyroflo's `tools` package, imported with the commands, reconfigures stdout
+  and stderr to UTF-8 (errors replaced) in place, so human text goes out as UTF-8
+  bytes and never crashes. `safe_streams` (called by `main`) is the backstop for a
+  stream nothing reconfigured: it replaces what it cannot encode with `?`. JSON is
+  ASCII-escaped whenever the stream was not UTF-8 when the process started
+  (`agentic_cli.ORIGINAL_STREAMS`), so `agentic --json ... | ConvertFrom-Json` in
+  Windows PowerShell gets non-ASCII names and paths exactly (DF-283).
 """
 
 import json
@@ -28,6 +33,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from agentic_cli import ORIGINAL_STREAMS
 from agentic_cli.errors import CliError
 
 #: C0 controls except tab and newline, DEL, and C1 controls (CSI, OSC... as one byte).
@@ -92,7 +98,8 @@ class Output:
     def error(self, error: CliError) -> None:
         if self.json_mode:
             body = {"error": str(error), "exit_code": int(error.code), "hint": error.hint}
-            self.err.print(json.dumps(body, ensure_ascii=False), markup=False, highlight=False)
+            text = json.dumps(body, ensure_ascii=not _exact("stderr"))
+            self.err.print(text, markup=False, highlight=False)
             return
         self.err.print(f"[red]error:[/red] {escape(str(error))}", markup=True)
         if error.hint:
@@ -103,14 +110,28 @@ def _json(data: Any, indent: int | None = 2) -> str:
     """`data` as JSON; C0 controls are escaped by JSON itself, C1 controls here (as
     `\\u0080`...), so the text is the same for a parser and inert in a terminal. On a
     stdout that is not UTF-8 everything beyond ASCII is escaped, so nothing is lost."""
-    ascii_only = not _utf8(sys.stdout)
+    ascii_only = not _exact("stdout")
     text = json.dumps(data, indent=indent, default=str, ensure_ascii=ascii_only)
     return _C1.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
 
 
+def _exact(name: str) -> bool:
+    """Whether non-ASCII text reaches the reader of `sys.<name>` as it is: the stream is
+    UTF-8 and, when it is still the stream the process started with, it was UTF-8 then
+    too (an import may have reconfigured it in place; its reader did not change)."""
+    stream = getattr(sys, name)
+    original, encoding = ORIGINAL_STREAMS.get(name, (None, ""))
+    if stream is original and encoding and not _utf8_name(encoding):
+        return False
+    return _utf8(stream)
+
+
 def _utf8(stream: TextIO | None) -> bool:
-    encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "").replace("_", "")
-    return encoding in ("utf8", "utf8sig", "cp65001")
+    return _utf8_name(getattr(stream, "encoding", None) or "")
+
+
+def _utf8_name(encoding: str) -> bool:
+    return encoding.lower().replace("-", "").replace("_", "") in ("utf8", "utf8sig", "cp65001")
 
 
 def safe_streams(*streams: TextIO | None) -> None:
