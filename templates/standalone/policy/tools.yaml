@@ -5,6 +5,8 @@ forbidden: []
 deny:
   # command prefixes no agent may run: publishing is the pipeline's job (an action
   # step after the gates), and history is never rewritten
-  shell: ["git push", "git commit --amend", "git rebase", "git reset --hard", "git clean"]
+  shell: ["git push", "git commit --amend", "git rebase", "git reset --hard", "git clean",
+          # an audit reports; fixing changes dependencies, and -o writes a file
+          "npm audit fix", "pip-audit --fix", "pip-audit -o|--output"]
   # files no agent may write: git's own data, and the framework's settings and pipelines
   paths: [".git/**", ".agentic/**"]

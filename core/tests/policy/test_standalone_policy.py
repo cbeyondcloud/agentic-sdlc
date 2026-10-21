@@ -86,3 +86,26 @@ def test_safe_defaults(policy):
     assert policy.allowed_repo_patterns == []  # any repo: there is no org to name them
     assert "git push" in policy.deny.shell  # publishing is the pipeline's action, never an agent's
     assert policy.classifications["restricted"].allowed_tiers == ["local"]
+
+
+def test_qa_audits_cannot_fix_or_write(policy):
+    """DF-237: an audit reports; its fixing and file-writing forms are denied for every
+    agent (the guard's matching is tested in commons/tests/test_standalone_shell_rules.py)."""
+    for rule in ("npm audit fix", "pip-audit --fix", "pip-audit -o|--output"):
+        assert rule in policy.deny.shell, rule
+
+
+def test_the_readme_covers_init_restricted_repos_windows_and_shell_lists():
+    """DF-233, DF-234: what a person needs before the first run."""
+    text = read_text(TEMPLATE / "README.md")
+    for needed in (
+        "agentic init --standalone",
+        "## Restricted repos",
+        "tier: local",
+        "WSL2",
+        "wsl --install",
+        "## Allowing another test command",
+        "agent-types.yaml",
+    ):
+        assert needed in text, needed
+    assert "not built yet" not in text
