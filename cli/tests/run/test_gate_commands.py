@@ -287,12 +287,13 @@ def test_show_never_runs_a_diff_driver(workspace, policy_repo, gateway, cli, tmp
     assert not Path(marker).exists()
 
 
-def test_show_cuts_a_huge_diff_with_a_note(workspace, policy_repo, gateway, cli):
-    run_id = built(policy_repo, gateway, cli, "x = 1\n" * 120_000)  # about 720 KiB
-    shown = cli("--json", "show", run_id).json()
-    assert len(shown["diff"].encode("utf-8")) < 600_000
-    assert shown["diff"].rstrip().endswith("git diff")
-    assert "diff cut at" in shown["diff"]
+def test_show_cuts_a_huge_diff_on_the_terminal_with_a_note(workspace, policy_repo, gateway, cli):
+    run_id = built(policy_repo, gateway, cli, "x = 1\n" * 60_000)  # about 360 KiB
+    human = cli("--no-color", "show", run_id).out
+    assert "diff cut at 256 KiB" in human and "agentic --json show" in human
+    assert human.count("+x = 1") < 60_000
+    shown = cli("--json", "show", run_id).json()  # all of it, for a script or a UI
+    assert shown["diff"].count("+x = 1") == 60_000
 
 
 ESCAPES = "\x1b]0;pwned\x07\x1b[1A\x1b[2K\x9b2K"

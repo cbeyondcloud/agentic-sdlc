@@ -290,22 +290,23 @@ def _diff(rt: Runtime, state: RunState) -> str:
             parts.append(worktree_git(tree.path, "diff", *flags, base[name], commit[name]))
         except WorktreeError as error:
             parts.append(f"# {name}: the diff cannot be shown ({error})")
-    return _capped("\n".join(part for part in parts if part))
+    return "\n".join(part for part in parts if part)
 
 
-DIFF_CAP_BYTES = 512 * 1024
+DIFF_CAP_BYTES = 256 * 1024
 
 
 def _capped(diff: str) -> str:
-    """A diff over DIFF_CAP_BYTES is cut at a line end, with a note: rendering megabytes
-    of generated code would stall the terminal and hide nothing useful."""
+    """For the terminal: a diff over DIFF_CAP_BYTES is cut at a line end, with a note
+    that says so and where to see all of it (highlighting megabytes of generated code
+    stalls the terminal). `--json` keeps the whole diff."""
     data = diff.encode("utf-8")
     if len(data) <= DIFF_CAP_BYTES:
         return diff
     kept = data[:DIFF_CAP_BYTES].decode("utf-8", "ignore").rsplit("\n", 1)[0]
     return (
-        f"{kept}\n# ... diff cut at {DIFF_CAP_BYTES // 1024} KiB of {len(data) // 1024} KiB; "
-        "see the whole change in the run's tree with git diff\n"
+        f"{kept}\n# ... diff cut at {DIFF_CAP_BYTES // 1024} KiB of {len(data) // 1024} KiB: "
+        "`agentic --json show <run>` has all of it\n"
     )
 
 
@@ -327,7 +328,8 @@ def _show(shown: dict):
             console.print(Markdown(body))
         console.rule("code changes")
         if shown["diff"]:
-            console.print(Syntax(printable(shown["diff"]), "diff", word_wrap=True))
+            diff = printable(_capped(shown["diff"]))
+            console.print(Syntax(diff, "diff", word_wrap=True))
         else:
             console.print("no code changes", markup=False)
 
