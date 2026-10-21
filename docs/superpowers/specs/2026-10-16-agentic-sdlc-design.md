@@ -404,6 +404,7 @@ steps:
 - `when` / `until` are expressions over handoff front-matter fields, evaluated by a **safe expression evaluator** (OSS to be chosen; candidates cel-python, simpleeval — spike S13).
 - **Overlays**: a repo can overlay an org pipeline (add/replace a step, change a gate's approver) without forking it.
 - Gates: **approve**, **reject with feedback** (routes back per pipeline), or **edit the handoff then approve** (opens `$EDITOR`).
+- **Failures route back, never complete (DF-238):** work goes back on a failure through a loop whose `until` reads the judging handoff (e.g. QA inside the build loop, running every round so the loop always ends on a report about the current change, `until: "review.open_blocking == 0 && test_report.verdict == 'pass'"`). An exhausted loop's gate refuses a bare approval while `until` is false: a person edits a pinned handoff so it holds (marking a review finding accepted, or naming a failing test or criterion in the test report's `accepted_failures` - an attributable acceptance that only a person may write, never an agent), rejects with feedback for another pass, or stops the run. Only blocking findings count towards a loop's oscillation check. A run whose newest review or test report still reports a failure at the end pauses `failing-handoff` instead of completing.
 - Preflight compiles the pipeline and checks step N `produces` matches step N+1 `consumes`.
 
 ### 6.1 Gate model (from Zyroflo)
@@ -416,9 +417,9 @@ steps:
 
 ### 6.2 Library pipelines
 
-- `feature-delivery` — BA → Design → (Developer ↔ Code Review loop) → QA → PR (the v1 acceptance pipeline).
+- `feature-delivery` — BA → Design → (Developer ↔ Code Review ↔ QA loop) → PR (the v1 acceptance pipeline; a QA fail goes back to the Developer).
 - `full-lifecycle` — Zyroflo P0–P11: intake → requirements → scoping → design → implementation → test → review → triage → release → deploy → verify → closeout, with gates G1–G5; profiles select which stages run.
-- `bugfix` — intake (with baseline tests) → Developer ↔ Review → QA → PR.
+- `bugfix` — intake (with baseline tests) → (Developer ↔ Review ↔ QA loop) → PR.
 
 ---
 

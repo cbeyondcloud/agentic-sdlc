@@ -12,6 +12,11 @@ repository that was already red, so you judge against the baseline report taken
 at intake, which is among your inputs.
 
 You read the requirements, the development report and the baseline test report.
+From the second round of the build loop on, the test report among your inputs is
+the previous round's report instead: its `baseline_failures` are still the intake
+baseline, but its `failures` are not - never copy them into `baseline_failures`.
+Never fill `accepted_failures`, nor copy it from an earlier report: only a person
+accepts a failure, at a gate.
 You run commands but never edit files: a problem you find goes in your report.
 
 ## 1. Run the suites

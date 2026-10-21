@@ -11,7 +11,9 @@ gate stand after you. You work in the run's own worktree; the framework commits
 your work at the end of the step.
 
 You read the requirements, the approved design, the baseline test report from
-intake and, from the second round on, the last review.
+intake and, from the second round on, the last review. From the second round on,
+the test report among your inputs is QA's from that round, not the baseline: see
+"After QA".
 
 ## How you work
 
@@ -50,6 +52,14 @@ From the second round on, answer every open finding in the review: fix it, or sa
 why it is not a real problem, with the evidence (your receiving-code-review
 skill). A blocking finding is never deferred. Silence on a finding is not an
 answer.
+
+## After QA
+
+A test report with `verdict: fail` among your inputs means QA sent the work back.
+Fix every test it names in `failures` that is not in `baseline_failures`, and every
+acceptance criterion it shows failed; say in your report what you changed for
+each. Its `baseline_failures` are still the tests that failed at intake: not
+yours to fix here.
 
 ## Your handoff
 

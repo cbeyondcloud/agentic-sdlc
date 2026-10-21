@@ -1,9 +1,13 @@
 # feature-delivery: a request becomes a reviewed, tested pull request (spec §6.2).
 # BA -> [requirements gate] -> test baseline -> Design -> [design gate] -> Developer
-# <-> Code Review -> [review gate] -> QA -> pull request. Every step's agent is a
+# <-> Code Review <-> QA -> [review gate] -> pull request. Every step's agent is a
 # library agent (library/agents/); the stage instructions come from Zyroflo's SOPs.
-# A QA `fail` opens no PR: the skipped publish step records the condition that
-# stopped it (an on-fail route back to the Developer is M2-23).
+# A QA `fail` routes the work back to the Developer, with the QA report among its
+# inputs (DF-238): the build loop ends only on a clean review and a QA pass. Still
+# failing after 3 rounds, the run waits at the loop's gate, where a bare approval is
+# refused: a person edits a handoff (marks a review finding accepted, or names a failing
+# test in the QA report's accepted_failures - an attributable acceptance), rejects with
+# feedback for another round, or stops the run.
 name: feature-delivery
 version: 1.0.0
 regime: team
@@ -29,20 +33,21 @@ steps:
   - loop:
       id: build-review
       max_iterations: 3
-      until: "review.open_blocking == 0"   # Zyroflo's exit rule: the score never gates
-      on_exhausted: gate                   # still blocked after 3 rounds: a person decides
+      # Zyroflo's exit rule (the score never gates), and QA's verdict: a fail loops back
+      until: "review.open_blocking == 0 && test_report.verdict == 'pass'"
+      on_exhausted: gate                   # still failing after 3 rounds: a person decides
       steps:
         - id: develop
           agent: developer
         - id: review
           agent: code-review
+        - id: qa                           # tests against the baseline, every acceptance
+          agent: qa                        # criterion - every round, so the loop always
+                                           # ends on a QA report about the current change
 
-  - gate: review-approval               # a person reads the change before QA and publishing
+  - gate: review-approval               # a person reads the change and its QA report
     approver_role: approver
-
-  - id: qa                              # tests against the baseline, every acceptance criterion
-    agent: qa
 
   - id: publish
     action: github.open_pr
-    when: "test_report.verdict == 'pass'"
+    when: "test_report.verdict == 'pass'"   # always true after the loop; kept as a guard

@@ -35,6 +35,11 @@ class HandoffBase(_Strict):
             raise ValueError("the summary must not be blank")
         return value
 
+    def failure(self) -> str | None:
+        """Why this handoff reports a failure a run may not complete on, or None (DF-238).
+        Kinds that judge work (review, test-report) override it; extensions inherit it."""
+        return None
+
 
 class TestCounts(_Strict):
     __test__ = False  # not a pytest test class, despite the name
@@ -150,6 +155,12 @@ class ReviewData(HandoffBase):
     score: float | None = Field(default=None, ge=0, le=10)
     prepass_results: list[PrepassResult] = []
 
+    def failure(self) -> str | None:
+        if not self.open_blocking:
+            return None
+        plural = "s" if self.open_blocking > 1 else ""
+        return f"{self.open_blocking} blocking finding{plural} open"
+
 
 # --- test-report: produced by QA ------------------------------------------------
 
@@ -177,6 +188,9 @@ class TestReportData(HandoffBase):
     # failures). Optional, so a report written before these fields existed stays valid.
     failures: list[str] = []  # the failing tests, by name
     baseline_failures: list[str] = []  # tests already failing at intake (the baseline report)
+    # Failing tests and acceptance criteria (by id) a person accepted at a gate: they stay
+    # named as failures, nothing claims they failed at intake. Never an agent's (review F3).
+    accepted_failures: list[str] = []
 
     @model_validator(mode="after")
     def a_pass_has_no_new_failures(self) -> "TestReportData":
@@ -186,14 +200,29 @@ class TestReportData(HandoffBase):
                     f"verdict: 'pass' but {self.tests.failed} test(s) failed; a pass with "
                     "failures must name each one, once, in `failures`"
                 )
-            if new := [name for name in self.failures if name not in self.baseline_failures]:
+            known = {*self.baseline_failures, *self.accepted_failures}
+            if new := [name for name in self.failures if name not in known]:
                 raise ValueError(
                     f"verdict: 'pass' but {', '.join(new)} failed and was not failing at "
-                    "intake (`baseline_failures`)"
+                    "intake (`baseline_failures`) nor accepted by a person (`accepted_failures`)"
                 )
-            if failed := [r.criterion_id for r in self.acceptance_results if not r.passed]:
-                raise ValueError(f"verdict: 'pass' but acceptance criterion {failed[0]} failed")
+            failed = [r.criterion_id for r in self.acceptance_results if not r.passed]
+            if failed := [c for c in failed if c not in self.accepted_failures]:
+                raise ValueError(
+                    f"verdict: 'pass' but acceptance criterion {failed[0]} failed and was not "
+                    "accepted by a person (`accepted_failures`)"
+                )
         return self
+
+    def failure(self) -> str | None:
+        if self.verdict == "pass":
+            return None
+        parts = ["verdict 'fail'"]
+        if new := [name for name in self.failures if name not in self.baseline_failures]:
+            parts.append(f"new failures: {', '.join(new)}")
+        if failed := [r.criterion_id for r in self.acceptance_results if not r.passed]:
+            parts.append(f"failed criteria: {', '.join(failed)}")
+        return "; ".join(parts)
 
 
 # kind name (as written in front matter) -> the model for its fields

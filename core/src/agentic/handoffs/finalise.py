@@ -54,7 +54,8 @@ def finalise_handoff(
 ) -> tuple[str, Handoff]:
     """The final document and its parsed handoff, or HandoffError with every problem.
     `person`: the text is a person's (an edit at a gate), who may accept a finding at
-    a blocking severity; an agent may not (DF-41, owner 2026-10-20)."""
+    a blocking severity or a failing test (`accepted_failures`); an agent may not
+    (DF-41, owner 2026-10-20; review F3)."""
     check_block_on(block_on)
 
     text = _unwrapped(text)
@@ -82,6 +83,11 @@ def finalise_handoff(
         data["open_blocking"] = count_open_blocking(data.get("findings"), block_on)
         if not person:
             problems += _accepted_by_agent(data.get("findings"), block_on, lines)
+    if schema.kind == "test-report" and not person and data.get("accepted_failures"):
+        problems.append(  # QA accepting its own failures would end the loop (review F3)
+            "accepted_failures: only a person can accept a failure, at a gate "
+            f"(line {line_of(lines, ('accepted_failures',))})"
+        )
     envelope = {
         "kind": schema.kind,
         "schema_version": schema.schema_version,

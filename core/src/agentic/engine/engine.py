@@ -9,9 +9,13 @@ until something needs a person - a gate, a pause - or the run ends:
                   handoff written into the run folder and pinned by digest
   * action step - a built-in action by name
   * loop        - its body repeated until `until` holds; an oscillating or
-                  exhausted loop escalates to a gate (or fails the run)
+                  exhausted loop escalates to a gate (or fails the run), where a
+                  bare approval is refused while `until` is false (DF-238)
   * gate        - the run stops until the gate ledger reports it satisfied:
                   an approval over the exact bytes it pinned (spec §7.3)
+  * the end     - the run completes only when no newest handoff reports a failure
+                  (a QA `fail`, open blocking findings); otherwise it pauses
+                  `failing-handoff` for a person (DF-238)
 
 Each completed step is a checkpoint: `run.json` is saved before the next step
 starts, and the budget snapshot is saved as calls settle, so a crash re-runs only
@@ -72,6 +76,8 @@ from agentic.transport.budget import BudgetError
 
 _LOG = logging.getLogger("agentic.engine")
 PROMPT_HEAD = "Pipeline: {pipeline} · step: {step} · iteration: {iteration}"
+#: The pause of a run that reached its end while a newest handoff reports a failure.
+FAILING_PAUSE = "failing-handoff"
 
 
 class EngineError(Exception):
@@ -362,6 +368,13 @@ class _Run:
                 if not await self._step(step, 1):
                     return state
                 self._next()
+        try:  # a run never completes on a failing review or QA report (DF-238)
+            failures = self._failures()
+        except _Unusable as problem:
+            return self._pause(problem.pause_id, problem.reason)
+        if failures:
+            reason = "the run cannot complete while a handoff reports a failure: "
+            return self._pause(FAILING_PAUSE, reason + "; ".join(failures))
         return self._close("completed")
 
     async def resume(
@@ -623,6 +636,8 @@ class _Run:
             if invalid:
                 message += " - not a valid handoff:\n" + "\n".join(invalid)
             raise GateRefused(message + " - review them and decide again")
+        if refusal := self._loop_still_failing(pending):
+            raise GateRefused(refusal)
         self.gates.record(
             pending.id,
             "approve",
@@ -657,10 +672,36 @@ class _Run:
             state.feedback.pop(step, None)
             self._after_step()
         elif pending.id.endswith("-exhausted") and self._gate_step(pending.id) is None:
-            self._next()  # a person accepted the loop's result as it stands
+            self._next()  # a person's edit made the loop's `until` hold
         else:
             self.save()
         return await self.go()
+
+    def _loop_still_failing(self, pending: Pending) -> str | None:
+        """Why an exhausted loop may not be approved yet, or None (DF-238): its `until`
+        must hold over the current handoffs - a person's edit can make it hold (marking a
+        finding accepted, or a failing test in `accepted_failures`), a bare approval cannot
+        wave a failure through."""
+        if not pending.id.endswith("-exhausted") or self._gate_step(pending.id) is not None:
+            return None
+        top = self.pipeline.steps[self.state.cursor.index]
+        if not isinstance(top, LoopStep):
+            return None
+        loop = top.loop
+        try:
+            if compile_condition(loop.until).evaluate(self._context()):
+                return None
+            why = "still does not hold"
+        except ExpressionError as error:
+            why = f"cannot be evaluated ({error.reason})"
+        except _Unusable as problem:
+            why = f"cannot be evaluated ({problem.reason})"
+        return (
+            f"{loop.id}: its exit condition {loop.until!r} {why} - edit a pinned handoff so "
+            "that it holds (a person may mark a review finding accepted, or name a failing "
+            "test or criterion in a test report's accepted_failures and set its verdict to "
+            "pass), reject with feedback for another pass, or stop the run"
+        )
 
     async def _reject(self, decision: Reject, gate: GateStep | None) -> RunState:
         state, pending = self.state, self.state.pending
@@ -817,7 +858,9 @@ class _Run:
             self.save()
 
     def _oscillating(self, loop: LoopSpec) -> str | None:
-        """An open finding of this iteration that repeats one of the last two (§8.5)."""
+        """An open blocking finding of this iteration that repeats one of the last two
+        (§8.5). A non-blocking one may stay open while the work goes round for another
+        reason (a QA failure, say): it decides nothing, so it is no oscillation (review F2)."""
         body = {step.id for step in loop.steps}
         by_iteration: dict[int, list[str]] = {}
         for record in self.state.history[self.state.loop_pass_start :]:
@@ -839,7 +882,9 @@ class _Run:
             return None
         if handoff.envelope.kind != "review":
             return None
-        return [f.issue for f in handoff.data.findings if f.status == "open"]  # type: ignore[attr-defined]
+        blocking = self.e.block_on_for(self.state.regime)
+        findings = handoff.data.findings  # type: ignore[attr-defined]
+        return [f.issue for f in findings if f.status == "open" and f.severity in blocking]
 
     # ── one step ─────────────────────────────────────────────────────────────
 
@@ -1172,6 +1217,20 @@ class _Run:
             context[kind] = {**fields, "status": handoff.envelope.status}
         return context
 
+    def _failures(self) -> list[str]:
+        """Each newest handoff that reports a failure (a QA `fail`, open blocking review
+        findings), as `kind (path): reason`. Unreadable or changed: it pauses (I7)."""
+        failures = []
+        for kind, rel in sorted(self.state.latest.items()):
+            self._check_unchanged(rel)
+            try:
+                handoff = self._read(rel)
+            except (OSError, HandoffError) as error:
+                raise _Unusable("handoff-invalid", f"{rel} cannot be read: {error}") from error
+            if reason := handoff.data.failure():  # type: ignore[attr-defined]
+                failures.append(f"{kind} ({rel}): {reason}")
+        return failures
+
     def _read(self, rel: str):
         text = (self.recorder.run_dir / rel).read_text(encoding="utf-8")
         return parse_handoff(text.replace("\r\n", "\n").replace("\r", "\n"), self.catalog)
@@ -1410,6 +1469,7 @@ def _usd(amount: float | None) -> Decimal | None:
 
 __all__ = [
     "Clock",
+    "FAILING_PAUSE",
     "Engine",
     "EngineError",
     "GateLedger",
