@@ -35,6 +35,11 @@ class HandoffBase(_Strict):
             raise ValueError("the summary must not be blank")
         return value
 
+    def failure(self) -> str | None:
+        """Why this handoff reports a failure a run may not complete on, or None (DF-238).
+        Kinds that judge work (review, test-report) override it; extensions inherit it."""
+        return None
+
 
 class TestCounts(_Strict):
     __test__ = False  # not a pytest test class, despite the name
@@ -150,6 +155,12 @@ class ReviewData(HandoffBase):
     score: float | None = Field(default=None, ge=0, le=10)
     prepass_results: list[PrepassResult] = []
 
+    def failure(self) -> str | None:
+        if not self.open_blocking:
+            return None
+        plural = "s" if self.open_blocking > 1 else ""
+        return f"{self.open_blocking} blocking finding{plural} open"
+
 
 # --- test-report: produced by QA ------------------------------------------------
 
@@ -194,6 +205,16 @@ class TestReportData(HandoffBase):
             if failed := [r.criterion_id for r in self.acceptance_results if not r.passed]:
                 raise ValueError(f"verdict: 'pass' but acceptance criterion {failed[0]} failed")
         return self
+
+    def failure(self) -> str | None:
+        if self.verdict == "pass":
+            return None
+        parts = ["verdict 'fail'"]
+        if new := [name for name in self.failures if name not in self.baseline_failures]:
+            parts.append(f"new failures: {', '.join(new)}")
+        if failed := [r.criterion_id for r in self.acceptance_results if not r.passed]:
+            parts.append(f"failed criteria: {', '.join(failed)}")
+        return "; ".join(parts)
 
 
 # kind name (as written in front matter) -> the model for its fields
