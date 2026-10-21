@@ -221,3 +221,48 @@ def test_an_agent_cannot_accept_a_failing_test():  # review F3: like DF-41, for 
         finalise_handoff(agent_answer, schema=report, stamp=STAMP)
     _, handoff = finalise_handoff(agent_answer, schema=report, stamp=STAMP, person=True)
     assert handoff.data.accepted_failures == ["tests/test_export.py::test_csv"]
+
+
+# ── M1-81 hardening (DF-35, DF-40) ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize("fence", ["````", "~~~", "`````markdown"])
+def test_a_longer_or_tilde_outer_fence_is_stripped(fence):
+    """A four-backtick fence (models use it when the document holds ``` code blocks) is
+    one fence too, not a broken answer that costs a retry (DF-35)."""
+    closing = fence.rstrip("markdown")
+    fenced = f"{fence}\n" + answer(DESIGN_FIELDS) + f"{closing}\n"
+
+    _, handoff = finalise_handoff(fenced, schema=DESIGN, stamp=STAMP)
+
+    assert handoff.data.summary == "queue exports"
+
+
+def test_a_fence_of_the_other_character_is_not_a_closing_fence():
+    fenced = "````\n" + answer(DESIGN_FIELDS) + "~~~~\n"
+
+    with pytest.raises(HandoffError):
+        finalise_handoff(fenced, schema=DESIGN, stamp=STAMP)
+
+
+def test_error_lines_count_in_the_agents_own_text():
+    """Blank lines and a fence before the document shift every line: the retry message
+    must name the line the model wrote, or it fixes the wrong one (DF-35)."""
+    bad = DESIGN_FIELDS.replace("rationale: exports time out", "rationale: ''")
+    text = "\n\n```markdown\n" + answer(bad) + "```\n"
+    # line 1-2 blank, 3 the fence, 4 '---', then status=5, summary=6, decisions=7,
+    # id=8, choice=9, rationale=10
+    with pytest.raises(HandoffError, match=r"rationale.*\(line 10\)"):
+        finalise_handoff(text, schema=DESIGN, stamp=STAMP)
+
+
+@pytest.mark.parametrize(("escape", "char"), [("\\N", "\x85"), ("\\L", " ")])
+def test_a_line_separator_in_a_field_survives_the_final_document(escape, char):
+    """YAML reads U+0085 in a quoted scalar as a line break folded to a space: the final
+    document would differ from the answer, silently (DF-40)."""
+    fields = DESIGN_FIELDS.replace("summary: queue exports", f'summary: "queue{escape}exports"')
+
+    document, handoff = finalise_handoff(answer(fields), schema=DESIGN, stamp=STAMP)
+
+    assert handoff.data.summary == f"queue{char}exports"
+    assert parse_handoff(document).data.summary == f"queue{char}exports"

@@ -10,6 +10,7 @@ Errors carry line numbers in the agent's own text, so the retry message (M1-20)
 can point at the exact line to fix.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -58,13 +59,13 @@ def finalise_handoff(
     (DF-41, owner 2026-10-20; review F3)."""
     check_block_on(block_on)
 
-    text = _unwrapped(text)
+    text, above = _unwrapped(text)
     try:
         header, body = split_front_matter(text)
     except YamlFileError as error:
         raise HandoffError([NO_DOCUMENT]) from error
     try:
-        meta, lines = load_yaml(header, first_line=2)
+        meta, lines = load_yaml(header, first_line=2 + above)
     except YamlFileError as error:
         raise HandoffError([f"front matter: {error}"]) from error
     meta = {} if meta is None else meta
@@ -146,10 +147,29 @@ def _accepted_by_agent(findings: object, block_on: frozenset[str], lines) -> lis
     ]
 
 
-def _unwrapped(text: str) -> str:
-    """LF line endings, no byte-order mark, and one outer code fence removed."""
-    text = text.replace("\r\n", "\n").replace("\r", "\n").removeprefix("\ufeff").strip()
+def _unwrapped(text: str) -> tuple[str, int]:
+    """LF line endings, no byte-order mark, and one outer code fence (three or more
+    backticks or tildes, DF-35) removed; with the number of lines removed above the
+    document, so errors name lines in the agent's own text."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n").removeprefix("\ufeff")
+    above = _leading_lines(text)
+    text = text.strip()
     lines = text.split("\n")
-    if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
-        text = "\n".join(lines[1:-1]).strip()
-    return text
+    fence = _FENCE.match(lines[0])
+    if len(lines) >= 2 and fence and _closes(lines[-1].strip(), fence.group(1)):
+        inner = "\n".join(lines[1:-1])
+        above += 1 + _leading_lines(inner)
+        text = inner.strip()
+    return text, above
+
+
+_FENCE = re.compile(r"(`{3,}|~{3,})[^`~]*$")
+
+
+def _closes(line: str, opening: str) -> bool:
+    return len(line) >= 3 and set(line) == {opening[0]}
+
+
+def _leading_lines(text: str) -> int:
+    """How many whole lines `strip()` removes from the start of `text`."""
+    return text[: len(text) - len(text.lstrip())].count("\n")
