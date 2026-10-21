@@ -55,7 +55,8 @@
       "ba-requirements@1": "sha256:ad0e2f6d3db9c1a4509ab02327f687ab9b5c5aeafb0b1adedd95b1d64bcec10b"
     },
     "same_family": false,
-    "tier": "eval-judge"
+    "tier": "eval-judge",
+    "warnings": []
   },
   "judge_cost_usd": 0.0168,
   "k": 2,

@@ -194,6 +194,50 @@ def test_tag_selects_the_fixture_subset(tmp_path: Path, capsys):
     assert "fixture" in capsys.readouterr().err  # the known tags are listed
 
 
+def gateway_policy(tmp_path: Path) -> Path:
+    """The fixture policy with both tiers behind one gateway prefix and no `family:`."""
+    policy = tmp_path / "gw-policy"
+    shutil.copytree(LIBRARY / "fixtures" / "policy", policy)
+    tiers = policy / "tiers.yaml"
+    text = tiers.read_text(encoding="utf-8").replace("family-a/", "gateway/")
+    tiers.write_text(text.replace("family-b/", "gateway/"), encoding="utf-8")
+    return policy
+
+
+def test_a_shared_gateway_prefix_is_warned_and_recorded(tmp_path: Path, capsys):
+    """DF-302: preflight warns when the judge and the agents share a prefix that may be a
+    gateway, with no `family:` set; the report keeps the warning."""
+    policy = gateway_policy(tmp_path)
+    code, out = run(tmp_path, "business-analyst", "--policy", str(policy))
+    printed = json.loads(capsys.readouterr().out)
+    assert code == ExitCode.OK
+    assert any("'gateway/'" in w and "family:" in w for w in printed["warnings"])
+    report = EvalReport.model_validate_json((out / "report.json").read_bytes())
+    assert report.judge.warnings == printed["warnings"] and report.judge.same_family
+    human = main(
+        [
+            "eval",
+            "run",
+            "--agent",
+            "business-analyst",
+            "--corpus",
+            str(LIBRARY),
+            "--split",
+            "all",
+            "--mode",
+            "replay",
+            "--tag",
+            "fixture",
+            "--policy",
+            str(policy),
+            "--out",
+            str(tmp_path / "human"),
+        ]
+    )
+    assert human == ExitCode.OK
+    assert "warning:" in capsys.readouterr().err
+
+
 def test_a_rubric_id_cannot_leave_the_corpus(tmp_path: Path, capsys):
     """F1: `rubric: ../../outside` must neither read nor write outside the corpus."""
     corpus = corpus_copy(tmp_path / "t")

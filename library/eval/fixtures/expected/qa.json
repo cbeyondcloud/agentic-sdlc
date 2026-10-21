@@ -19,6 +19,14 @@
         "unscored": [],
         "value": 0.8
       },
+      "qa_false_alarm": {
+        "ci_high": 0.0,
+        "ci_low": 0.0,
+        "median": null,
+        "n_scored": 3,
+        "unscored": [],
+        "value": 0.0
+      },
       "schema_valid": {
         "ci_high": 1.0,
         "ci_low": 1.0,
@@ -74,8 +82,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 1.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 4.0,
         "criteria_total": 2.0,
         "qa_catch": 0.5,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },
@@ -102,8 +113,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 1.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 4.0,
         "criteria_total": 2.0,
         "qa_catch": 0.5,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },
@@ -130,8 +144,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 2.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 2.0,
         "criteria_total": 2.0,
         "qa_catch": 1.0,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },
@@ -158,8 +175,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 2.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 2.0,
         "criteria_total": 2.0,
         "qa_catch": 1.0,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },
@@ -186,8 +206,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 1.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 3.0,
         "criteria_total": 1.0,
         "qa_catch": 1.0,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },
@@ -214,8 +237,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 1.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 3.0,
         "criteria_total": 1.0,
         "qa_catch": 1.0,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },

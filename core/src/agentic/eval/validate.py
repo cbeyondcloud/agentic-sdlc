@@ -131,17 +131,24 @@ def _review_problems(case: EvalCase) -> list[str]:
     return problems
 
 
-def _qa_problems(case: EvalCase) -> list[str]:
-    text = case.inputs.handoffs.get("requirements")
-    if text is None or input_problems("requirements", text):
-        return ["a qa case needs a valid requirements handoff to check criteria against"]
-    header, _ = split_front_matter(text)
+def criteria_ids(requirements: str | None) -> set[str] | None:
+    """Every acceptance criterion id (`REQ-n.m`) of a requirements document, or None
+    when it is not a valid requirements input."""
+    if requirements is None or input_problems("requirements", requirements):
+        return None
+    header, _ = split_front_matter(requirements)
     meta, _ = load_yaml(header)
-    criteria = {
+    return {
         f"{item['id']}.{position}"
         for item in meta["items"]
         for position in range(1, len(item["acceptance_criteria"]) + 1)
     }
+
+
+def _qa_problems(case: EvalCase) -> list[str]:
+    criteria = criteria_ids(case.inputs.handoffs.get("requirements"))
+    if criteria is None:
+        return ["a qa case needs a valid requirements handoff to check criteria against"]
     problems = [
         f"failing criterion {c} is not a criterion of the requirements (REQ-n.m: criterion m "
         f"of item REQ-n)"
@@ -190,4 +197,4 @@ def _is_file_exactly(root: Path, relative: PurePosixPath) -> bool:
     return here.is_file()
 
 
-__all__ = ["case_problems", "input_problems", "parse_hunks"]
+__all__ = ["case_problems", "criteria_ids", "input_problems", "parse_hunks"]

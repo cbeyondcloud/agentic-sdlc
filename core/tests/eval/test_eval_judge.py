@@ -182,8 +182,87 @@ def policy(**tiers) -> OrgPolicy:
 
 def test_model_family_is_the_vendor_prefix_unless_overridden():
     assert model_family("Family-A/model-x") == "family-a"
-    assert model_family("bare-model") == "bare-model"
+    assert model_family("bare-model") is None  # DF-256: unknown, never the whole id
     assert model_family("gateway/model-x", override="family-c") == "family-c"
+
+
+def test_a_one_word_quote_is_not_evidence():
+    """DF-258: a quote of a word or two (found anywhere) proves nothing."""
+    log: list = []
+    scores = dict.fromkeys(("problem", "criteria", "testability", "scope", "consistency"), 2)
+    judge = RubricJudge(
+        rubric_judge(scores, "CSV", log), Rubric.model_validate(RUBRIC), model_id="m/j"
+    )
+    result = asyncio.run(judge.score(OUTPUT))
+    assert len(log) == 2 and "too short" in log[1]["prompt"]
+    assert result.total is None
+
+
+def test_the_judge_uses_its_tiers_temperature():
+    """DF-256: temperature 0 is the default, not a rule a backend must accept."""
+    org = policy(
+        balanced={"model": "family-a/m1"},
+        **{JUDGE_TIER: {"model": "family-b/judge", "temperature": 0.2}},
+    )
+    choice = resolve_judge(org, ["family-a/m1"])
+    assert choice.settings == {"temperature": 0.2}
+    plain = policy(balanced={"model": "family-a/m1"}, **{JUDGE_TIER: {"model": "family-b/j"}})
+    assert resolve_judge(plain, ["family-a/m1"]).settings == {"temperature": 0.0}
+    log: list = []
+    scores = dict.fromkeys(("problem", "criteria", "testability", "scope", "consistency"), 0)
+    judge = RubricJudge(
+        rubric_judge(scores, "", log),
+        Rubric.model_validate(RUBRIC),
+        model_id="family-b/judge",
+        settings=choice.settings,
+    )
+    asyncio.run(judge.score(OUTPUT))
+    assert log[0]["settings"]["temperature"] == 0.2
+
+
+def test_a_shared_gateway_prefix_without_family_is_warned():
+    """DF-302: 'gateway/a' and 'gateway/b' look like one family to the prefix rule."""
+    org = policy(balanced={"model": "gateway/m1"}, **{JUDGE_TIER: {"model": "gateway/judge"}})
+    choice = resolve_judge(org, ["gateway/m1"])
+    assert choice.same_family is True
+    assert any("'gateway/'" in w and "family:" in w for w in choice.warnings)
+
+
+def test_a_judge_behind_a_routing_prefix_is_warned():
+    """The reverse case: 'router/family-a/judge' looks like family 'router', unlike the
+    agents' 'family-a', although it is the same family."""
+    org = policy(
+        balanced={"model": "family-a/m1"}, **{JUDGE_TIER: {"model": "router/family-a/judge"}}
+    )
+    choice = resolve_judge(org, ["family-a/m1"])
+    assert any("router/family-a/judge" in w and "family:" in w for w in choice.warnings)
+
+
+def test_a_model_with_no_family_prefix_is_flagged_and_warned():
+    org = policy(balanced={"model": "local-model"}, **{JUDGE_TIER: {"model": "family-b/judge"}})
+    choice = resolve_judge(org, ["local-model"])
+    assert choice.same_family is True  # cannot tell: the calibration sample doubles
+    assert any("local-model" in w for w in choice.warnings)
+
+
+def test_families_set_by_admins_silence_the_warnings():
+    org = policy(
+        balanced={"model": "gateway/m1", "family": "family-a"},
+        **{JUDGE_TIER: {"model": "gateway/judge", "family": "family-b"}},
+    )
+    choice = resolve_judge(org, ["gateway/m1"])
+    assert choice.warnings == () and choice.same_family is False
+
+
+def test_a_same_family_judge_is_refused_when_policy_offers_another_family():
+    """DF-262: the judge is never the candidate's family when policy offers another."""
+    org = policy(
+        balanced={"model": "family-a/m1"},
+        strong={"model": "family-c/m2"},
+        **{JUDGE_TIER: {"model": "family-a/judge"}},
+    )
+    with pytest.raises(JudgeError, match="family-c"):
+        resolve_judge(org, ["family-a/m1"])
 
 
 def test_judge_from_a_different_family():

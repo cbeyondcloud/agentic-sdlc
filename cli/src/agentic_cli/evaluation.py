@@ -238,7 +238,13 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
         )
         who = identity(request, f"{JUDGE_TIER}@1", JUDGE_TIER)
         model = build_model_for(choice.model, who, gateway, meter)
-        return RubricJudge(model, rubrics[request.case.rubric], model_id=choice.model, leaks=leaks)
+        return RubricJudge(
+            model,
+            rubrics[request.case.rubric],
+            model_id=choice.model,
+            leaks=leaks,
+            settings=choice.settings,
+        )
 
     def reference(case) -> str | None:
         if not case.expected.golden:
@@ -295,6 +301,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             family=choice.family,
             same_family=choice.same_family,
             rubrics={r.key: r.sha for r in rubrics.values()},
+            warnings=list(choice.warnings),
         )
     report = build_report(
         runset,
@@ -340,6 +347,7 @@ def summary(result: RunResult) -> dict:
         "stale_cassettes": report.stale_cassettes,
         "problems": report.problems,
         "leaks": report.leaks,
+        "warnings": list(report.judge.warnings) if report.judge is not None else [],
     }
 
 

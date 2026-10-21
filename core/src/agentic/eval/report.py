@@ -36,9 +36,11 @@ Verdict = Literal["MEASURED", "UNMEASURABLE", "INCOMPLETE"]
 RATIO_METRICS = {
     "defect_recall": ("defects_caught", "defects_total"),
     "qa_catch": ("criteria_caught", "criteria_total"),
+    "qa_false_alarm": ("criteria_false_alarms", "criteria_passing"),
 }
 PARTS = {part for pair in RATIO_METRICS.values() for part in pair}
 ORDER = ["schema_valid", "rubric", "defect_recall", "unmatched_blocking", "qa_catch"]
+ORDER += ["qa_false_alarm"]
 ORDER += ["tests_pass", "cost_usd", "tokens", "duration_s"]
 VOLATILE = ("duration_s",)
 #: The metric each case class exists to measure: always listed, so a metric nobody
@@ -102,6 +104,7 @@ class JudgeInfo(_Model):
     family: str
     same_family: bool
     rubrics: dict[str, str]  # rubric key -> sha256
+    warnings: list[str] = []  # family guesses an admin should confirm (`family:`)
 
 
 class EvalReport(_Model):
@@ -251,6 +254,7 @@ def render_markdown(report: EvalReport) -> str:
         )
         rubrics = ", ".join(f"{k} `{v[:19]}`" for k, v in judge.rubrics.items())
         lines.append(f"- **Judge:** tier `{judge.tier}`, family {judge.family}{same}; {rubrics}")
+        lines += [f"- **Judge warning:** {w}" for w in judge.warnings]
     cost = "unmeasured" if report.cost_total_usd is None else f"${report.cost_total_usd:.4f}"
     lines.append(
         f"- **Cost:** {cost} ({report.cost_unmeasured_runs} runs unmeasured)"

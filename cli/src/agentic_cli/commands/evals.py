@@ -96,6 +96,8 @@ def register(app: typer.Typer) -> None:
             )
         )
         data = evaluation.summary(result)
+        for warning in data["warnings"]:
+            output.warn(warning)
         output.result(data, lambda console: _show_run(console, data))
         if (error := evaluation.failure(result)) is not None:
             raise error
