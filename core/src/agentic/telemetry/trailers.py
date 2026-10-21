@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from agentic.engine.state import RunState
+from agentic.hosting.base import PR_BODY_END, PR_BODY_START
 
 TRAILER_KEYS = (
     "Agentic-Run",
@@ -117,16 +118,23 @@ def pr_body(
         path = f"{run_folder.rstrip('/')}/{rel}" if run_folder else rel
         return f"{label} `{_line(path)}`"
 
+    # a publish step runs before the run ends: say when the status was taken (DF-293)
+    status = (
+        "running (when this was published; `agentic pr open` refreshes it)"
+        if state.status == "running"
+        else state.status
+    )
     lines = [
+        PR_BODY_START,  # a re-publish replaces only what lies between the markers (DF-296)
         f"## Agentic run {title}",
         "",
         f"- Pipeline: `{state.pipeline}` {state.pipeline_version} ({state.regime})",
         f"- Started by: {_line(state.starter)}",
         f"- Policy version: `{state.policy_version}`",
-        f"- Status: {state.status}",
+        f"- Status: {status}",
     ]
-    if cost_usd is not None:
-        lines.append(f"- Cost: ${cost_usd}")
+    if cost_usd is not None:  # plain digits, never `1E-7` (DF-318)
+        lines.append(f"- Cost so far: ${format(cost_usd, 'f')}")
     if logs:
         lines.append(f"- Logs: {_line(logs)}")
     lines += ["", "### Handoffs", ""]
@@ -149,6 +157,7 @@ def pr_body(
             lines.append(f"- {_code(_cut(_line(text)))} (from {shown('handoff', rel)})")
         if len(proposed) > MAX_PROPOSALS:
             lines.append(f"- ... {len(proposed) - MAX_PROPOSALS} more in the run's handoffs")
+    lines.append(PR_BODY_END)
     return "\n".join(lines) + "\n"
 
 

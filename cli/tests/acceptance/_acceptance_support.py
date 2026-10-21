@@ -444,7 +444,7 @@ def assert_published(
     body = pull["body"]
     assert f"## Agentic run `{run_id}`" in body
     assert f".agentic/local/runs/{run_id}/handoffs/" in body and "sha256:" in body
-    assert f"- Cost: ${Decimal(COST_USD) * recorded_calls(scenario.name)}" in body
+    assert f"- Cost so far: ${Decimal(COST_USD) * recorded_calls(scenario.name)}" in body
     assert f"- Logs: `agentic logs {run_id}`" in body
     recorded = json.loads((run_folder(repo, run_id) / "pr.json").read_text(encoding="utf-8"))
     assert recorded["pull_requests"][0]["url"] == pull["html_url"]

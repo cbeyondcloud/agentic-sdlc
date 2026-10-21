@@ -83,6 +83,27 @@ def test_a_known_secret_is_scrubbed_from_the_message(pair):
     assert "nowhere" not in str(raised.value)
 
 
+def test_a_pre_push_hook_never_sees_the_frameworks_secrets(pair, tmp_path, monkeypatch):
+    """A husky hook, credential helper or ssh wrapper runs inside `git push`: it gets the
+    person's own credentials (an SSH agent), never the framework's tokens (DF-294)."""
+    work, _ = pair
+    secrets = ["AGENTIC_GITHUB_TOKEN", "AGENTIC_TOKENLEAN_API_KEY"]
+    for name in secrets:
+        monkeypatch.setenv(name, "x" * 16)
+    monkeypatch.setenv("AGENTIC_HOME", "/home/dev/.agentic")
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/tmp/agent.sock")
+    seen = tmp_path / "hook-env.txt"
+    hook = work / ".git" / "hooks" / "pre-push"
+    hook.write_text(f"#!/bin/sh\nenv > '{seen.as_posix()}'\n", encoding="utf-8", newline="\n")
+    hook.chmod(0o755)
+
+    push_branch(work, "origin", "main")
+
+    names = {line.split("=", 1)[0] for line in seen.read_text(encoding="utf-8").splitlines()}
+    assert not names & set(secrets)
+    assert {"AGENTIC_HOME", "SSH_AUTH_SOCK"} <= names
+
+
 def test_remote_url_reads_the_fetch_url(pair):
     work, bare = pair
     assert Path(remote_url(work, "origin")) == bare

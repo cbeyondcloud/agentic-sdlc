@@ -1,8 +1,14 @@
 """Which repository a git remote names (M1-58): host, owner and name, never credentials."""
 
+import re
+import time
+from pathlib import Path
+
 import pytest
 
 from agentic.hosting import HostingError, RepoRef, parse_remote
+from agentic.hosting import base as hosting_base
+from agentic.hosting.base import PR_BODY_END, PR_BODY_START, scrub_url_credentials, splice_body
 
 
 @pytest.mark.parametrize(
@@ -50,3 +56,51 @@ def test_a_local_path_is_not_a_hosted_repository(url):
 def test_a_url_without_an_owner_is_refused():
     with pytest.raises(HostingError, match="owner"):
         parse_remote("https://github.com/app.git")
+
+
+# ── M1 close-out (DF-297, DF-296, DF-300) ────────────────────────────────────
+
+PASSWORD = "p@ss" + "w0rd"  # built from pieces; holds an unencoded '@'
+
+
+def test_a_password_with_an_at_sign_is_scrubbed_whole():  # DF-297
+    text = f"fatal: unable to access 'https://dev:{PASSWORD}@git.example.com/acme/app.git/'"
+    scrubbed = scrub_url_credentials(text)
+    assert scrubbed == "fatal: unable to access 'https://git.example.com/acme/app.git/'"
+
+
+def test_an_at_sign_after_the_host_is_not_userinfo():
+    text = "see https://git.example.com/acme/app@v2 and https://h.example/x?mail=a@b"
+    assert scrub_url_credentials(text) == text
+
+
+def test_scrubbing_a_long_value_is_linear():  # the scheme rule must not backtrack
+    started = time.monotonic()
+    scrub_url_credentials("a" * 20_000 + "://")
+    scrub_url_credentials("a://" * 5_000)
+    assert time.monotonic() - started < 0.25
+
+
+BODY = f"{PR_BODY_START}\n## Agentic run `r-1`\n- Status: completed\n{PR_BODY_END}\n"
+
+
+def test_an_update_replaces_only_the_generated_part():  # DF-296
+    current = (
+        "Reviewer note: check the migration first.\n\n"
+        f"{PR_BODY_START}\n## Agentic run `r-1`\n- Status: running\n{PR_BODY_END}\n\n"
+        "Follow-up: ticket PAY-12."
+    )
+    spliced = splice_body(current, BODY)
+    assert spliced.startswith("Reviewer note: check the migration first.\n\n")
+    assert spliced.endswith(f"{PR_BODY_END}\n\nFollow-up: ticket PAY-12.")
+    assert "- Status: completed" in spliced and "- Status: running" not in spliced
+
+
+@pytest.mark.parametrize("current", [None, "", "an old description with no markers"])
+def test_a_description_without_markers_is_replaced_whole(current):
+    assert splice_body(current, BODY) == BODY
+
+
+def test_the_hosting_protocol_names_no_vendor():  # DF-300
+    text = (Path(hosting_base.__file__)).read_text(encoding="utf-8")
+    assert not re.search(r"github|gitlab|azure|bitbucket", text, re.IGNORECASE)

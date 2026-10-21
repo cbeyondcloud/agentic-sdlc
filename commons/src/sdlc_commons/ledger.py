@@ -33,7 +33,11 @@ _AGENT = _SLUG + r"@[0-9A-Za-z][0-9A-Za-z.+-]{0,31}"
 #: an id of that shape can be recorded - never a note, a prompt or an email.
 FIELDS = {
     "team": {"type": "string", "pattern": _SLUG},
-    "policy_version": {"type": "string", "pattern": r"git:[0-9a-f]{40}|sha256:[0-9a-f]{64}"},
+    # a git commit (SHA-1, or SHA-256's 64 hex: DF-307) or a content hash
+    "policy_version": {
+        "type": "string",
+        "pattern": r"git:[0-9a-f]{40}(?:[0-9a-f]{24})?|sha256:[0-9a-f]{64}",
+    },
     "agent": {"type": "string", "pattern": _AGENT},
     "parent": {"type": "string", "pattern": _AGENT},
     "tier": {"type": "string", "pattern": _SLUG},
