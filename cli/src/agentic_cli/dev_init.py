@@ -209,7 +209,11 @@ def _policy_items(loaded: LoadedPolicy) -> list[Item]:
     where = f"org {loaded.org}" if loaded.mode == "org" else f"standalone {loaded.source}"
     items = [Item("policy", "ok", f"{where} ({policy.version})")]
     for warning in loaded.warnings:
-        items.append(Item("policy: cache", "warn", warning, "reconnect and run init again"))
+        if loaded.mode == "org":
+            items.append(Item("policy: cache", "warn", warning, "reconnect and run init again"))
+        else:
+            fix = "restore it and run init again, or pass --policy <folder> to choose one"
+            items.append(Item("policy: standalone", "warn", warning, fix))
     for note in loaded.notes:
         items.append(Item(f"policy: {loaded.mode}", "info", note))
     placeholders = sorted(name for name, tier in policy.tiers.items() if PLACEHOLDER in tier.model)

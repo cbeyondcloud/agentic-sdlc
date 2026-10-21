@@ -21,6 +21,7 @@ from agentic_cli.hosting import connect
 from agentic_cli.output import Output
 from agentic_cli.policy_source import LoadedPolicy, resolve_policy
 from agentic_cli.repo_guard import check_repo
+from agentic_cli.workspace import recorded_policy, recorded_root
 
 
 def register(app: typer.Typer) -> None:
@@ -68,7 +69,12 @@ def register(app: typer.Typer) -> None:
                 ExitCode.USAGE,
                 hint="add --yes after reviewing the tools with a plain `agentic init`",
             )
-        loaded = resolve_policy(standalone=standalone, policy_path=policy, home=home, config=config)
+        recorded = None
+        if standalone and policy is None and (found := recorded_policy(Path.cwd())):
+            recorded = recorded_root(found, Path.cwd())  # what init chose last time
+        loaded = resolve_policy(
+            standalone=standalone, policy_path=policy, home=home, config=config, recorded=recorded
+        )
         try:
             if repo:
                 settings = config if open_pr else None

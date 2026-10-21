@@ -8,6 +8,7 @@ builder are fakes."""
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 
 import pytest
@@ -177,6 +178,35 @@ def test_a_custom_policy_is_remembered_for_this_repo(
     assert found is not None and found.resolve() == policy_repo.resolve()
 
 
+def test_init_again_without_policy_keeps_the_remembered_one(
+    setup_repo, deps, policy_repo, monkeypatch, capsys
+):
+    """Re-running `init --standalone` to refresh readiness must not swap a custom policy
+    for the template behind the person's back."""
+    init(setup_repo, monkeypatch, capsys, "--policy", str(policy_repo))
+    _, report = init(setup_repo, monkeypatch, capsys)
+    assert str(policy_repo) in item(report, "policy")["detail"]
+    kept = item(report, "policy: standalone")
+    assert kept["status"] == "info" and "--policy" in kept["detail"]
+    assert not installed().exists()  # the template was not installed in its place
+    found = Workspace.load(setup_repo, env={}, home=agentic_home()).policy_repo
+    assert found is not None and found.resolve() == policy_repo.resolve()
+
+
+def test_init_again_when_the_remembered_policy_is_gone_says_so(
+    setup_repo, deps, policy_repo, tmp_path, monkeypatch, capsys
+):
+    moved = tmp_path / "moved-policy"
+    shutil.copytree(policy_repo, moved)
+    init(setup_repo, monkeypatch, capsys, "--policy", str(moved))
+    shutil.rmtree(moved)
+    _, report = init(setup_repo, monkeypatch, capsys)
+    gone = item(report, "policy: standalone")
+    assert gone["status"] == "warn" and str(moved) in gone["detail"], report["checks"]
+    assert "--policy" in gone["fix"]
+    assert str(installed()) in item(report, "policy")["detail"]  # the template, said aloud
+
+
 def test_a_policy_later_commands_will_not_find_is_reported(
     setup_repo, deps, policy_repo, tmp_path, monkeypatch, capsys
 ):
@@ -227,6 +257,48 @@ def test_a_failed_install_leaves_no_partial_policy(home, deps, monkeypatch):
         patched.setattr(shutil, "copytree", copytree_failing)
         patched.setattr(os, "rename", other_volume)
         loaded.commit()
+    assert not installed().exists()
+    assert [p.name for p in installed().parent.iterdir()] == []  # no temporary folder left
+    loaded.discard()
+
+
+def test_a_rename_blocked_for_a_moment_is_retried(home, deps, monkeypatch):
+    """On Windows an antivirus scanner holds handles on files just copied, so renaming
+    their folder fails with access denied for a moment: init retries, not fails."""
+    from agentic_cli import policy_source
+    from agentic_cli.policy_source import resolve_policy
+
+    loaded = resolve_policy(standalone=True, policy_path=None, home=agentic_home(), config={})
+    replace, calls = os.replace, []
+
+    def held_once(src, dst):
+        calls.append(src)
+        if len(calls) == 1:
+            raise PermissionError(13, "Access is denied")
+        return replace(src, dst)
+
+    monkeypatch.setattr(policy_source.os, "replace", held_once)
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    loaded.commit()
+    assert len(calls) == 2 and (installed() / "policy" / "tiers.yaml").is_file()
+
+
+def test_a_rename_that_stays_blocked_says_what_to_do(home, deps, monkeypatch):
+    from agentic_cli import policy_source
+    from agentic_cli.errors import CliError
+    from agentic_cli.policy_source import resolve_policy
+
+    loaded = resolve_policy(standalone=True, policy_path=None, home=agentic_home(), config={})
+
+    def held(src, dst):
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(policy_source.os, "replace", held)
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+    with pytest.raises(CliError) as caught:
+        loaded.commit()
+    assert caught.value.code == ExitCode.ERROR and str(installed()) in str(caught.value)
+    assert "run `agentic init` again" in caught.value.hint
     assert not installed().exists()
     assert [p.name for p in installed().parent.iterdir()] == []  # no temporary folder left
     loaded.discard()

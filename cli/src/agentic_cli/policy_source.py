@@ -5,7 +5,9 @@ no RBAC. PATH is a policy repo (a folder holding `policy/`, and optionally `skil
 `agents/`, `pipelines/`, `teams/`) or a `policy/` folder itself.
 
 Standalone with no PATH (and no local `policy:` or, without `org:`, `policy_repo:` in
-the user config: `config.local_policy_setting`) uses the framework's
+the user config: `config.local_policy_setting`) keeps the policy an earlier
+`init --standalone --policy` recorded for this repository, saying so; when that folder
+is gone it says so too (a warning) and falls back to the framework's
 template (M1-62): `~/.agentic/policy/standalone/` when it exists - the person's own copy,
 never overwritten - else a fresh one assembled in a scratch folder
 (`agentic_cli.standalone`) that `LoadedPolicy.commit()` installs there after the guard.
@@ -29,6 +31,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -42,6 +45,8 @@ from agentic_cli.standalone import STANDALONE_DIR, assemble
 
 DEFAULT_CACHE_HOURS = 24
 _ORG = re.compile(r"[a-z][a-z0-9-]{0,63}")
+#: Waits before each retry of a rename an antivirus scanner holds up (about 3 s in all).
+_RENAME_WAITS = (0.1, 0.2, 0.4, 0.8, 1.6)
 
 
 @dataclass
@@ -102,12 +107,21 @@ class LoadedPolicy:
 
 
 def resolve_policy(
-    *, standalone: bool, policy_path: Path | None, home: Path, config: dict[str, Any]
+    *,
+    standalone: bool,
+    policy_path: Path | None,
+    home: Path,
+    config: dict[str, Any],
+    recorded: Path | None = None,
 ) -> LoadedPolicy:
-    """Load the policy for this init without writing anything (see `commit`)."""
+    """Load the policy for this init without writing anything (see `commit`).
+    `recorded` is the policy repo an earlier standalone init recorded for this
+    repository (`workspace.recorded_root`), kept when no policy is given."""
     if standalone:
         setting = local_policy_setting(config)
         path = policy_path or (Path(setting) if setting else None)
+        if path is None and recorded is not None and recorded != home / STANDALONE_DIR:
+            return _recorded_policy(recorded, home)
         if path is None:
             return _standalone_template(home)
         path = Path(path).expanduser().absolute()  # init.json records it for later commands
@@ -116,6 +130,24 @@ def resolve_policy(
     if policy_path is not None:
         raise CliError("--policy is for --standalone", ExitCode.USAGE)
     return _org_policy(home, config)
+
+
+def _recorded_policy(recorded: Path, home: Path) -> LoadedPolicy:
+    """The policy this repository was initialised with, kept (never the template in
+    its place, silently); when its folder is gone, the template with a warning."""
+    if (recorded / "policy").is_dir():
+        loaded = LoadedPolicy(_load(recorded / "policy"), recorded, "standalone", str(recorded))
+        loaded.notes.append(
+            f"kept the policy recorded for this repository ({recorded}); pass --policy "
+            "to choose another"
+        )
+        return loaded
+    loaded = _standalone_template(home)
+    loaded.warnings.append(
+        f"the policy recorded for this repository ({recorded}) is gone: init uses the "
+        f"standalone template ({loaded.source}) instead"
+    )
+    return loaded
 
 
 def _standalone_template(home: Path) -> LoadedPolicy:
@@ -231,13 +263,35 @@ def _install_atomically(source: Path, target: Path) -> bool:
         shutil.rmtree(staged, onexc=_writable_and_retry)
     try:
         shutil.copytree(source, staged)
-        os.replace(staged, target)
-    except OSError:
+        _replace_retrying(staged, target)
+    except OSError as error:
         shutil.rmtree(staged, ignore_errors=True)
         if target.is_dir():
             return False
+        if isinstance(error, PermissionError):
+            raise CliError(
+                f"cannot install the standalone policy into {target}: {error}",
+                ExitCode.ERROR,
+                hint="another program (often an antivirus scan) is holding the new files; "
+                "wait a moment, then run `agentic init` again",
+            ) from error
         raise
     return True
+
+
+def _replace_retrying(staged: Path, target: Path) -> None:
+    """`os.replace`, retried for a few seconds on access denied: on Windows an
+    antivirus scanner opens files just copied, and a folder cannot be renamed while
+    a file in it is open (shutil.move hid this by copying again)."""
+    for wait in _RENAME_WAITS:
+        try:
+            os.replace(staged, target)
+            return
+        except PermissionError:
+            if target.exists():  # another init won the race: not a held handle
+                raise
+            time.sleep(wait)
+    os.replace(staged, target)
 
 
 def _writable_and_retry(func, path, _error) -> None:
