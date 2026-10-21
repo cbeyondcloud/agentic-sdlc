@@ -55,8 +55,8 @@ def tree_path(tree: Path, raw: str) -> str | None:
         relative = posixpath.normpath(text)
         if relative == ".." or relative.startswith("../"):
             return None
-    if relative == ".":
-        return None
+    if relative == "." or ".git" in relative.lower().split("/"):
+        return None  # git's metadata is not code: a worktree's `.git` names the main repo
     try:
         (root / relative).resolve().relative_to(root)
     except (ValueError, OSError):
