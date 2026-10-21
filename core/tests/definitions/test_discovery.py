@@ -188,5 +188,20 @@ def test_an_agent_file_name_is_compared_exactly(tmp_path: Path):
         "---\nname: developer\ntype: general\nversion: 1.0.0\ndescription: d\n---\nDo it.\n",
     )
 
-    with pytest.raises(DefinitionError, match="defines agent 'developer'"):
+    with pytest.raises(DefinitionError, match="defines agent 'developer'") as error:
+        DefinitionSet.discover(org=None, team=None, repo=repo)
+
+    # `set name: Developer` would be refused by the name rule: not offered (DF-323)
+    assert "set name: Developer" not in str(error.value)
+    assert "developer.md" in str(error.value)
+
+
+def test_a_valid_stem_is_offered_as_the_name(tmp_path: Path):  # DF-323
+    repo = make_layer(tmp_path / "repo")
+    write(
+        repo / "agents" / "reviewer.md",
+        "---\nname: developer\ntype: general\nversion: 1.0.0\ndescription: d\n---\nDo it.\n",
+    )
+
+    with pytest.raises(DefinitionError, match="set name: reviewer"):
         DefinitionSet.discover(org=None, team=None, repo=repo)

@@ -30,6 +30,9 @@ from agentic.skills.loader import MAX_PRELOADED
 if TYPE_CHECKING:
     from agentic.sandbox.readiness import SandboxDecision
 
+#: The word the standalone policy template puts in every tier's model (DF-225).
+PLACEHOLDER_MODEL = "change-me"
+
 
 class SkillAvailability(Protocol):
     """The installed skills a run would load (`agentic.skills.InstalledSkills`)."""
@@ -129,6 +132,16 @@ def preflight(
         if agent is None:
             return
         report.resolved[step.agent] = agent
+        if PLACEHOLDER_MODEL in agent.model:  # the template's tiers were never edited
+            problems.append(
+                Problem(
+                    step.id,
+                    "model",
+                    f"tier {agent.tier!r} still names the placeholder model {agent.model!r}: "
+                    "set a real model id for it in tiers.yaml in your policy folder",
+                    agent.model,
+                )
+            )
         for v in kind_violations(agent, definitions.handoffs):
             problems.append(
                 Problem(

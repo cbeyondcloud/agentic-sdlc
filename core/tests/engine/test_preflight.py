@@ -91,6 +91,35 @@ def test_a_clean_pipeline_passes(check):
     assert set(report.resolved) == {"ba", "designer", "dev", "reviewer"}
 
 
+def test_a_placeholder_tier_model_is_refused_before_any_spend(tmp_path: Path, fixtures: Path):
+    """The standalone template ships `change-me/...` models; a user who forgets to edit
+    tiers.yaml learns it here, not from the gateway on the first call (DF-225)."""
+    policy = load_policy(fixtures / "policy" / "policy")
+    tiers = {
+        name: tier.model_copy(update={"model": f"change-me/{name}-model"})
+        for name, tier in policy.tiers.items()
+    }
+    policy = policy.model_copy(update={"tiers": tiers, "team_overrides": {}})
+    layer = tmp_path / "layer"
+    write(
+        layer / "agents" / "ba.md",
+        "---\nname: ba\ntype: business-analyst\nversion: 1.0.0\ndescription: ba\n---\nGo.\n",
+    )
+    write(
+        layer / "pipelines" / "test.yaml",
+        "name: test\nversion: 1.0.0\nsteps:\n  - id: requirements\n    agent: ba\n",
+    )
+    definitions = DefinitionSet.discover(org=None, team=None, repo=layer, allow_repo_pipelines=True)
+
+    report = preflight(
+        definitions.pipeline("test"), definitions, policy, ResolveContext(team="payments")
+    )
+
+    problem = next(p for p in report.problems if p.check == "model")
+    assert not report.passed and problem.step == "requirements"
+    assert "change-me" in problem.detail and "tiers.yaml" in problem.detail
+
+
 def test_unknown_agent(check):
     report = check(CLEAN.replace("agent: reviewer", "agent: ghost"))
 

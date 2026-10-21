@@ -145,6 +145,44 @@ def test_duplicate_key_rejected(tmp_path: Path):
     assert "duplicate" in str(error.value).lower()
 
 
+LOOP = (
+    "  - loop:\n      id: {id}\n      max_iterations: 2\n      until: x\n"
+    "      steps:\n        - id: a\n          agent: developer\n"
+)
+
+
+@pytest.mark.parametrize(
+    "steps",
+    [
+        "  - id: '../x'\n    agent: developer\n",
+        "  - id: 'a b'\n    agent: developer\n",
+        "  - id: .hidden\n    agent: developer\n",
+        "  - id: 'trailing.'\n    agent: developer\n",
+        "  - id: " + "a" * 101 + "\n    agent: developer\n",
+        "  - id: CON\n    agent: developer\n",
+        "  - id: nul.txt\n    action: open_pr\n",
+        "  - gate: 'gate/1'\n    approver_role: team-lead\n",
+        LOOP.format(id="'l:1'"),
+    ],
+)
+def test_step_gate_and_loop_ids_are_plain_names(tmp_path: Path, steps: str):  # DF-180
+    """An id becomes a file name (step logs, handoffs) and a trailer value, on every OS."""
+    with pytest.raises(DefinitionError) as error:
+        load_pipeline(write_pipeline(tmp_path, steps))
+
+    assert "plain name" in str(error.value) or "device name" in str(error.value)
+
+
+def test_plain_ids_with_dots_underscores_and_capitals_load(tmp_path: Path):
+    steps = (
+        "  - id: build_v1.2\n    agent: developer\n"
+        "  - gate: QA-ok\n    approver_role: team-lead\n" + LOOP.format(id="fix-loop")
+    )
+    pipeline = load_pipeline(write_pipeline(tmp_path, steps))
+
+    assert pipeline.steps[0].id == "build_v1.2" and pipeline.steps[1].gate == "QA-ok"
+
+
 def test_a_loop_with_no_steps_is_refused(tmp_path):  # DF-06
     path = tmp_path / "empty-loop.yaml"
     path.write_text(

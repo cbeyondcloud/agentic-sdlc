@@ -14,10 +14,12 @@ Control flow is linear + gates + bounded loops + `when` conditions (D3);
 there are no parallel branches at pipeline level.
 """
 
+import re
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     ConfigDict,
     Discriminator,
@@ -28,8 +30,28 @@ from pydantic import (
     model_validator,
 )
 
+from agentic.definitions.agent import windows_device_name
 from agentic.definitions.errors import DefinitionError
 from agentic.yamlio import YamlFileError, load_yaml, read_text
+
+# A step, gate or loop id becomes a file name (step logs, handoffs, state files) and a
+# commit-trailer value: the same rule as the step logs' plain file name (DF-180).
+PLAIN_ID = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,99}")
+
+
+def plain_id(value: str) -> str:
+    """`value` when it can be an id on every OS; else a ValueError saying why."""
+    if not PLAIN_ID.fullmatch(value) or value.endswith("."):
+        raise ValueError(
+            f"{value[:60]!r} is not a plain name: use letters, digits, '.', '_' and '-' "
+            "(at most 100 characters, not starting or ending with '.') - it becomes a file name"
+        )
+    if windows_device_name(value):
+        raise ValueError(f"{value!r} is a Windows device name, so no file can carry it")
+    return value
+
+
+PlainId = Annotated[str, AfterValidator(plain_id)]
 
 
 class AgentStep(BaseModel):
@@ -37,7 +59,7 @@ class AgentStep(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
+    id: PlainId
     agent: str
     when: str | None = None
 
@@ -47,7 +69,7 @@ class ActionStep(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
+    id: PlainId
     action: str
     when: str | None = None
 
@@ -57,7 +79,7 @@ class GateStep(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    gate: str
+    gate: PlainId
     approver_role: str
     four_eyes: bool = False  # True: the approver must not be the person who started the run
     on_reject: str | None = None  # the step a rejection routes back to (default: the one before)
@@ -68,7 +90,7 @@ class LoopSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
+    id: PlainId
     max_iterations: int = Field(ge=1)
     until: str
     on_exhausted: Literal["gate", "fail"] = "gate"  # what happens if the limit is reached

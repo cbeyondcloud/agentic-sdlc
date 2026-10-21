@@ -338,12 +338,25 @@ def _code_lines(path: Path) -> list[str]:
     return [line for number, line in enumerate(lines, 1) if number not in prose]
 
 
-def test_no_vendor_names_outside_backend_modules():  # DF-79: policy, agents, handoffs too
-    core = Path(__file__).resolve().parents[2] / "src" / "agentic"
+CORE_SRC = Path(__file__).resolve().parents[2] / "src" / "agentic"
+
+
+def _neutral_files() -> list[Path]:
+    """Every module that must name no vendor: the four folders, sub-folders included
+    (agents/tools, DF-325), and the backend protocol."""
     folders = ("engine", "policy", "handoffs", "agents")
-    routing = {core / "agents" / "models.py"}  # maps a model id to its gateway route
-    neutral = [p for f in folders for p in sorted((core / f).glob("*.py")) if p not in routing]
-    for path in [*neutral, core / "backends" / "base.py"]:
+    routing = {CORE_SRC / "agents" / "models.py"}  # maps a model id to its gateway route
+    found = [p for f in folders for p in sorted((CORE_SRC / f).rglob("*.py")) if p not in routing]
+    return [*found, CORE_SRC / "backends" / "base.py"]
+
+
+def test_the_vendor_guard_covers_sub_folders():  # DF-325
+    assert CORE_SRC / "agents" / "tools" / "files.py" in _neutral_files()
+    assert CORE_SRC / "agents" / "models.py" not in _neutral_files()
+
+
+def test_no_vendor_names_outside_backend_modules():  # DF-79: policy, agents, handoffs too
+    for path in _neutral_files():
         hits = [line for line in _code_lines(path) if VENDOR.search(line)]
         assert hits == [], f"{path.name} names a vendor: {hits[:3]}"
 

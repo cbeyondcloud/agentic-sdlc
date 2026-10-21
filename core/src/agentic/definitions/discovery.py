@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from agentic.definitions.agent import AgentDefinition, load_agent
+from agentic.definitions.agent import AgentDefinition, load_agent, valid_agent_name
 from agentic.definitions.errors import DefinitionError
 from agentic.definitions.pipeline import PipelineDefinition, load_pipeline
 
@@ -78,11 +78,13 @@ class DefinitionSet:
             for path in _files(root / "agents", ".md"):
                 agent = load_agent(path)
                 if path.stem != agent.name:  # else it silently replaces <name>.md (DF-03)
+                    # offer the stem only when the name rule would accept it (DF-323)
+                    other = f", or set name: {path.stem}" if valid_agent_name(path.stem) else ""
                     raise DefinitionError(
                         path,
                         [
                             f"{path.name} defines agent '{agent.name}': name the file "
-                            f"{agent.name}.md, or set name: {path.stem}"
+                            f"{agent.name}.md{other}"
                         ],
                     )
                 found.agents[agent.name] = (agent, layer)
