@@ -57,6 +57,8 @@ class ScriptedUpstream:
             message = {"role": "assistant", "content": text.replace("\r\n", "\n")}
             return self._reply(body, message, "stop")
         prompt = _last_user_text(body)
+        if "<findings>" in prompt:  # adjudicating unmatched review findings
+            return self._reply(body, self._adjudication(case_id, index, body, prompt), "tool_calls")
         output = prompt.split("<output>\n", 1)[1].split("\n</output>", 1)[0]
         title = next((line for line in output.splitlines() if line.startswith("# ")), "")
         wanted = self.script["judge"].get(case_id, {})
@@ -78,6 +80,28 @@ class ScriptedUpstream:
         }
         message = {"role": "assistant", "content": None, "tool_calls": [call]}
         return self._reply(body, message, "tool_calls")
+
+    def _adjudication(self, case_id: str, index: int, body: dict, prompt: str) -> dict:
+        """One verdict per numbered finding: the script's list for the case, else real."""
+        listed = prompt.split("<findings>\n", 1)[1].split("\n</findings>", 1)[0]
+        count = len(re.findall(r"^\d+\. ", listed, flags=re.MULTILINE))
+        wanted = self.script.get("adjudications", {}).get(case_id, [])
+        verdicts = [
+            {
+                "real": wanted[i] if i < len(wanted) else True,
+                "reason": "scripted for the fixture corpus",
+            }
+            for i in range(count)
+        ]
+        call = {
+            "id": f"call_{case_id}_judge_{index}",
+            "type": "function",
+            "function": {
+                "name": body["tools"][0]["function"]["name"],
+                "arguments": json.dumps({"verdicts": verdicts}),
+            },
+        }
+        return {"role": "assistant", "content": None, "tool_calls": [call]}
 
     def _reply(self, body: dict, message: dict, finish: str) -> UpstreamReply:
         reply = {

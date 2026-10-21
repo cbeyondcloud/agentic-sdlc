@@ -186,6 +186,45 @@ def test_the_rubric_evaluator_shows_the_judge_a_capped_output():
     assert int(str(raised.value)) < JUDGE_CHAR_CAP + 200
 
 
+def finding_judge_model(verdicts: list[list[bool]], log: list):
+    """Answers each adjudication call with the next list of verdicts."""
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        log.append(last_user_text(messages))
+        real = verdicts[min(len(log) - 1, len(verdicts) - 1)]
+        args = {"verdicts": [{"real": r, "reason": "because"} for r in real]}
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, args)])
+
+    return FunctionModel(answer)
+
+
+FINDINGS = [
+    {"severity": "high", "file": "a.py", "line": 3, "issue": "the cap overflows"},
+    {"severity": "low", "file": "a.py", "line": 9, "issue": "a name is unclear"},
+]
+
+
+def test_the_finding_judge_says_which_unmatched_findings_are_real():
+    """DF-244: a false finding is unmatched AND judged not a real issue."""
+    from agentic.eval.judge import FindingJudge
+
+    log: list = []
+    judge = FindingJudge(finding_judge_model([[True, False]], log), model_id="family-b/j")
+    verdicts = asyncio.run(judge.adjudicate("--- a/a.py\n+++ b/a.py\n", FINDINGS))
+    assert [v.real for v in verdicts] == [True, False]
+    assert "1. [high] a.py:3" in log[0] and "2. [low] a.py:9" in log[0]
+    assert "<diff>" in log[0]
+
+
+def test_a_wrong_number_of_verdicts_is_re_asked_then_unmeasured():
+    from agentic.eval.judge import FindingJudge
+
+    log: list = []
+    judge = FindingJudge(finding_judge_model([[True]], log), model_id="m/j")
+    assert asyncio.run(judge.adjudicate("diff", FINDINGS)) is None
+    assert len(log) == 2 and "exactly 2" in log[1]
+
+
 def test_a_position_biased_judge_gives_a_tie():
     judge = PairwiseJudge(pairwise_model(lambda a, b: "1"), model_id="m/j")
     result = asyncio.run(judge.compare("answer A", "answer B"))

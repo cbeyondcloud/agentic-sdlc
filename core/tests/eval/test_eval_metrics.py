@@ -271,6 +271,73 @@ def test_false_alarms_are_a_pooled_rate_in_the_report():
     assert RATIO_METRICS["qa_false_alarm"] == ("criteria_false_alarms", "criteria_passing")
 
 
+#: ── DF-244: false findings ────────────────────────────────────────────────────
+
+
+class FakeFindingJudge:
+    def __init__(self, real: list[bool] | None):
+        self.real, self.calls = real, []
+
+    async def adjudicate(self, diff, findings):
+        from agentic.eval.judge import FindingVerdict
+
+        self.calls.append(findings)
+        if self.real is None:
+            return None
+        return [FindingVerdict(real=r, reason="r") for r in self.real]
+
+
+def evaluate_false_findings(judge, output=REVIEW_DOC):
+    import asyncio
+
+    from pydantic_evals.evaluators import EvaluatorContext
+
+    from agentic.eval.metrics import FalseFindingMetric
+    from agentic.eval.records import RunRequest
+
+    record = RunRecord(status="completed", output=output)
+    ctx = EvaluatorContext(
+        name="r1.X.0",
+        inputs=RunRequest(review_case(), "X", 0, "review", "r1.X.0"),
+        metadata=None,
+        expected_output=None,
+        output=record,
+        duration=0.0,
+        _span_tree=None,
+        attributes={},
+        metrics={},
+    )
+    metric = FalseFindingMetric(judge_for=lambda request: judge)
+    return asyncio.run(metric.evaluate(ctx)), record
+
+
+def test_unmatched_findings_judged_not_real_are_false_findings():
+    judge = FakeFindingJudge([False])
+    metrics, record = evaluate_false_findings(judge)
+    # REVIEW_DOC: one finding matches a seeded defect, one ('other.py') matches none
+    assert [f["file"] for f in judge.calls[0]] == ["other.py"]
+    assert metrics == {"false_findings": 1.0, "findings_total": 2.0, "false_finding_rate": 0.5}
+    assert record.adjudications == [
+        {"file": "other.py", "line": 3, "issue": "unrelated", "real": False, "reason": "r"}
+    ]
+
+
+def test_a_real_unmatched_issue_is_not_a_false_finding():
+    metrics, _ = evaluate_false_findings(FakeFindingJudge([True]))
+    assert metrics["false_findings"] == 0.0 and metrics["false_finding_rate"] == 0.0
+
+
+def test_an_undecided_judge_leaves_false_findings_unmeasured():
+    metrics, _ = evaluate_false_findings(FakeFindingJudge(None))
+    assert metrics == {}
+
+
+def test_false_finding_rate_is_a_pooled_rate_in_the_report():
+    from agentic.eval.report import RATIO_METRICS
+
+    assert RATIO_METRICS["false_finding_rate"] == ("false_findings", "findings_total")
+
+
 def test_an_invalid_output_scores_zero_and_an_errored_run_is_unmeasured():
     invalid = objective_metrics(review_case(), RunRecord(status="invalid", output="x"), "review")
     assert invalid["schema_valid"] == 0.0 and invalid["defects_caught"] == 0

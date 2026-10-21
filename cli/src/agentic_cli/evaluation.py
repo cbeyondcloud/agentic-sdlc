@@ -49,13 +49,14 @@ from agentic.eval.devtask import copy_workspace
 from agentic.eval.gate import GATE_AGENTS, GateReport, evaluate_gate, render_gate
 from agentic.eval.judge import (
     JUDGE_TIER,
+    FindingJudge,
     JudgeError,
     RubricError,
     RubricJudge,
     load_rubric,
     resolve_judge,
 )
-from agentic.eval.metrics import ObjectiveMetrics, RubricMetric
+from agentic.eval.metrics import FalseFindingMetric, ObjectiveMetrics, RubricMetric
 from agentic.eval.records import RunRequest
 from agentic.eval.replay import CassetteServer, Upstream, http_upstream
 from agentic.eval.report import EvalReport, JudgeInfo, build_report, write_report
@@ -184,13 +185,17 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     rubric_ids = sorted({c.rubric for c in cases if c.rubric})
     rubrics = {r: _load(lambda r=r: load_rubric(corpus.path(rubric_path(r)))) for r in rubric_ids}
     choice = None
-    if rubrics:
+    notes: list[str] = []
+    adjudicate = any(c.expected.seeded_defects for c in cases)  # review: false findings
+    if rubrics or adjudicate:
         try:  # the cases' class must allow the judge's tier: restricted data stays put
             choice = resolve_judge(policy, [resolved.model], classification=classification)
         except JudgeError as error:
-            raise CliError(
-                str(error), ExitCode.REFUSED, hint="ask an admin for an eval-judge tier"
-            ) from error
+            if rubrics:  # the primary metric needs the judge
+                raise CliError(
+                    str(error), ExitCode.REFUSED, hint="ask an admin for an eval-judge tier"
+                ) from error
+            notes.append(f"false findings are unmeasured: {error}")
 
     created = datetime.now(UTC)
     report_id = f"eval-{options.agent}-{created:%Y%m%dT%H%M%S}-{secrets.token_hex(3)}"
@@ -251,9 +256,9 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     judge_share = Decimal(str(budget)) * JUDGE_SHARE
     judge_slice = money.run.open("judge", "step", judge_share) if choice else None
 
-    def judge_for(request: RunRequest) -> RubricJudge | None:
-        if choice is None or judge_slice is None or request.case.rubric not in rubrics:
-            return None
+    def judge_model(request: RunRequest):
+        """The judge's model for one run: its calls keyed to the run, charged to the
+        judge's share of the budget."""
         gateway = gateway_for(f"{request.cassette_key}/judge")
         meter = MeteringTransport(
             make_network_transport(gateway.network),
@@ -263,13 +268,24 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             log=judge_costs,
         )
         who = identity(request, f"{JUDGE_TIER}@1", JUDGE_TIER)
-        model = build_model_for(choice.model, who, gateway, meter)
+        return build_model_for(choice.model, who, gateway, meter)  # type: ignore[union-attr]
+
+    def judge_for(request: RunRequest) -> RubricJudge | None:
+        if choice is None or judge_slice is None or request.case.rubric not in rubrics:
+            return None
         return RubricJudge(
-            model,
+            judge_model(request),
             rubrics[request.case.rubric],
             model_id=choice.model,
             leaks=leaks,
             settings=choice.settings,
+        )
+
+    def finding_judge_for(request: RunRequest) -> FindingJudge | None:
+        if choice is None or judge_slice is None or not request.case.expected.seeded_defects:
+            return None
+        return FindingJudge(
+            judge_model(request), model_id=choice.model, leaks=leaks, settings=choice.settings
         )
 
     def reference(case) -> str | None:
@@ -277,10 +293,10 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             return None
         return read_text(corpus.path(case.expected.golden)).replace("\r\n", "\n")
 
-    notes: list[str] = []
     prepare = None
     if any(c.inputs.workspace for c in cases):  # dev tasks: tools on a copy, tests after
-        prepare, resolved, notes = _workspaces(resolved, folder, options.mode, policy)
+        prepare, resolved, workspace_notes = _workspaces(resolved, folder, options.mode, policy)
+        notes += workspace_notes
     runner = AgentCaseRunner(
         resolved,
         model_for,
@@ -294,6 +310,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     evaluators = [
         ObjectiveMetrics(),
         RubricMetric(judge_for=judge_for, scrubber=scrubber, reference=reference),
+        FalseFindingMetric(judge_for=finding_judge_for, scrubber=scrubber),
     ]
     ledger = EvalLedger(Path.cwd(), report_id, policy.version, options.agent)
     ledger("eval.run_started")

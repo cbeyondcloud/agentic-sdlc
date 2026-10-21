@@ -37,10 +37,11 @@ RATIO_METRICS = {
     "defect_recall": ("defects_caught", "defects_total"),
     "qa_catch": ("criteria_caught", "criteria_total"),
     "qa_false_alarm": ("criteria_false_alarms", "criteria_passing"),
+    "false_finding_rate": ("false_findings", "findings_total"),
 }
 PARTS = {part for pair in RATIO_METRICS.values() for part in pair}
-ORDER = ["schema_valid", "rubric", "defect_recall", "unmatched_blocking", "qa_catch"]
-ORDER += ["qa_false_alarm"]
+ORDER = ["schema_valid", "rubric", "defect_recall", "false_finding_rate", "unmatched_blocking"]
+ORDER += ["qa_catch", "qa_false_alarm"]
 ORDER += ["tests_pass", "cost_usd", "tokens", "duration_s"]
 VOLATILE = ("duration_s",)
 #: The metric each case class exists to measure: always listed, so a metric nobody
@@ -331,6 +332,11 @@ def write_report(
             _write(
                 folder / "judged" / f"{item.request.run_id}.context.json",
                 json.dumps(context, indent=2, ensure_ascii=False) + "\n",
+            )
+        if record.adjudications is not None:  # for a person to sample the judge's rulings
+            _write(
+                folder / "judged" / f"{item.request.run_id}.findings.json",
+                json.dumps(record.adjudications, indent=2, ensure_ascii=False) + "\n",
             )
     return paths
 

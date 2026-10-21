@@ -47,3 +47,5 @@ class RunRecord:
     judge_reference: str | None = None  # the reference the judge graded against
     judge_key_points: list[str] = field(default_factory=list)  # ... and the key points
     judge_stopped: bool = False  # the judge's budget share ran out: unscored, INCOMPLETE
+    # review: each unmatched finding with the judge's verdict (people sample these)
+    adjudications: list[dict] | None = None

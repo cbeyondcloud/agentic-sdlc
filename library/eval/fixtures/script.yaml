@@ -6,6 +6,7 @@
 #          to the contract's retry message, or to a tool call's result); paths relative
 #          to library/eval/. A mapping {tool: {args}} answers with that tool call.
 # judge:   case id -> rubric criterion scores (missing criteria score 2).
+# The judge's adjudication of unmatched review findings is scripted under adjudications.
 # cost_usd: what each recorded call reports in x-tokenlean-cost-usd.
 cost_usd: "0.0021"
 answers:
@@ -31,6 +32,10 @@ answers:
   dev-money-split:
     - {write_file: {path: money.py, from: solutions/dev-money-split/money.py}}
     - fixtures/answers/dev-money-split.md
+# adjudications: review case id -> the judge's verdict (real?) per unmatched finding, in
+#                order; findings not listed are real.
+adjudications:
+  rev-discount-rounding: [false]  # the invoices.py concern is outside the change
 judge:
   ba-invoice-export: {}
   ba-reset-limits: {scope: 1}

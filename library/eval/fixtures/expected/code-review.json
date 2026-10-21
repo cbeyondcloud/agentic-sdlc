@@ -21,6 +21,15 @@
         "unscored": [],
         "value": 0.875
       },
+      "false_finding_rate": {
+        "ci_high": 0.3333333333333333,
+        "ci_low": 0.0,
+        "median": null,
+        "n_scored": 4,
+        "sigma_case": 0.25,
+        "unscored": [],
+        "value": 0.1
+      },
       "schema_valid": {
         "ci_high": 1.0,
         "ci_low": 1.0,
@@ -61,8 +70,15 @@
   "corpus_manifest_sha": "sha256:523778543577edb59d60e082e7fc8754446ce49b1852966c50ce75011d425e61",
   "cost_total_usd": 0.0168,
   "cost_unmeasured_runs": 0,
-  "judge": null,
-  "judge_cost_usd": null,
+  "judge": {
+    "family": "family-b",
+    "model": "family-b/judge-model",
+    "rubrics": {},
+    "same_family": false,
+    "tier": "eval-judge",
+    "warnings": []
+  },
+  "judge_cost_usd": 0.0126,
   "k": 2,
   "kind": "review",
   "labels": {
@@ -90,6 +106,9 @@
         "defect_recall": 0.5,
         "defects_caught": 1.0,
         "defects_total": 2.0,
+        "false_finding_rate": 0.5,
+        "false_findings": 1.0,
+        "findings_total": 2.0,
         "schema_valid": 1.0,
         "tokens": 1400.0,
         "unmatched_blocking": 1.0
@@ -119,6 +138,9 @@
         "defect_recall": 0.5,
         "defects_caught": 1.0,
         "defects_total": 2.0,
+        "false_finding_rate": 0.5,
+        "false_findings": 1.0,
+        "findings_total": 2.0,
         "schema_valid": 1.0,
         "tokens": 1400.0,
         "unmatched_blocking": 1.0
@@ -148,6 +170,9 @@
         "defect_recall": 1.0,
         "defects_caught": 2.0,
         "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 3.0,
         "schema_valid": 1.0,
         "tokens": 1400.0,
         "unmatched_blocking": 0.0
@@ -177,6 +202,9 @@
         "defect_recall": 1.0,
         "defects_caught": 2.0,
         "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 3.0,
         "schema_valid": 1.0,
         "tokens": 1400.0,
         "unmatched_blocking": 0.0
@@ -206,6 +234,9 @@
         "defect_recall": 1.0,
         "defects_caught": 2.0,
         "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 3.0,
         "schema_valid": 1.0,
         "tokens": 1400.0,
         "unmatched_blocking": 0.0
@@ -235,6 +266,9 @@
         "defect_recall": 1.0,
         "defects_caught": 2.0,
         "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 3.0,
         "schema_valid": 1.0,
         "tokens": 1400.0,
         "unmatched_blocking": 0.0
@@ -264,6 +298,9 @@
         "defect_recall": 1.0,
         "defects_caught": 2.0,
         "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 2.0,
         "schema_valid": 1.0,
         "tokens": 1400.0,
         "unmatched_blocking": 0.0
@@ -293,6 +330,9 @@
         "defect_recall": 1.0,
         "defects_caught": 2.0,
         "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 2.0,
         "schema_valid": 1.0,
         "tokens": 1400.0,
         "unmatched_blocking": 0.0

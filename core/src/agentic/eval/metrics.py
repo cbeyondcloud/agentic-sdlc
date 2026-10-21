@@ -9,6 +9,8 @@ Objective truth wherever it exists; a judge only where it does not:
 |                 | file, within +/-3 lines of a seeded range (category        |        |
 |                 | compared when given);                                       |        |
 |                 | unmatched_blocking: open blocking findings matching none   |        |
+|                 | false_finding_rate: unmatched findings judged not real,    | yes    |
+|                 | over all counted findings (`FindingJudge`)                 |        |
 | test-report     | qa_catch: seeded failing criteria the report shows failed; | no     |
 |                 | qa_false_alarm: passing criteria it shows failed           |        |
 | dev-report      | tests_pass: every fail-to-pass and pass-to-pass test passes | no     |
@@ -28,8 +30,8 @@ invalid document delivers nothing, so it scores 0 on its kind's metric as well a
 schema validity (the agent's failure, not the harness's).
 
 An unmatched finding is not automatically false: real diffs carry real issues. The
-false-finding rate needs a judge (or a person) to adjudicate unmatched findings, which
-is deferred; `unmatched_blocking` is reported meanwhile.
+judge adjudicates unmatched findings (DF-244) and its rulings are written beside the
+report (judged/<run>.findings.json) so a person can sample them, as S10 asks.
 """
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -40,7 +42,7 @@ from pydantic_evals.evaluators import Evaluator, EvaluatorContext
 
 from agentic.eval.blind import Scrubber
 from agentic.eval.cases import EvalCase, SeededDefect
-from agentic.eval.judge import RubricJudge, cap_for_judge
+from agentic.eval.judge import FindingJudge, RubricJudge, cap_for_judge
 from agentic.eval.records import RunRecord, RunRequest
 from agentic.eval.validate import criteria_ids, parse_hunks
 from agentic.handoffs import BLOCK_ON_DEFAULT, Handoff, HandoffError, parse_handoff
@@ -284,6 +286,62 @@ class RubricMetric(Evaluator[RunRequest, RunRecord, None]):
             return {}
         record.judge = result
         return {} if result.total is None else {"rubric": result.total}
+
+
+@dataclass
+class FalseFindingMetric(Evaluator[RunRequest, RunRecord, None]):
+    """The false-finding rate of a review run (DF-244): open findings above `info` that
+    match no seeded defect AND that the judge rules not a real issue, over all such
+    findings. Unmatched findings go to the judge in one call; its verdicts are kept on
+    the record (and in the report folder) for a person to sample. Unmeasured when there
+    is no judge, the judge cannot decide, or its budget share is spent."""
+
+    judge_for: Callable[[RunRequest], FindingJudge | None] = lambda request: None
+    scrubber: Scrubber = field(default_factory=Scrubber)
+
+    async def evaluate(
+        self, ctx: EvaluatorContext[RunRequest, RunRecord, None]
+    ) -> dict[str, float]:
+        case, record = ctx.inputs.case, ctx.output
+        if not case.expected.seeded_defects or not scored(record):
+            return {}
+        judge = self.judge_for(ctx.inputs)
+        document = parse_document(record.output, ctx.inputs.kind)
+        if judge is None or document is None or record.status != "completed":
+            return {}
+        counted = [
+            f for f in document.data.model_dump().get("findings", []) if counts_for_recall(f)
+        ]
+        tolerances = file_tolerances(case.inputs.diff)
+        unmatched = [
+            counted[i]
+            for i in match_findings(
+                counted, case.expected.seeded_defects, tolerances=tolerances
+            ).unmatched
+        ]
+        verdicts: list = []
+        if unmatched:
+            shown = [
+                {**f, "issue": self.scrubber.scrub(str(f.get("issue", "")))} for f in unmatched
+            ]
+            try:
+                verdicts = await judge.adjudicate(case.inputs.diff or "", shown) or []
+            except LimitHit:
+                record.judge_stopped = True
+                return {}
+            if not verdicts:
+                return {}
+        record.adjudications = [
+            {"file": f.get("file"), "line": f.get("line"), "issue": f.get("issue")}
+            | {"real": v.real, "reason": v.reason}
+            for f, v in zip(unmatched, verdicts, strict=True)
+        ]
+        false = sum(not v.real for v in verdicts)
+        return {
+            "false_findings": float(false),
+            "findings_total": float(len(counted)),
+            **({"false_finding_rate": false / len(counted)} if counted else {}),
+        }
 
 
 def judge_view(document: str) -> str:

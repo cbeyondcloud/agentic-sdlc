@@ -77,6 +77,19 @@ def test_fixture_developer_runs_execute_their_tests(tmp_path: Path, capsys):
     assert "unicodedata" not in original  # the corpus is never edited
 
 
+def test_review_runs_measure_false_findings(tmp_path: Path, capsys):
+    """DF-244: the judge rules on unmatched findings; its rulings are kept for sampling."""
+    code, out = run(tmp_path, "code-review")
+    assert code == ExitCode.OK, capsys.readouterr().err
+    report = EvalReport.model_validate_json((out / "report.json").read_bytes())
+    rate = report.aggregates["X"]["false_finding_rate"]
+    assert rate.value is not None and 0 < rate.value < 1
+    rulings = json.loads(
+        (out / "judged" / "rev-discount-rounding.X.0.findings.json").read_text(encoding="utf-8")
+    )
+    assert rulings[0]["file"] == "billing/invoices.py" and rulings[0]["real"] is False
+
+
 def test_fixture_mode_makes_no_network_calls(tmp_path: Path, monkeypatch, capsys):
     """DF-113: pydantic-evals, pydantic-ai and the harness reach nothing but the local
     cassette server - no telemetry, no default model."""
