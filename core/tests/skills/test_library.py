@@ -108,6 +108,36 @@ def test_default_catalog_end_to_end(catalog, fixtures: Path, tmp_path: Path):
         assert estimate_tokens(skills.catalog_line(key)) <= 100
 
 
+#: The rest of the per-role defaults (spec §24 table, DF-134), with their loading mode.
+ROLE_DEFAULTS = {
+    "addyosmani/interview-me": "pre",  # BA: questions routed to the gate
+    "mattpocock/to-spec": "on-demand",  # BA
+    "addyosmani/api-and-interface-design": "on-demand",  # Design
+    "mattpocock/improve-codebase-architecture": "on-demand",  # Design
+    "superpowers/requesting-code-review": "pre",  # Code Review checklist
+    "addyosmani/browser-testing-with-devtools": "on-demand",  # QA
+}
+
+
+def test_role_defaults_present(catalog):
+    assert {key: catalog.skills[key].loading for key in ROLE_DEFAULTS} == ROLE_DEFAULTS
+
+
+def test_vendored_skills_keep_no_orchestration(catalog):
+    """Sub-agent dispatch, skill-tool calls and vendor CLI set-up are adapted out (§11.4)."""
+    banned = re.compile(
+        r"spawn a sub-?agent|dispatch (a|the) [\w ]*subagent|call the skill tool|"
+        r"/setup-matt-pocock-skills|\.mcp\.json|claude code settings",
+        re.IGNORECASE,
+    )
+    found = {}
+    for key in ROLE_DEFAULTS:
+        for path in skill_folder(LIBRARY, key).rglob("*.md"):
+            if hits := banned.findall(path.read_text(encoding="utf-8")):
+                found[path.relative_to(LIBRARY).as_posix()] = hits
+    assert found == {}
+
+
 def test_pre_loaded_skills_per_role_stay_within_the_cap(catalog):
     """Spec §11.3: at most 3-5 pre-loaded skills per role; the catalog marks few as pre."""
     pre = [key for key, entry in catalog.skills.items() if entry.loading == "pre"]

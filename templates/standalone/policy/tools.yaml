@@ -1,0 +1,10 @@
+# Tools agents may be given, tools nobody may use, and what every agent is denied
+# (D31). Deny beats allow and is merged with each agent's own deny list.
+catalog: [read_files, search, edit_files, run_shell, codeintel, spawn_agent, activate_skill]
+forbidden: []
+deny:
+  # command prefixes no agent may run: publishing is the pipeline's job (an action
+  # step after the gates), and history is never rewritten
+  shell: ["git push", "git commit --amend", "git rebase", "git reset --hard", "git clean"]
+  # files no agent may write: git's own data, and the framework's settings and pipelines
+  paths: [".git/**", ".agentic/**"]
