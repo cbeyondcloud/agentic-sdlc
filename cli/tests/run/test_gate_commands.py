@@ -18,10 +18,13 @@ SUMMARY = "One line saying what this handoff concludes."
 EDITOR_SCRIPT = """\
 import os, sys
 path = sys.argv[1]
-with open(path, encoding="utf-8") as handle:
+if os.environ.get("EDIT_MARKER"):
+    open(os.environ["EDIT_MARKER"], "w").close()
+with open(path, encoding="utf-8-sig") as handle:
     text = handle.read()
 text = text.replace(os.environ["EDIT_FROM"], os.environ["EDIT_TO"])
-with open(path, "w", encoding="utf-8", newline="\\n") as handle:
+encoding = os.environ.get("EDIT_ENCODING", "utf-8")
+with open(path, "w", encoding=encoding, newline="\\n") as handle:
     handle.write(text)
 """
 
@@ -130,6 +133,71 @@ def test_an_unchanged_edit_is_refused(workspace, gateway, cli, editor):
     editor("text that is not there", "x")
     result = cli("edit", run_id)
     assert result.code == ExitCode.REFUSED and "nothing changed" in result.err
+    assert drafts(workspace, run_id) == []  # nothing worth keeping
+
+
+def drafts(workspace: Path, run_id: str) -> list[Path]:
+    folder = workspace / ".agentic" / "local" / "state" / run_id / "edit"
+    return sorted(p for p in folder.rglob("*") if p.is_file()) if folder.is_dir() else []
+
+
+def test_edit_checks_the_gateway_before_the_editor_opens(
+    workspace, gateway, cli, editor, tmp_path, monkeypatch
+):
+    """A missing credential is found before the person spends time editing (DF-220)."""
+    run_id = started(cli)
+    monkeypatch.delenv("AGENTIC_TOKENLEAN_API_KEY")
+    marker = tmp_path / "editor-ran"
+    monkeypatch.setenv("EDIT_MARKER", str(marker))
+    editor(SUMMARY, "Edited by a person.")
+    result = cli("edit", run_id)
+    assert result.code == ExitCode.REFUSED and "agentic login" in result.err
+    assert not marker.exists()
+
+
+def test_a_refused_edit_is_kept_and_the_next_edit_continues_from_it(
+    workspace, gateway, cli, editor
+):
+    run_id = started(cli)
+    editor("status: complete", "status: maybe")
+    result = cli("edit", run_id)
+    assert result.code == ExitCode.REFUSED and "not a valid handoff" in result.err
+    [draft] = drafts(workspace, run_id)
+    assert "status: maybe" in draft.read_text("utf-8") and draft.name in result.err
+    # the person had also changed the summary; the next edit starts from their draft
+    draft.write_text(draft.read_text("utf-8").replace(SUMMARY, "Fixed by a person."), "utf-8")
+    editor("status: maybe", "status: complete")
+    result = cli("--json", "edit", run_id)
+    assert result.code == ExitCode.OK, result.err
+    entries, _ = ledgers(workspace, run_id)
+    edited = workspace / ".agentic" / "local" / "runs" / run_id / list(entries[-1]["artifacts"])[0]
+    assert "Fixed by a person." in edited.read_text("utf-8")
+    assert drafts(workspace, run_id) == []  # decided: the draft is gone
+
+
+def test_an_edit_saved_in_another_encoding_is_refused_and_kept(
+    workspace, gateway, cli, editor, monkeypatch
+):
+    run_id = started(cli)
+    monkeypatch.setenv("EDIT_ENCODING", "cp1252")
+    editor(SUMMARY, "Résumé of the change.")
+    result = cli("--json", "edit", run_id)
+    assert result.code == ExitCode.INVALID, result.err
+    error = json.loads(result.err.strip().splitlines()[-1])
+    assert "UTF-8" in error["error"] and "agentic edit" in error["hint"]
+    assert len(drafts(workspace, run_id)) == 1
+    assert ledgers(workspace, run_id)[0] == []
+
+
+def test_an_edit_saved_with_a_byte_order_mark_is_accepted(
+    workspace, gateway, cli, editor, monkeypatch
+):
+    """Windows editors may save UTF-8 with a BOM; the handoff is read without it."""
+    run_id = started(cli)
+    monkeypatch.setenv("EDIT_ENCODING", "utf-8-sig")
+    editor(SUMMARY, "Edited in Notepad.")
+    result = cli("--json", "edit", run_id)
+    assert result.code == ExitCode.OK, result.err
 
 
 def test_a_decision_on_another_gate_is_refused(workspace, gateway, cli):

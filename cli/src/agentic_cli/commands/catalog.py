@@ -10,6 +10,7 @@ agentic policy show                        tiers, classes, agent types and caps,
 """
 
 import re
+import tempfile
 from importlib.resources import files
 from pathlib import Path
 from typing import Annotated
@@ -92,12 +93,14 @@ def register(app: typer.Typer) -> None:
             )
         org_template = (ws.policy_repo or Path()) / "templates" / "agents" / f"{agent_type}.md"
         if org_template.is_file():
-            text = org_template.read_text(encoding="utf-8")
+            text, source = org_template.read_text(encoding="utf-8"), str(org_template)
         else:
             text = files("agentic_cli").joinpath("templates", "agent.md").read_text("utf-8")
+            source = "the built-in agent template"
         text = _set_key(_set_key(text, "name", name), "type", agent_type)
+        agent = _checked_agent(name, text, source)  # nothing is written from a broken template
         path = _create(ws.repo / ".agentic" / "agents" / f"{name}.md", text)
-        problems = _agent_problems(ws, load_agent(path), path)
+        problems = _agent_problems(ws, agent, path)
         if name in ws.definitions().agents:
             out.warn(f"{name} also exists in the {ws.definitions().agent_source(name)} layer")
         out.result(
@@ -338,6 +341,23 @@ def _check_slug(name: str) -> None:
 def _set_key(text: str, key: str, value: str) -> str:
     """Set the first `key:` line's value, keeping its comment."""
     return re.sub(rf"^({key}:[ \t]*)[^\s#]+", rf"\g<1>{value}", text, count=1, flags=re.M)
+
+
+def _checked_agent(name: str, text: str, source: str) -> AgentDefinition:
+    """The agent `text` defines, loaded from a scratch copy; a template that does not give
+    a valid agent is refused before anything is written to the repository."""
+    with tempfile.TemporaryDirectory(prefix="agentic-new-") as scratch:
+        draft = Path(scratch) / f"{name}.md"
+        draft.write_bytes(text.replace("\r\n", "\n").encode("utf-8"))
+        try:
+            return load_agent(draft)
+        except DefinitionError as error:
+            reasons = "; ".join(error.errors) or str(error)
+            raise CliError(
+                f"the agent template does not give a valid agent ({reasons}); nothing was written",
+                ExitCode.INVALID,
+                hint=f"fix {source} (in the policy repo, by a pull request)",
+            ) from error
 
 
 def _create(path: Path, text: str) -> Path:

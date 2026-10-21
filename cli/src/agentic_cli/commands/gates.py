@@ -13,7 +13,9 @@ the workspace's person. Standalone mode has no RBAC: every role is held (M2-03 b
 org roles); four-eyes still applies where the gate or the regime asks for it.
 """
 
+import hashlib
 import re
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -22,6 +24,7 @@ import typer
 from rich.markdown import Markdown
 from rich.syntax import Syntax
 
+from agentic.agents.models import GatewaySettings
 from agentic.engine.gates import Approve, Decision, Edit, Reject, StandaloneAuthorizer
 from agentic.engine.state import RunState
 from agentic.yamlio import YamlFileError, split_front_matter
@@ -77,7 +80,12 @@ def register(app: typer.Typer) -> None:
         notes: Annotated[str, typer.Option(help="Recorded with the approval.")] = "",
     ) -> None:
         """Edit a pinned handoff in $VISUAL / $EDITOR (Notepad on Windows); the edit is
-        validated as a handoff, then approved."""
+        validated as a handoff, then approved.
+
+        The draft is kept until a decision is recorded: a refused or failed edit is
+        continued by the next `agentic edit` (DF-220). It is keyed by the pinned file's
+        digest, so a draft of an older version is never offered."""
+        out: Output = ctx.obj
         rt, state = _waiting(run_id)
         pinned = sorted(state.pending.artefacts)
         if file is None and len(pinned) != 1:
@@ -91,21 +99,42 @@ def register(app: typer.Typer) -> None:
             raise CliError(
                 f"{rel} is not pinned by this gate", ExitCode.USAGE, hint=", ".join(pinned)
             )
+        gateway = rt.gateway()  # before the editor: a missing credential would lose the edit
         original = (rt.store.path(run_id).parent / rel).read_text(encoding="utf-8")
-        draft = rt.ws.repo / STATE / run_id / "edit" / Path(rel).name
-        draft.parent.mkdir(parents=True, exist_ok=True)
-        draft.write_bytes(original.encode("utf-8"))
+        digest = hashlib.sha256(original.encode("utf-8")).hexdigest()[:16]
+        draft = rt.ws.repo / STATE / run_id / "edit" / digest / Path(rel).name
+        again = f"`agentic edit {run_id}` continues from it"
+        if draft.is_file():
+            out.warn(f"continuing your unfinished edit in {draft} (delete it to start over)")
+        else:
+            draft.parent.mkdir(parents=True, exist_ok=True)
+            draft.write_bytes(original.encode("utf-8"))
         edit_file(draft)
-        text = draft.read_text(encoding="utf-8").replace("\r\n", "\n")
+        try:  # an editor may save UTF-8 with a byte order mark (Notepad); that is fine
+            text = draft.read_bytes().decode("utf-8-sig").replace("\r\n", "\n")
+        except UnicodeDecodeError:
+            raise CliError(
+                "the edited file is not UTF-8 text; nothing was decided",
+                ExitCode.INVALID,
+                hint=f"save {draft} as UTF-8 in your editor; {again}",
+            ) from None
         if text == original.replace("\r\n", "\n"):
+            shutil.rmtree(draft.parent, ignore_errors=True)
             raise CliError(
                 "nothing changed in the editor; nothing was decided",
                 ExitCode.REFUSED,
                 hint=f"to accept it as it is: agentic approve {run_id}",
             )
         decision = Edit(gate or state.pending.id, rt.user, rel, text, notes)
-        _decide(ctx.obj, rt, state, decision)
-        draft.unlink(missing_ok=True)
+        try:
+            _decide(out, rt, state, decision, gateway)
+        except CliError as error:  # refused or failed: the person's text is kept
+            kept = f"your edit is kept in {draft}; {again}"
+            hint = f"{error.hint}; {kept}" if error.hint else kept
+            raise CliError(str(error), error.code, hint=hint) from error
+        except typer.Exit:  # decided (the run then goes on, or waits again)
+            shutil.rmtree(draft.parent, ignore_errors=True)
+            raise
 
     @app.command("show")
     def show(ctx: typer.Context, run_id: str) -> None:
@@ -174,10 +203,16 @@ def _waiting(run_id: str) -> tuple[Runtime, RunState]:
     return rt, state
 
 
-def _decide(out: Output, rt: Runtime, state: RunState, decision: Decision) -> None:
+def _decide(
+    out: Output,
+    rt: Runtime,
+    state: RunState,
+    decision: Decision,
+    gateway: GatewaySettings | None = None,
+) -> None:
     engine = rt.engine(regime=state.regime)
     result = drive(
-        rt.redact(rt.gateway()),
+        rt.redact(gateway or rt.gateway()),
         rt.store.path(state.run_id).parent,
         lambda: engine.decide(
             state.run_id,
