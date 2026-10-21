@@ -34,8 +34,10 @@ from sdlc_commons.ledger import run_id_refusal
 #: Untracked files a checkpoint never commits: what running a repository's tests or
 #: linters leaves in the tree (bytecode, tool caches, coverage data, installed packages).
 #: A repository that ignores them in .gitignore is unaffected; one that does not would
-#: otherwise get them on the run branch and in its pull request (M1-68). Tracked files
-#: under these paths are still committed. Git glob pathspecs, relative to the tree.
+#: otherwise get them on the run branch and in its pull request (M1-68). The checkpoint
+#: then deletes them (the next run regenerates them), as a fresh attempt already does.
+#: Tracked files under these paths are still committed. Git glob pathspecs, relative to
+#: the tree.
 GENERATED: tuple[str, ...] = (
     "**/__pycache__/**",
     "**/*.py[cod]",
@@ -185,6 +187,9 @@ class StepCheckpoints:
             _git(path, "add", "-u")
             if _git(path, "diff", "--cached", "--name-only"):
                 _git(path, *self._commit_config(path), "commit", "-q", "--no-verify", "-m", message)
+            # and the caches left out go, so the tree is clean again: removing the run's
+            # trees at closure refuses any uncommitted change (review F2); ignored files stay
+            _git(path, "clean", "-q", "-fd", "--", *(f":(glob){g}" for g in GENERATED))
             heads[name] = _git(path, "rev-parse", "HEAD")
         return heads
 

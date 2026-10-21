@@ -140,6 +140,25 @@ def test_finish_leaves_test_run_caches_out_of_the_checkpoint(repo):  # M1-68 fin
     assert sorted(changed) == ["split.py", "vendor/node_modules/kept.js"]  # tracked: kept
 
 
+def test_a_checkpoint_leaves_the_tree_clean_so_the_run_can_be_removed(repo):  # review F2
+    """Caches left out of the checkpoint must not leave the tree dirty: removing the run's
+    trees at closure refuses any uncommitted change. Ignored files (.venv/) are kept."""
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    (tree / "split.py").write_text("y = 2\n", encoding="utf-8")
+    for junk in ("__pycache__/split.cpython-312.pyc", "pkg/__pycache__/m.pyc", ".coverage"):
+        (tree / junk).parent.mkdir(parents=True, exist_ok=True)
+        (tree / junk).write_bytes(b"\x00generated")
+    (tree / ".venv").mkdir()
+    (tree / ".venv" / "kept.txt").write_text("ignored\n", encoding="utf-8")
+    checkpoints.finish("agentic: qa #1 (r-ckpt-1)")
+
+    assert git(tree, "status", "--porcelain") == ""
+    assert (tree / ".venv" / "kept.txt").is_file()
+    checkpoints.worktrees.remove()  # not forced: nothing of value is left uncommitted
+    assert not tree.exists()
+
+
 def test_finish_with_no_change_returns_head_unchanged(repo):
     checkpoints = open_run(repo)
     checkpoints.prepare()
