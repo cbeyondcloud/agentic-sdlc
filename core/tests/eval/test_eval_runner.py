@@ -2,6 +2,7 @@
 budget-capped, every run kept; and one case run by the real agent runner."""
 
 import asyncio
+from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
 
@@ -211,8 +212,20 @@ def resolved_developer(fixtures: Path, tmp_path: Path):
     return resolved
 
 
-def dev_task_run(fixtures: Path, tmp_path: Path, write_solution: bool):
-    """DF-241: the Developer works in a copy of its workspace; the case's tests then run."""
+SLUGIFY_SOLUTION = LIBRARY / "solutions" / "dev-slugify" / "textutil.py"
+
+
+def dev_task_run(
+    fixtures: Path,
+    tmp_path: Path,
+    write_solution: bool = False,
+    *,
+    writes: Sequence[tuple[str, str]] = (),
+    sandbox=None,
+):
+    """DF-241: the Developer works in a copy of its workspace; the case's tests then run.
+    The scripted model writes `writes` (path, text) - after the reference solution when
+    `write_solution` - one file per turn, then answers."""
     from pydantic_ai import Tool
     from pydantic_ai.messages import ToolCallPart
 
@@ -222,8 +235,9 @@ def dev_task_run(fixtures: Path, tmp_path: Path, write_solution: bool):
 
     corpus = load_corpus(LIBRARY)
     case = corpus.case("dev-slugify")
-    solution = (LIBRARY / "solutions" / "dev-slugify" / "textutil.py").read_text(encoding="utf-8")
+    solution = SLUGIFY_SOLUTION.read_text(encoding="utf-8")
     report = (LIBRARY / "fixtures" / "answers" / "dev-slugify.md").read_text(encoding="utf-8")
+    planned = [*([("textutil.py", solution)] if write_solution else []), *writes]
     trees: list[Path] = []
 
     def prepare(request, source: Path) -> Workspace:
@@ -235,15 +249,17 @@ def dev_task_run(fixtures: Path, tmp_path: Path, write_solution: bool):
 
         def write_file(path: str, text: str) -> str:
             """Write a file of the working tree."""
+            (tree / path).parent.mkdir(parents=True, exist_ok=True)
             (tree / path).write_text(text, encoding="utf-8")
             return "written"
 
-        return Workspace(tree=tree, tools=[Tool(write_file)])
+        return Workspace(tree=tree, tools=[Tool(write_file)], sandbox=sandbox)
 
     def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        if write_solution and len(messages) == 1:
-            args = {"path": "textutil.py", "text": solution}
-            return ModelResponse(parts=[ToolCallPart("write_file", args)])
+        turn = (len(messages) - 1) // 2
+        if turn < len(planned):
+            path, text = planned[turn]
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": path, "text": text})])
         return ModelResponse(parts=[TextPart(report)])
 
     runner = AgentCaseRunner(
@@ -276,6 +292,59 @@ def test_a_developer_run_that_changes_nothing_fails_its_tests(fixtures, tmp_path
     record, metrics, _ = dev_task_run(fixtures, tmp_path, write_solution=False)
     assert record.tests["tests/test_textutil.py::test_slugify_strips_accents"] is False
     assert metrics["tests_pass"] == 0.0
+
+
+SLUGIFY_TEST = "tests/test_textutil.py"
+FAKE_PASS = (
+    "def test_slugify_basic():\n    assert True\n\n"
+    "def test_slugify_strips_accents():\n    assert True\n"
+)
+PASS_EVERYTHING = (
+    "import pytest\n\n\n"
+    "@pytest.hookimpl(hookwrapper=True)\n"
+    "def pytest_runtest_makereport(item, call):\n"
+    "    outcome = yield\n"
+    "    outcome.get_result().outcome = 'passed'\n"
+)
+
+
+def test_a_developer_that_rewrites_the_cases_tests_does_not_pass_them(fixtures, tmp_path):
+    """F2: the case's tests are the truth; the agent's edits to them are undone first."""
+    record, metrics, trees = dev_task_run(fixtures, tmp_path, writes=[(SLUGIFY_TEST, FAKE_PASS)])
+    assert metrics["tests_pass"] == 0.0, record.tests
+    assert "assert True" not in (trees[0] / SLUGIFY_TEST).read_text(encoding="utf-8")
+
+
+def test_a_developer_that_adds_a_conftest_does_not_pass_the_tests(fixtures, tmp_path):
+    writes = [("tests/conftest.py", PASS_EVERYTHING), ("conftest.py", PASS_EVERYTHING)]
+    record, metrics, _ = dev_task_run(fixtures, tmp_path, writes=writes)
+    assert metrics["tests_pass"] == 0.0, record.tests
+
+
+def test_a_developer_whose_code_stops_pytest_fails_its_tests(fixtures, tmp_path):
+    """F1/F2: the tests ran on the pristine workspace, so a session that never reported
+    on the agent's tree is the agent's failure, not an unmeasured run."""
+    stop = "import os\nprint('PASSED tests/test_textutil.py::test_slugify_basic')\nos._exit(0)\n"
+    record, metrics, _ = dev_task_run(fixtures, tmp_path, writes=[("textutil.py", stop)])
+    assert record.tests is not None and not any(record.tests.values())
+    assert metrics["tests_pass"] == 0.0
+
+
+class BrokenSandbox:
+    """A sandbox in which pytest cannot start at all (a harness problem)."""
+
+    isolated = True
+
+    async def run(self, command: str, cwd: Path, timeout_s: float):
+        from agentic.sandbox.process import ShellResult
+
+        return ShellResult(exit_code=127, stdout="", stderr="python: not found", timed_out=False)
+
+
+def test_tests_that_cannot_run_anywhere_leave_tests_pass_unmeasured(fixtures, tmp_path):
+    record, metrics, _ = dev_task_run(fixtures, tmp_path, True, sandbox=BrokenSandbox())
+    assert record.tests is None and "tests_pass" not in metrics
+    assert any("could not run" in e for e in record.errors)
 
 
 def test_the_developer_is_told_where_its_files_are():

@@ -9,16 +9,18 @@ defaults, which are the M1-64 initial targets:
   * BA and Design    median blind rubric >= 7/10
   * Developer        tests_pass >= 0.5 (first attempt)
   * Code Review      defect_recall >= 0.7 and false_finding_rate <= 0.3
-  * QA               qa_catch >= 0.8
+  * QA               qa_catch >= 0.8 and qa_false_alarm <= 0.3
 
-A gate is decided on the point estimate with the 95 % CI shown (S10). Its verdict:
+A gate is decided on the point estimate with the 95 % CI shown (S10), on at least
+decision 18's floor of cases (`MIN_CASES`). Its verdict:
 
   * NOT_A_GATE - some report cannot decide a gate: not live, not the holdout split, a
-                 tag subset, not MEASURED, another corpus than the rest, or two reports
-                 for one agent;
+                 tag subset, not MEASURED, fewer cases than the floor, another corpus
+                 than the rest, or two reports for one agent;
   * FAIL       - a measured target is missed;
   * INCOMPLETE - nothing is missed but a target could not be measured (no report for the
-                 agent, or a metric the harness does not compute yet);
+                 agent, a metric the harness does not compute yet, or one scored on
+                 fewer cases than the floor);
   * PASS       - every target is met.
 
 The median cost per run of each agent is recorded as the baseline M1-64 asks for.
@@ -45,9 +47,25 @@ DEFAULT_TARGETS: dict[str, list[EvalTarget]] = {
         EvalTarget(metric="defect_recall", at_least=0.7),
         EvalTarget(metric="false_finding_rate", at_most=0.3),
     ],
-    "qa": [EvalTarget(metric="qa_catch", at_least=0.8)],
+    # qa_catch alone is met by a report that fails every criterion; the false-alarm
+    # bound keeps it honest (DF-258; the owner confirms the value at M1-64)
+    "qa": [
+        EvalTarget(metric="qa_catch", at_least=0.8),
+        EvalTarget(metric="qa_false_alarm", at_most=0.3),
+    ],
 }
 GATE_AGENTS = ("business-analyst", "design", "developer", "code-review", "qa")
+#: The fewest holdout cases a gated agent's report must run, and each of its target
+#: metrics score: decision 18's floors (20 scoping cases per rubric agent, 20 review
+#: diffs, 20 dev tasks; QA's floor is 30 seeded criteria, which the corpus spreads over
+#: 15 cases). An agent not named has no floor.
+MIN_CASES: dict[str, int] = {
+    "business-analyst": 20,
+    "design": 20,
+    "developer": 20,
+    "code-review": 20,
+    "qa": 15,
+}
 
 
 class _Model(BaseModel):
@@ -89,15 +107,19 @@ def evaluate_gate(
     *,
     targets: Mapping[str, Sequence[EvalTarget]] | None = None,
     agents: Sequence[str] = GATE_AGENTS,
+    min_cases: Mapping[str, int] = MIN_CASES,
 ) -> GateReport:
-    """Compare `reports` with the targets for `agents` (every agent with a report counts)."""
+    """Compare `reports` with the targets for `agents` (every agent with a report counts).
+    A report must run at least `min_cases` cases for its agent, and a target scored on
+    fewer cases than that is not measured."""
     targets = targets or {}
-    problems = _problems(reports)
+    problems = _problems(reports, min_cases)
     by_agent = {r.agent: r for r in reports}
     rows: list[GateRow] = []
     for agent in dict.fromkeys([*agents, *by_agent]):
+        floor = min_cases.get(agent, 0)
         for target in targets_for(agent, targets):
-            rows.append(_row(agent, target, by_agent.get(agent)))
+            rows.append(_row(agent, target, by_agent.get(agent), floor))
     if problems:
         verdict: GateVerdict = "NOT_A_GATE"
     elif any(r.verdict == "FAIL" for r in rows):
@@ -144,7 +166,7 @@ def render_gate(gate: GateReport) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _problems(reports: Sequence[EvalReport]) -> list[str]:
+def _problems(reports: Sequence[EvalReport], min_cases: Mapping[str, int]) -> list[str]:
     problems = []
     seen: set[str] = set()
     for r in reports:
@@ -152,6 +174,11 @@ def _problems(reports: Sequence[EvalReport]) -> list[str]:
         if r.agent in seen:
             problems.append(f"two reports for {r.agent}: give one per agent")
         seen.add(r.agent)
+        if len(r.cases) < (floor := min_cases.get(r.agent, 0)):
+            problems.append(
+                f"{name} ran {len(r.cases)} cases; a gate needs at least {floor} "
+                "holdout cases for this agent (decision 18)"
+            )
         if r.mode != "live":
             problems.append(f"{name} ran in {r.mode} mode; a gate needs live runs")
         if r.split != "holdout":
@@ -165,7 +192,7 @@ def _problems(reports: Sequence[EvalReport]) -> list[str]:
     return problems
 
 
-def _row(agent: str, target: EvalTarget, report: EvalReport | None) -> GateRow:
+def _row(agent: str, target: EvalTarget, report: EvalReport | None, floor: int = 0) -> GateRow:
     bound = f">= {target.at_least}" if target.at_least is not None else f"<= {target.at_most}"
     base = {"agent": agent, "metric": target.metric, "statistic": target.statistic}
     if report is None:
@@ -178,6 +205,11 @@ def _row(agent: str, target: EvalTarget, report: EvalReport | None) -> GateRow:
         note = "not computed" if aggregate is None else "no case scored"
         return GateRow(**base, target=bound, value=None, verdict="NOT_MEASURED", note=note)
     met = value >= target.at_least if target.at_least is not None else value <= target.at_most
+    verdict: RowVerdict = "PASS" if met else "FAIL"
+    note = ""
+    if aggregate.n_scored < floor:  # type: ignore[union-attr]
+        verdict = "NOT_MEASURED"
+        note = f"{aggregate.n_scored} of {floor} cases scored"  # type: ignore[union-attr]
     return GateRow(
         **base,
         target=bound,
@@ -185,7 +217,8 @@ def _row(agent: str, target: EvalTarget, report: EvalReport | None) -> GateRow:
         ci_low=aggregate.ci_low,  # type: ignore[union-attr]
         ci_high=aggregate.ci_high,  # type: ignore[union-attr]
         n_scored=aggregate.n_scored,  # type: ignore[union-attr]
-        verdict="PASS" if met else "FAIL",
+        verdict=verdict,
+        note=note,
     )
 
 
@@ -197,6 +230,7 @@ def _median_cost(report: EvalReport) -> float | None:
 __all__ = [
     "DEFAULT_TARGETS",
     "GATE_AGENTS",
+    "MIN_CASES",
     "GateReport",
     "GateRow",
     "evaluate_gate",

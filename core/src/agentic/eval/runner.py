@@ -18,7 +18,9 @@ A case with a workspace (a dev task) runs in a fresh copy of it (DF-241): `prepa
 copies the workspace and gives the agent its tools on that tree - the CLI builds them
 with the run's guard and sandbox - and once the agent has answered, the case's
 fail-to-pass and pass-to-pass tests run on the tree (through the workspace's sandbox),
-so `tests_pass` is measured. The corpus itself is never changed.
+so `tests_pass` is measured. The test files and pytest configuration are restored from
+the workspace first, so the agent cannot pass by editing them. The corpus itself is
+never changed.
 """
 
 import random
@@ -38,7 +40,7 @@ from agentic.agents.metering import CostLog
 from agentic.agents.runner import AgentTask, PydanticAIRunner
 from agentic.agents.tools.context import Sandbox
 from agentic.eval.cases import EvalCase
-from agentic.eval.devtask import copy_workspace, run_tests
+from agentic.eval.devtask import CouldNotRunTests, copy_workspace, run_case_tests
 from agentic.eval.records import RunRecord, RunRequest
 from agentic.handoffs import HandoffContract, HandoffSchema
 from agentic.policy import ResolvedAgent
@@ -230,15 +232,17 @@ class AgentCaseRunner:
         unmeasured, never failed by the harness."""
         tests = request.case.expected.tests
         unscored = record.status not in SCORED or record.error is not None  # e.g. the cap
-        if workspace is None or tests is None or unscored:
+        if workspace is None or tests is None or unscored or self.corpus_root is None:
             return record
+        source = self.corpus_root / PurePosixPath(request.case.inputs.workspace or "")
         try:
-            record.tests = await run_tests(
+            record.tests = await run_case_tests(
+                source,
                 workspace.tree,
                 [*tests.fail_to_pass, *tests.pass_to_pass],
                 sandbox=workspace.sandbox,
             )
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError, CouldNotRunTests) as error:
             record.errors.append(f"the case's tests could not run: {error}")
         return record
 
