@@ -87,3 +87,17 @@ Steps (real CLI): `init --repo --standalone` (PR on fake GitHub) -> merge -> `in
 - [ ] DF-255: corpus references compare each path component's case with the directory entry (regression test).
 - [ ] DF-253: confirm the architecture test passes when `check.py` runs from PowerShell.
 - [ ] `uv run python scripts/check.py --all` three consecutive green runs; record them.
+
+---
+
+## As built (2026-10-21)
+
+- Scenarios: `cli/tests/acceptance/test_accept_feature_delivery.py` (M1-68, 26 recorded calls), `test_accept_custom_agent.py` (M1-69), `test_accept_empty_repo.py` (M1-70); shared feature texts in `_invoice_story.py`; cassettes in `cassettes/m1-6x/acceptance/1.json`; record with `uv run python scripts/record_acceptance.py`.
+- Bugs the scenarios exposed, each fixed with a regression test:
+  1. checkpoints committed test-run caches (`__pycache__/*.pyc`, `.pytest_cache`...) onto the run branch and its PR (`sdlc_commons.worktrees.GENERATED`; `commons/tests/test_step_checkpoints.py`);
+  2. step logs said nothing about tool calls, so `agentic logs` could not show what QA ran (`agentic.agents.tools.context._log_call`; `core/tests/agents/test_tools.py`);
+  3. the PR body had no cost and no logs pointer (`pr_body(cost_usd=, logs=)`; `core/tests/telemetry/test_trailers.py`, `cli/tests/run/test_pr_contract.py`);
+  4. a plain-English description with `: ` failed validation with only the parser's words (`agentic.yamlio`; `core/tests/test_yamlio.py`);
+  5. `init --repo` refused a brand-new empty repository with a self-contradicting message and could not make a root commit (`repo_guard._default_branch`, `repo_setup.commit_on_branch`, `init._init_repo`; `cli/tests/test_init_repo_pr.py`).
+- DF-255 fixed (`agentic.eval.corpus._exists_exactly`); DF-253 confirmed green from PowerShell.
+- The sandbox assertion: commands run in `srt` where the machine is ready (the Linux container), unsandboxed by the person's policy edit on Windows native.

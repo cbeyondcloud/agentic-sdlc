@@ -26,6 +26,7 @@ from _acceptance_support import (
     git,
     handoff_text,
     recorded_calls,
+    sandbox_available,
     shell_results,
     success,
     tool,
@@ -143,6 +144,8 @@ def test_feature_delivery_on_an_existing_repo(scenario: Scenario):
     done = scenario.ok("--json", "approve", run_id, "--notes", "ship it").json()
     assert done["status"] == "completed", done
     assert scenario.finish_models() == []  # every recorded call used, none missing
+    # commands ran inside the OS sandbox where the machine has one (the Linux container)
+    assert done["sandbox"].startswith("srt") if sandbox_available() else done["sandbox"] == "none"
 
     # the steps, the loop's three rounds and the gates' decisions
     assert [(h["step"], h["iteration"], h["outcome"]) for h in done["history"]] == [
