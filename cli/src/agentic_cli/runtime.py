@@ -51,7 +51,7 @@ from agentic.transport import CallIdentity
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.wiring import StepWiring, production_scanner
-from agentic_cli.workspace import Workspace
+from agentic_cli.workspace import RUNS, Workspace
 from sdlc_commons.gates import ZyrofloGates, regime_block_on
 from sdlc_commons.ledger import RunIdentity, RunLedger
 from sdlc_commons.redaction import redactor
@@ -390,6 +390,7 @@ class Runtime:
             trees_for=wiring.trees_for,
             step_logs=StepLogs(self.redact(gateway)),
             redact=self.redact(gateway),  # pause reasons and step details in run.json
+            handoff_prefix=RUNS.as_posix(),  # repo-relative Agentic-Handoff trailers (DF-174)
         )
 
     def identity(self, step: StepContext) -> CallIdentity:

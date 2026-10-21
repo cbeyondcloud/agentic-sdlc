@@ -162,6 +162,7 @@ class Engine:
         trees_for: Callable[[str], StepTrees] | None = None,
         step_logs: StepLogs | None = None,
         redact: Callable[[str], str] | None = None,
+        handoff_prefix: str = "",
     ) -> None:
         self.definitions, self.policy, self.context = definitions, policy, context
         self.store, self.recorder_for, self.gates_for = store, recorder_for, gates_for
@@ -174,6 +175,10 @@ class Engine:
         # masks secrets in the reasons and details stored in run.json: a provider's error
         # text can echo a key (the CLI passes its redactor; None: stored as it is)
         self.redact: Callable[[str], str] = redact or _as_is
+        # where run folders sit in the repository (".agentic/local/runs"): commit trailers
+        # then name handoffs by their repo-relative path (spec 14.5, DF-174); "" keeps
+        # them relative to the run folder
+        self.handoff_prefix = handoff_prefix.strip().strip("/")
 
     async def start(
         self, pipeline: str, inputs: dict[str, str], starter: str, run_id: str
@@ -632,7 +637,12 @@ class _Run:
             notes=decision.notes,
             extra={"regime": state.regime},
         )
-        mark = ApprovalMark(gate=pending.id, approver=decision.approver, at=self.e.clock.now())
+        mark = ApprovalMark(
+            gate=pending.id,
+            approver=decision.approver,
+            at=self.e.clock.now(),
+            history_len=len(state.history),
+        )
         state.approvals.append(mark)
         if self._gate_step(pending.id) is not None:
             state.approved[pending.id] = dict(pending.artefacts)
@@ -673,6 +683,7 @@ class _Run:
         else:
             target, cursor = self._reject_target(gate)
         self._rollback_for(target, cursor.loop_iteration or 1)  # the code goes back too
+        self._supersede(target, cursor.loop_iteration or 1)
         self.gates.record(
             pending.id,
             "reject",
@@ -689,6 +700,25 @@ class _Run:
         state.cursor = cursor
         self.save()
         return await self.go()
+
+    def _supersede(self, step: str, iteration: int) -> None:
+        """Mark the approvals given after the newest attempt of `step` at `iteration`
+        finished: they approved work a rejection now sends back, so they no longer stand
+        (DF-173). Approvals of earlier work - before that attempt - still do."""
+        history = self.state.history
+        index = next(
+            (
+                i
+                for i in range(len(history) - 1, -1, -1)
+                if history[i].step == step and history[i].iteration == iteration
+            ),
+            None,
+        )
+        if index is None:
+            return
+        for mark in self.state.approvals:
+            if mark.history_len is not None and mark.history_len > index:
+                mark.superseded = True
 
     def _reject_target(self, gate: GateStep) -> tuple[str, Cursor]:
         """Where a rejection sends the work: `on_reject`, else the step before the gate."""
@@ -1238,8 +1268,11 @@ class _Run:
     def _audit(self, step: str, iteration: int, agent: ResolvedAgent) -> CommitAudit:
         """The trailers of a step's checkpoint commit: who, what, which approval, and the
         handoffs the step consumed (M1-45)."""
-        approval = self.state.approvals[-1] if self.state.approvals else None
+        standing = [a for a in self.state.approvals if not a.superseded]
+        approval = standing[-1] if standing else None
         consumed = [self.state.latest[k] for k in agent.consumes if k in self.state.latest]
+        if self.e.handoff_prefix:
+            consumed = [f"{self.e.handoff_prefix}/{self.state.run_id}/{rel}" for rel in consumed]
         return CommitAudit(
             run_id=self.state.run_id,
             step=step,

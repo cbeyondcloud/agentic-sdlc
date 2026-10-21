@@ -77,6 +77,10 @@ class ApprovalMark(_Strict):
     gate: str
     approver: str
     at: AwareDatetime
+    history_len: int | None = Field(default=None, ge=0)  # len(history) when it was given
+    # a later rejection sent the work back to before this approval: it no longer stands,
+    # so no commit cites it (DF-173); kept here, the approval ledger is append-only
+    superseded: bool = False
 
 
 class RunState(_Strict):
