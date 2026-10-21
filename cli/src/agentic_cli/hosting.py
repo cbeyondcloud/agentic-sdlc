@@ -21,7 +21,8 @@ github`). It is held only in memory and never shown.
 """
 
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,17 @@ class Connection:
     kind: str
     token: str = field(repr=False)  # for scrubbing messages; never shown
     token_source: str = ""  # "env" or "keyring"
+    token_hint: str = ""  # how to provide (or replace) the token
+
+    @contextmanager
+    def errors(self) -> Iterator[None]:
+        """A failed hosting call (push or API) as a CliError, with what to do about it."""
+        try:
+            yield
+        except HostingError as error:
+            status = getattr(error, "status", None)
+            hint = self.token_hint if status in (401, 403) else None
+            raise CliError(str(error), ExitCode.ERROR, hint=hint) from error
 
     def close(self) -> None:
         close = getattr(self.provider, "close", None)
@@ -148,7 +160,9 @@ def connect(
         provider = HOST_KINDS[config.kind].make(config.api_url, found.value)
     except HostingError as error:
         raise CliError(str(error), ExitCode.INVALID, hint="fix api_url in git_hosts") from error
-    return Connection(provider, repo, remote, config.kind, found.value, found.source)
+    return Connection(
+        provider, repo, remote, config.kind, found.value, found.source, _token_hint(config)
+    )
 
 
 def login_names(settings: Mapping[str, Any]) -> dict[str, str]:
@@ -160,18 +174,20 @@ def login_names(settings: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _token(config: HostConfig, found_in: Credentials):
-    name = config.credential
-    hint = f"set {env_var(name)}, or run `agentic login --for {_login_name(config)}`"
     try:
-        return found_in.get(name)
+        return found_in.get(config.credential)
     except CredentialError as error:
         raise CliError(
-            f"no token for {config.host}: {error}", ExitCode.REFUSED, hint=hint
+            f"no token for {config.host}: {error}", ExitCode.REFUSED, hint=_token_hint(config)
         ) from error
 
 
-def _login_name(config: HostConfig) -> str:
-    return config.kind if config.credential == _default(config.kind) else config.host
+def _token_hint(config: HostConfig) -> str:
+    login = config.kind if config.credential == _default(config.kind) else config.host
+    return (
+        f"set {env_var(config.credential)}, or run `agentic login --for {login}` "
+        f"(a token that may open pull requests on {config.host})"
+    )
 
 
 def _default(kind: str) -> str:

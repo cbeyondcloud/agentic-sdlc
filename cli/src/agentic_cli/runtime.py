@@ -59,8 +59,24 @@ from sdlc_commons.redaction import redactor
 #: The backends this CLI builds. The claude-code backend is not wired yet (DF-74), so
 #: preflight refuses a step that names it instead of failing mid-run.
 CONFIGURED_BACKENDS: tuple[str, ...] = ("native",)
-#: Built-in actions (`github.open_pr` arrives with M1-58).
-ACTIONS: dict = {}
+
+
+def _publish(kind: str | None) -> Callable[["Runtime"], Callable]:
+    def make(rt: "Runtime") -> Callable:
+        from agentic_cli.publishing import publish_action  # it imports this module's peers
+
+        return publish_action(rt.ws, rt.store.runs_root, kind)
+
+    return make
+
+
+#: Built-in actions, by the name a pipeline step gives: name -> (Runtime -> action). M1-58:
+#: push the run's branch and open its pull request - on a GitHub host (`github.open_pr`,
+#: the spec's name), or on whatever host `origin` is (`open_pr`).
+ACTIONS: dict[str, Callable[["Runtime"], Callable]] = {
+    "github.open_pr": _publish("github"),
+    "open_pr": _publish(None),
+}
 SKILLS = Path(".agentic") / "local" / "skills"
 STATE = Path(".agentic") / "local" / "state"
 #: Charged for a call whose cost the gateway did not report and whose model has no price.
@@ -384,7 +400,7 @@ class Runtime:
             runner_factory=runners,
             block_on_for=regime_block_on,
             clock=SystemClock(),
-            actions=ACTIONS,
+            actions={name: make(self) for name, make in ACTIONS.items()},
             run_budget_usd=run_budget_usd,
             sandbox_label=decision.label,
             trees_for=wiring.trees_for,

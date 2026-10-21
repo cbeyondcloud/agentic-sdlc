@@ -1,0 +1,151 @@
+"""A local fake of the GitHub REST API (stdlib `http.server`) for the M1-58 contract tests.
+
+It serves only what the adapter calls: the repository, pull requests (list, create,
+update) and a commit's check runs and statuses. It checks the bearer token like GitHub
+does and reads branch heads from a local bare remote, so a pull request can only be
+opened for a branch that was really pushed. Every request is recorded (method, path,
+query, body), so tests can assert what was - and was never - called. Errors echo the
+request's Authorization header back, so a test can prove the client scrubs it.
+"""
+
+import json
+import re
+import subprocess
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
+
+_REPO = r"/repos/(?P<owner>[^/]+)/(?P<name>[^/]+)"
+
+
+class FakeGitHub:
+    def __init__(self, token: str, bare: Path | None = None, default_branch: str = "main"):
+        self.token = token
+        self.bare = bare
+        self.default_branch = default_branch
+        self.pulls: list[dict] = []
+        self.check_runs: list[list[dict]] = [[]]  # one list per read; the last one repeats
+        self.statuses: list[dict] = []
+        self.requests: list[dict] = []
+        self.fail: dict[str, tuple[int, str]] = {}  # "POST pulls" -> (status, message)
+        self._lock = threading.Lock()
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._handler())
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+
+    @property
+    def url(self) -> str:
+        host, port = self._server.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def start(self) -> "FakeGitHub":
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+    def paths(self) -> list[str]:
+        return [f"{r['method']} {r['path']}" for r in self.requests]
+
+    # ── the API ──────────────────────────────────────────────────────────────
+
+    def handle(self, method: str, path: str, query: dict, body: dict | None, auth: str):
+        with self._lock:
+            self.requests.append(
+                {"method": method, "path": path, "query": query, "body": body, "auth": auth}
+            )
+            if auth != f"Bearer {self.token}":
+                return 401, {"message": f"Bad credentials (got {auth})"}
+            for key, (status, message) in self.fail.items():
+                verb, _, tail = key.partition(" ")
+                if verb == method and path.endswith(tail):
+                    return status, {"message": f"{message} (request had {auth})"}
+            return self._route(method, path, query, body or {})
+
+    def _route(self, method, path, query, body):
+        if method == "GET" and re.fullmatch(_REPO, path):
+            return 200, {"default_branch": self.default_branch}
+        if re.fullmatch(_REPO + "/pulls", path):
+            if method == "GET":
+                owner = re.fullmatch(_REPO + "/pulls", path).group("owner")
+                head = query.get("head", [""])[0].removeprefix(f"{owner}:")
+                return 200, [p for p in self.pulls if p["head"]["ref"] == head]
+            if method == "POST":
+                return self._create(body)
+        found = re.fullmatch(_REPO + r"/pulls/(?P<n>\d+)", path)
+        if found and method == "PATCH":
+            pull = next((p for p in self.pulls if p["number"] == int(found["n"])), None)
+            if pull is None:
+                return 404, {"message": "Not Found"}
+            pull["body"] = body.get("body", pull["body"])
+            pull["head"]["sha"] = self._head(pull["head"]["ref"]) or pull["head"]["sha"]
+            return 200, pull
+        if method == "GET" and re.fullmatch(_REPO + r"/commits/[^/]+/check-runs", path):
+            runs = self.check_runs.pop(0) if len(self.check_runs) > 1 else self.check_runs[0]
+            return 200, {"total_count": len(runs), "check_runs": runs}
+        if method == "GET" and re.fullmatch(_REPO + r"/commits/[^/]+/status", path):
+            return 200, {"state": "pending", "statuses": self.statuses}
+        return 404, {"message": "Not Found"}
+
+    def _create(self, body: dict):
+        head = body.get("head", "")
+        sha = self._head(head)
+        if sha is None:
+            return 422, {"message": "Validation Failed", "errors": [{"message": "head invalid"}]}
+        if any(p["head"]["ref"] == head for p in self.pulls):
+            message = f"A pull request already exists for acme:{head}."
+            return 422, {"message": "Validation Failed", "errors": [{"message": message}]}
+        number = len(self.pulls) + 1
+        pull = {
+            "number": number,
+            "html_url": f"https://github.example.test/acme/app/pull/{number}",
+            "state": "open",
+            "title": body.get("title", ""),
+            "body": body.get("body", ""),
+            "head": {"ref": head, "sha": sha},
+            "base": {"ref": body.get("base", "")},
+        }
+        self.pulls.append(pull)
+        return 201, pull
+
+    def _head(self, branch: str) -> str | None:
+        if self.bare is None:
+            return "f" * 40
+        done = subprocess.run(
+            ["git", "-C", str(self.bare), "rev-parse", "--verify", "-q", f"refs/heads/{branch}"],
+            capture_output=True,
+            text=True,
+        )
+        return done.stdout.strip() if done.returncode == 0 else None
+
+    def _handler(self):
+        fake = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def _serve(self) -> None:
+                parts = urlsplit(self.path)
+                length = int(self.headers.get("content-length") or 0)
+                raw = self.rfile.read(length) if length else b""
+                body = json.loads(raw) if raw else None
+                status, data = fake.handle(
+                    self.command,
+                    parts.path,
+                    parse_qs(parts.query),
+                    body,
+                    self.headers.get("authorization", ""),
+                )
+                payload = json.dumps(data).encode("utf-8")
+                self.send_response(status)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = _serve
+
+            def log_message(self, format, *args) -> None:  # noqa: A002 - stdlib signature
+                return
+
+        return Handler
