@@ -24,7 +24,8 @@ Records are matched to their step by a context variable, so two runs advanced
 concurrently in one process (or a step's child agents, which inherit the context)
 never write into each other's logs.
 
-`read_logs` / `render_logs` read them back for `agentic logs <run> [--step]` (M1-54).
+`read_logs` / `render_logs` read them back for `agentic logs <run> [--step]`, `LogTail`
+reads what is new for `--follow`, and `redact_record` redacts a record once more on read.
 """
 
 import itertools
@@ -128,42 +129,110 @@ class _StepHandler(logging.Handler):
         }
 
     def _clean(self, text: str) -> str:
-        try:
-            cleaned = self.redact(text)
-        except Exception:
-            return UNREDACTABLE
-        return cleaned if isinstance(cleaned, str) else UNREDACTABLE
+        return _clean(self.redact, text)
 
     def _value(self, value: object) -> object:
-        if isinstance(value, Mapping):
-            return {self._clean(str(k)): self._value(v) for k, v in value.items()}
-        if isinstance(value, (list, tuple)):
-            return [self._value(item) for item in value]
-        if value is None or isinstance(value, (bool, int, float)):
-            return value
-        return self._clean(str(value))
+        return _redacted(self.redact, value)
+
+
+def _clean(redact: Callable[[str], str], text: str) -> str:
+    try:
+        cleaned = redact(text)
+    except Exception:
+        return UNREDACTABLE
+    return cleaned if isinstance(cleaned, str) else UNREDACTABLE
+
+
+def _redacted(redact: Callable[[str], str], value: object) -> object:
+    if isinstance(value, Mapping):
+        return {_clean(redact, str(k)): _redacted(redact, v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redacted(redact, item) for item in value]
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return _clean(redact, str(value))
+
+
+def redact_record(record: Mapping, redact: Callable[[str], str]) -> dict:
+    """A copy of a read-back record with its text redacted once more (the message, the
+    error, field names and values; numbers stay). Records are redacted when written;
+    this masks what an older writer, or a redactor that did not know a secret, let by."""
+    return {
+        key: _redacted(redact, value) if key in ("message", "error", "fields") else value
+        for key, value in record.items()
+    }
+
+
+class LogTail:
+    """A run's step logs read incrementally: each `poll()` returns the records written
+    since the previous one, oldest first (for `agentic logs --follow`).
+
+    Files are read in binary from a byte offset per file, and only whole lines (ending
+    in a newline) are taken, so a record being written is never half-read; a file that
+    got shorter than its offset is read again from the start. Opening a file for
+    reading never blocks the writer (Python opens files shared on Windows too).
+    """
+
+    def __init__(
+        self, run_dir: Path, step: str | None = None, min_level: str | None = None
+    ) -> None:
+        self.folder = Path(run_dir) / "logs"
+        self.step = step
+        self.floor = LEVELS[min_level.lower()] if min_level else 0
+        self._offsets: dict[Path, int] = {}
+        self._lines: dict[Path, int] = {}
+
+    def poll(self, final: bool = False) -> list[dict]:
+        """The new records. `final` also takes a last line with no newline (a writer
+        that stopped mid-record), which then reads as a "not JSON" error."""
+        if not self.folder.is_dir():
+            return []
+        records = []
+        for path in sorted(self.folder.glob("*.jsonl")):
+            if self._wanted(path.stem):
+                records += self._read(path, final)
+        return sorted(records, key=_order)
+
+    def _wanted(self, stem: str) -> bool:
+        step = self.step
+        return not step or stem == step or bool(re.fullmatch(re.escape(step) + r"-\d+", stem))
+
+    def _read(self, path: Path, final: bool) -> list[dict]:
+        offset = self._offsets.get(path, 0)
+        try:
+            with path.open("rb") as handle:
+                if handle.seek(0, 2) < offset:  # truncated or replaced: start again
+                    offset, self._lines[path] = 0, 0
+                handle.seek(offset)
+                data = handle.read()
+        except OSError:
+            return []  # removed or unreadable for now: the next poll tries again
+        end = len(data) if final else data.rfind(b"\n") + 1
+        self._offsets[path] = offset + end
+        records = []
+        for raw in data[:end].splitlines():
+            self._lines[path] = number = self._lines.get(path, 0) + 1
+            record = _parse(raw, path.name, number)
+            if LEVELS.get(str(record.get("level")), logging.ERROR) >= self.floor:
+                records.append(record)
+        return records
+
+
+def _parse(raw: bytes, name: str, number: int) -> dict:
+    try:
+        record = json.loads(raw.decode("utf-8"))
+    except ValueError:  # UnicodeDecodeError is a ValueError
+        record = None
+    if not isinstance(record, dict):
+        return {"level": "error", "message": f"{name}:{number}: not JSON", "at": ""}
+    return record
 
 
 def read_logs(run_dir: Path, step: str | None = None, min_level: str | None = None) -> list[dict]:
     """A run's step logs, oldest first (by time, then by write order within a process).
     `step` is a step id (every iteration) or `<step>-<iteration>`; `min_level` drops
     records below it."""
-    folder = Path(run_dir) / "logs"
-    if not folder.is_dir():
-        return []
-    floor = LEVELS[min_level.lower()] if min_level else 0
-    records = []
-    for path in sorted(folder.glob("*.jsonl")):
-        if step and not (path.stem == step or re.fullmatch(re.escape(step) + r"-\d+", path.stem)):
-            continue
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            try:
-                record = json.loads(line)
-            except ValueError:
-                record = {"level": "error", "message": f"{path.name}:{number}: not JSON", "at": ""}
-            if LEVELS.get(str(record.get("level")), logging.ERROR) >= floor:
-                records.append(record)
-    return sorted(records, key=_order)
+    return LogTail(run_dir, step, min_level).poll(final=True)
 
 
 def _order(record: dict) -> tuple[str, int]:
