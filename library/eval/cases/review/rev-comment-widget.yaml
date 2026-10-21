@@ -1,0 +1,38 @@
+id: rev-comment-widget
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the comments widget."
+  diff: |
+    diff --git a/web/src/components/Comments.tsx b/web/src/components/Comments.tsx
+    --- a/web/src/components/Comments.tsx
+    +++ b/web/src/components/Comments.tsx
+    @@ -6,11 +6,11 @@ export function Comments({ postId }: { postId: string }) {
+       const [comments, setComments] = useState<Comment[]>([]);
+    -  useEffect(() => {
+    -    fetchComments(postId).then(setComments);
+    -  }, [postId]);
+    +  useEffect(() => {
+    +    fetchComments(postId).then(setComments);
+    +  }, []);
+       return (
+         <ul>
+           {comments.map((c) => (
+    -        <li key={c.id}>{c.text}</li>
+    +        <li key={c.id} dangerouslySetInnerHTML={{ __html: c.text }} />
+           ))}
+         </ul>
+       );
+expected:
+  seeded_defects:
+    - file: web/src/components/Comments.tsx
+      lines: [9, 9]
+      category: logic
+      note: "the effect no longer depends on postId: navigating to another post keeps showing the first post's comments"
+    - file: web/src/components/Comments.tsx
+      lines: [13, 13]
+      category: security
+      note: "user-written comment text is rendered as HTML: stored XSS"
+tags: [typescript, react, security]

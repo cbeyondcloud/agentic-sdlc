@@ -1,0 +1,39 @@
+id: rev-config-loader
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to how the desktop agent finds and reads its settings."
+  diff: |
+    diff --git a/src/Agent/Settings/SettingsLoader.cs b/src/Agent/Settings/SettingsLoader.cs
+    --- a/src/Agent/Settings/SettingsLoader.cs
+    +++ b/src/Agent/Settings/SettingsLoader.cs
+    @@ -14,9 +14,15 @@ public static class SettingsLoader
+         public static Settings Load()
+         {
+    -        var path = Path.Combine(AppContext.BaseDirectory, "settings.json");
+    +        var home = Environment.GetEnvironmentVariable("HOME");
+    +        var path = home + "/.agent/settings.json";
+             if (!File.Exists(path))
+                 return Settings.Default;
+             var json = File.ReadAllText(path);
+             return JsonSerializer.Deserialize<Settings>(json) ?? Settings.Default;
+         }
+    +
+    +    public static bool IsManagedPath(string candidate, string managedRoot)
+    +    {
+    +        return candidate.StartsWith(managedRoot);
+    +    }
+     }
+expected:
+  seeded_defects:
+    - file: src/Agent/Settings/SettingsLoader.cs
+      lines: [16, 17]
+      category: portability
+      note: "HOME is usually unset on Windows, giving the path '/.agent/settings.json'; use Environment.GetFolderPath(SpecialFolder.ApplicationData) and Path.Combine"
+    - file: src/Agent/Settings/SettingsLoader.cs
+      lines: [26, 26]
+      category: security
+      note: "a culture-sensitive, case-sensitive prefix test: 'C:\\Data' vs 'c:\\data' differ, and 'C:\\DataEvil' passes for root 'C:\\Data'"
+tags: [csharp, windows]

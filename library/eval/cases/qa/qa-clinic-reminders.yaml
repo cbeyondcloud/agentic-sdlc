@@ -1,0 +1,56 @@
+id: qa-clinic-reminders
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the appointment reminders work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Patients get SMS or email reminders before appointments."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Reminders are sent at the configured offsets."
+          acceptance_criteria:
+            - "WHEN an appointment is booked THE system SHALL schedule a reminder 48 hours and 2 hours before it, in the clinic's time zone."
+            - "WHEN an appointment is cancelled THE system SHALL cancel its pending reminders."
+        - id: REQ-2
+          statement: "Patients can opt out."
+          acceptance_criteria:
+            - "WHEN a patient replies STOP THE system SHALL send that patient no further reminders."
+        - id: REQ-3
+          statement: "Messages carry no clinical details."
+          acceptance_criteria:
+            - "WHEN a reminder is composed THE system SHALL include only the date, time, clinic name and address."
+      ---
+      # Requirements: appointment reminders
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Reminder jobs, SMS and email senders, STOP handling."
+      files_changed: [reminders/scheduler.py, reminders/compose.py, reminders/inbound_sms.py]
+      tests_run: {passed: 148, failed: 0, skipped: 0}
+      deviations_from_design:
+        - "Reminder times are computed in UTC from the appointment's start time; the clinic time zone setting is not read yet."
+      ---
+      # Development report: appointment reminders
+
+      ## What changed
+      Booking an appointment schedules two jobs, 48 and 2 hours before the start time.
+      Cancelling an appointment deletes both jobs. A reply of STOP to the SMS number sets
+      `reminders_opt_out` on the patient, and the sender skips opted-out patients.
+
+      ## Message content
+      The template shows the date, time, clinic name and address, and the appointment type
+      (for example "Cardiology follow-up") so patients know which visit it is.
+
+      ## Tests
+      Scheduling, cancellation, STOP handling and the template are covered by unit tests.
+expected:
+  failing_criteria: [REQ-1.1, REQ-3.1]
+tags: [health, notifications]

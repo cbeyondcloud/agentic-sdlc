@@ -1,0 +1,34 @@
+id: rev-token-cache
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the desktop client's access-token cache."
+  diff: |
+    diff --git a/src/Client/Auth/TokenCache.cs b/src/Client/Auth/TokenCache.cs
+    --- a/src/Client/Auth/TokenCache.cs
+    +++ b/src/Client/Auth/TokenCache.cs
+    @@ -18,9 +18,9 @@ public sealed class TokenCache
+         public bool IsValid(Token token)
+         {
+    -        return token.ExpiresAtUtc > DateTime.UtcNow.AddMinutes(1);
+    +        return token.ExpiresAtUtc > DateTime.Now;
+         }
+
+    -    public async Task RefreshAsync()
+    +    public async void OnNetworkChanged(object sender, EventArgs e)
+         {
+             _token = await _issuer.IssueAsync();
+         }
+expected:
+  seeded_defects:
+    - file: src/Client/Auth/TokenCache.cs
+      lines: [20, 20]
+      category: logic
+      note: "a UTC expiry is compared with local time: in time zones ahead of UTC expired tokens look valid for hours; the one-minute safety margin is also gone"
+    - file: src/Client/Auth/TokenCache.cs
+      lines: [23, 23]
+      category: error-handling
+      note: "async void: a failed refresh throws on the synchronization context and crashes the app instead of reaching a caller"
+tags: [csharp, async]

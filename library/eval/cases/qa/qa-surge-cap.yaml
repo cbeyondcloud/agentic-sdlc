@@ -1,0 +1,46 @@
+id: qa-surge-cap
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the surge cap work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Ride fares are capped at twice the base fare in declared emergency areas."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "Fares in emergency areas are capped."
+          acceptance_criteria:
+            - "WHEN a trip starts in an area with an active emergency THE system SHALL quote at most twice the base fare."
+            - "WHEN an emergency ends THE system SHALL stop capping new quotes."
+        - id: REQ-2
+          statement: "Capped quotes are reportable."
+          acceptance_criteria:
+            - "WHEN a quote is capped THE system SHALL record the uncapped and capped amounts."
+      ---
+      # Requirements: surge cap
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Surge multiplier cap for emergency areas."
+      files_changed: [pricing/surge.py, pricing/emergency.py]
+      tests_run: {passed: 83, failed: 0, skipped: 0}
+      ---
+      # Development report: surge cap
+
+      ## What changed
+      In an active emergency area the surge multiplier is limited to 2.0. The booking fee and
+      the airport surcharge are added after the multiplier, as before. Emergencies have an
+      end time, after which the limit no longer applies.
+
+      ## Reporting
+      Capped quotes are counted per area and hour on the operations dashboard.
+expected:
+  failing_criteria: [REQ-1.1, REQ-2.1]
+tags: [mobility, pricing]

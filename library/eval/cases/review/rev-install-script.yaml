@@ -1,0 +1,33 @@
+id: rev-install-script
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the Windows developer setup script."
+  diff: |
+    diff --git a/tools/setup.ps1 b/tools/setup.ps1
+    --- a/tools/setup.ps1
+    +++ b/tools/setup.ps1
+    @@ -5,7 +5,6 @@ param([string]$Version = "1.4.2")
+     $ErrorActionPreference = "Stop"
+    -$toolDir = Join-Path $env:LOCALAPPDATA "acme\tool"
+    +$toolDir = "$env:HOME\.acme\tool"
+     New-Item -ItemType Directory -Force -Path $toolDir | Out-Null
+    -$zip = Join-Path $toolDir "tool.zip"
+    -Invoke-WebRequest "https://downloads.acme.example/tool/$Version/tool.zip" -OutFile $zip
+    -Expand-Archive $zip -DestinationPath $toolDir -Force
+    +$installer = Invoke-WebRequest "https://downloads.acme.example/tool/$Version/install.ps1"
+    +Invoke-Expression $installer.Content
+     Write-Host "Installed tool $Version to $toolDir"
+expected:
+  seeded_defects:
+    - file: tools/setup.ps1
+      lines: [9, 9]
+      category: security
+      note: "downloaded code is executed with Invoke-Expression with no hash or signature check; the previous zip flow should verify a pinned SHA-256"
+    - file: tools/setup.ps1
+      lines: [6, 6]
+      category: portability
+      note: "$env:HOME is not set on most Windows machines, so the tool lands in '\\.acme\\tool' at the drive root; use $env:LOCALAPPDATA or $HOME"
+tags: [powershell, windows, security]

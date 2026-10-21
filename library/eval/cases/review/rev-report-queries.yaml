@@ -1,0 +1,31 @@
+id: rev-report-queries
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the overdue invoices report."
+  diff: |
+    diff --git a/billing/reports.py b/billing/reports.py
+    --- a/billing/reports.py
+    +++ b/billing/reports.py
+    @@ -40,2 +40,6 @@ def overdue_report(account_ids):
+    -    invoices = Invoice.objects.filter(account_id__in=account_ids, status="open")
+    -    return [row(i) for i in invoices.select_related("account")]
+    +    rows = []
+    +    for account_id in account_ids:
+    +        for invoice in Invoice.objects.filter(account_id=account_id, status="open"):
+    +            if invoice.due_date < datetime.now():
+    +                rows.append(row(invoice))
+    +    return rows
+expected:
+  seeded_defects:
+    - file: billing/reports.py
+      lines: [42, 42]
+      category: performance
+      note: "one query per account, and row() reads invoice.account lazily: N+1 queries where one select_related query did the work"
+    - file: billing/reports.py
+      lines: [43, 43]
+      category: logic
+      note: "due_date is a date and datetime.now() a naive local datetime: comparing them raises TypeError (and local time misjudges 'overdue' near midnight)"
+tags: [python, performance]

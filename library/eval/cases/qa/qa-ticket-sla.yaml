@@ -1,0 +1,48 @@
+id: qa-ticket-sla
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the support SLA work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Tickets track SLAs in business hours with warnings before a breach."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Timers count business hours."
+          acceptance_criteria:
+            - "WHEN a ticket is created outside business hours THE system SHALL start its timer at the next business hour."
+            - "WHEN a ticket waits for the customer THE system SHALL pause its timer."
+        - id: REQ-2
+          statement: "Breaches are seen before they happen."
+          acceptance_criteria:
+            - "WHEN 80 percent of an SLA has elapsed THE system SHALL warn the team lead."
+            - "WHEN an SLA is breached THE system SHALL mark the ticket and include it in the weekly report."
+      ---
+      # Requirements: support SLAs
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "SLA timers, warnings and the weekly report."
+      files_changed: [sla/clock.py, sla/jobs.py, reports/weekly.py]
+      tests_run: {passed: 132, failed: 0, skipped: 0}
+      ---
+      # Development report: support SLAs
+
+      ## What changed
+      The SLA clock uses the team's business-hours calendar: a ticket created at night starts
+      counting at the next opening time. A scheduled job warns the team lead at 80 percent
+      and marks breached tickets, which the weekly report lists.
+
+      ## Waiting on customer
+      The status "waiting on customer" is shown on the ticket; the clock keeps running in
+      that status so that the SLA reflects the customer's real wait.
+expected:
+  failing_criteria: [REQ-1.2]
+tags: [support]

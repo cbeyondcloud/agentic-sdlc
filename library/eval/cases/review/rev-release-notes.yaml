@@ -1,0 +1,28 @@
+id: rev-release-notes
+agent: code-review
+case_class: review
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the release-notes script developers run locally."
+  diff: |
+    diff --git a/scripts/release-notes.sh b/scripts/release-notes.sh
+    --- a/scripts/release-notes.sh
+    +++ b/scripts/release-notes.sh
+    @@ -3,3 +3,3 @@ set -euo pipefail
+    -ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+    +ROOT="$(dirname "$(readlink -f "$0")")/.."
+     VERSION="$1"
+    -perl -pi -e "s/^## Unreleased/## $VERSION/" "$ROOT/CHANGELOG.md"
+    +sed -i "s/^## Unreleased/## $VERSION/" "$ROOT/CHANGELOG.md"
+expected:
+  seeded_defects:
+    - file: scripts/release-notes.sh
+      lines: [3, 3]
+      category: portability
+      note: "readlink -f is missing from older macOS releases' BSD readlink"
+    - file: scripts/release-notes.sh
+      lines: [5, 5]
+      category: portability
+      note: "BSD sed on macOS needs an argument after -i: this treats the expression as a backup suffix and fails"
+tags: [bash, macos]

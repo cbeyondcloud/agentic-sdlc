@@ -1,0 +1,19 @@
+id: ba-audit-export
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Auditors download the admin audit log as CSV and open it in Excel on Windows, where
+    names with accents come out garbled and long exports time out. Write the requirements
+    for a reliable audit log export.
+expected:
+  key_points:
+    - "the CSV opens correctly in Excel on Windows (UTF-8 with a byte order mark, CRLF)"
+    - "exports run as a background job for large date ranges"
+    - "the export is filtered by date range, actor and action"
+    - "cells that start with = + - or @ are escaped against formula injection"
+    - "every export is itself recorded in the audit log"
+rubric: ba-requirements
+tags: [compliance, windows, encoding]

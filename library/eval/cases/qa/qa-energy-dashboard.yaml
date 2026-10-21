@@ -1,0 +1,38 @@
+id: qa-energy-dashboard
+agent: qa
+case_class: qa
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the usage dashboard work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Households see hourly electricity use and compare periods."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "Usage is shown honestly."
+          acceptance_criteria:
+            - "WHEN meter readings are missing for an hour THE system SHALL show a gap."
+            - "WHEN a period is selected THE system SHALL show the same period last month."
+      ---
+      # Requirements: usage dashboard
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Hourly chart with a last-month comparison."
+      files_changed: [dashboard/usage.py, web/UsageChart.tsx]
+      tests_run: {passed: 31, failed: 0, skipped: 0}
+      ---
+      # Development report: usage dashboard
+
+      ## What changed
+      Readings are summed into hourly buckets; an hour with no readings is plotted as 0 kWh so
+      the line stays continuous. A toggle overlays the same period of the previous month.
+expected:
+  failing_criteria: [REQ-1.1]
+tags: [utilities]

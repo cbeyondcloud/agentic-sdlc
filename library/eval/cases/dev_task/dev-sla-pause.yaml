@@ -1,0 +1,20 @@
+id: dev-sla-pause
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    elapsed_minutes() counts the whole time a ticket is open, but the SLA clock
+    must stop while the ticket waits for the customer. The events list already records
+    'waiting' and 'resumed'. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-sla-pause
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_sla.py::test_waiting_time_is_not_counted"
+      - "tests/test_sla.py::test_still_waiting"
+    pass_to_pass:
+      - "tests/test_sla.py::test_open_ticket_counts_all_time"
+  solution: solutions/dev-sla-pause
+tags: [python, support]

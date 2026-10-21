@@ -1,0 +1,33 @@
+id: design-shipment-eta
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the delivery estimates described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Customers see a live delivery estimate and get an email when it slips by a day."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Carrier events update one shipment status and estimate."
+          acceptance_criteria:
+            - "WHEN a scan event arrives from any supported carrier THE system SHALL map it to the common status model within one minute."
+            - "WHEN an event is older than the latest applied event THE system SHALL record it without changing the status."
+        - id: REQ-2
+          statement: "Customers are told about large changes."
+          acceptance_criteria:
+            - "WHEN the estimate moves by more than 24 hours THE system SHALL email the customer once."
+      ---
+      # Requirements: delivery estimates
+expected:
+  key_points:
+    - "one adapter per carrier behind a common interface; adding a carrier adds an adapter"
+    - "events are idempotent by carrier event id and ordered by event time"
+    - "the estimate is recomputed from the latest status and lane statistics"
+    - "notification decisions are deduplicated so a flapping estimate sends one email"
+rubric: design
+tags: [logistics, integrations]

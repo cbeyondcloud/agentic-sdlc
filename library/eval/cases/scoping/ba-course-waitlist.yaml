@@ -1,0 +1,19 @@
+id: ba-course-waitlist
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Popular evening courses fill up in minutes and students email the office to be told
+    when a seat frees. Add a waitlist: when someone drops out, the next student gets the
+    seat offer. Write the requirements.
+expected:
+  key_points:
+    - "students join a waitlist when a course is full and see their position"
+    - "a freed seat is offered to the first student in order"
+    - "the offer expires after a set time and passes to the next student"
+    - "a student cannot hold more than one offer for overlapping courses"
+    - "the office can see and reorder the waitlist with a recorded reason"
+rubric: ba-requirements
+tags: [education]

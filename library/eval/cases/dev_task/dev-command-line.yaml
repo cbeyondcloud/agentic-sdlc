@@ -1,0 +1,20 @@
+id: dev-command-line
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    command_line() is shown to users so they can copy a command into their shell.
+    Arguments with spaces or quotes come out broken. Quote for cmd/PowerShell-style
+    parsing on Windows and for POSIX shells elsewhere. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-command-line
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_shellcmd.py::test_posix_quoting"
+      - "tests/test_shellcmd.py::test_windows_quoting"
+    pass_to_pass:
+      - "tests/test_shellcmd.py::test_simple_arguments_are_unchanged"
+  solution: solutions/dev-command-line
+tags: [python, windows, shell]

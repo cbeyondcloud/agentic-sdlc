@@ -1,0 +1,19 @@
+id: dev-sensor-debounce
+agent: developer
+case_class: dev_task
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    should_alert() must alert only after `needed` consecutive readings above the
+    threshold, but a single normal reading in between does not reset the count, so a door
+    opened twice an hour raises an alert. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-sensor-debounce
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_alerts.py::test_interrupted_breaches_do_not_alert"
+    pass_to_pass:
+      - "tests/test_alerts.py::test_sustained_breach_alerts"
+  solution: solutions/dev-sensor-debounce
+tags: [python, iot]

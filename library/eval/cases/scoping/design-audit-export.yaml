@@ -1,0 +1,32 @@
+id: design-audit-export
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the audit log export described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Auditors export the audit log as a CSV that Excel opens correctly."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "The file opens correctly in spreadsheet tools."
+          acceptance_criteria:
+            - "WHEN an export is generated THE system SHALL write UTF-8 with a byte order mark and CRLF line endings."
+            - "WHEN a cell value starts with =, +, - or @ THE system SHALL prefix it with an apostrophe."
+        - id: REQ-2
+          statement: "Large exports finish."
+          acceptance_criteria:
+            - "WHEN the date range holds more than 50,000 events THE system SHALL run the export as a background job and email a link."
+      ---
+      # Requirements: audit log export
+expected:
+  key_points:
+    - "rows are streamed from a cursor so memory stays flat"
+    - "one CSV writer configuration (BOM, CRLF, quoting, formula escaping) is shared"
+    - "the download link is short-lived and the export itself is audited"
+rubric: design
+tags: [compliance, windows, encoding]

@@ -1,0 +1,19 @@
+id: ba-leave-requests
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Employees request leave by emailing their manager, and HR re-types it into payroll.
+    Build a leave request flow: request, manager approval, and the balance updated
+    automatically. Write the requirements.
+expected:
+  key_points:
+    - "an employee sees their remaining balance per leave type before requesting"
+    - "the manager approves or rejects with a reason; the employee is notified"
+    - "approved leave reduces the balance and is visible to payroll"
+    - "requests that exceed the balance or overlap existing leave are refused"
+    - "a deputy can approve when the manager is away"
+rubric: ba-requirements
+tags: [hr]

@@ -1,0 +1,32 @@
+id: design-feature-rollout
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the percentage rollouts described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Features roll out to a stable percentage of users with an instant kill switch."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Rollouts are stable per user."
+          acceptance_criteria:
+            - "WHEN a flag is at N percent THE system SHALL enable it for the same users on every evaluation."
+            - "WHEN the percentage rises THE system SHALL keep it enabled for users who already had it."
+        - id: REQ-2
+          statement: "Flags can be killed fast."
+          acceptance_criteria:
+            - "WHEN a kill switch is used THE system SHALL return off for the flag within 10 seconds in every service."
+      ---
+      # Requirements: percentage rollouts
+expected:
+  key_points:
+    - "bucketing hashes the flag key and user id so buckets are stable and independent"
+    - "services evaluate locally from a cached rule set pushed or polled from the service"
+    - "the kill switch bypasses the normal cache interval"
+rubric: design
+tags: [platform]

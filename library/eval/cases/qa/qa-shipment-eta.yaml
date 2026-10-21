@@ -1,0 +1,55 @@
+id: qa-shipment-eta
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the delivery estimate work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Customers see a live delivery estimate and are told when it slips."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Carrier events update the shipment."
+          acceptance_criteria:
+            - "WHEN a scan event arrives from any of the three carriers THE system SHALL update the shipment status within one minute."
+            - "WHEN an event is older than the latest applied event THE system SHALL not change the status."
+        - id: REQ-2
+          statement: "Customers see the estimate."
+          acceptance_criteria:
+            - "WHEN a customer opens the order page THE system SHALL show the estimate and when it was last updated."
+        - id: REQ-3
+          statement: "Customers are told about large changes."
+          acceptance_criteria:
+            - "WHEN the estimate moves by more than 24 hours THE system SHALL email the customer once."
+      ---
+      # Requirements: delivery estimates
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Carrier adapters, status model and estimate display."
+      files_changed: [shipping/adapters/, shipping/status.py, web/order_page.tsx, shipping/notify.py]
+      tests_run: {passed: 97, failed: 0, skipped: 0}
+      deviations_from_design:
+        - "Only the two carriers with webhooks are integrated; the third carrier's polling adapter is left for the next sprint."
+      ---
+      # Development report: delivery estimates
+
+      ## What changed
+      Webhook adapters for two carriers map scan events to the common status model; events are
+      applied in the order they arrive. The order page shows the estimate and its update time.
+
+      ## Notifications
+      When a recomputed estimate differs from the previous one by more than 24 hours, an email
+      is queued. Each recomputation compares with the value just before it.
+
+      ## Known limits
+      Events are not deduplicated by carrier event id yet.
+expected:
+  failing_criteria: [REQ-1.1, REQ-1.2, REQ-3.1]
+tags: [logistics, integrations]

@@ -1,0 +1,17 @@
+id: ba-energy-dashboard
+agent: business-analyst
+case_class: scoping
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Households with smart meters want to see their electricity use by hour and compare it
+    with last month. Write the requirements for a usage dashboard.
+expected:
+  key_points:
+    - "hourly usage for a chosen day, week or month"
+    - "comparison with the same period last month"
+    - "readings missing from the meter are shown as gaps, not zero"
+    - "the household's tariff turns usage into an estimated cost"
+rubric: ba-requirements
+tags: [utilities]

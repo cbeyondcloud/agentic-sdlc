@@ -1,0 +1,38 @@
+id: rev-retry-backoff
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change, which adds exponential backoff to the HTTP client retries."
+  diff: |
+    diff --git a/client/src/main/java/com/acme/client/RetryPolicy.java b/client/src/main/java/com/acme/client/RetryPolicy.java
+    --- a/client/src/main/java/com/acme/client/RetryPolicy.java
+    +++ b/client/src/main/java/com/acme/client/RetryPolicy.java
+    @@ -30,10 +30,14 @@ public final class RetryPolicy {
+         public <T> T call(Callable<T> action) throws Exception {
+             for (int attempt = 0; ; attempt++) {
+                 try {
+                     return action.call();
+                 } catch (IOException e) {
+                     if (attempt >= maxAttempts) throw e;
+    -                Thread.sleep(baseDelayMs);
+    +                long delay = baseDelayMs << attempt;
+    +                try {
+    +                    Thread.sleep(delay);
+    +                } catch (InterruptedException ignored) {
+    +                }
+                 }
+             }
+         }
+expected:
+  seeded_defects:
+    - file: client/src/main/java/com/acme/client/RetryPolicy.java
+      lines: [36, 36]
+      category: logic
+      note: "the shift is uncapped: after enough attempts the delay overflows to a negative or huge value; no maximum delay or jitter"
+    - file: client/src/main/java/com/acme/client/RetryPolicy.java
+      lines: [39, 39]
+      category: concurrency
+      note: "the interrupt is swallowed without restoring the flag: a shutting-down executor keeps retrying"
+tags: [java, concurrency]

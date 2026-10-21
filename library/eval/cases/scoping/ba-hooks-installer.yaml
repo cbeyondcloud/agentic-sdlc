@@ -1,0 +1,19 @@
+id: ba-hooks-installer
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Every repository has its own instructions for installing git hooks, and half of them
+    only work in bash. We want one installer that works from PowerShell on Windows and
+    from zsh or bash on macOS and Linux. Write the requirements.
+expected:
+  key_points:
+    - "the installer runs from PowerShell, bash and zsh with the same result"
+    - "hooks run with Git for Windows' bash or a native script, never assuming /bin/sh paths"
+    - "existing hooks are kept (chained), not overwritten"
+    - "line endings of hook scripts do not break them on any OS"
+    - "uninstall restores the previous hooks"
+rubric: ba-requirements
+tags: [developer-tools, windows, shell]

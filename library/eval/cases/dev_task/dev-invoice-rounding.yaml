@@ -1,0 +1,19 @@
+id: dev-invoice-rounding
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Invoice line totals are rounded with round(), which rounds half to even and
+    works on floats, so 2.675 becomes 2.67. Finance wants half-up rounding to cents on
+    exact decimal amounts. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-invoice-rounding
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_invoice.py::test_half_cents_round_up"
+    pass_to_pass:
+      - "tests/test_invoice.py::test_plain_totals"
+  solution: solutions/dev-invoice-rounding
+tags: [python, billing]

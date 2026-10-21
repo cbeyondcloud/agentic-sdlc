@@ -1,0 +1,20 @@
+id: dev-env-file
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    The .env loader splits on every '=', so DATABASE_URL=postgres://u:p@h/db?x=1
+    loses its query, and quoted values keep their quotes. Fix both; comments and blank
+    lines are already skipped. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-env-file
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_dotenv_lite.py::test_values_may_contain_equals"
+      - "tests/test_dotenv_lite.py::test_quotes_are_removed"
+    pass_to_pass:
+      - "tests/test_dotenv_lite.py::test_simple_values_and_comments"
+  solution: solutions/dev-env-file
+tags: [python, developer-tools]

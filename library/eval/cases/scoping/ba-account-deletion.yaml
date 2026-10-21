@@ -1,0 +1,18 @@
+id: ba-account-deletion
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Under GDPR, users may ask us to delete their account and personal data. Today support
+    does it by hand across five systems. Write the requirements for self-service deletion.
+expected:
+  key_points:
+    - "the user confirms the request and is told what is deleted and what is retained"
+    - "deletion completes in every system within 30 days"
+    - "data we must keep by law (invoices) is retained but detached from the profile"
+    - "a grace period lets the user cancel the deletion"
+    - "the deletion is provable (a record without personal data)"
+rubric: ba-requirements
+tags: [privacy, compliance]

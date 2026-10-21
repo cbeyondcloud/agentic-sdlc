@@ -1,0 +1,19 @@
+id: dev-version-compare
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    The update checker says 1.9.0 is newer than 1.10.0 because it compares version
+    strings. Compare numerically; a pre-release such as 2.0.0-rc1 is older than 2.0.0. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-version-compare
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_versions.py::test_numeric_components"
+      - "tests/test_versions.py::test_pre_releases_are_older"
+    pass_to_pass:
+      - "tests/test_versions.py::test_simple_ordering"
+  solution: solutions/dev-version-compare
+tags: [python, developer-tools]

@@ -1,0 +1,37 @@
+id: rev-csv-reader
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the meter-readings CSV import."
+  diff: |
+    diff --git a/src/import.rs b/src/import.rs
+    --- a/src/import.rs
+    +++ b/src/import.rs
+    @@ -8,3 +8,13 @@ use crate::model::Reading;
+     pub fn parse_readings(text: &str) -> Vec<Reading> {
+    -    Vec::new()
+    +    text.split('\n')
+    +        .skip(1)
+    +        .filter(|line| !line.is_empty())
+    +        .map(|line| {
+    +            let cols: Vec<&str> = line.split(',').collect();
+    +            Reading {
+    +                meter: cols[0].to_string(),
+    +                kwh: cols[2].parse::<f64>().unwrap(),
+    +            }
+    +        })
+    +        .collect()
+     }
+expected:
+  seeded_defects:
+    - file: src/import.rs
+      lines: [9, 9]
+      category: portability
+      note: "splitting on '\\n' leaves '\\r' on every field of a CRLF file exported on Windows; use lines()"
+    - file: src/import.rs
+      lines: [15, 16]
+      category: error-handling
+      note: "a short row or a non-numeric value panics (index out of bounds, unwrap) and aborts the whole import"
+tags: [rust, crlf]

@@ -48,8 +48,17 @@ addopts = "-q"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-# Documentation folders contain Markdown with code snippets; never lint them.
-extend-exclude = ["docs", "reports", "research_notes", "spikes"]
+# Documentation folders contain Markdown with code snippets; never lint them. The eval
+# corpus's workspaces and reference solutions are data - code with seeded bugs, hashed into
+# library/eval/manifest.json - so neither the linter nor the formatter may touch them.
+extend-exclude = [
+  "docs",
+  "reports",
+  "research_notes",
+  "spikes",
+  "library/eval/workspaces",
+  "library/eval/solutions",
+]
 force-exclude = true  # honour the excludes when pre-commit passes file names
 
 [tool.ruff.lint]

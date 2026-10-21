@@ -1,0 +1,19 @@
+id: ba-shipment-eta
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Customers keep calling to ask where their parcel is. We receive scan events from three
+    carriers. Show customers a live estimated delivery time on the order page and email
+    them when it changes by more than a day. Write the requirements.
+expected:
+  key_points:
+    - "carrier scan events from all three carriers are normalised to one status model"
+    - "the estimate and its last update time are shown on the order page"
+    - "an email goes out only when the estimate moves by more than a day"
+    - "late, duplicate or out-of-order scan events do not move the status backwards"
+    - "an order with no scan for a set period is flagged for the support team"
+rubric: ba-requirements
+tags: [logistics, integrations]

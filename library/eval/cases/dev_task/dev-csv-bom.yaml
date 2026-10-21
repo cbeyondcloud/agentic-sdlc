@@ -1,0 +1,19 @@
+id: dev-csv-bom
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Price lists exported from Excel on Windows start with a UTF-8 byte order mark,
+    so the first column is read as '\ufeffsku' and every row is rejected. Read files with
+    or without a BOM, and CRLF line endings. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-csv-bom
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_pricelist.py::test_excel_bom_and_crlf"
+    pass_to_pass:
+      - "tests/test_pricelist.py::test_plain_utf8"
+  solution: solutions/dev-csv-bom
+tags: [python, windows, encoding]

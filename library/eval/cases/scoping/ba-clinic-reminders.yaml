@@ -1,0 +1,19 @@
+id: ba-clinic-reminders
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Patients of our outpatient clinics miss about one appointment in eight. The clinics
+    want automatic reminders before each appointment, by text message or email, in the
+    patient's own language. Write the requirements.
+expected:
+  key_points:
+    - "reminders go out a configurable time before the appointment (e.g. 48 and 2 hours)"
+    - "the patient chooses the channel and can opt out at any time"
+    - "reminder times follow the clinic's time zone, including daylight saving changes"
+    - "no clinical detail appears in the message (privacy)"
+    - "a cancelled or moved appointment cancels or reschedules its pending reminders"
+rubric: ba-requirements
+tags: [health, notifications]

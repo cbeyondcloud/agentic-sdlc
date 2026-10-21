@@ -1,0 +1,19 @@
+id: ba-pickup-slots
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Shoppers can buy online and collect in store, but stores get crowded at lunch time.
+    Let shoppers choose a 30-minute collection slot at checkout, with a limit per slot
+    set by each store. Write the requirements.
+expected:
+  key_points:
+    - "each store sets slot length, opening hours and orders per slot"
+    - "checkout shows only slots with capacity, in the store's local time"
+    - "a slot is held while the shopper pays and released if payment fails"
+    - "staff see the orders per slot to prepare them in time"
+    - "shoppers can change their slot until a cut-off"
+rubric: ba-requirements
+tags: [retail]

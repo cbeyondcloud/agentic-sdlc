@@ -45,7 +45,7 @@
     "ba-reset-limits",
     "ba-webhook-retries"
   ],
-  "corpus_manifest_sha": "sha256:381f9d83224a489293b28e7fd4af5cd7879c0f83f87edd3b4a8c5aa919a17739",
+  "corpus_manifest_sha": "sha256:523778543577edb59d60e082e7fc8754446ce49b1852966c50ce75011d425e61",
   "cost_total_usd": 0.021,
   "cost_unmeasured_runs": 0,
   "judge": {

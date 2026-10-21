@@ -1,0 +1,26 @@
+id: rev-memo-cache
+agent: code-review
+case_class: review
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change, which caches exchange-rate lookups."
+  diff: |
+    diff --git a/pricing/rates.py b/pricing/rates.py
+    --- a/pricing/rates.py
+    +++ b/pricing/rates.py
+    @@ -4,2 +4,5 @@ import time
+    -def rate(currency: str) -> Decimal:
+    -    return fetch_rate(currency)
+    +def rate(currency: str, _cache: dict = {}) -> Decimal:
+    +    if currency in _cache:
+    +        return _cache[currency]
+    +    _cache[currency] = fetch_rate(currency)
+    +    return _cache[currency]
+expected:
+  seeded_defects:
+    - file: pricing/rates.py
+      lines: [6, 6]
+      category: logic
+      note: "cached rates never expire: the process keeps the first rate it saw for its whole life (the import of time suggests a TTL was meant)"
+tags: [python]

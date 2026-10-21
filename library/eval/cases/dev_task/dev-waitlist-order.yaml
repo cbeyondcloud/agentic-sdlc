@@ -1,0 +1,18 @@
+id: dev-waitlist-order
+agent: developer
+case_class: dev_task
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    next_student() should offer a freed seat to whoever joined the waitlist first,
+    but it offers it to the most recent student. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-waitlist-order
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_waitlist.py::test_first_come_first_served"
+    pass_to_pass:
+      - "tests/test_waitlist.py::test_empty_waitlist"
+  solution: solutions/dev-waitlist-order
+tags: [python, education]

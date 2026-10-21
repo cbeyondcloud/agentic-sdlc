@@ -1,0 +1,17 @@
+id: ba-timesheet-reminders
+agent: business-analyst
+case_class: scoping
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Contractors forget to submit timesheets on Friday, which delays invoicing. Write the
+    requirements for reminders and a manager overview.
+expected:
+  key_points:
+    - "a reminder on the last working day of the week if the timesheet is not submitted"
+    - "a second reminder the next working day"
+    - "managers see who has not submitted"
+    - "people on approved leave are not reminded"
+rubric: ba-requirements
+tags: [hr, notifications]

@@ -1,0 +1,46 @@
+id: qa-expense-receipts
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the expense receipts work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Employees attach receipts to expense claims."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Receipts are required by policy."
+          acceptance_criteria:
+            - "WHEN a claim line above the receipt threshold has no receipt THE system SHALL refuse to submit the claim."
+            - "WHEN the same receipt is attached to two claims THE system SHALL flag both for finance."
+        - id: REQ-2
+          statement: "Uploads are bounded."
+          acceptance_criteria:
+            - "WHEN a file is larger than 10 MB THE system SHALL refuse it with the reason."
+            - "WHEN a file is not an image or a PDF THE system SHALL refuse it with the reason."
+      ---
+      # Requirements: expense receipts
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Receipt upload, policy check and duplicate detection."
+      files_changed: [expenses/receipts.py, expenses/policy.py, web/ReceiptUpload.tsx]
+      tests_run: {passed: 90, failed: 0, skipped: 0}
+      deviations_from_design:
+        - "Duplicate detection compares file names within one claim."
+      ---
+      # Development report: expense receipts
+
+      ## What changed
+      Claims cannot be submitted while a line above the threshold lacks a receipt. Uploads
+      larger than 10 MB are refused with "file too large (limit 10 MB)". The file picker
+      offers images and PDFs; the server stores whatever is uploaded.
+expected:
+  failing_criteria: [REQ-1.2, REQ-2.2]
+tags: [finance]

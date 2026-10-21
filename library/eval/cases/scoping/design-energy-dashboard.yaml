@@ -1,0 +1,28 @@
+id: design-energy-dashboard
+agent: design
+case_class: scoping
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the usage dashboard described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Households see hourly electricity use and compare periods."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "Usage is shown honestly."
+          acceptance_criteria:
+            - "WHEN meter readings are missing for an hour THE system SHALL show a gap."
+            - "WHEN a period is selected THE system SHALL show the same period last month."
+      ---
+      # Requirements: usage dashboard
+expected:
+  key_points:
+    - "readings are aggregated into hourly buckets in the household's time zone"
+    - "missing data is represented explicitly rather than as zero"
+    - "cost estimates use the tariff in force at each reading time"
+rubric: design
+tags: [utilities]

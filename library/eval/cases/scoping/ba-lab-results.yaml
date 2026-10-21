@@ -1,0 +1,18 @@
+id: ba-lab-results
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Patients want to see their lab results online. Clinicians want a chance to call the
+    patient first for serious results. Write the requirements for the results portal.
+expected:
+  key_points:
+    - "results are released to the patient after a delay unless a clinician releases early"
+    - "results flagged critical are held until a clinician releases them"
+    - "patients see reference ranges and plain-language explanations"
+    - "access is logged and visible to the patient"
+    - "a proxy (parent of a minor) sees only what policy allows"
+rubric: ba-requirements
+tags: [health, privacy]
