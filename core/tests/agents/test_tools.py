@@ -5,6 +5,7 @@ commons adapter) with the REAL SP2 guard - not paths a test assembled by hand.
 """
 
 import asyncio
+import logging
 import os
 import subprocess
 import sys
@@ -284,6 +285,37 @@ def test_a_shell_command_runs_in_the_tree(tree, resolved):
 
     assert f"ran in {tree[1].name}" in call(tools, "run_shell", command="pytest -q")
     assert sandbox.ran == ["pytest -q"]
+
+
+class PytestSandbox(FakeSandbox):
+    async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
+        self.ran.append(command)
+        out = "....F\nFAILED tests/test_split.py::test_first\n1 failed, 4 passed in 0.12s\n\n"
+        return ShellResult(exit_code=1, stdout=out, stderr="", timed_out=False)
+
+
+def test_each_tool_call_is_logged_for_the_step_without_file_contents(
+    tree, resolved, caplog
+):  # M1-68: `agentic logs` must show what an agent did, e.g. the tests QA ran
+    caplog.set_level(logging.INFO, logger="agentic.tools")
+    tools = build_tools(
+        agent_with(resolved, ["edit_files", "run_shell"]),
+        context(tree, resolved, sandbox=PytestSandbox()),
+    )
+    call(tools, "write_file", path="src/new.py", text="BODY_NOT_LOGGED = 1\n")
+    call(tools, "run_shell", command="pytest -q")
+    call(tools, "run_shell", command="git push origin main")
+
+    records = [r for r in caplog.records if r.name == "agentic.tools"]
+    assert [r.getMessage() for r in records] == [
+        "tool write_file: ok",
+        "tool run_shell: exit 1 - 1 failed, 4 passed in 0.12s",
+        "tool run_shell: refused",
+    ]
+    assert records[0].fields == {"tool": "write_file", "path": "src/new.py", "text": "<20 chars>"}
+    assert records[1].fields == {"tool": "run_shell", "command": "pytest -q"}
+    assert "push" in records[2].fields["refused"]
+    assert "BODY_NOT_LOGGED" not in caplog.text
 
 
 def test_the_shell_needs_an_isolated_sandbox_unless_allowed(tree, resolved):
