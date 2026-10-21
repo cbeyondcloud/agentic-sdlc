@@ -126,6 +126,23 @@ def test_a_recorded_policy_inside_the_repository_is_ignored(repo, tmp_path):
     assert Workspace.load(repo, env={}, home=home).policy_repo == home / "policy" / "standalone"
 
 
+def test_a_recorded_policy_that_is_gone_is_refused_not_replaced(repo, tmp_path):
+    """A custom policy moved, deleted or on an unplugged drive must not be swapped for
+    the standalone template without a word: the person believes theirs applies."""
+    home = tmp_path / "home"
+    (home / "policy" / "standalone" / "policy").mkdir(parents=True)
+    gone = tmp_path / "my-strict-policy"
+    for recorded in (gone, gone / "policy"):
+        record_init(repo, str(recorded))
+        with pytest.raises(CliError) as caught:
+            Workspace.load(repo, env={}, home=home).policy()
+        assert caught.value.code == ExitCode.REFUSED
+        assert str(gone) in str(caught.value)
+        assert "agentic init --standalone --policy" in caught.value.hint
+    (gone / "policy").mkdir(parents=True)  # back again (the drive is plugged in)
+    assert Workspace.load(repo, env={}, home=home).policy_repo == gone
+
+
 def test_an_org_init_record_is_not_a_local_policy(repo, tmp_path):
     home = tmp_path / "home"
     record_init(repo, "https://github.com/acme/agentic-org-policy.git", mode="org")

@@ -8,7 +8,8 @@ repo, the team and the person.
                    config's `policy_repo` is then where init fetches it from, often a
                    URL); else the config's local `policy` or `policy_repo` folder; else
                    the policy `init --standalone [--policy X]` recorded for this repo in
-                   `.agentic/local/init.json` (only a folder outside the repo); else the
+                   `.agentic/local/init.json` (only a folder outside the repo; refused,
+                   never replaced, when that folder is gone); else the
                    standalone `.agentic/local/policy/`, else `~/.agentic/policy/standalone/`;
                    its `policy/` folder is the org policy, its root the org layer of
                    agents and pipelines, `teams/<team>/` the team layer;
@@ -122,7 +123,16 @@ class Workspace:
             # an org user never gets a personal policy (no org governance) in its place,
             # silently: the org policy is reported missing (review F3)
             return cached / "repo"
-        if recorded is not None and (root := _outside_policy_root(recorded, self.repo)):
+        if recorded is not None and (root := recorded_root(recorded, self.repo)):
+            if not (root / "policy").is_dir():
+                # never the template in its place, silently: the person chose this one
+                raise CliError(
+                    f"the policy recorded for this repository is gone: {root} has no "
+                    "policy/ folder",
+                    ExitCode.REFUSED,
+                    hint="restore it (or reconnect its drive), or choose a policy with "
+                    "`agentic init --standalone --policy <folder>`",
+                )
             return root
         if (self.repo / STANDALONE_POLICY).is_dir():
             return self.repo / STANDALONE_POLICY
@@ -204,17 +214,18 @@ def recorded_policy(repo: Path) -> Path | None:
     return Path(source.strip()).expanduser()
 
 
-def _outside_policy_root(path: Path, repo: Path) -> Path | None:
-    """The policy repo root `path` names (the root, or its `policy/` folder), when it is
-    an absolute folder outside `repo`."""
+def recorded_root(path: Path, repo: Path) -> Path | None:
+    """The policy repo root a recorded `path` names (the root, or its `policy/` folder),
+    when it is absolute and outside `repo`; None otherwise (a repo never chooses its own
+    policy). The folder may be gone since: callers check."""
     if not path.is_absolute():
         return None
     root = path.parent if path.name == "policy" and not (path / "policy").is_dir() else path
     try:
         resolved, top = root.resolve(), repo.resolve()
     except OSError:
-        return None
-    if resolved == top or top in resolved.parents or not (root / "policy").is_dir():
+        return root  # cannot be followed: reported as gone, never silently replaced
+    if resolved == top or top in resolved.parents:
         return None
     return root
 
