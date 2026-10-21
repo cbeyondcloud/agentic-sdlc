@@ -25,11 +25,12 @@ import asyncio
 import time
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from agentic.engine.state import RunState, RunStateError
+from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
 from agentic_cli.driving import (
     drive,
@@ -65,6 +66,8 @@ def register(app: typer.Typer) -> None:
         """Run a pipeline (or show what it would do, with --dry-run)."""
         out: Output = ctx.obj
         given = _inputs(inputs or [])
+        if run_id is not None:
+            _check_run_id(run_id)  # before the workspace, preflight and gateway (DF-219)
         rt = Runtime(Workspace.load())
         if dry_run:
             report = rt.preflight(pipeline, live=False)
@@ -86,6 +89,8 @@ def register(app: typer.Typer) -> None:
             )
         engine = rt.engine(run_budget_usd=limit, regime=rt.pipeline(pipeline).regime)
         run_id = run_id or new_run_id(pipeline)
+        # a live run prints nothing until it stops: name it now, for a Ctrl-C (DF-221)
+        out.progress(f"started run {run_id} (if interrupted: agentic resume {run_id})")
         state = drive(
             rt.redact(gateway),
             rt.store.path(run_id).parent,
@@ -253,6 +258,13 @@ def _usd(text: str | None, flag: str) -> Decimal | None:
     if not amount.is_finite() or amount < 0:
         raise CliError(f"{flag} is an amount in USD, not {text!r}", ExitCode.USAGE)
     return amount
+
+
+def _check_run_id(run_id: str) -> None:
+    try:
+        RunStore(Path(".")).path(run_id)  # the engine's own rule, without touching disk
+    except RunStateError as error:
+        raise CliError(f"--run-id: {error}", ExitCode.USAGE) from error
 
 
 def _load(rt: Runtime, run_id: str) -> RunState:

@@ -111,6 +111,22 @@ def test_a_live_run_without_a_gateway_is_refused(workspace, cli):
     assert result.code == ExitCode.REFUSED and "gateway" in result.err
 
 
+def test_a_bad_run_id_is_a_usage_error_before_anything_else(workspace, cli):
+    """Checked first: no gateway, preflight or skill sync for a typo (DF-219)."""
+    result = cli("run", "deliver", "--input", "request=x", "--run-id", "../escape")
+    assert result.code == ExitCode.USAGE, result.err
+    assert "run id" in result.err and "gateway" not in result.err
+
+
+def test_a_live_run_says_its_id_when_it_starts(workspace, gateway, cli):
+    """After Ctrl-C the person knows which run to resume (DF-221)."""
+    result = cli("run", "deliver", "--input", "request=x", "--run-id", "named-1")
+    started = [line for line in result.err.splitlines() if line.startswith("started run")]
+    assert started and started[0].startswith("started run named-1"), result.err
+    assert "agentic resume named-1" in started[0]
+    assert "started run" not in cli("--json", "status", "named-1").err
+
+
 def test_stop_ends_the_run_and_runs_hides_it(workspace, gateway, cli):
     _, run_id = start(cli)
     stopped = cli("--json", "stop", run_id, "--reason", "not needed")

@@ -91,6 +91,11 @@ class Output:
             self.out.print(text, markup=False, end="")
             self.out.file.flush()
 
+    def progress(self, message: str) -> None:
+        """A note on stderr while a command works (not with --json: the result says it)."""
+        if not self.json_mode:
+            self.err.print(message, markup=False)
+
     def warn(self, message: str) -> None:
         if not self.json_mode:
             self.err.print(f"[yellow]warning:[/yellow] {escape(message)}", markup=True)

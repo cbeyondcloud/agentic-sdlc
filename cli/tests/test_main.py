@@ -22,6 +22,12 @@ def test_the_exit_code_table_is_complete_and_distinct():
     assert all(meaning.strip() for _, meaning in EXIT_CODE_TABLE)
 
 
+def test_exit_4_says_it_covers_every_pause_and_where_to_tell_them_apart():
+    """Exit 4 is a gate, a tool approval, or a step error/policy pause (DF-221)."""
+    meaning = dict(EXIT_CODE_TABLE)[ExitCode.PAUSED]
+    assert "gate" in meaning and "step error" in meaning and "--json" in meaning
+
+
 def test_help_lists_the_registered_commands(capsys):
     assert main(["--help"]) == ExitCode.OK
     shown = capsys.readouterr().out
