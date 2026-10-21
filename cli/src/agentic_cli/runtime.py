@@ -41,7 +41,6 @@ from agentic.engine.preflight import PreflightReport, Problem, preflight
 from agentic.engine.state import RunStore
 from agentic.policy import ResolvedAgent
 from agentic.sandbox.readiness import Readiness, SandboxDecision, decide_sandbox, readiness
-from agentic.security import SecretScanner
 from agentic.skills.catalog import CatalogError, load_catalog
 from agentic.skills.install import sync_skills
 from agentic.skills.loader import InstalledSkills
@@ -51,7 +50,7 @@ from agentic.telemetry.sinks import ForwardingRecorder
 from agentic.transport import CallIdentity
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
-from agentic_cli.wiring import StepWiring
+from agentic_cli.wiring import StepWiring, production_scanner
 from agentic_cli.workspace import Workspace
 from sdlc_commons.gates import ZyrofloGates, regime_block_on
 from sdlc_commons.ledger import RunIdentity, RunLedger
@@ -428,6 +427,7 @@ class Runtime:
             self.ws.repo / STATE,
             skills=library if isinstance(library, InstalledSkills) else None,
             codeintel_for=codeintel_for,
+            scanner=production_scanner(self.ws.policy()),  # tool output, as model calls
         )
 
     def _catalog_root(self) -> Path | None:
@@ -477,7 +477,7 @@ def _native_backend(rt: Runtime, gateway: GatewaySettings):
         fallback_estimate_usd=FALLBACK_ESTIMATE_USD,
         policy_version=policy.version,
         network_transport=network_transport(),
-        scanner_for=lambda step: SecretScanner.from_policy(policy.secret_scan),
+        scanner_for=lambda step: production_scanner(policy),
     )
 
 

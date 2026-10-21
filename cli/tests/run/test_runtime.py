@@ -107,3 +107,15 @@ def test_preflight_reports_skills_missing_from_the_catalog(workspace, policy_rep
     problem = next(p for p in report.problems if p.check == "skills")
     assert "acme/interviewing" in problem.detail and "catalog" in problem.detail
     assert json.dumps(rt.plan("deliver", report))  # the plan is plain JSON
+
+
+def test_steps_scan_tool_output_with_the_org_policy_scanner(workspace, policy_repo):
+    # batch-2 integration: the run command puts the policy scanner (DF-148) on every step's
+    # tools, not the scanner's default
+    org = policy_repo / "policy" / "org.yaml"
+    org.write_text(org.read_text("utf-8") + "secret_scan: { action: mask }\n", "utf-8")
+    rt = Runtime(Workspace.load())
+    policy = rt.ws.policy()
+    decision = runtime.decide_sandbox(runtime.machine_readiness(), "solo", policy.sandbox)
+    wiring = rt._wiring(decision)
+    assert wiring.scanner is not None and wiring.scanner.action == "mask"
