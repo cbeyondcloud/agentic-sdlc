@@ -8,6 +8,7 @@ WHOLE tree is killed - the shell, `srt`, bubblewrap and everything they started
 """
 
 import asyncio
+import logging
 import os
 import re
 import signal
@@ -28,11 +29,20 @@ SECRET_NAME = re.compile(
 )
 # A value carrying a credential, whatever its name: a URL with `user:password@`, or with
 # a long user part (`https://<token>@host`); `ssh://git@host` is a user name, not a secret.
-_URL_CREDENTIAL = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://(?:[^/\s@:]*:[^/\s@]+|[^/\s@:]{20,})@")
+# A scheme starts only where no scheme character precedes it, and the userinfo parts are
+# bounded, so a long value is scanned in linear time (DF-333).
+_URL_CREDENTIAL = re.compile(
+    r"(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]*://"
+    r"(?:[^/\s@:]{0,256}:[^/\s@]{1,4096}|[^/\s@:]{20,4096})@"
+)
 # Windows: `cmd.exe` and CreateProcess search the working folder before PATH unless this
 # is set, so an agent's `pytest.cmd` in the tree would run in place of the real one (DF-68).
 _NO_CWD_SEARCH = "NoDefaultCurrentDirectoryInExePath"
 _ABSOLUTE_ENTRY = re.compile(r"^(?:[/\\]|[A-Za-z]:[/\\]|%)")
+_POSIX_DEFAULT_PATH = ("/usr/local/bin", "/usr/bin", "/bin")
+# Withheld variables whose loss breaks a tool's network or sign-in: named as a warning.
+_NOTICEABLE = frozenset({"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "SSH_AUTH_SOCK"})
+_log = logging.getLogger("agentic.sandbox")
 
 
 @dataclass(frozen=True)
@@ -43,24 +53,69 @@ class ShellResult:
     timed_out: bool
 
 
+_REPORTED: set[str] = set()  # withheld names already logged by this process
+
+
 def secret_value(value: str) -> bool:
     """Whether an environment value carries a credential (a URL with one)."""
     return bool(_URL_CREDENTIAL.search(value))
+
+
+def _withheld(name: str, value: str) -> bool:
+    return bool(SECRET_NAME.search(name)) or secret_value(value)
+
+
+def withheld_names(environ: Mapping[str, str] | None = None) -> list[str]:
+    """The variables `safe_env` leaves out of `environ` (default: this process's), by
+    name only - never a value - for `doctor` and the run log (DF-334)."""
+    source = os.environ if environ is None else environ
+    return sorted(name for name, value in source.items() if _withheld(name, value))
+
+
+def _report(names: list[str]) -> None:
+    """Log the withheld names this process has not logged yet: a developer whose proxy
+    or SSH agent stops working inside a run can see why (values are never logged)."""
+    new = [name for name in names if name not in _REPORTED]
+    if not new:
+        return
+    _REPORTED.update(new)
+    noticeable = any(name.upper() in _NOTICEABLE for name in new)
+    _log.log(
+        logging.WARNING if noticeable else logging.INFO,
+        "withheld from agent commands (a secret name or a credential in the value): %s",
+        ", ".join(new),
+    )
+
+
+def _path_entries(value: str) -> list[str]:
+    """The absolute entries of a PATH value; a quoted entry is judged without its quotes
+    (Windows allows `"C:\\Program Files\\Tool"`, DF-336) and kept as written."""
+    return [e for e in value.split(os.pathsep) if _ABSOLUTE_ENTRY.match(e.strip('"'))]
+
+
+def _default_path(source: Mapping[str, str], windows: bool) -> str:
+    """A PATH of system folders, for a PATH left with no absolute entry: an empty PATH
+    means the current folder - the agent's own tree - to some shells (DF-336)."""
+    if windows:
+        root = next((v for k, v in source.items() if k.upper() == "SYSTEMROOT"), "C:\\Windows")
+        return os.pathsep.join([f"{root}\\System32", root, f"{root}\\System32\\Wbem"])
+    return os.pathsep.join(_POSIX_DEFAULT_PATH)
 
 
 def safe_env(
     environ: Mapping[str, str] | None = None, *, windows: bool | None = None
 ) -> dict[str, str]:
     """The environment for an agent's command: `environ` (default: this process's)
-    without secret-named variables or credential-carrying values, with no relative
-    entry in PATH (a folder the agent can write), and on Windows with the working
-    folder never searched for a program."""
+    without secret-named variables or credential-carrying values (their names are
+    logged once, never their values), with no relative entry in PATH (a folder the agent
+    can write), and on Windows with the working folder never searched for a program."""
     source = os.environ if environ is None else environ
     windows = os.name == "nt" if windows is None else windows
-    env = {k: v for k, v in source.items() if not SECRET_NAME.search(k) and not secret_value(v)}
+    env = {k: v for k, v in source.items() if not _withheld(k, v)}
+    _report(sorted(set(source) - set(env)))
     for name in [k for k in env if k.upper() == "PATH"]:
-        entries = env[name].split(os.pathsep)
-        env[name] = os.pathsep.join(e for e in entries if _ABSOLUTE_ENTRY.match(e))
+        entries = _path_entries(env[name])
+        env[name] = os.pathsep.join(entries) if entries else _default_path(source, windows)
     if windows:
         for name in [k for k in env if k.upper() == _NO_CWD_SEARCH.upper()]:
             del env[name]

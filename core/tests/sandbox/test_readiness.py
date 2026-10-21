@@ -171,6 +171,50 @@ def test_the_windows_guidance_names_the_org_pin():  # DF-67
     assert "0.0.78" not in r.text()
 
 
+def _smoke_says(output: str):
+    def run(argv: list[str]) -> tuple[int, str]:
+        if Path(argv[0]).name == "srt" and argv[1] != "--version":
+            return 1, output
+        return answers()(argv)
+
+    return run
+
+
+def _smoke_fix(r: Readiness) -> str:
+    return next(c.fix for c in r.checks if c.name == "smoke")
+
+
+def test_a_failing_smoke_on_macos_does_not_name_user_namespaces():  # DF-335
+    r = readiness(
+        system="Darwin",
+        kernel_release="24.0",
+        which=present,
+        run=_smoke_says("sandbox-exec: sandbox_apply: Operation not permitted"),
+    )
+    assert "apparmor" not in _smoke_fix(r) and "probe" in _smoke_fix(r)
+
+
+def test_a_failing_smoke_with_bubblewrap_missing_names_the_missing_tools():  # DF-335
+    which = lambda name: None if name == "bwrap" else present(name)  # noqa: E731
+    r = readiness(
+        system="Linux",
+        kernel_release="6.8",
+        which=which,
+        run=_smoke_says("bwrap: command not found"),
+    )
+    assert "apparmor" not in _smoke_fix(r) and "missing" in _smoke_fix(r)
+
+
+def test_a_failing_smoke_on_wsl1_names_wsl2():  # DF-335
+    r = readiness(
+        system="Linux",
+        kernel_release="4.4.0-19041-Microsoft",
+        which=present,
+        run=_smoke_says("srt: failed to start the sandbox"),
+    )
+    assert "WSL 2" in _smoke_fix(r)
+
+
 def test_missing_srt_does_not_blame_user_namespaces():  # DF-71: the fix would mislead
     which = lambda name: None if name == "srt" else present(name)  # noqa: E731
     r = readiness(system="Linux", kernel_release="6.8", which=which, run=answers())

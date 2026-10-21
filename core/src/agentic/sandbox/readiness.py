@@ -52,6 +52,7 @@ USERNS_FIX = (
     "srt could not start a sandbox. On Ubuntu 24.04+ allow unprivileged user namespaces: "
     "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0"
 )
+_USERNS_WORDS = re.compile(r"uid map|user namespace|userns|unprivileged", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -124,7 +125,11 @@ def readiness(
     if apt:
         checks.append(_tool(which, "bwrap", "bubblewrap", "sudo apt install -y bubblewrap"))
         checks.append(_tool(which, "socat", "socat", "sudo apt install -y socat"))
-    checks.append(_smoke(which, run, ready=all(c.ok for c in checks[:2])))
+    # what the smoke check's fix may name (DF-335): WSL 1 kernels carry no "WSL2" tag
+    cause = "macos" if kind == "macos" else "tools" if not all(c.ok for c in checks[2:]) else ""
+    if not cause and kind == "wsl" and "wsl2" not in release.lower():
+        cause = "wsl1"
+    checks.append(_smoke(which, run, ready=all(c.ok for c in checks[:2]), cause=cause))
     if kind == "wsl" and tree is not None:
         on_windows_disk = Path(tree).as_posix().startswith("/mnt/")
         checks.append(
@@ -199,7 +204,7 @@ def _tool(which, program: str, name: str, fix: str) -> Check:
     return Check(name, path is not None, path or "not found", fix)
 
 
-def _smoke(which, run, *, ready: bool) -> Check:
+def _smoke(which, run, *, ready: bool, cause: str = "") -> Check:
     if not ready or which("srt") is None:  # the user-namespace fix would mislead (DF-71)
         return Check("smoke", False, "not run", "install node and srt first (see above)")
     with tempfile.TemporaryDirectory(prefix="agentic-srt-") as folder:
@@ -209,5 +214,24 @@ def _smoke(which, run, *, ready: bool) -> Check:
         box._write_settings()
         code, out = run(["srt", "--settings", str(box.settings), "--", "bash", "-c", "true"])
     if code != 0:
-        return Check("smoke", False, out[-200:] or f"exit {code}", USERNS_FIX)
+        return Check("smoke", False, out[-200:] or f"exit {code}", _smoke_fix(cause, out))
     return Check("smoke", True, "srt started a sandbox")
+
+
+def _smoke_fix(cause: str, output: str) -> str:
+    """The likeliest fix for a sandbox that would not start, by what the checks above
+    found and what srt said (DF-335): the user-namespace switch only where it can be
+    the cause (Linux and WSL 2), never on macOS or with a tool missing."""
+    if cause == "macos":
+        return (
+            "srt could not start a macOS sandbox (its output is above); run "
+            "`python -m agentic.sandbox.probe` for a case-by-case report"
+        )
+    if cause == "tools":
+        return "install the missing tools listed above, then check again"
+    if cause == "wsl1" and not _USERNS_WORDS.search(output):
+        return (
+            "srt could not start a sandbox: it needs WSL 2, and this kernel looks like "
+            "WSL 1 (in PowerShell: `wsl -l -v`, then `wsl --set-version <distro> 2`)"
+        )
+    return USERNS_FIX
