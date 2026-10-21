@@ -7,8 +7,9 @@ Zyroflo's release flow (`tools.sdlc.release`, P8), followed step by step:
      it; a refusal stops before anything leaves the machine;
   2. **push** - plain `git push` with the person's own git credentials, never forced;
   3. **open** - the pull request on the repository's default branch, its body M1-45's
-     `pr_body` (the run, every handoff with its digest, the approvals, the AGENTS.md
-     additions agents proposed), masked by the commons redactor. Publishing again
+     `pr_body` (the run, its cost so far and where its logs are, every handoff with its
+     digest, the approvals, the AGENTS.md additions agents proposed), masked by the
+     commons redactor. Publishing again
      updates the open pull request's body instead of opening another;
   4. **watch** - `watch_ci` reads every check until none is still running and judges
      them with Zyroflo's verdict (`sdlc_commons.release`): only green passes (a skipped
@@ -37,6 +38,7 @@ from agentic.hosting import CheckRun, HostingError
 from agentic.hosting.git import push_branch
 from agentic.memory.agents_md import proposals
 from agentic.telemetry.trailers import pr_body
+from agentic_cli.driving import spent
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.hosting import Connection, connect
@@ -333,12 +335,18 @@ def _body(ws: Workspace, state: RunState, found: list[tuple[str, str]]) -> str:
     folder = f"{RUNS.as_posix()}/{state.run_id}"
     base = control_plane_url(ws)
     run_link = f"{base}/runs/{state.run_id}" if base else None
+    if run_link:
+        logs = f"[step logs]({run_link}/logs)"
+    else:  # the logs are in the starter's git-ignored run folder
+        logs = f"`agentic logs {state.run_id}` in the starter's checkout"
     return pr_body(
         state,
         run_link=run_link,
         handoff_link=(lambda rel: f"{run_link}/{rel}") if run_link else (lambda rel: None),
         proposals=found,
         run_folder=folder,
+        cost_usd=spent(state),
+        logs=logs,
     )
 
 
