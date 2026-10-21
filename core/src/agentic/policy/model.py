@@ -32,7 +32,8 @@ class TierSpec(_Strict):
     """What one capability tier means: the real model plus default settings."""
 
     model: str
-    effort: str | None = None
+    # the levels an agent file may ask for: a typo is refused here, not at a model call
+    effort: Literal["low", "medium", "high"] | None = None
     temperature: float | None = None
     # The model's family for the eval judge rule (spike S10), when its id's prefix before
     # '/' does not say it (a gateway alias, a team's own deployment).
