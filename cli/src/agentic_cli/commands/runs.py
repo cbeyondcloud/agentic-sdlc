@@ -29,9 +29,11 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich import box
 
 from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
+from agentic_cli.commands.catalog import show_definition_warnings
 from agentic_cli.driving import (
     drive,
     engine_errors,
@@ -69,6 +71,7 @@ def register(app: typer.Typer) -> None:
         if run_id is not None:
             _check_run_id(run_id)  # before the workspace, preflight and gateway (DF-219)
         rt = Runtime(Workspace.load())
+        show_definition_warnings(out, rt.ws)
         if dry_run:
             report = rt.preflight(pipeline, live=False)
             plan = rt.plan(pipeline, report)
@@ -305,24 +308,32 @@ def _list(out: Output, rt: Runtime, *, show_all: bool, limit: int | None = None)
         }
         for s in states
     ]
+    out.result(rows, _show_runs(rows))
 
+
+WIDE_COLUMNS = 100  # below this the runs table drops pipeline and updated (DF-222 b)
+NARROW = ("run", "status", "waiting on", "cost USD")
+
+
+def _show_runs(rows: list[dict]):
     def show(console) -> None:
         if not rows:
             console.print("no runs", markup=False)
             return
-        table = output_table("run", "pipeline", "status", "waiting on", "updated", "cost USD")
+        # an 80-column terminal (macOS Terminal's default) cannot fit six columns beside
+        # a whole run id; the pipeline is in the run id already
+        wide = console.width >= WIDE_COLUMNS
+        columns = ["run", "pipeline", "status", "waiting on", "updated", "cost USD"]
+        table = output_table(*(columns if wide else [c for c in columns if c in NARROW]))
+        if not wide:  # no borders, one space between columns: whole words in each
+            table.box, table.show_edge, table.padding = box.SIMPLE_HEAD, False, (0, 1, 0, 0)
         for r in rows:
-            table.add_row(
-                r["run_id"],
-                r["pipeline"],
-                r["status"],
-                r["waiting_on"] or "",
-                r["updated_at"][:19],
-                r["cost_usd"],
-            )
+            cells = [r["run_id"], r["pipeline"], r["status"], r["waiting_on"] or ""]
+            cells += [r["updated_at"][:19], r["cost_usd"]]
+            table.add_row(*(cells if wide else [cells[0], cells[2], cells[3], cells[5]]))
         console.print(table)
 
-    out.result(rows, show)
+    return show
 
 
 def _show_plan(plan: dict):

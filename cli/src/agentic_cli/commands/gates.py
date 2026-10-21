@@ -285,11 +285,28 @@ def _diff(rt: Runtime, state: RunState) -> str:
         tree = trees.get(name)
         if tree is None or name not in base or base[name] == commit[name]:
             continue
-        try:
-            parts.append(worktree_git(tree.path, "diff", base[name], commit[name]))
+        try:  # never a diff driver or textconv the repository configures (DF-222 e)
+            flags = ("--no-ext-diff", "--no-textconv", "--no-color")
+            parts.append(worktree_git(tree.path, "diff", *flags, base[name], commit[name]))
         except WorktreeError as error:
             parts.append(f"# {name}: the diff cannot be shown ({error})")
-    return "\n".join(part for part in parts if part)
+    return _capped("\n".join(part for part in parts if part))
+
+
+DIFF_CAP_BYTES = 512 * 1024
+
+
+def _capped(diff: str) -> str:
+    """A diff over DIFF_CAP_BYTES is cut at a line end, with a note: rendering megabytes
+    of generated code would stall the terminal and hide nothing useful."""
+    data = diff.encode("utf-8")
+    if len(data) <= DIFF_CAP_BYTES:
+        return diff
+    kept = data[:DIFF_CAP_BYTES].decode("utf-8", "ignore").rsplit("\n", 1)[0]
+    return (
+        f"{kept}\n# ... diff cut at {DIFF_CAP_BYTES // 1024} KiB of {len(data) // 1024} KiB; "
+        "see the whole change in the run's tree with git diff\n"
+    )
 
 
 def _show(shown: dict):

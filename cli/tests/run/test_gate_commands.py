@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from _cli_support import FakeGateway, answer, write
+from _cli_support import FakeGateway, answer, git, write
 
 from agentic_cli import runtime
 from agentic_cli.exit_codes import ExitCode
@@ -251,6 +251,48 @@ def test_show_includes_the_diff_of_the_gated_steps(workspace, policy_repo, gatew
     shown = cli("--json", "show", run_id).json()
     assert "src/new.py" in shown["diff"] and "+y = 2" in shown["diff"]
     assert "src/new.py" in cli("show", run_id).out
+
+
+def built(policy_repo, gateway, cli, text: str) -> str:
+    write(policy_repo / "pipelines" / "build.yaml", BUILD)
+    write(
+        policy_repo / "agents" / "builder.md",
+        "---\nname: builder\ntype: general\nversion: 1.0.0\ndescription: Builds.\n"
+        "tools: [read_files, edit_files]\nconsumes: []\n---\nBuild it.\n",
+    )
+    gateway.answers["builder"] = [
+        {"tool": "write_file", "args": {"path": "src/new.py", "text": text}},
+        "built it",
+    ]
+    result = cli("--json", "run", "build")
+    assert result.code == ExitCode.PAUSED, result.err
+    return result.json()["run_id"]
+
+
+MARKER_SCRIPT = "import sys\nopen(sys.argv[1], 'w').close()\n"
+
+
+def test_show_never_runs_a_diff_driver(workspace, policy_repo, gateway, cli, tmp_path, monkeypatch):
+    """An external diff or textconv program configured for the repository is not run
+    when a person looks at a gate (DF-222 e)."""
+    run_id = built(policy_repo, gateway, cli, "y = 2\n")
+    script = write(tmp_path / "marker.py", MARKER_SCRIPT).as_posix()
+    marker = (tmp_path / "driver-ran").as_posix()
+    command = f'"{Path(sys.executable).as_posix()}" "{script}" "{marker}"'
+    monkeypatch.setenv("GIT_EXTERNAL_DIFF", command)
+    git(workspace, "config", "diff.spy.textconv", command)
+    write(workspace / ".git" / "info" / "attributes", "* diff=spy\n")
+    shown = cli("--json", "show", run_id).json()
+    assert "+y = 2" in shown["diff"]
+    assert not Path(marker).exists()
+
+
+def test_show_cuts_a_huge_diff_with_a_note(workspace, policy_repo, gateway, cli):
+    run_id = built(policy_repo, gateway, cli, "x = 1\n" * 120_000)  # about 720 KiB
+    shown = cli("--json", "show", run_id).json()
+    assert len(shown["diff"].encode("utf-8")) < 600_000
+    assert shown["diff"].rstrip().endswith("git diff")
+    assert "diff cut at" in shown["diff"]
 
 
 ESCAPES = "\x1b]0;pwned\x07\x1b[1A\x1b[2K\x9b2K"

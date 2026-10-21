@@ -58,6 +58,8 @@ def register(app: typer.Typer) -> None:
         warnings are shown and pass, as they do for a run)."""
         out: Output = ctx.obj
         ws = Workspace.load()
+        if not paths:
+            show_definition_warnings(out, ws)
         report = _validate(ws, paths or [])
         out.result(report, _show_validation(report))
         errors = sum(p["severity"] != "warning" for p in report["problems"])
@@ -270,7 +272,14 @@ def _agents(out: Output, ws: Workspace, text: str) -> None:
     out.result(rows, lambda c: _table(c, rows, ("name", "type", "version", "layer", "description")))
 
 
+def show_definition_warnings(out: Output, ws: Workspace) -> None:
+    """What discovery skipped, such as a repo pipeline the org policy ignores (DF-222 f)."""
+    for warning in ws.definitions().warnings:
+        out.warn(warning)
+
+
 def _pipelines(out: Output, ws: Workspace, text: str) -> None:
+    show_definition_warnings(out, ws)
     definitions = ws.definitions()
     rows = [
         {

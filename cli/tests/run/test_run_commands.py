@@ -127,6 +127,32 @@ def test_a_live_run_says_its_id_when_it_starts(workspace, gateway, cli):
     assert "started run" not in cli("--json", "status", "named-1").err
 
 
+def test_the_runs_table_stays_readable_in_80_columns():
+    """macOS Terminal opens at 80 columns: the run id stays whole and every column keeps
+    readable words; the pipeline (already in the run id) and the time go (DF-222 b)."""
+    from rich.console import Console
+
+    from agentic_cli.commands.runs import _show_runs
+
+    row = {
+        "run_id": "feature-delivery-20261021-101500-ab12",
+        "pipeline": "feature-delivery",
+        "status": "awaiting_gate",
+        "waiting_on": "design-approval",
+        "updated_at": "2026-10-21T10:15:00+00:00",
+        "cost_usd": "0.123456",
+    }
+    narrow = Console(width=80, record=True, no_color=True)
+    _show_runs([row])(narrow)
+    text = narrow.export_text()
+    for word in (row["run_id"], "awaiting_gate", "design-approval", "0.123456"):
+        assert word in text, text
+    wide = Console(width=140, record=True, no_color=True)
+    _show_runs([row])(wide)
+    text = wide.export_text()
+    assert "feature-delivery " in text and "2026-10-21" in text
+
+
 def test_stop_ends_the_run_and_runs_hides_it(workspace, gateway, cli):
     _, run_id = start(cli)
     stopped = cli("--json", "stop", run_id, "--reason", "not needed")

@@ -199,6 +199,16 @@ def test_pipelines_new_warns_when_org_policy_ignores_repo_pipelines(workspace, p
     assert result.code == ExitCode.OK and "allow_repo_pipelines" in result.err
 
 
+def test_an_ignored_repo_pipeline_is_named_where_people_look(workspace, policy_repo, cli):
+    """`pipelines new` warns once; later a run of it says 'no pipeline named' unless the
+    reason is shown with it (DF-222 f)."""
+    write(policy_repo / "policy" / "org.yaml", "allow_repo_pipelines: false\n")
+    assert cli("pipelines", "new", "my-flow").code == ExitCode.OK
+    for args in (["pipelines", "list"], ["validate"], ["run", "my-flow", "--dry-run"]):
+        result = cli(*args)
+        assert "ignored repo pipeline my-flow.yaml" in result.err, (args, result.err)
+
+
 def test_policy_show(workspace, cli):
     shown = cli("--json", "policy", "show").json()
     assert shown["tiers"]["balanced"]["model"] == "acme/model-b"
