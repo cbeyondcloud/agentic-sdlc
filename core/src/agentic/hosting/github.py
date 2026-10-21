@@ -327,4 +327,6 @@ def _pull_request(data: Any) -> PullRequest:
         base=str(base.get("ref") or ""),
         head_sha=str(head.get("sha") or ""),
         state=str(data.get("state") or "open"),
+        # null is an empty description; no `body` key at all: not known (None)
+        body=str(data["body"] or "") if "body" in data else None,
     )

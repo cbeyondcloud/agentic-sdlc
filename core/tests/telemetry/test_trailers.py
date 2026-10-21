@@ -4,6 +4,8 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
 from agentic.engine.state import ApprovalMark, Cursor, RunState, StepRecord
 from agentic.telemetry.trailers import (
     TRAILER_KEYS,
@@ -136,6 +138,14 @@ def test_pr_body_shows_the_cost_and_where_the_logs_are():  # M1-68 acceptance
     assert "- Cost: $0.3250\n" in body
     assert "- Logs: `agentic logs r-pr`\n" in body
     assert body.index("- Status:") < body.index("- Cost:") < body.index("### Handoffs")
+
+
+@pytest.mark.parametrize(
+    ("cost", "shown"), [("1E-7", "0.0000001"), ("0E-7", "0.0000000"), ("1E+2", "100")]
+)
+def test_pr_body_never_shows_the_cost_in_scientific_notation(cost: str, shown: str):  # DF-318
+    body = pr_body(state(), run_link=None, cost_usd=Decimal(cost))
+    assert f"- Cost: ${shown}\n" in body
 
 
 def test_pr_body_without_cost_or_logs_leaves_their_lines_out():

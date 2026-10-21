@@ -61,6 +61,7 @@ class PullRequest:
     base: str  # the branch it would merge into
     head_sha: str  # the commit CI checks
     state: str = "open"
+    body: str | None = None  # its description as it is now; None when the host did not say
 
 
 @dataclass(frozen=True)

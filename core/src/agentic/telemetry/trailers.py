@@ -126,7 +126,7 @@ def pr_body(
         f"- Status: {state.status}",
     ]
     if cost_usd is not None:
-        lines.append(f"- Cost: ${cost_usd}")
+        lines.append(f"- Cost: ${format(cost_usd, 'f')}")  # never '$1E-7' (DF-318)
     if logs:
         lines.append(f"- Logs: {_line(logs)}")
     lines += ["", "### Handoffs", ""]

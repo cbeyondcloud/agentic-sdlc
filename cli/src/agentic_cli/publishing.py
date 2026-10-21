@@ -9,8 +9,9 @@ Zyroflo's release flow (`tools.sdlc.release`, P8), followed step by step:
   3. **open** - the pull request on the repository's default branch, its body M1-45's
      `pr_body` (the run, its cost so far and where its logs are, every handoff with its
      digest, the approvals, the AGENTS.md additions agents proposed), masked by the
-     commons redactor. Publishing again
-     updates the open pull request's body instead of opening another;
+     commons redactor (the title too) and set between `<!-- agentic:run -->` markers.
+     Publishing again updates only that part of the open pull request's body, keeping
+     what a person wrote around it, instead of opening another;
   4. **watch** - `watch_ci` reads every check until none is still running and judges
      them with Zyroflo's verdict (`sdlc_commons.release`): only green passes (a skipped
      check settles the watch but is not a pass). No checks at all is answered `none`
@@ -59,6 +60,10 @@ DEFAULT_INTERVAL_SECONDS = 15
 #: A watch survives this many failed reads in a row (a proxy blip, a 502, a rate limit).
 MAX_TRANSIENT_FAILURES = 5
 TITLE_LIMIT = 100
+#: Around the generated part of a pull request's description: publishing again replaces
+#: only what is between them (HTML comments: invisible on the rendered page).
+BODY_BEGIN = "<!-- agentic:run -->"
+BODY_END = "<!-- /agentic:run -->"
 
 
 def publish_run(ws: Workspace, store_root: Path, state: RunState, kind: str | None = None) -> dict:
@@ -80,16 +85,18 @@ def publish_run(ws: Workspace, store_root: Path, state: RunState, kind: str | No
                     hint="use `action: open_pr`, which opens it on whatever host origin is",
                 )
             push_branch(tree.path, conn.remote, tree.branch, secrets=[conn.token])
-            body = redactor(extra=[conn.token])(_body(ws, state, found))
+            redact = redactor(extra=[conn.token])
+            block = _marked(redact(_body(ws, state, found)))
             provider, repo = conn.provider, conn.repo
             existing = provider.find_pull_request(repo, tree.branch)
-            if existing is not None:
+            if existing is not None:  # only the generated part changes (DF-296)
+                body = merge_body(existing.body, block)
                 pull = provider.update_pull_request(repo, existing.number, body=body)
             else:
                 base = provider.default_branch(repo)
-                title = _title(state)
+                title = redact(_title(state))  # a run input may hold a secret (DF-295)
                 pull = provider.open_pull_request(
-                    repo, head=tree.branch, base=base, title=title, body=body
+                    repo, head=tree.branch, base=base, title=title, body=block
                 )
             published.append(
                 {
@@ -348,6 +355,24 @@ def _body(ws: Workspace, state: RunState, found: list[tuple[str, str]]) -> str:
         cost_usd=spent(state),
         logs=logs,
     )
+
+
+def merge_body(current: str | None, block: str) -> str:
+    """The pull request's description with the generated `block` put in place of the
+    earlier one, keeping whatever a person wrote around it (DF-296). With no markers in
+    `current` (a person removed them), the block is added at the end - nothing of theirs
+    is lost; when the host did not say (None), the block is the whole description."""
+    if current is None or not current.strip():
+        return block
+    start, end = current.find(BODY_BEGIN), current.find(BODY_END)
+    if start == -1 or end == -1 or end < start:
+        return f"{current.rstrip()}\n\n{block}"
+    after = current[end + len(BODY_END) :].removeprefix("\r\n").removeprefix("\n")
+    return f"{current[:start]}{block}{after}"
+
+
+def _marked(body: str) -> str:
+    return f"{BODY_BEGIN}\n{body.rstrip()}\n{BODY_END}\n"
 
 
 def _title(state: RunState) -> str:
