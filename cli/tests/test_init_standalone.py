@@ -134,10 +134,12 @@ def test_later_commands_find_the_installed_policy(setup_repo, deps, monkeypatch,
     plan = json.loads(capsys.readouterr().out)
     assert plan["pipeline"] == "feature-delivery" and plan["regime"] == "team"
     assert plan["steps"][0]["model"] == "acme/balanced-model"  # from the edited copy
-    # The only problem left is the publish action, which arrives with M1-58.
-    problems = [(p["step"], p["check"]) for p in plan["preflight"]["problems"]]
-    assert problems == [("publish", "action")], plan["preflight"]
-    assert code == ExitCode.INVALID
+    # The only problem left is the publish step's missing GitHub token (M1-58): a warning,
+    # because the step runs only `when` the work passed, so the dry run itself passes.
+    problems = [(p["step"], p["check"], p["severity"]) for p in plan["preflight"]["problems"]]
+    assert problems == [("publish", "publish", "warning")], plan["preflight"]
+    assert "agentic login --for github" in plan["preflight"]["problems"][0]["detail"]
+    assert code == ExitCode.OK
 
 
 def test_a_policy_later_commands_will_not_find_is_reported(
