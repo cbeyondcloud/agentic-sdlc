@@ -5,6 +5,16 @@ name = "agentic-sdlc-workspace"
 version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 
+# The two-week release-age rule for EVERY locked package, transitive ones included
+# (DF-95): a just-published (possibly compromised) release cannot enter uv.lock. A
+# security fix that cannot wait goes in `exclude-newer-package = { name = "<date>" }`
+# with a comment naming the advisory.
+[tool.uv]
+exclude-newer = "14 days"
+# certifi 2026.10.19 (uploaded 2026-10-20) fixes PYSEC-2026-4320: the release before it is
+# vulnerable, so the fix may not wait two weeks. Drop this line once it is 14 days old.
+exclude-newer-package = { certifi = "2026-10-21T00:00:00Z" }
+
 [tool.uv.workspace]
 members = ["core", "commons", "cli", "control-plane"]
 
