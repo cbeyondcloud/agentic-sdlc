@@ -200,10 +200,12 @@ def _tool(which, program: str, name: str, fix: str) -> Check:
 
 
 def _smoke(which, run, *, ready: bool) -> Check:
-    if not ready or which("srt") is None:
-        return Check("smoke", False, "not run: node and srt are needed first", USERNS_FIX)
+    if not ready or which("srt") is None:  # the user-namespace fix would mislead (DF-71)
+        return Check("smoke", False, "not run", "install node and srt first (see above)")
     with tempfile.TemporaryDirectory(prefix="agentic-srt-") as folder:
-        box = SrtSandbox(SandboxRules(write=(Path(folder),)), Path(folder))
+        work = Path(folder) / "work"
+        work.mkdir()
+        box = SrtSandbox(SandboxRules(write=(work,)), Path(folder))
         box._write_settings()
         code, out = run(["srt", "--settings", str(box.settings), "--", "bash", "-c", "true"])
     if code != 0:

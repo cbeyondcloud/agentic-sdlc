@@ -42,8 +42,14 @@ class SrtSandbox:
         self._written = False
 
     def _write_settings(self) -> None:
-        """Written once, atomically: a half-written file must never be read by srt."""
-        rules = replace(self.rules, write=(*self.rules.write, self.tmp))
+        """Written once, atomically: a half-written file must never be read by srt.
+        The file itself is denied writing: were it under a writable path, one command
+        could rewrite the rules of the next (DF-71)."""
+        rules = replace(
+            self.rules,
+            write=(*self.rules.write, self.tmp),
+            deny_write=(*self.rules.deny_write, self.settings),
+        )
         text = json.dumps(srt_settings(rules), indent=2) + "\n"
         self.tmp.mkdir(parents=True, exist_ok=True)
         temp = self.settings.with_name(f"{SETTINGS_FILE}.{os.getpid()}.tmp")

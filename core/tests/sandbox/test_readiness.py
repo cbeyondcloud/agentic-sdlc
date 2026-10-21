@@ -169,3 +169,10 @@ def test_the_windows_guidance_names_the_org_pin():  # DF-67
     r = readiness(system="Windows", which=lambda name: None, run=boom, srt_version="0.0.99")
     assert "@anthropic-ai/sandbox-runtime@0.0.99" in r.text()
     assert "0.0.78" not in r.text()
+
+
+def test_missing_srt_does_not_blame_user_namespaces():  # DF-71: the fix would mislead
+    which = lambda name: None if name == "srt" else present(name)  # noqa: E731
+    r = readiness(system="Linux", kernel_release="6.8", which=which, run=answers())
+    assert "apparmor_restrict_unprivileged_userns" not in r.text()
+    assert "install node and srt first" in r.text()
