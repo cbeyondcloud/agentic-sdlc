@@ -83,10 +83,11 @@ class LoadedPolicy:
         if self._pending is None or self._cache is None:
             return
         target = self._cache / "repo"
-        if target.exists():
-            shutil.rmtree(target, onexc=_writable_and_retry)
         self._cache.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(self._pending), str(target))
+        try:
+            _swap_in(self._pending, target)
+        finally:
+            self.discard()  # the scratch folder, in every case (DF-201)
         now = datetime.now(UTC)
         stamp = {
             "source": self.source,
@@ -94,10 +95,10 @@ class LoadedPolicy:
             "fetched_at": now.isoformat(),
             "expires_at": (now + timedelta(hours=self._hours)).isoformat(),
         }
-        (self._cache / "fetched.json").write_text(
-            json.dumps(stamp, indent=2) + "\n", encoding="utf-8", newline="\n"
-        )
-        self.root, self._pending = target, None
+        staged = self._cache / f".fetched.json.tmp-{os.getpid()}"
+        staged.write_text(json.dumps(stamp, indent=2) + "\n", encoding="utf-8", newline="\n")
+        os.replace(staged, self._cache / "fetched.json")  # the stamp only after the swap
+        self.root = target
 
     def discard(self) -> None:
         """Drop a fetched policy repo that was not committed (a refusal or an error)."""
@@ -194,7 +195,7 @@ def _org_policy(home: Path, config: dict[str, Any]) -> LoadedPolicy:
             ExitCode.INVALID,
             hint=f"set them in {home / 'config.yaml'}, or use --standalone --policy <path>",
         )
-    hours = int(config.get("policy_cache_hours", DEFAULT_CACHE_HOURS))
+    hours = _cache_hours(config.get("policy_cache_hours", DEFAULT_CACHE_HOURS), home)
     cache = home / "policy" / org
     scratch = Path(tempfile.mkdtemp(prefix="agentic-policy-"))
     clone = scratch / "repo"
@@ -206,6 +207,17 @@ def _org_policy(home: Path, config: dict[str, Any]) -> LoadedPolicy:
         return loaded
     shutil.rmtree(scratch, ignore_errors=True)
     return _cached(cache, source, org, problem, hours)
+
+
+def _cache_hours(value: Any, home: Path) -> int:
+    """`policy_cache_hours`: a whole number of hours, at least 1 (DF-201)."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
+        return value
+    raise CliError(
+        f"policy_cache_hours must be a whole number of hours (1 or more), not {value!r}",
+        ExitCode.INVALID,
+        hint=f"fix it in {home / 'config.yaml'} (the default is {DEFAULT_CACHE_HOURS})",
+    )
 
 
 def _cached(cache: Path, source: str, org: str, problem: str, hours: int) -> LoadedPolicy:
@@ -277,6 +289,44 @@ def _install_atomically(source: Path, target: Path) -> bool:
             ) from error
         raise
     return True
+
+
+def _swap_in(source: Path, target: Path) -> None:
+    """Replace the folder `target` with a copy of `source`, by renames only (DF-201):
+    the copy is staged beside `target` (same volume), the old folder is moved aside,
+    the copy renamed in, the old one removed. A failure part-way puts the old folder
+    back, so `target` is always whole; when another init swapped its own fresh copy in
+    meanwhile, that one is kept."""
+    staged = target.with_name(f".{target.name}.new-{os.getpid()}")
+    old = target.with_name(f".{target.name}.old-{os.getpid()}")
+    for leftover in (staged, old):  # left by a killed init with this pid
+        if leftover.exists():
+            shutil.rmtree(leftover, onexc=_writable_and_retry)
+    try:
+        shutil.copytree(source, staged)
+        if target.exists():
+            _replace_retrying(target, old)
+        try:
+            _replace_retrying(staged, target)
+        except OSError:
+            if target.exists():  # another init's fresh copy: kept
+                return
+            if old.exists():
+                os.replace(old, target)
+            raise
+    except OSError as error:
+        raise CliError(
+            f"cannot update the org policy cache in {target.parent}: {error}",
+            ExitCode.ERROR,
+            hint="another program (often an antivirus scan) is holding the files; the "
+            "previous cache is kept - wait a moment, then run `agentic init` again",
+        ) from error
+    finally:
+        for leftover in (staged, old):
+            try:  # git makes its pack files read-only: Windows needs them writable first
+                shutil.rmtree(leftover, onexc=_writable_and_retry)
+            except OSError:
+                pass  # removed on the next init (the leftover check above)
 
 
 def _replace_retrying(staged: Path, target: Path) -> None:

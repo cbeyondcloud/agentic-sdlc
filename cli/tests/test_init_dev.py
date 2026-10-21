@@ -412,6 +412,65 @@ def test_org_init_offline_uses_an_unexpired_cache(
     assert item(report_of(capsys), "policy: cache")["status"] == "warn"
 
 
+def test_a_second_org_init_replaces_the_cache_whole(
+    setup_repo, org_config, deps, monkeypatch, capsys
+):
+    """DF-201: the old cache is swapped out by rename, never moved into (repo/repo)."""
+    assert org_init(setup_repo, monkeypatch) == ExitCode.OK
+    assert org_init(setup_repo, monkeypatch) == ExitCode.OK
+    cache = agentic_home() / "policy" / "acme"
+    assert (cache / "repo" / "policy").is_dir() and not (cache / "repo" / "repo").exists()
+    assert sorted(p.name for p in cache.iterdir()) == ["fetched.json", "repo"]
+
+
+def test_org_init_leaves_no_scratch_folder(
+    setup_repo, org_config, deps, monkeypatch, capsys, tmp_path
+):
+    """DF-201: agentic-policy-* folders must not pile up in the temp folder."""
+    import tempfile
+
+    scratch = tmp_path / "temp"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    assert org_init(setup_repo, monkeypatch) == ExitCode.OK
+    assert [p.name for p in scratch.iterdir() if p.name.startswith("agentic-policy-")] == []
+
+
+def test_a_failed_cache_swap_keeps_the_old_cache(setup_repo, org_config, deps, monkeypatch, capsys):
+    """DF-201: a failure mid-swap (an antivirus handle) leaves the previous cache and its
+    stamp as they were, never a stamp over a missing folder."""
+    from agentic_cli import policy_source
+
+    assert org_init(setup_repo, monkeypatch) == ExitCode.OK
+    cache = agentic_home() / "policy" / "acme"
+    stamp = (cache / "fetched.json").read_text(encoding="utf-8")
+    real = policy_source._replace_retrying
+
+    def blocked(staged: Path, target: Path) -> None:
+        if ".new-" in staged.name:
+            raise PermissionError(13, "held by another program", str(staged))
+        real(staged, target)
+
+    monkeypatch.setattr(policy_source, "_replace_retrying", blocked)
+    assert org_init(setup_repo, monkeypatch) == ExitCode.ERROR
+    assert (cache / "repo" / "policy").is_dir()
+    assert (cache / "fetched.json").read_text(encoding="utf-8") == stamp
+    assert sorted(p.name for p in cache.iterdir()) == ["fetched.json", "repo"]
+
+
+@pytest.mark.parametrize("value", ["soon", "true", "-1"])
+def test_a_bad_cache_lifetime_is_an_invalid_setting(
+    setup_repo, org_config, deps, monkeypatch, capsys, value
+):
+    """DF-201: a typo in policy_cache_hours is exit 3 naming the setting, not a ValueError."""
+    config = agentic_home() / "config.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + f"policy_cache_hours: {value}\n", encoding="utf-8"
+    )
+    assert org_init(setup_repo, monkeypatch) == ExitCode.INVALID
+    assert "policy_cache_hours" in json.loads(capsys.readouterr().err)["error"]
+
+
 def test_org_init_offline_with_an_expired_cache_refuses(
     setup_repo, org_config, deps, monkeypatch, capsys, tmp_path
 ):
