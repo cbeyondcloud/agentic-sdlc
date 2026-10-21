@@ -44,3 +44,4 @@ class RunRecord:
     tests: dict[str, bool] | None = None  # test id -> passed, when the run executed tests
     judge: Any = None  # the RubricResult, attached by the rubric evaluator
     judged: str | None = None  # the scrubbed text the judge saw (humans see the same)
+    judge_stopped: bool = False  # the judge's budget share ran out: unscored, INCOMPLETE

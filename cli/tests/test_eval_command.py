@@ -238,6 +238,153 @@ def test_a_shared_gateway_prefix_is_warned_and_recorded(tmp_path: Path, capsys):
     assert "warning:" in capsys.readouterr().err
 
 
+def ledger_events(tmp_path: Path) -> list[dict]:
+    (log,) = (tmp_path / ".agentic" / "local" / "runs").glob("*/events.jsonl")
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+def test_a_failure_after_the_runs_closes_the_ledger(tmp_path: Path, monkeypatch):
+    """DF-260: whatever raises after the eval opened its ledger run, the run is closed."""
+    from agentic_cli import evaluation
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(evaluation, "write_report", broken)
+    options = evaluation.RunOptions(
+        agent="qa", corpus=LIBRARY, split="all", mode="replay", tag="fixture", out=tmp_path / "o"
+    )
+    with pytest.raises(OSError, match="disk full"):
+        evaluation.execute_run(options)
+    events = ledger_events(tmp_path)
+    assert events[-1]["event"] == "run_closed" and events[-1]["status"] == "error"
+
+
+def test_the_budget_cap_in_replay_is_incomplete_not_a_broken_replay(tmp_path: Path, capsys):
+    """DF-254: runs the cap skipped made no calls; that is INCOMPLETE (exit 5), not a
+    replay to re-record (exit 1)."""
+    code, out = run(tmp_path, "qa", "--budget-usd", "0.01")
+    err = capsys.readouterr().err
+    assert code == ExitCode.STOPPED, err
+    report = EvalReport.model_validate_json((out / "report.json").read_bytes())
+    assert report.verdict == "INCOMPLETE" and report.problems == []
+    assert "re-record" not in err
+
+
+def test_a_judge_that_failed_everywhere_is_not_called_a_replay_failure(tmp_path: Path):
+    """DF-254: only cassette problems get the re-record hint."""
+    from agentic_cli import evaluation
+
+    _, out = run(tmp_path, "business-analyst")
+    report = EvalReport.model_validate_json((out / "report.json").read_bytes())
+    judged_out = report.model_copy(
+        update={"verdict": "UNMEASURABLE", "problems": ["X: no case got a rubric score"]}
+    )
+    paths = {"json": out / "report.json", "markdown": out / "report.md"}
+    error = evaluation.failure(evaluation.RunResult(judged_out, out, paths))
+    assert "replay" not in str(error) and "rubric score" in str(error)
+    assert "re-record" not in (error.hint or "") and error.code == ExitCode.ERROR
+    replayed = evaluation.RunResult(
+        judged_out.model_copy(update={"problems": ["no cassette for x: record it"]}),
+        out,
+        paths,
+        replay_problems=["no cassette for x: record it"],
+    )
+    assert "re-record" in evaluation.failure(replayed).hint
+
+
+def test_a_policy_folder_that_does_not_exist_is_named(tmp_path: Path, capsys):
+    """DF-259: not 'tiers: Field required'."""
+    code, _ = run(tmp_path, "qa", "--policy", str(tmp_path / "nowhere"))
+    assert code == ExitCode.INVALID
+    err = capsys.readouterr().err
+    assert "nowhere" in err and "not a folder" in err and "Field required" not in err
+
+
+def test_no_policy_given_reads_plainly(tmp_path: Path, capsys):
+    corpus = corpus_copy(tmp_path)
+    shutil.rmtree(corpus / "fixtures" / "policy")
+    assert run_corpus(corpus, tmp_path / "o", "qa", "--tag", "fixture") == ExitCode.USAGE
+    err = capsys.readouterr().err
+    assert "no policy folder given" in err and "no the" not in err
+
+
+def test_a_readme_in_the_cases_folder_is_allowed(tmp_path: Path, capsys):
+    corpus = corpus_copy(tmp_path)
+    (corpus / "cases" / "README.md").write_text("# Cases\n", encoding="utf-8")
+    write_manifest(corpus)
+    assert run_corpus(corpus, tmp_path / "o", "qa", "--tag", "fixture") == ExitCode.OK
+
+
+def test_a_single_variant_report_shows_no_variant_label(tmp_path: Path, capsys):
+    """DF-259: 'X' means something only in an A/B."""
+    out = tmp_path / "human"
+    code = main(
+        [
+            "eval",
+            "run",
+            "--agent",
+            "qa",
+            "--corpus",
+            str(LIBRARY),
+            "--split",
+            "all",
+            "--mode",
+            "replay",
+            "--tag",
+            "fixture",
+            "--out",
+            str(out),
+        ]
+    )
+    assert code == ExitCode.OK
+    shown = capsys.readouterr().out
+    assert "  qa_catch:" in shown and " X " not in shown
+    markdown = (out / "report.md").read_text(encoding="utf-8")
+    assert "## Metrics\n" in markdown and "## Metrics: X" not in markdown
+
+
+def test_live_calls_carry_the_users_team(tmp_path: Path, monkeypatch):
+    """DF-248: TokenLean attributes eval spend to the person's team, not to 'eval'."""
+    from agentic.eval.replay import UpstreamReply
+    from agentic_cli import evaluation
+
+    monkeypatch.setenv("AGENTIC_TEAM", "payments")
+    seen: list[str] = []
+    answer = (LIBRARY / "fixtures" / "answers" / "qa-invoice-export.md").read_text(encoding="utf-8")
+
+    def upstream(request):
+        seen.append(request.headers.get("x-agentic-team") or request.headers.get("X-Agentic-Team"))
+        body = json.loads(request.body)
+        reply = {
+            "id": "c",
+            "object": "chat.completion",
+            "created": 1,
+            "model": body["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": answer},
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        return UpstreamReply(200, json.dumps(reply).encode(), "application/json")
+
+    options = evaluation.RunOptions(
+        agent="qa",
+        corpus=LIBRARY,
+        split="all",
+        mode="record",
+        tag="fixture",
+        out=tmp_path / "o",
+        cassettes=tmp_path / "cassettes",
+    )
+    evaluation.execute_run(options, upstream=upstream)
+    assert seen and set(seen) == {"payments"}
+
+
 def test_a_rubric_id_cannot_leave_the_corpus(tmp_path: Path, capsys):
     """F1: `rubric: ../../outside` must neither read nor write outside the corpus."""
     corpus = corpus_copy(tmp_path / "t")

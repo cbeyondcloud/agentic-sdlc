@@ -45,6 +45,7 @@ from agentic.eval.records import RunRecord, RunRequest
 from agentic.eval.validate import criteria_ids, parse_hunks
 from agentic.handoffs import BLOCK_ON_DEFAULT, Handoff, HandoffError, parse_handoff
 from agentic.handoffs.finalise import FRAMEWORK_FIELDS
+from agentic.transport import LimitHit
 from agentic.yamlio import YamlFileError, dump_yaml, load_yaml, split_front_matter
 
 TOLERANCE = 3  # lines either side of a seeded range (S10)
@@ -269,11 +270,15 @@ class RubricMetric(Evaluator[RunRequest, RunRecord, None]):
         if parse_document(record.output, ctx.inputs.kind) is None or record.status != "completed":
             return {"rubric": 0.0}  # an invalid document delivers nothing to grade
         record.judged = self.scrubber.scrub(judge_view(record.output or ""))  # what it sees
-        result = await judge.score(
-            record.judged,
-            reference=self.reference(case),
-            key_points=case.expected.key_points,
-        )
+        try:
+            result = await judge.score(
+                record.judged,
+                reference=self.reference(case),
+                key_points=case.expected.key_points,
+            )
+        except LimitHit:  # the eval's cap, not the agent's doing: unscored, INCOMPLETE
+            record.judge_stopped = True
+            return {}
         record.judge = result
         return {} if result.total is None else {"rubric": result.total}
 

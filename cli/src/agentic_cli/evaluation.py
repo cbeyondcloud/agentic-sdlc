@@ -30,7 +30,7 @@ import random
 import secrets
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -56,11 +56,12 @@ from agentic.eval.metrics import ObjectiveMetrics, RubricMetric
 from agentic.eval.records import RunRequest
 from agentic.eval.replay import CassetteServer, Upstream, http_upstream
 from agentic.eval.report import EvalReport, JudgeInfo, build_report, write_report
-from agentic.eval.runner import AgentCaseRunner, run_eval
+from agentic.eval.runner import BUDGET_STOP, AgentCaseRunner, run_eval
 from agentic.handoffs import BUILTIN_CATALOG
 from agentic.policy import PolicyError, ResolveContext, load_policy, resolve_agent
 from agentic.transport import BudgetLedger, CallIdentity, NetworkSettings, make_network_transport
 from agentic.yamlio import YamlFileError, dump_yaml, load_yaml, read_text
+from agentic_cli.config import agentic_home, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from sdlc_commons.ledger import LedgerError, RunIdentity, RunLedger
@@ -103,6 +104,7 @@ class RunResult:
     report: EvalReport
     folder: Path
     paths: dict[str, Path]
+    replay_problems: list[str] = field(default_factory=list)  # the cassette server's
 
 
 def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> RunResult:
@@ -121,8 +123,8 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     root = _corpus_root(options.corpus)
     corpus = _load(lambda: load_corpus(root))
     fixtures = root / "fixtures"
-    policy_dir = _folder(options.policy, fixtures / "policy", "--policy", "the policy folder")
-    agents_dir = _folder(options.agents, fixtures / "agents", "--agents", "agent definitions")
+    policy_dir = _folder(options.policy, fixtures / "policy", "--policy", "policy folder")
+    agents_dir = _folder(options.agents, fixtures / "agents", "--agents", "agents folder")
     policy = _load(lambda: load_policy(policy_dir))
     definition = _agent(agents_dir, options.agent)
     split = None if options.split == "all" else options.split
@@ -188,11 +190,14 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
         base = server.base_url(key) if server is not None else (options.gateway or "")
         return GatewaySettings(base_url=base, api_key=api_key, network=network)
 
+    # replay: fixed values, so a replay is the same everywhere; otherwise the person and
+    # their team, so TokenLean attributes the spend to them (DF-248)
     user = TEAM if options.mode == "replay" else getpass.getuser()
+    team = TEAM if options.mode == "replay" else _team()
 
     def identity(request: RunRequest, agent: str, tier: str) -> CallIdentity:
         return CallIdentity(
-            team=TEAM,
+            team=team,
             user=user,
             repo=f"eval:{root.name}",
             pipeline="eval",
@@ -265,70 +270,78 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     ]
     ledger = EvalLedger(Path.cwd(), report_id, policy.version, options.agent)
     ledger("eval.run_started")
-    try:
-        if server is not None:
-            server.start()
-            server.expect(f"{c.id}/X/{r}/agent" for c in cases for r in range(repeats))
-        runset = asyncio.run(
-            run_eval(
-                cases,
-                {"X": runner},
-                kind=kind,
-                repeats=repeats,
-                seed=options.seed,
-                evaluators=evaluators,
-                budget_usd=budget,
-                max_concurrency=options.max_concurrency,
-                name=f"eval-{options.agent}",
+    try:  # whatever raises from here on, the ledger run is closed, never left open (DF-260)
+        try:
+            if server is not None:
+                server.start()
+                server.expect(f"{c.id}/X/{r}/agent" for c in cases for r in range(repeats))
+            runset = asyncio.run(
+                run_eval(
+                    cases,
+                    {"X": runner},
+                    kind=kind,
+                    repeats=repeats,
+                    seed=options.seed,
+                    evaluators=evaluators,
+                    budget_usd=budget,
+                    max_concurrency=options.max_concurrency,
+                    name=f"eval-{options.agent}",
+                )
             )
+        finally:
+            if server is not None:
+                server.close()
+            if judge_slice is not None and not judge_slice.closed:
+                judge_slice.close()
+        # runs the budget cap skipped or stopped made fewer calls than recorded: that is
+        # INCOMPLETE, not a replay to re-record (DF-254)
+        capped = [
+            f"{r.request.cassette_key}/agent"
+            for r in runset.runs
+            if r.record.status == "skipped" or r.record.error == BUDGET_STOP
+        ]
+        problems = server.finish(capped=capped) if server is not None else []
+        labels = assign_labels([agent_id], seed=options.seed)
+        labels.seal_scores()
+        judge_info = None
+        if choice is not None:
+            judge_info = JudgeInfo(
+                tier=choice.tier,
+                model=choice.model,
+                family=choice.family,
+                same_family=choice.same_family,
+                rubrics={r.key: r.sha for r in rubrics.values()},
+                warnings=list(choice.warnings),
+            )
+        report = build_report(
+            runset,
+            report_id=report_id,
+            created_at=created.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            mode=options.mode,  # type: ignore[arg-type]
+            agent=options.agent,
+            agent_version=definition.version,
+            kind=kind,
+            corpus_manifest_sha=corpus.manifest.sha,
+            split=options.split,
+            tag=options.tag,
+            labels=labels.reveal(),
+            judge=judge_info,
+            leaks=leaks.leaks,
+            stale_cassettes=server.stale if server is not None else 0,
+            problems=problems,
+            judge_cost_usd=_reported_total(judge_costs),
         )
+        paths = write_report(report, folder, runset.runs)
+        for rubric_id in rubric_ids:  # calibration shows people the rubric the judge used
+            target = folder / PurePosixPath(rubric_path(rubric_id))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(corpus.path(rubric_path(rubric_id)), target)
+        digest = "sha256:" + hashlib.sha256(paths["json"].read_bytes()).hexdigest()
     except BaseException:
-        ledger("eval.failed")  # the run is closed in the ledger, never left open
+        ledger("eval.failed")
         raise
-    finally:
-        if server is not None:
-            server.close()
-        if judge_slice is not None and not judge_slice.closed:
-            judge_slice.close()
-    problems = server.finish() if server is not None else []
-    labels = assign_labels([agent_id], seed=options.seed)
-    labels.seal_scores()
-    judge_info = None
-    if choice is not None:
-        judge_info = JudgeInfo(
-            tier=choice.tier,
-            model=choice.model,
-            family=choice.family,
-            same_family=choice.same_family,
-            rubrics={r.key: r.sha for r in rubrics.values()},
-            warnings=list(choice.warnings),
-        )
-    report = build_report(
-        runset,
-        report_id=report_id,
-        created_at=created.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        mode=options.mode,  # type: ignore[arg-type]
-        agent=options.agent,
-        agent_version=definition.version,
-        kind=kind,
-        corpus_manifest_sha=corpus.manifest.sha,
-        split=options.split,
-        tag=options.tag,
-        labels=labels.reveal(),
-        judge=judge_info,
-        leaks=leaks.leaks,
-        stale_cassettes=server.stale if server is not None else 0,
-        problems=problems,
-        judge_cost_usd=_reported_total(judge_costs),
-    )
-    paths = write_report(report, folder, runset.runs)
-    for rubric_id in rubric_ids:  # calibration shows people the rubric the judge used
-        target = folder / PurePosixPath(rubric_path(rubric_id))
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(corpus.path(rubric_path(rubric_id)), target)
-    digest = "sha256:" + hashlib.sha256(paths["json"].read_bytes()).hexdigest()
     ledger("eval.report_written", report=digest, verdict=report.verdict)
-    return RunResult(report, folder, paths)
+    return RunResult(report, folder, paths, replay_problems=problems)
 
 
 def summary(result: RunResult) -> dict:
@@ -354,9 +367,10 @@ def summary(result: RunResult) -> dict:
 def failure(result: RunResult) -> CliError | None:
     """The error to exit with, when the report says the evaluation did not measure."""
     report = result.report
-    if report.problems:
+    if result.replay_problems:
+        verb = "recording" if report.mode == "record" else "replay"
         return CliError(
-            f"the replay failed: {report.problems[0]}",
+            f"the {verb} failed: {result.replay_problems[0]}",
             ExitCode.ERROR,
             hint="re-record the cassettes with --mode record (see library/eval/README.md)",
         )
@@ -364,6 +378,12 @@ def failure(result: RunResult) -> CliError | None:
         return CliError(
             f"blinding leak: {', '.join(report.leaks)} reached the judge; the run is void",
             ExitCode.ERROR,
+        )
+    if report.problems:  # e.g. the judge failed on every run (live, or a recording)
+        return CliError(
+            f"the evaluation measured nothing: {report.problems[0]}",
+            ExitCode.ERROR,
+            hint=f"see the evaluator errors in {result.paths['markdown']}",
         )
     if report.verdict == "UNMEASURABLE":
         return CliError(
@@ -629,10 +649,18 @@ def _classification(cases: list[EvalCase], given: str | None, default: str) -> s
 
 def _folder(given: Path | None, default: Path, flag: str, what: str) -> Path:
     if given is not None:
+        if not given.is_dir():
+            raise CliError(
+                f"{flag} {given} is not a folder", ExitCode.INVALID, hint=f"pass the {what}"
+            )
         return given
     if default.is_dir():
         return default
-    raise CliError(f"no {what} given", ExitCode.USAGE, hint=f"pass {flag} <folder>")
+    raise CliError(
+        f"no {what} given",
+        ExitCode.USAGE,
+        hint=f"pass {flag} <folder> (the corpus has no {default.parent.name}/{default.name})",
+    )
 
 
 def _load[T](load: Callable[[], T]) -> T:
@@ -652,6 +680,13 @@ def _agent(folder: Path, name: str):
             hint=f"known agents: {known}",
         )
     return _load(lambda: load_agent(path))
+
+
+def _team() -> str:
+    """The person's team as other commands see it: AGENTIC_TEAM, else the user config's
+    `team`, else 'eval'."""
+    named = os.environ.get("AGENTIC_TEAM", "").strip()
+    return named or str(user_config(agentic_home()).get("team") or "").strip() or TEAM
 
 
 def _api_key(options: RunOptions, upstream: Upstream | None) -> str:

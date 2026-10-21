@@ -11,7 +11,7 @@ are averaged within a case first, then
 Every case a metric could not score is named beside its denominator. The verdict:
 
   * UNMEASURABLE - a blinding leak, a replay failure, or nothing scored at all;
-  * INCOMPLETE   - the budget cap stopped the evaluation;
+  * INCOMPLETE   - the budget cap stopped the evaluation (even before any run scored);
   * MEASURED     - otherwise. Whether the numbers meet a target is the gate's call (M1-64).
 
 `comparable` is the view CI compares with a committed expected report: everything but
@@ -185,10 +185,12 @@ def build_report(
     spent = [r for r in runs if r.requests or r.cost_usd is not None]
     measured = [r.cost_usd for r in spent if r.cost_usd is not None]
     model_ids = sorted({m for r in runs for m in r.model_ids})
-    if leaks or problems or not any(scored_run(r) for r in runs):
+    if leaks or problems:
         verdict: Verdict = "UNMEASURABLE"
-    elif runset.budget_hit:
+    elif runset.budget_hit:  # even if it stopped every run: the remedy is a larger budget
         verdict = "INCOMPLETE"
+    elif not any(scored_run(r) for r in runs):
+        verdict = "UNMEASURABLE"
     else:
         verdict = "MEASURED"
     return EvalReport(
@@ -260,9 +262,10 @@ def render_markdown(report: EvalReport) -> str:
         f"- **Cost:** {cost} ({report.cost_unmeasured_runs} runs unmeasured)"
         + (f" | budget ${report.budget_usd:.2f}" if report.budget_usd is not None else "")
     )
+    single = len(report.aggregates) == 1  # a label means something only in an A/B
     for label, metrics in report.aggregates.items():
         variant = report.labels.get(label, label)
-        lines += ["", f"## Metrics: {label} ({variant})", ""]
+        lines += ["", "## Metrics" if single else f"## Metrics: {label} ({variant})", ""]
         lines += ["| metric | value | median | 95% CI | cases scored | unscored |"]
         lines += ["|---|---|---|---|---|---|"]
         for name, agg in metrics.items():

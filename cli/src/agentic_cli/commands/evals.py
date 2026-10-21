@@ -148,10 +148,12 @@ def _show_run(console, data: dict) -> None:
         f"{data['agent']}: {data['verdict']} - {data['cases']} cases x {data['repeats']} repeats",
         markup=False,
     )
+    single = len(data["aggregates"]) == 1  # a label means something only in an A/B
     for label, metrics in data["aggregates"].items():
         for name, value in metrics.items():
             shown = "-" if value is None else f"{value:.3f}"
-            console.print(f"  {label} {name}: {shown}", markup=False)
+            prefix = "  " if single else f"  {label} "
+            console.print(f"{prefix}{name}: {shown}", markup=False)
     if data["stale_cassettes"]:
         console.print(
             f"  {data['stale_cassettes']} stale cassettes: prompts changed; re-record soon",

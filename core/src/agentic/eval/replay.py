@@ -164,11 +164,13 @@ class CassetteServer:
             for key in keys:
                 self._served.setdefault(key, 0)
 
-    def finish(self) -> list[str]:
+    def finish(self, capped: Iterable[str] = ()) -> list[str]:
         """Record: write the cassettes - all of them, or none when any call failed or an
         expected run made no call, so the committed set is never half replaced or
-        overwritten with error bodies. Replay: check every key used all its calls.
-        Returns every problem (empty: the recording or replay was faithful)."""
+        overwritten with error bodies. Replay: check every key used all its calls, except
+        the `capped` keys - runs the budget cap skipped or stopped, which the report
+        already calls INCOMPLETE. Returns every problem (empty: faithful)."""
+        capped = set(capped)
         with self._lock:
             if self.mode == "record":
                 for key in sorted(self._served):  # the expected keys
@@ -184,7 +186,7 @@ class CassetteServer:
                         self._write(key, calls)
             else:
                 for key, used in sorted(self._served.items()):
-                    calls = self._cassette(key)
+                    calls = self._cassette(key) if key not in capped else None
                     if calls is not None and used < len(calls):
                         self.problems.append(
                             f"{key}: recorded {len(calls)} calls, the run made {used}"

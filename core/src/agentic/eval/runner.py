@@ -122,7 +122,10 @@ async def run_eval(
         metrics = {k: float(v.value) for k, v in done.scores.items()}
         errors = [f"{f.name}: {f.error_message}" for f in done.evaluator_failures]
         runs.append(EvalRunResult(request, done.output, metrics, errors))
-    return RunSet(runs, repeats, seed, budget_usd, bool(spent["hit"]), spent["usd"])
+    judge_stopped = any(r.record.judge_stopped for r in runs)
+    return RunSet(
+        runs, repeats, seed, budget_usd, bool(spent["hit"]) or judge_stopped, spent["usd"]
+    )
 
 
 BUDGET_STOP = "stopped: the evaluation's budget cap was reached"
@@ -174,6 +177,9 @@ class AgentCaseRunner:
                 record = RunRecord(status="stopped", error=BUDGET_STOP)
             else:  # the agent spent its own per-run budget: its failure, and scored
                 record = RunRecord(status="stopped", errors=[str(hit)])
+            return _record(record, costs, started)
+        except Exception as error:  # noqa: BLE001 - an infrastructure failure, its spend kept
+            record = RunRecord(status="error", error=f"{type(error).__name__}: {error}")
             return _record(record, costs, started)
         finally:
             slice_.close()

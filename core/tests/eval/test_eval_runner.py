@@ -120,6 +120,80 @@ def test_an_agent_s_own_budget_is_its_failure_the_eval_cap_is_not():
     assert hit_eval_cap(LimitHit("run", "run", Decimal("5"), Decimal("5.1")), granted=own, own=own)
 
 
+def resolved_ba(fixtures: Path, tmp_path: Path):
+    policy = load_policy(fixtures / "policy" / "policy")
+    agent_file = tmp_path / "business-analyst.md"
+    agent_file.write_text(
+        "---\nname: business-analyst\ntype: business-analyst\nversion: 1.0.0\nowner: eval\n"
+        "status: active\ndescription: BA for tests.\ntools: []\nproduces: requirements\n"
+        "limits: {budget_usd: 1, max_turns: 5, max_minutes: 5}\n---\nWrite requirements.\n",
+        encoding="utf-8",
+    )
+    resolved, violations = resolve_agent(
+        load_agent(agent_file), policy, ResolveContext(team="payments")
+    )
+    assert resolved is not None, violations
+    return resolved
+
+
+def test_an_errored_run_keeps_what_it_spent(fixtures: Path, tmp_path: Path):
+    """DF-260: a run that fails after paid calls still counts their cost."""
+    from agentic.transport.cost import CallCost
+
+    def model_for(request, costs, budget):
+        def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            paid = CallCost("reported", Decimal("0.25"), 10, 5, None, None, "m", None, None)
+            costs.add(paid, Decimal("0.25"))
+            raise RuntimeError("upstream reset the connection")
+
+        return FunctionModel(answer)
+
+    runner = AgentCaseRunner(
+        resolved_ba(fixtures, tmp_path),
+        model_for,
+        schema=BUILTIN_CATALOG.schema("requirements"),
+        state_root=tmp_path / "state",
+        budget=BudgetLedger(Decimal("5")),
+    )
+    request = RunRequest(scoping_case("c1"), "X", 0, "requirements", "c1.X.0")
+    record = asyncio.run(runner(request))
+    assert record.status == "error" and "reset" in record.error
+    assert record.cost_usd == 0.25 and record.requests == 1
+
+
+def test_a_judge_budget_stop_marks_the_evaluation_incomplete():
+    """DF-260: the judge exhausting its share is the eval cap, not a measured run."""
+    from agentic.eval.metrics import RubricMetric
+    from agentic.transport import LimitHit
+
+    class BrokeJudge:
+        async def score(self, *args, **kwargs):
+            raise LimitHit("step", "judge", Decimal("1"), Decimal("1.1"))
+
+    case = scoping_case("c1")
+    answer = (
+        "---\nkind: requirements\nschema_version: 1\nrun_id: r\nstep: s\nagent: a@1\n"
+        "produced_at: 2026-10-21T10:00:00Z\n" + REQUIREMENTS_ANSWER.removeprefix("---\n")
+    )
+
+    async def run(request: RunRequest) -> RunRecord:
+        return RunRecord(status="completed", output=answer)
+
+    result = asyncio.run(
+        run_eval(
+            [case],
+            {"X": run},
+            kind="requirements",
+            repeats=1,
+            seed=0,
+            evaluators=[RubricMetric(judge_for=lambda request: BrokeJudge())],
+        )
+    )
+    (only,) = result.runs
+    assert "rubric" not in only.metrics and only.record.judge_stopped
+    assert result.budget_hit
+
+
 def test_agent_case_runner_produces_a_schema_valid_handoff(fixtures: Path, tmp_path: Path):
     policy = load_policy(fixtures / "policy" / "policy")
     agent_file = tmp_path / "business-analyst.md"
