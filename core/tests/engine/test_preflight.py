@@ -258,3 +258,23 @@ def test_a_judging_step_outside_a_loop_is_warned_about(check):
 
 def test_a_judging_step_inside_a_loop_is_not_warned_about(check):
     assert "judging-step" not in checks(check(CLEAN))
+
+
+def test_a_baseline_report_a_later_step_replaces_is_not_warned_about(check):
+    """The baseline test report sits outside the loop, but QA's report in the loop is the
+    newest of its kind at the end, so only QA's verdict can pause the run."""
+    pipeline = CLEAN.replace(
+        "  - id: design\n", "  - id: baseline\n    agent: base\n  - id: design\n"
+    ).replace(
+        "        - id: review\n          agent: reviewer\n",
+        "        - id: review\n          agent: reviewer\n        - id: qa\n          agent: qa\n",
+    )
+    agents = {
+        "base": "type: general\nproduces: test-report\nconsumes: []\n",
+        "qa": "type: general\nproduces: test-report\nconsumes: [dev-report]\n",
+    }
+
+    report = check(pipeline, extra_agents=agents)
+
+    assert report.passed, report.text()
+    assert "judging-step" not in checks(report)
