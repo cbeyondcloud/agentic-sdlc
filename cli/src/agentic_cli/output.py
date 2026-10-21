@@ -10,6 +10,9 @@
   never reaches the terminal as control sequences: every string Rich renders goes
   through `printable` (which `Syntax` and `Markdown` callers apply themselves), and
   JSON escapes the C1 controls a terminal would act on.
+* Rich markup is off by default, so square brackets in a run id, path or reason print
+  as they are (`[/x]` would raise MarkupError, `[bold]x` would vanish; DF-218). A styled
+  line passes `markup=True` and puts any such text through `escape`.
 * A stdout or stderr that is not UTF-8 (a Windows pipe or redirect, a legacy code
   page) shows characters it cannot encode as `?` instead of crashing the command
   (`safe_streams`, called by `main`), and JSON on it is ASCII-escaped, so it stays exact.
@@ -22,6 +25,7 @@ from collections.abc import Callable
 from typing import Any, TextIO
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from agentic_cli.errors import CliError
@@ -38,7 +42,11 @@ def printable(text: str) -> str:
 
 
 class _Console(Console):
-    """A Console that renders every string through `printable` (cells, rules, lines)."""
+    """A Console that renders every string through `printable` (cells, rules, lines),
+    with markup off unless a call turns it on."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(markup=False, **kwargs)
 
     def render_str(self, text: str, **kwargs):
         return super().render_str(printable(text), **kwargs)
@@ -79,14 +87,14 @@ class Output:
 
     def warn(self, message: str) -> None:
         if not self.json_mode:
-            self.err.print(f"[yellow]warning:[/yellow] {message}")
+            self.err.print(f"[yellow]warning:[/yellow] {escape(message)}", markup=True)
 
     def error(self, error: CliError) -> None:
         if self.json_mode:
             body = {"error": str(error), "exit_code": int(error.code), "hint": error.hint}
             self.err.print(json.dumps(body, ensure_ascii=False), markup=False, highlight=False)
             return
-        self.err.print(f"[red]error:[/red] {error}", markup=True)
+        self.err.print(f"[red]error:[/red] {escape(str(error))}", markup=True)
         if error.hint:
             self.err.print(f"  {error.hint}", markup=False)
 

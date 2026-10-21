@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich.markup import escape
 
 from agentic.hosting.git import push_branch
 from agentic.repoconfig import RepoConfig
@@ -166,7 +167,9 @@ def _init_repo(
     pull = data["pull_request"]
 
     def show(console) -> None:
-        console.print(f"Prepared branch [bold]{branch}[/bold] ({commit[:12]}) with:")
+        console.print(
+            f"Prepared branch [bold]{escape(branch)}[/bold] ({commit[:12]}) with:", markup=True
+        )
         for path in sorted(files):
             console.print(f"  {path}", markup=False)
         for path in kept:
