@@ -96,6 +96,8 @@ def _describe_yaml_error(error: YAMLError, first_line: int) -> str:
     problem = getattr(error, "problem", None) or str(error).splitlines()[0]
     if "duplicate key" in str(error):
         problem = f"duplicate key ({problem}); each setting may appear only once"
+    elif problem == "mapping values are not allowed here":  # plain text with ': ' in it
+        problem += " - text containing ': ' is read as a new key: put the value in quotes"
     message = f"line {mark.line + first_line}: {problem}" if mark else problem
     context = getattr(error, "context", None) or ""
     context_mark = getattr(error, "context_mark", None)
