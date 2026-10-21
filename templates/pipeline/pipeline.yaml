@@ -37,16 +37,27 @@ steps:                                    # required; at least one step
   #   on_reject: design                   # step a rejection sends the work back to   [the agent step before the gate]
 
   # --- loop step: repeats its steps until a condition holds ---------------------
+  # Put every step that judges the work (code review, QA) INSIDE the loop and let
+  # `until` read each of them: a failure is then routed back to the developer with
+  # the review and QA report. A run never completes while its newest review or QA
+  # report shows a failure; a judging step outside a loop can only pause the run
+  # at its end ("failing-handoff", preflight warns). At an exhausted loop's gate a
+  # bare approval is refused while `until` is false: a person edits a handoff (marks
+  # a review finding accepted, or names a failing test or criterion in the QA
+  # report's accepted_failures and sets its verdict to pass), rejects with feedback
+  # for another pass, or stops the run.
   # - loop:
   #     id: build-review                  # unique loop name
   #     max_iterations: 3                 # 1 or more; the loop never runs forever
-  #     until: "review.open_blocking == 0"   # stop as soon as this is true (checked after each pass)
+  #     until: "review.open_blocking == 0 && test_report.verdict == 'pass'"   # checked after each pass
   #     on_exhausted: gate                # gate | fail: what happens if max_iterations is reached   [gate]
   #     steps:                            # agent and action steps only (no gates, no nested loops)
   #       - id: develop
   #         agent: developer
   #       - id: review
   #         agent: code-review
+  #       - id: qa                        # every pass, so the loop ends on a QA report of this change
+  #         agent: qa
 
   # --- action step: a built-in action, no model call ----------------------------
   # - id: publish

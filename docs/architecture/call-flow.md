@@ -26,19 +26,19 @@ flowchart TD
     g1 -->|approve| dev
     subgraph loop ["Loop build-review, at most 3 iterations"]
         dev["Step develop<br/>developer → dev-report<br/>in the run's worktree + sandbox"] --> rev["Step review<br/>code-review → review"]
-        rev --> until{"review.open_blocking == 0 ?"}
-        until -->|no, next iteration| dev
+        rev --> qa["Step qa (every round)<br/>qa → test-report against the baseline"]
+        qa --> until{"review.open_blocking == 0<br/>and test_report.verdict == 'pass' ?"}
+        until -->|no: review and QA report go back| dev
     end
     until -->|yes| g2{{"Gate review-approval<br/>approver"}}
-    until -->|"3 iterations used, or oscillating"| gx{{"Gate build-review-exhausted"}}
-    gx --> g2
+    until -->|"3 iterations used, or oscillating"| gx{{"Gate build-review-exhausted<br/>approve refused while until is false"}}
+    gx -->|"edit: accept a finding, or name a test in accepted_failures"| g2
+    gx -->|reject + feedback| dev
     g2 -->|reject + feedback| dev
-    g2 -->|approve| qa["Step qa<br/>qa → test-report against the baseline"]
-    qa --> when{"test_report.verdict == 'pass' ?"}
-    when -->|yes| pr["Action publish<br/>github.open_pr (M1-58)"]
-    when -->|no| skipped["publish skipped, the reason recorded"]
-    pr --> done(["Run closed: run_closed event, cost by step"])
-    skipped --> done
+    g2 -->|approve| pr["Action publish<br/>github.open_pr (M1-58)"]
+    pr --> last{"a newest handoff reports a failure ?"}
+    last -->|no| done(["Run closed: run_closed event, cost by step"])
+    last -->|yes| failing(["Paused failing-handoff: the failing handoffs pinned for agentic show"])
 ```
 
 ## 1. Setup, start and preflight
@@ -199,14 +199,15 @@ sequenceDiagram
         Eng->>Eng: deterministic pre-pass: gitleaks, ast-grep, osv-scanner 🔲 M2-48
         Eng->>Rev: agent step with dev-report and the diff
         Rev-->>Eng: review handoff: findings, open_blocking, score
-        Eng->>Eng: until review.open_blocking == 0, else oscillation check ✅ agentic/engine/engine.py · _Run._oscillating
-        Eng->>Led: loop_back ✅ sdlc_commons/ledger.py · RunLedger.record
+        Eng->>QA: agent step, every round: tests against the baseline, every acceptance criterion
+        QA-->>Eng: test-report with verdict
+        Eng->>Eng: until review.open_blocking == 0 && test_report.verdict == 'pass', else oscillation check ✅ agentic/engine/engine.py · _Run._loop, _Run._oscillating
+        Eng->>Led: loop_back: the review and QA report go to the Developer ✅ sdlc_commons/ledger.py · RunLedger.record
     end
+    Note over Eng: exhausted: gate build-review-exhausted, where approve is refused while until is false - edit (accept a finding, or name a test in accepted_failures), reject, or stop ✅ agentic/engine/engine.py · _Run._loop_still_failing
     Note over Eng: then gate review-approval (section 3)
-    Eng->>QA: agent step: tests against the baseline, every acceptance criterion
-    QA-->>Eng: test-report with verdict
-    Eng->>Eng: publish runs only when test_report.verdict == 'pass' ✅ agentic/engine/engine.py · _Run._step
     Eng->>GH: push the run's branch, open the PR with run and handoff links 🔲 M1-58 (PR body ✅ agentic/telemetry/trailers.py · pr_body)
+    Eng->>Eng: a newest handoff still reports a failure: pause failing-handoff, failing handoffs pinned ✅ agentic/engine/engine.py · _Run.go, _Run._failures
     Eng->>Led: run_closed ✅ agentic/engine/engine.py · _Run._close
     Eng-->>Eng: agentic cost: by step, agent and child ✅ agentic_cli/commands/cost.py
 ```
