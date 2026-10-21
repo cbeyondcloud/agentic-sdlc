@@ -44,6 +44,23 @@ def test_policy_repo_from_user_config_then_org_cache_then_standalone(repo, polic
     assert Workspace.load(repo, env={}, home=home).policy_repo == local
 
 
+def test_the_org_cache_is_read_where_init_writes_it(repo, tmp_path):
+    home = tmp_path / "home"
+    write(home / "config.yaml", "org: acme\n")
+    (home / "policy" / "acme" / "repo" / "policy").mkdir(parents=True)
+    assert Workspace.load(repo, env={}, home=home).policy_repo == home / "policy" / "acme" / "repo"
+
+
+def test_the_installed_standalone_policy_comes_last(repo, tmp_path):
+    home = tmp_path / "home"
+    installed = home / "policy" / "standalone"
+    installed.mkdir(parents=True)
+    assert Workspace.load(repo, env={}, home=home).policy_repo == installed
+    local = repo / ".agentic" / "local" / "policy"
+    local.mkdir(parents=True)
+    assert Workspace.load(repo, env={}, home=home).policy_repo == local
+
+
 def test_no_policy_is_refused_with_a_hint(repo, tmp_path):
     with pytest.raises(CliError) as caught:
         Workspace.load(repo, env={}, home=tmp_path / "home").policy()

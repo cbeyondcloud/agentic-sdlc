@@ -16,13 +16,16 @@ standalone/
 
 ## Getting started
 
-From the root of the repository you want to work on:
+From the root of the repository you want to work on (a clean checkout of its default
+branch):
 
 ```
-agentic init --standalone
+agentic init --repo --standalone     # once per repo: proposes .agentic/config.yaml on a branch
+git merge agentic/init               # or push the branch and merge it by a pull request
+agentic init --standalone            # each person, on each machine
 ```
 
-The first time, init builds your own policy repo in `~/.agentic/policy/standalone/`
+The first time, `agentic init --standalone` builds your own policy repo in `~/.agentic/policy/standalone/`
 (`AGENTIC_HOME` instead of `~/.agentic` when you set it). It holds:
 
 - `policy/`, copied from this folder;

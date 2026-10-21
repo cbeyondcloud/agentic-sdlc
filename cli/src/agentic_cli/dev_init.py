@@ -50,6 +50,7 @@ from agentic_cli.exit_codes import ExitCode
 from agentic_cli.policy_source import LoadedPolicy
 from agentic_cli.readiness import Item, Report
 from agentic_cli.repo_guard import RepoRoot
+from agentic_cli.workspace import Workspace
 from sdlc_commons.tool_fetch import FetchResult, ToolFetcher, ToolFetchError
 
 LOCAL_REL = Path(".agentic") / "local"
@@ -59,6 +60,8 @@ LOCAL_WRITES = tuple(
     Path(rel) for rel in ("audit", AUDIT_REL, "skills", "index", "init.json", ".gitignore")
 )
 BUNDLED_SKILLS = Path(__file__).resolve().parents[3] / "library" / "skills"  # dev checkout
+#: The model name the standalone template uses until the person picks real models.
+PLACEHOLDER = "change-me"
 
 
 class IndexSkipped(Exception):
@@ -145,6 +148,8 @@ def run_dev_init(
         tree=root.path,
     )
     items += _policy_items(loaded)
+    if loaded.mode == "standalone":
+        items.append(_runs_policy(root.path, home, loaded.root))
     items += _skills(root.path, local, loaded, config, deps.roles, audit)
     tools = _Tools(home, policy, deps, audit)
     items += tools.required()
@@ -204,6 +209,20 @@ def _policy_items(loaded: LoadedPolicy) -> list[Item]:
     items = [Item("policy", "ok", f"{where} ({policy.version})")]
     for warning in loaded.warnings:
         items.append(Item("policy: cache", "warn", warning, "reconnect and run init again"))
+    for note in loaded.notes:
+        items.append(Item(f"policy: {loaded.mode}", "info", note))
+    placeholders = sorted(name for name, tier in policy.tiers.items() if PLACEHOLDER in tier.model)
+    if placeholders:
+        tiers = loaded.root / "policy" / "tiers.yaml"
+        items.append(
+            Item(
+                "policy: models",
+                "missing",
+                f"placeholder models in tiers {', '.join(placeholders)}",
+                f"replace every '{PLACEHOLDER}' model in {tiers} with a model your gateway "
+                "serves, then run init again",
+            )
+        )
     scan = policy.secret_scan
     detectors = ", ".join(scan.detectors) if scan.detectors else "the default detectors"
     items.append(
@@ -215,6 +234,28 @@ def _policy_items(loaded: LoadedPolicy) -> list[Item]:
         )
     )
     return items
+
+
+def _runs_policy(repo: Path, home: Path, policy_root: Path) -> Item:
+    """Whether later commands in this repo (`agentic run`...) will use this policy."""
+    found = Workspace.load(repo, home=home).policy_repo
+    if found is not None and _same_folder(found, policy_root):
+        return Item("policy: runs", "info", f"later commands use {policy_root}")
+    using = f"use {found}" if found is not None else "find no policy"
+    return Item(
+        "policy: runs",
+        "warn",
+        f"later commands in this repo {using}, not {policy_root}",
+        f"set AGENTIC_POLICY_REPO={policy_root} (or policy_repo: {policy_root.as_posix()} in "
+        f"{home / 'config.yaml'})",
+    )
+
+
+def _same_folder(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return False
 
 
 # --- skills ---

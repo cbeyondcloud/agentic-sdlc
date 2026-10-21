@@ -4,8 +4,9 @@ repo, the team and the person.
   * repository   - the nearest folder holding `.git` (a folder, or a file in a worktree);
   * repo config  - `.agentic/config.yaml` (committed): `classification`;
   * policy repo  - `AGENTIC_POLICY_REPO`, else the user config's `policy_repo`, else the
-                   policy cache `~/.agentic/policy/<org>/` (user config `org`; written by
-                   `agentic init`), else the standalone `.agentic/local/policy/`;
+                   policy cache `~/.agentic/policy/<org>/repo/` (user config `org`;
+                   written by `agentic init`), else the standalone `.agentic/local/policy/`,
+                   else `~/.agentic/policy/standalone/` (`agentic init --standalone`);
                    its `policy/` folder is the org policy, its root the org layer of
                    agents and pipelines, `teams/<team>/` the team layer;
   * team         - `AGENTIC_TEAM`, else the user config's `team`;
@@ -31,6 +32,7 @@ from agentic.yamlio import YamlFileError, load_yaml, read_text
 from agentic_cli.config import agentic_home, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.standalone import STANDALONE_DIR
 
 REPO_CONFIG = Path(".agentic") / "config.yaml"
 RUNS = Path(".agentic") / "local" / "runs"
@@ -97,10 +99,16 @@ class Workspace:
         if given:
             return Path(str(given)).expanduser()
         org = self.settings.get("org")
-        if org and (self.home / "policy" / str(org)).is_dir():
-            return self.home / "policy" / str(org)
+        if org:
+            cached = self.home / "policy" / str(org)
+            if (cached / "repo").is_dir():  # where `agentic init` caches the policy repo
+                return cached / "repo"
+            if cached.is_dir():
+                return cached
         if (self.repo / STANDALONE_POLICY).is_dir():
             return self.repo / STANDALONE_POLICY
+        if (self.home / STANDALONE_DIR).is_dir():  # `agentic init --standalone` (M1-62)
+            return self.home / STANDALONE_DIR
         return None
 
     @property
