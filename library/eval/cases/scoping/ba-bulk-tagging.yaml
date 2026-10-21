@@ -14,4 +14,4 @@ expected:
     - partial failure is reported per product
     - only catalogue editors may bulk-tag
 rubric: ba-requirements
-tags: [catalogue]
+tags: [catalogue, fixture]

@@ -24,4 +24,4 @@ expected:
       lines: [2, 3]
       category: validation
       note: a negative percent is not rejected and increases the total
-tags: [billing]
+tags: [billing, fixture]

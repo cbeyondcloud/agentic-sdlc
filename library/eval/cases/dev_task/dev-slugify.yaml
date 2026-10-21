@@ -13,4 +13,4 @@ expected:
   tests:
     fail_to_pass: [tests/test_textutil.py::test_slugify_strips_accents]
     pass_to_pass: [tests/test_textutil.py::test_slugify_basic]
-tags: [python]
+tags: [python, fixture]

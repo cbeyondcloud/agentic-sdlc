@@ -74,13 +74,21 @@ class Corpus:
     manifest: CorpusManifest
     _by_id: dict[str, EvalCase] = field(default_factory=dict, repr=False)
 
-    def select(self, agent: str | None = None, split: Split | None = None) -> list[EvalCase]:
-        """The cases for one agent and/or split, in id order."""
+    def select(
+        self, agent: str | None = None, split: Split | None = None, tag: str | None = None
+    ) -> list[EvalCase]:
+        """The cases for one agent, split and/or tag, in id order."""
         return [
             case
             for case in self.cases
-            if (agent is None or case.agent == agent) and (split is None or case.split == split)
+            if (agent is None or case.agent == agent)
+            and (split is None or case.split == split)
+            and (tag is None or tag in case.tags)
         ]
+
+    def tags(self) -> list[str]:
+        """Every tag some case carries, sorted."""
+        return sorted({tag for case in self.cases for tag in case.tags})
 
     def case(self, case_id: str) -> EvalCase:
         return self._by_id[case_id]

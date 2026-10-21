@@ -3,7 +3,7 @@
     agentic eval run --agent <name> [--corpus DIR] [--split holdout|dev|all] [--repeat N]
                      [--mode live|record|replay] [--budget-usd N] [--out DIR]
                      [--policy DIR] [--agents DIR] [--cassettes DIR] [--gateway URL]
-                     [--classification CLASS]
+                     [--classification CLASS] [--tag TAG]
     agentic eval calibrate export --report DIR [--out FILE]
     agentic eval calibrate score  --report DIR --scores FILE --scores FILE
 
@@ -69,6 +69,10 @@ def register(app: typer.Typer) -> None:
                 help="Data class of cases that name none (default: the org's default class)."
             ),
         ] = None,
+        tag: Annotated[
+            str | None,
+            typer.Option(help="Only cases carrying this tag (fixture: the recorded CI subset)."),
+        ] = None,
     ) -> None:
         """Run an agent over an eval corpus and write a report."""
         output: Output = ctx.obj
@@ -88,6 +92,7 @@ def register(app: typer.Typer) -> None:
                 seed=seed,
                 max_concurrency=concurrency,
                 classification=classification,
+                tag=tag,
             )
         )
         data = evaluation.summary(result)

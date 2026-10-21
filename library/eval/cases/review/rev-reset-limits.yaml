@@ -40,4 +40,4 @@ expected:
       lines: [14, 15]
       category: security
       note: the per-account limit answers differently from success, which also reveals the account
-tags: [auth, security]
+tags: [auth, security, fixture]

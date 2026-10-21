@@ -114,6 +114,7 @@ class EvalReport(_Model):
     kind: str
     corpus_manifest_sha: str
     split: str
+    tag: str | None = None  # only cases carrying this tag were run
     cases: list[str]
     k: int
     seed: int
@@ -152,6 +153,7 @@ def build_report(
     corpus_manifest_sha: str,
     split: str,
     labels: dict[str, str],
+    tag: str | None = None,
     judge: JudgeInfo | None = None,
     leaks: Sequence[str] = (),
     stale_cassettes: int = 0,
@@ -195,6 +197,7 @@ def build_report(
         kind=kind,
         corpus_manifest_sha=corpus_manifest_sha,
         split=split,
+        tag=tag,
         cases=cases,
         k=runset.repeats,
         seed=runset.seed,
@@ -231,7 +234,9 @@ def render_markdown(report: EvalReport) -> str:
         f"# Eval report: {report.agent} ({report.kind})",
         "",
         f"- **Verdict:** {report.verdict}",
-        f"- **Mode:** {report.mode} | **split:** {report.split} | "
+        f"- **Mode:** {report.mode} | **split:** {report.split}"
+        + (f" | **tag:** {report.tag}" if report.tag else "")
+        + " | "
         f"**cases:** {report.n} x {report.k} repeats | **seed:** {report.seed}",
         f"- **Corpus:** `{report.corpus_manifest_sha}`",
         f"- **Agent:** {report.agent}@{report.agent_version or '?'} | "

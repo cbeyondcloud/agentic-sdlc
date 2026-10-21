@@ -45,7 +45,7 @@
     "ba-reset-limits",
     "ba-webhook-retries"
   ],
-  "corpus_manifest_sha": "sha256:e06ee048dc597ae36e27fb0b0b6cace0e34547bae33ca121cc524d5323ac9bc0",
+  "corpus_manifest_sha": "sha256:54d6680d6ea36537f742b89a969db9684e2abcfec66a772477d3b54762c7eecb",
   "cost_total_usd": 0.021,
   "cost_unmeasured_runs": 0,
   "judge": {
@@ -382,6 +382,7 @@
   "seed": 0,
   "split": "all",
   "stale_cassettes": 0,
+  "tag": "fixture",
   "unscored_runs": [],
   "verbosity_r": {
     "X": 0.9113346345279643

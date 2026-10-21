@@ -15,4 +15,4 @@ expected:
     - behaviour when the limit store is unavailable
     - reuse of the existing limiter or cache
 rubric: design
-tags: [auth, security]
+tags: [auth, security, fixture]

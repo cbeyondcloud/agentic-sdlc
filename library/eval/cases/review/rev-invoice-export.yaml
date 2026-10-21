@@ -46,4 +46,4 @@ expected:
       lines: [6, 9]
       category: security
       note: no finance role check before enqueueing the export
-tags: [billing]
+tags: [billing, fixture]

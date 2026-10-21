@@ -13,4 +13,4 @@ inputs:
 expected:
   golden: golden/test-report/03-webhook-retries.md
   failing_criteria: [REQ-3.1]
-tags: [integrations]
+tags: [integrations, fixture]

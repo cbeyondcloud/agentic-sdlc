@@ -34,6 +34,8 @@ REPO = Path(__file__).resolve().parent.parent
 LIBRARY = REPO / "library" / "eval"
 FIXTURES = LIBRARY / "fixtures"
 AGENTS = ["business-analyst", "design", "code-review", "qa", "developer"]
+#: Only these cases have cassettes: CI replays them; the rest of the corpus is for live runs.
+FIXTURE_TAG = "fixture"
 
 
 class ScriptedUpstream:
@@ -117,7 +119,7 @@ def main() -> int:
 
 def _record(script: dict, scratch: str) -> int:
     for agent in AGENTS:
-        options = dict(agent=agent, corpus=LIBRARY, split="all", seed=0)
+        options = dict(agent=agent, corpus=LIBRARY, split="all", seed=0, tag=FIXTURE_TAG)
         recorded = execute_run(
             RunOptions(**options, mode="record", out=Path(scratch) / "rec" / agent),
             upstream=ScriptedUpstream(script),

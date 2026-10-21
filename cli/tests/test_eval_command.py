@@ -38,6 +38,8 @@ def run(tmp_path: Path, agent: str, *extra: str) -> tuple[int, Path]:
             "replay",
             "--out",
             str(out),
+            "--tag",
+            "fixture",
             *extra,
         ]
     )
@@ -169,6 +171,27 @@ def run_corpus(corpus: Path, out: Path, agent: str, *extra: str) -> int:
             *extra,
         ]
     )
+
+
+def test_tag_selects_the_fixture_subset(tmp_path: Path, capsys):
+    """CI replays only the cases with cassettes (tag `fixture`); the rest of the corpus is
+    for live runs and has none."""
+    corpus = corpus_copy(tmp_path)
+    seed = corpus / "cases" / "scoping" / "ba-invoice-export.yaml"
+    extra = seed.read_bytes().replace(b"id: ba-invoice-export", b"id: ba-untagged-extra")
+    (corpus / "cases" / "scoping" / "ba-untagged-extra.yaml").write_bytes(
+        extra.replace(b"fixture, ", b"").replace(b", fixture", b"").replace(b"[fixture]", b"[]")
+    )
+    write_manifest(corpus)
+    out = tmp_path / "rep"
+    assert run_corpus(corpus, out, "business-analyst", "--tag", "fixture") == ExitCode.OK
+    report = EvalReport.model_validate_json((out / "report.json").read_bytes())
+    assert "ba-untagged-extra" not in report.cases and report.tag == "fixture"
+    capsys.readouterr()
+    assert run_corpus(corpus, tmp_path / "x", "business-analyst", "--tag", "nope") == (
+        ExitCode.INVALID
+    )
+    assert "fixture" in capsys.readouterr().err  # the known tags are listed
 
 
 def test_a_rubric_id_cannot_leave_the_corpus(tmp_path: Path, capsys):

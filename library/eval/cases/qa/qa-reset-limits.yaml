@@ -24,4 +24,4 @@ inputs:
       answer HTTP 429 "too many requests". No audit event is written yet.
 expected:
   failing_criteria: [REQ-1.2, REQ-3.1]
-tags: [auth]
+tags: [auth, fixture]

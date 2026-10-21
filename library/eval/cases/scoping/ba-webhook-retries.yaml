@@ -15,4 +15,4 @@ expected:
     - integrators can list failed deliveries
     - integrators can replay a failed delivery
 rubric: ba-requirements
-tags: [integrations]
+tags: [integrations, fixture]

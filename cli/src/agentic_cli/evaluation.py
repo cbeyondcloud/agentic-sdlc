@@ -95,6 +95,7 @@ class RunOptions:
     seed: int = 0
     max_concurrency: int = 1
     classification: str | None = None  # for cases that name none (default: the org's)
+    tag: str | None = None  # only cases carrying this tag (CI: `fixture`, the cassette subset)
 
 
 @dataclass(frozen=True)
@@ -125,10 +126,17 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     policy = _load(lambda: load_policy(policy_dir))
     definition = _agent(agents_dir, options.agent)
     split = None if options.split == "all" else options.split
-    cases = corpus.select(agent=options.agent, split=split)  # type: ignore[arg-type]
+    cases = corpus.select(options.agent, split, options.tag)  # type: ignore[arg-type]
     if not cases:
+        if options.tag is not None and options.tag not in corpus.tags():
+            raise CliError(
+                f"no case in the corpus carries the tag {options.tag!r}",
+                ExitCode.INVALID,
+                hint=f"known tags: {', '.join(corpus.tags()) or 'none'}",
+            )
+        tagged = f" {options.tag!r}" if options.tag is not None else ""
         raise CliError(
-            f"the corpus has no {options.split} cases for agent {options.agent}",
+            f"the corpus has no {options.split}{tagged} cases for agent {options.agent}",
             ExitCode.INVALID,
             hint=f"cases name their agent in 'agent:'; corpus: {root}",
         )
@@ -298,6 +306,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
         kind=kind,
         corpus_manifest_sha=corpus.manifest.sha,
         split=options.split,
+        tag=options.tag,
         labels=labels.reveal(),
         judge=judge_info,
         leaks=leaks.leaks,
