@@ -20,7 +20,7 @@ import typer
 from agentic_cli.commands import COMMANDS
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
-from agentic_cli.output import Output
+from agentic_cli.output import Output, safe_streams
 
 
 def build_app() -> typer.Typer:
@@ -48,6 +48,7 @@ def build_app() -> typer.Typer:
 
 def main(argv: Sequence[str] | None = None, app: typer.Typer | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    safe_streams()  # a Windows pipe is not UTF-8: never crash on an arrow in agent text
     command = typer.main.get_command(app or build_app())
     out = Output(json_mode="--json" in args, color="--no-color" not in args)
     try:

@@ -6,7 +6,10 @@
     agentic status [<run>]
     agentic runs [--all]
     agentic stop <run> --reason TEXT
-    agentic logs <run> [--step ID] [--level LEVEL]          (M1-47's command)
+    agentic logs <run> [--step ID] [--level LEVEL] [--follow]   (M1-47's command)
+
+`logs` shows the run's per-step logs, redacted once more on read. `--follow` keeps
+printing new records until the run stops running (`--json --follow`: JSON Lines).
 
 A run that waits for a person exits 4, one stopped (or paused at a limit) exits 5, a
 dry run whose preflight fails exits 3 with the report.
@@ -19,13 +22,15 @@ the run (four-eyes).
 """
 
 import asyncio
+import time
+from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
 from typing import Annotated
 
 import typer
 
 from agentic.engine.state import RunState, RunStateError
-from agentic.telemetry.logs import LEVELS, read_logs, render_logs
+from agentic.telemetry.logs import LEVELS, LogTail, read_logs, redact_record, render_logs
 from agentic_cli.driving import (
     drive,
     engine_errors,
@@ -169,18 +174,62 @@ def register(app: typer.Typer) -> None:
         run_id: str,
         step: Annotated[str | None, typer.Option(help="A step id, or <step>-<iteration>.")] = None,
         level: Annotated[str | None, typer.Option(help="Lowest level shown.")] = None,
+        follow: Annotated[
+            bool,
+            typer.Option(
+                "--follow", "-f", help="Keep printing new records until the run stops running."
+            ),
+        ] = False,
     ) -> None:
-        """A run's per-step logs (secrets redacted when written)."""
+        """A run's per-step logs (secrets redacted when written, and again when shown)."""
         out: Output = ctx.obj
         if level is not None and level.lower() not in LEVELS:
             raise CliError(f"--level is one of {', '.join(LEVELS)}", ExitCode.USAGE)
         rt = Runtime(Workspace.load())
         _load(rt, run_id)
-        records = read_logs(rt.store.path(run_id).parent, step, level)
+        redact = _log_redactor(rt)
+        run_dir = rt.store.path(run_id).parent
+        if follow:
+            _follow(out, rt, run_id, LogTail(run_dir, step, level), redact)
+            return
+        records = [redact_record(r, redact) for r in read_logs(run_dir, step, level)]
         out.result(records, lambda c: c.print(render_logs(records), markup=False, end=""))
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+FOLLOW_INTERVAL_S = 0.5
+_sleep = time.sleep  # replaced by the tests
+
+
+def _log_redactor(rt: Runtime) -> Callable[[str], str]:
+    """The redactor for shown logs: with the gateway key when one is configured, but
+    reading logs never needs a gateway."""
+    try:
+        return rt.redact(rt.gateway())
+    except CliError:
+        return rt.redact()
+
+
+def _follow(
+    out: Output, rt: Runtime, run_id: str, tail: LogTail, redact: Callable[[str], str]
+) -> None:
+    """Print records as they are written, until the run is no longer running.
+
+    The status is read BEFORE each poll: once a status read says the run stopped
+    running, the poll after it has every record written before that, so the last
+    records are never missed. A run whose process died stays `running`: Ctrl-C ends
+    the follow (exit 130)."""
+    while True:
+        status = _load(rt, run_id).status
+        for record in tail.poll(final=status != "running"):
+            clean = redact_record(record, redact)
+            out.stream(clean, render_logs([clean]))
+        if status != "running":
+            break
+        _sleep(FOLLOW_INTERVAL_S)
+    if not out.json_mode:
+        out.err.print(f"run {run_id} is {status}", markup=False)
 
 
 def _inputs(pairs: list[str]) -> dict[str, str]:

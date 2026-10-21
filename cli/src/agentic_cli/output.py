@@ -10,12 +10,16 @@
   never reaches the terminal as control sequences: every string Rich renders goes
   through `printable` (which `Syntax` and `Markdown` callers apply themselves), and
   JSON escapes the C1 controls a terminal would act on.
+* A stdout or stderr that is not UTF-8 (a Windows pipe or redirect, a legacy code
+  page) shows characters it cannot encode as `?` instead of crashing the command
+  (`safe_streams`, called by `main`), and JSON on it is ASCII-escaped, so it stays exact.
 """
 
 import json
 import re
+import sys
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TextIO
 
 from rich.console import Console
 from rich.table import Table
@@ -64,6 +68,15 @@ class Output:
         else:
             self.out.print(str(data), markup=False)
 
+    def stream(self, data: Any, text: str) -> None:
+        """Show one item of a stream as it arrives (`logs --follow`): with `--json`, one
+        compact JSON document per line (JSON Lines); otherwise `text`, as it is."""
+        if self.json_mode:
+            print(_json(data, indent=None), flush=True)
+        else:
+            self.out.print(text, markup=False, end="")
+            self.out.file.flush()
+
     def warn(self, message: str) -> None:
         if not self.json_mode:
             self.err.print(f"[yellow]warning:[/yellow] {message}")
@@ -78,8 +91,31 @@ class Output:
             self.err.print(f"  {error.hint}", markup=False)
 
 
-def _json(data: Any) -> str:
+def _json(data: Any, indent: int | None = 2) -> str:
     """`data` as JSON; C0 controls are escaped by JSON itself, C1 controls here (as
-    `\\u0080`...), so the text is the same for a parser and inert in a terminal."""
-    text = json.dumps(data, indent=2, default=str, ensure_ascii=False)
+    `\\u0080`...), so the text is the same for a parser and inert in a terminal. On a
+    stdout that is not UTF-8 everything beyond ASCII is escaped, so nothing is lost."""
+    ascii_only = not _utf8(sys.stdout)
+    text = json.dumps(data, indent=indent, default=str, ensure_ascii=ascii_only)
     return _C1.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
+
+
+def _utf8(stream: TextIO | None) -> bool:
+    encoding = (getattr(stream, "encoding", None) or "").lower().replace("-", "").replace("_", "")
+    return encoding in ("utf8", "utf8sig", "cp65001")
+
+
+def safe_streams(*streams: TextIO | None) -> None:
+    """Let each text stream that is not UTF-8 replace what it cannot encode (`?`)
+    instead of raising UnicodeEncodeError mid-output: a Windows pipe or redirect uses
+    the ANSI code page, and agent text holds arrows, accents and CJK. A UTF-8 stream,
+    or one that cannot be reconfigured (a test capture), is left as it is."""
+    for stream in streams or (sys.stdout, sys.stderr):
+        if stream is None or _utf8(stream):
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(errors="replace")
+            except (ValueError, OSError):  # a detached or closed stream
+                continue
