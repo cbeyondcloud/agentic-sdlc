@@ -229,7 +229,8 @@ class AgentCaseRunner:
         answered or failed on its own). A test that cannot run leaves tests_pass
         unmeasured, never failed by the harness."""
         tests = request.case.expected.tests
-        if workspace is None or tests is None or record.status not in SCORED:
+        unscored = record.status not in SCORED or record.error is not None  # e.g. the cap
+        if workspace is None or tests is None or unscored:
             return record
         try:
             record.tests = await run_tests(
