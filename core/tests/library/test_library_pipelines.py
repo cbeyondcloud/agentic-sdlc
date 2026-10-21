@@ -284,6 +284,37 @@ def test_a_failed_qa_routes_back_to_the_developer(library, standalone_policy, na
     assert run["ledger"].verify() == []
 
 
+RED = ["tests/test_legacy.py::test_old", "tests/test_io.py"]  # a failure and a collection error
+
+
+@pytest.mark.parametrize("name", PIPELINES)
+def test_a_repo_that_is_already_red_completes_on_no_new_failures(
+    library, standalone_policy, name, tmp_path: Path
+):
+    """DF-231: the baseline names the failures (a collection error counted as one) and
+    passes, because it was measured; QA copies them into baseline_failures and passes on
+    no NEW failures. The run completes and publishes."""
+    red = {"tests": {"passed": 40, "failed": 2, "skipped": 0}, "failures": RED}
+    script = {
+        **SCRIPT,
+        "code-review": [answer("review", findings=[])],
+        "qa-baseline": [
+            answer(
+                "test-report",
+                summary="Baseline: 40 passed, 2 failed.",
+                baseline_failures=RED,
+                **red,
+            )
+        ],
+        "qa": [answer("test-report", baseline_failures=RED, **red)],
+    }
+    run = dry_run(library, standalone_policy, name, tmp_path, script)
+    state = run["state"]
+    assert state.status == "completed", state.pending
+    assert run["published"] == [state.run_id]
+    assert "tests/test_io.py" in run["seen"]["qa"]  # QA read the baseline it must copy
+
+
 @pytest.mark.parametrize("name", PIPELINES)
 def test_qa_that_keeps_failing_ends_at_a_gate_never_completed(
     library, standalone_policy, name, tmp_path: Path

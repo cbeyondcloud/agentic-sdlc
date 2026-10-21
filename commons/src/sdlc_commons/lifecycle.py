@@ -10,6 +10,8 @@ module reads them from the installed package, through Zyroflo's own accessor
                      an SOP that disagrees with Zyroflo's catalog is refused;
   * review_rubric() - the review categories and weights; refused unless the
                      weights sum to 10, as the rubric itself promises;
+  * review_deductions() - points off per finding by severity, and the cap a
+                     critical finding puts on the final score;
   * RUNS_ROOT      - where the framework keeps run folders (git-ignored); set for
                      Zyroflo when `sdlc_commons` is imported (Z3).
 """
@@ -38,6 +40,12 @@ _FRONT_MATTER_FIELDS = (
 _CATEGORY_ROW = re.compile(
     r"^\|\s*\d+\s*\|\s*\*\*(?P<name>[^*]+)\*\*\s*\|\s*(?P<weight>\d+(?:\.\d+)?)\s*\|"
     r"\s*(?P<checks>.+?)\s*\|\s*$"
+)
+
+
+#: `| 🟠 High | −0.5 | ... |` and `| 🔴 Critical | caps final score at **8.0** | ... |`
+_DEDUCTION_ROW = re.compile(
+    r"^\s*\|[^|]*?\b(?P<severity>Critical|High|Medium|Low)\s*\|\s*(?P<value>[^|]+?)\s*\|"
 )
 
 
@@ -99,6 +107,26 @@ def review_rubric() -> list[RubricCategory]:
     if not rubric or abs(total - 10) > 1e-9:
         raise LifecycleError(f"review rubric at {path}: category weights sum to {total:g}, not 10")
     return rubric
+
+
+def review_deductions() -> dict[str, float]:
+    """The rubric's severity deductions (`high`, `medium`, `low`: points off per finding)
+    and `critical_cap` (the highest final score with a critical finding), from Zyroflo's
+    scoring procedure; refused when one is missing (DF-235)."""
+    path = content.root() / _RUBRIC
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise LifecycleError(f"review rubric not readable at {path}: {error}") from error
+    found: dict[str, float] = {}
+    for match in map(_DEDUCTION_ROW.match, _section(lines, "## Scoring procedure")):
+        if match and (number := re.search(r"\d+(?:\.\d+)?", match["value"])):
+            severity = match["severity"].lower()
+            found["critical_cap" if severity == "critical" else severity] = float(number[0])
+    missing = {"critical_cap", "high", "medium", "low"} - set(found)
+    if missing:
+        raise LifecycleError(f"review rubric at {path}: no deduction for {sorted(missing)}")
+    return found
 
 
 def _load(entry) -> Stage:

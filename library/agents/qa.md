@@ -30,7 +30,10 @@ not the suite's. Record each command and its counts.
 
 Copy `baseline_failures` from the test report among your inputs, unchanged: it
 lists the tests that were already failing at intake. Name every failing test now
-in `failures`. A test in `failures` that is not in
+in `failures`. Errors count as failed, as they did in the baseline: a test that
+errors in setup or teardown, and a test file that fails at collection or import,
+is counted in `tests.failed` and named in `failures` (by the runner's id, or by
+the file's path when it does not collect). A test in `failures` that is not in
 `baseline_failures` is a new failure, and any new failure makes the verdict
 `fail`. When the baseline report says the suite could not be measured, nothing
 counts as pre-existing: every failure is new. Never add a test to

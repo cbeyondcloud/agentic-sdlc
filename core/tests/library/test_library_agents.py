@@ -110,6 +110,15 @@ def test_the_reviewer_cannot_write_files_through_its_shell(
     assert guard.command(command) != []
 
 
+@pytest.mark.parametrize("name", ["qa", "qa-baseline"])
+def test_qa_agents_count_collection_and_setup_errors_as_failures(library, name):
+    """DF-231: a test report has no `errors` count; a suite with collection or setup
+    errors must still be counted and named, or a red baseline is miscounted."""
+    text = " ".join(library.agent(name).instructions.split()).lower()
+    assert "errors count as failed" in text
+    assert "collection" in text and "setup" in text
+
+
 def test_review_loop_and_baseline_rules_are_in_the_instructions(library):
     review = library.agent("code-review").instructions
     assert "open_blocking" in review and "never" in review.lower()  # score never gates
