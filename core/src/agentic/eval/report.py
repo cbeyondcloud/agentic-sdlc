@@ -309,16 +309,23 @@ def render_markdown(report: EvalReport) -> str:
 def write_report(
     report: EvalReport, folder: Path, runs: Sequence[EvalRunResult] = ()
 ) -> dict[str, Path]:
-    """report.json, report.md, and judged/<run>.md (exactly what the judge saw: the
-    calibration export shows people the same text). LF line endings throughout."""
+    """report.json, report.md, and per judged run judged/<run>.md and
+    judged/<run>.context.json - exactly the output, reference and key points the judge
+    saw: the calibration export shows people the same. LF line endings throughout."""
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     paths = {"json": folder / "report.json", "markdown": folder / "report.md"}
     _write(paths["json"], json.dumps(report.model_dump(mode="json"), indent=2) + "\n")
     _write(paths["markdown"], render_markdown(report))
     for item in runs:
-        if item.record.judged is not None:
-            _write(folder / "judged" / f"{item.request.run_id}.md", item.record.judged)
+        record = item.record
+        if record.judged is not None:
+            _write(folder / "judged" / f"{item.request.run_id}.md", record.judged)
+            context = {"reference": record.judge_reference, "key_points": record.judge_key_points}
+            _write(
+                folder / "judged" / f"{item.request.run_id}.context.json",
+                json.dumps(context, indent=2, ensure_ascii=False) + "\n",
+            )
     return paths
 
 

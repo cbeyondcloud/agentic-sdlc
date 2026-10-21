@@ -270,11 +270,13 @@ class RubricMetric(Evaluator[RunRequest, RunRecord, None]):
         if parse_document(record.output, ctx.inputs.kind) is None or record.status != "completed":
             return {"rubric": 0.0}  # an invalid document delivers nothing to grade
         record.judged = self.scrubber.scrub(judge_view(record.output or ""))  # what it sees
+        record.judge_reference = self.reference(case)  # people calibrating see these too
+        record.judge_key_points = list(case.expected.key_points)
         try:
             result = await judge.score(
                 record.judged,
-                reference=self.reference(case),
-                key_points=case.expected.key_points,
+                reference=record.judge_reference,
+                key_points=record.judge_key_points,
             )
         except LimitHit:  # the eval's cap, not the agent's doing: unscored, INCOMPLETE
             record.judge_stopped = True

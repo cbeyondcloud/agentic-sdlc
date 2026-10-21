@@ -476,7 +476,7 @@ def calibrate(*args: str) -> int:
 
 
 def rater_files(tmp_path: Path, out: Path, names=("lead-a", "lead-b")) -> list[Path]:
-    key = json.loads((out / "calibration" / "key.json").read_text(encoding="utf-8"))
+    key = json.loads((out / "calibration-key.json").read_text(encoding="utf-8"))
     paths = []
     for i, name in enumerate(names):
         path = tmp_path / f"rater-{i}.yaml"
@@ -484,6 +484,22 @@ def rater_files(tmp_path: Path, out: Path, names=("lead-a", "lead-b")) -> list[P
         path.write_text(dump_yaml({"rater": name, "scores": scores}), encoding="utf-8")
         paths.append(path)
     return paths
+
+
+def test_raters_see_what_the_judge_saw_and_never_its_totals(tmp_path: Path, capsys):
+    """DF-257: kappa(judge, human) compares like with like - raters get the reference and
+    key points the judge got - and the folder handed to raters holds no answer key."""
+    from agentic.yamlio import load_yaml
+
+    _, out = run(tmp_path, "business-analyst")
+    assert calibrate("export", "--report", str(out)) == ExitCode.OK
+    pack = load_yaml((out / "calibration" / "pack.yaml").read_text(encoding="utf-8"))[0]
+    with_golden = [i for i in pack["items"] if i.get("reference")]
+    assert with_golden and all("## " in i["reference"] for i in with_golden)
+    assert all(i["key_points"] for i in pack["items"])
+    handed_out = {p.name for p in (out / "calibration").iterdir()}
+    assert handed_out == {"pack.yaml", "scores-template.yaml"}
+    assert (out / "calibration-key.json").is_file()
 
 
 def test_calibration_needs_two_distinct_raters(tmp_path: Path, capsys):
@@ -548,7 +564,7 @@ def test_calibration_export_is_blind_and_scoring_accepts_an_agreeing_judge(tmp_p
     assert "family-a" not in pack and "family-b" not in pack and ".X." not in pack
     assert exported["items"] == 8  # all 8 judged runs: fewer than the minimum of 10
 
-    key = json.loads((out / "calibration" / "key.json").read_text(encoding="utf-8"))
+    key = json.loads((out / "calibration-key.json").read_text(encoding="utf-8"))
     rater = {item: entry["judge_total"] for item, entry in key["items"].items()}
     files = []
     for name, shift in (("lead-a", 0), ("lead-b", 1)):
@@ -567,7 +583,7 @@ def test_calibration_export_is_blind_and_scoring_accepts_an_agreeing_judge(tmp_p
 def test_raters_who_disagree_mean_the_rubric_is_ambiguous(tmp_path: Path, capsys):
     _, out = run(tmp_path, "business-analyst")
     calibrate("export", "--report", str(out))
-    key = json.loads((out / "calibration" / "key.json").read_text(encoding="utf-8"))
+    key = json.loads((out / "calibration-key.json").read_text(encoding="utf-8"))
     items = sorted(key["items"])
     files = []
     for name, scores in (

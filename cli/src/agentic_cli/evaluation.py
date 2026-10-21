@@ -78,6 +78,7 @@ CALIBRATION_MINIMUM = 10  # ... at least 10, doubled when the judge shares the a
 KAPPA_FLOOR = 0.6
 WITHIN_ONE_FLOOR = 0.8
 HALF_POINTS = [i / 2 for i in range(21)]  # 0, 0.5, ..., 10: a mean of two raters
+CALIBRATION_KEY = "calibration-key.json"  # beside the report, never in calibration/
 
 
 @dataclass(frozen=True)
@@ -487,7 +488,12 @@ def export_calibration(report_dir: Path, out: Path | None = None, *, seed: int =
             "item-" + hashlib.sha256(f"{report.report_id}/{run.run_id}".encode()).hexdigest()[:10]
         )
         text = read_text(report_dir / "judged" / f"{run.run_id}.md")
-        items.append({"id": opaque, "rubric": run.judge.rubric_key, "text": text})  # type: ignore[union-attr]
+        item = {"id": opaque, "rubric": run.judge.rubric_key, "text": text}  # type: ignore[union-attr]
+        context_path = report_dir / "judged" / f"{run.run_id}.context.json"
+        if context_path.is_file():  # what the judge graded against, so raters do too
+            context = json.loads(context_path.read_bytes())
+            item |= {"reference": context.get("reference"), "key_points": context["key_points"]}
+        items.append(item)
         key[opaque] = {
             "run_id": run.run_id,
             "judge_total": run.metrics.get("rubric"),
@@ -507,7 +513,8 @@ def export_calibration(report_dir: Path, out: Path | None = None, *, seed: int =
     pack = {
         "instructions": (
             "Score each item 0-10 with the rubric: sum the criteria, each 0, 1 or 2 by its "
-            "anchors. Score on your own; do not discuss items with the other rater. Copy "
+            "anchors, judging the text against the item's reference and key points where "
+            "given. Score on your own; do not discuss items with the other rater. Copy "
             "scores-template.yaml, fill in your name and a score per item, and return it."
         ),
         "rubrics": rubrics,
@@ -518,8 +525,12 @@ def export_calibration(report_dir: Path, out: Path | None = None, *, seed: int =
         folder / "scores-template.yaml",
         dump_yaml({"rater": "", "scores": {i["id"]: None for i in items}}),
     )
+    # the answer key (the judge's totals) stays beside the report, outside the folder that
+    # is handed to raters (DF-257)
+    old_key = folder / "key.json"
+    old_key.unlink(missing_ok=True)
     _write(
-        folder / "key.json",
+        report_dir / CALIBRATION_KEY,
         json.dumps({"report_id": report.report_id, "items": key}, indent=2) + "\n",
     )
     return {
@@ -535,7 +546,7 @@ def score_calibration(report_dir: Path, score_files: list[Path]) -> dict:
     and the raters' mean is >= 0.6 and they are within 1 point on >= 80 % of items. If
     the raters disagree with each other (kappa < 0.6) the rubric is ambiguous: fix it
     first."""
-    key_path = report_dir / "calibration" / "key.json"
+    key_path = report_dir / CALIBRATION_KEY
     if not key_path.is_file():
         raise CliError(
             "no calibration export for this report",
