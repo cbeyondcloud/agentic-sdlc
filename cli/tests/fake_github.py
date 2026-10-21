@@ -82,10 +82,12 @@ class FakeGitHub:
             if method == "POST":
                 return self._create(body)
         found = re.fullmatch(_REPO + r"/pulls/(?P<n>\d+)", path)
-        if found and method == "PATCH":
+        if found and method in ("GET", "PATCH"):  # an update reads the body first (DF-296)
             pull = next((p for p in self.pulls if p["number"] == int(found["n"])), None)
             if pull is None:
                 return 404, {"message": "Not Found"}
+            if method == "GET":
+                return 200, pull
             pull["body"] = body.get("body", pull["body"])
             pull["head"]["sha"] = self._head(pull["head"]["ref"]) or pull["head"]["sha"]
             return 200, pull

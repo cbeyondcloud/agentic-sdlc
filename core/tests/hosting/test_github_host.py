@@ -8,6 +8,7 @@ import httpx2
 import pytest
 
 from agentic.hosting import CheckRun, HostingError, PullRequest, RepoRef
+from agentic.hosting.base import PR_BODY_END, PR_BODY_START
 from agentic.hosting.github import GITHUB_COM_API, GitHubHost, api_url_for
 
 TOKEN = "gho_" + "Fake" + "Token" + "0123456789"  # gitleaks:allow - built from pieces
@@ -93,7 +94,8 @@ def test_find_opens_and_updates_pull_requests():
         7, "https://github.com/acme/app/pull/7", "sdlc/r-1", "main", "a" * 40
     )
     github.update_pull_request(REPO, 7, body="B2")
-    find, create, update = calls
+    find, create, current, update = calls  # the update reads the description first
+    assert current[:2] == ("GET", "/repos/acme/app/pulls/7")
     assert find[:3] == (
         "GET",
         "/repos/acme/app/pulls",
@@ -284,8 +286,24 @@ def test_redirects_are_not_followed():
     def handler(request: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(301, headers={"location": "https://elsewhere.example.com/x"})
 
-    with pytest.raises(HostingError, match="301"):
+    with pytest.raises(HostingError, match="301") as raised:
         host(handler).default_branch(REPO)
+    # a renamed or moved repository: say what to do (DF-299)
+    assert "renamed or moved" in str(raised.value) and "git remote set-url" in str(raised.value)
+
+
+def test_an_update_keeps_what_a_person_wrote_around_the_run_part():  # DF-296
+    current = f"Reviewer note.\n\n{PR_BODY_START}\nold\n{PR_BODY_END}\n\nFollow-up."
+    sent: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "GET":
+            return httpx2.Response(200, json={**pr_json(), "body": current})
+        sent.append(json.loads(request.content)["body"])
+        return httpx2.Response(200, json=pr_json())
+
+    host(handler).update_pull_request(REPO, 7, body=f"{PR_BODY_START}\nnew\n{PR_BODY_END}\n")
+    assert sent == [f"Reviewer note.\n\n{PR_BODY_START}\nnew\n{PR_BODY_END}\n\nFollow-up."]
 
 
 def test_a_nested_owner_is_not_a_github_repository():

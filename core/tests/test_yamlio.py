@@ -58,6 +58,16 @@ def test_a_colon_in_plain_text_says_to_quote_the_value():  # M1-69 acceptance
     assert "put the value in quotes" in message and "': '" in message
 
 
+def test_the_mapping_hint_also_names_a_key_indented_too_far():  # DF-319
+    """The same parser message comes from a key indented further than the one above it;
+    advising only quotes would point the wrong way."""
+    with pytest.raises(YamlFileError) as error:
+        load_yaml("name: a\ntier: fast\n  model: x\n")
+
+    message = str(error.value)
+    assert "indented" in message and "quotes" in message
+
+
 def test_bom_is_ignored(tmp_path: Path):
     path = tmp_path / "f.yaml"
     path.write_bytes("﻿name: a\n".encode())

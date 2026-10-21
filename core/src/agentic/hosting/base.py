@@ -1,13 +1,15 @@
 """The hosting provider seam (M1-58, spec §16): where a run's branch becomes a pull request.
 
-GitHub is the v1 adapter (`agentic.hosting.github`); GitLab, Azure DevOps or Bitbucket
-are later adapters behind this same protocol, so neither the engine nor the CLI's
-publish flow changes when one is added. The protocol is deliberately small: what
+The v1 adapter lives beside this module; other hosts are later adapters behind this same
+protocol, so neither the engine nor the CLI's publish flow changes when one is added
+(DF-300: the protocol names no vendor). The protocol is deliberately small: what
 Zyroflo's release flow needs up to - and never including - the merge click:
 
   * `default_branch` - where a pull request goes when nothing else says;
   * `find_pull_request` / `open_pull_request` / `update_pull_request` - publishing is
-    idempotent: a second publish updates the open pull request's body;
+    idempotent: a second publish updates the open pull request's body, replacing only
+    the generated part between `PR_BODY_START` and `PR_BODY_END` (`splice_body`), so
+    what a person wrote around it is kept (DF-296);
   * `checks` - every CI check on a commit, in one vocabulary (below), for the verdict.
 
 Check vocabulary (an adapter maps its platform's words into these): `status` is
@@ -74,7 +76,7 @@ class CheckRun:
 
 
 class HostingProvider(Protocol):
-    kind: str  # "github", ...: what the host registry calls this adapter
+    kind: str  # what the host registry calls this adapter
 
     def default_branch(self, repo: RepoRef) -> str: ...
 
@@ -117,9 +119,42 @@ def parse_remote(url: str) -> RepoRef:
     return RepoRef(host=host, owner="/".join(parts[:-1]), name=parts[-1])
 
 
+#: The generated part of a pull request's description lies between these HTML comments,
+#: which hosts do not render; a re-publish replaces only what is between them (DF-296).
+PR_BODY_START = "<!-- agentic:run -->"
+PR_BODY_END = "<!-- /agentic:run -->"
+
+
+def _marked(text: str, *, last_end: bool = False) -> tuple[int, int] | None:
+    """Where the generated part of `text` starts and ends (markers included), or None.
+    With `last_end` (text that is all ours), the part runs to the last end marker."""
+    start = text.find(PR_BODY_START)
+    after = start + len(PR_BODY_START)
+    find = text.rfind if last_end else text.find
+    end = find(PR_BODY_END, after) if start >= 0 else -1
+    return (start, end + len(PR_BODY_END)) if end >= 0 else None
+
+
+def splice_body(current: str | None, generated: str) -> str:
+    """The description to send when `generated` replaces a pull request's `current` one:
+    only the marked part changes, and the text a person wrote before or after it stays.
+    A description without both markers (an old one, or one whose markers a person
+    deleted) is replaced whole."""
+    new, old = _marked(generated, last_end=True), _marked(current or "")
+    if new is None or old is None or current is None:
+        return generated
+    return current[: old[0]] + generated[new[0] : new[1]] + current[old[1] :]
+
+
+# A URL's userinfo: everything up to the LAST '@' before the host, so a password holding
+# an unencoded '@' goes whole (DF-297). A scheme starts only where no scheme character
+# precedes it, so a long value is scanned in linear time.
+_USERINFO = re.compile(r"(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]*://)[^/?#\s'\"]+@")
+
+
 def scrub_url_credentials(text: str) -> str:
     """`text` with the userinfo of every URL in it removed (`https://user:pw@h` -> `https://h`)."""
-    return re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s'\"]+@", r"\1", text)
+    return _USERINFO.sub(r"\1", text)
 
 
 def _shown(text: str) -> str:

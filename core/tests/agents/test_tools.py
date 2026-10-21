@@ -705,3 +705,44 @@ def test_host_paths_in_tool_output_are_shown_relative(tree, resolved):  # DF-23
     assert str(tree[1]) not in seen and tree[1].as_posix() not in seen
     assert str(tree[1].parent) not in seen.replace("\\\\", "\\")
     assert "cwd is .\n" in seen and "posix ./src" in seen
+
+
+# ── M1 close-out (DF-156, DF-339) ────────────────────────────────────────────
+
+
+def test_read_file_content_keeps_the_trees_path_verbatim(tree, resolved):  # DF-156
+    """An edit's old_string is copied from read_file: rewritten paths make it 'found 0'."""
+    line = f"ROOT = {tree[1].as_posix()!r}\n"
+    (tree[1] / "src" / "paths.py").write_text(line, encoding="utf-8")
+    tools = build_tools(agent_with(resolved, ["read_files", "edit_files"]), context(tree, resolved))
+
+    seen = call(tools, "read_file", path="src/paths.py")
+    assert tree[1].as_posix() in seen
+
+    edited = call(tools, "edit_file", path="src/paths.py", old=line.strip(), new="ROOT = '.'")
+    assert not edited.startswith("REFUSED"), edited
+
+
+GIT_ALIASES = [".git/config", ".GIT/config", ".git./config", "./.git/HEAD", "src/../.git/config"]
+
+
+@pytest.mark.parametrize("path", GIT_ALIASES)
+def test_read_file_refuses_git_metadata(tree, resolved, path):  # DF-339
+    """`.git/config` can hold a remote URL with a token; a worktree's `.git` file names
+    the main repository. Neither is code."""
+    git_dir = tree[1] / ".git"
+    if git_dir.is_file():  # a worktree: make a folder the test can read through
+        git_dir.unlink()
+        git_dir.mkdir()
+    (git_dir / "config").write_text("url = https://user:tok@host/x\n", encoding="utf-8")
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    tools = build_tools(agent_with(resolved, ["read_files"]), context(tree, resolved))
+
+    seen = call(tools, "read_file", path=path)
+    assert seen.startswith("REFUSED") and "tok@" not in seen and "refs/heads" not in seen
+
+
+def test_list_dir_refuses_git_metadata(tree, resolved):  # DF-339
+    tools = build_tools(agent_with(resolved, ["read_files"]), context(tree, resolved))
+
+    assert call(tools, "list_dir", path=".git").startswith("REFUSED")

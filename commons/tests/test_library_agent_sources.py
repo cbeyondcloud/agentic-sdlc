@@ -38,6 +38,23 @@ def test_code_review_rubric_matches_zyroflo():
     assert sum(table.values()) == pytest.approx(10)
 
 
+def test_code_review_deductions_and_critical_cap_match_zyroflo():  # DF-235
+    """Changing -0.5/-0.2/-0.05 or dropping the 8.0 critical cap in code-review.md
+    passed CI: they are read from review-rubric.md too."""
+    text = " ".join((AGENTS / "code-review.md").read_text(encoding="utf-8").split())
+    rubric = lifecycle.review_deductions()
+    assert set(rubric.per_finding) == {"high", "medium", "low"}
+    for severity, amount in rubric.per_finding.items():
+        assert f"{severity} -{amount:g}" in text, severity
+    assert f"any critical caps the final score at {rubric.critical_cap:.1f}" in text
+
+
+def test_the_rubric_deductions_are_read_from_zyroflo():  # DF-235
+    rubric = lifecycle.review_deductions()
+    assert rubric.per_finding == {"high": 0.5, "medium": 0.2, "low": 0.05}
+    assert rubric.critical_cap == 8.0
+
+
 def test_sop_rules_the_agents_rely_on_still_hold():
     """The rules adapted into the agents are still Zyroflo's rules."""
     assert "EARS" in lifecycle.stage("P1").instructions  # BA: EARS criteria

@@ -49,12 +49,28 @@ def test_denied_path_inside_the_tree_is_blocked(tree):
     assert not (tree / ".env").exists()
 
 
+def test_an_existing_denied_file_cannot_be_changed_or_removed(tree):  # DF-335, DF-71 (a)
+    """The ruling put the sandbox's own settings file on denyWrite as a single path: it
+    must hold for a file that exists, inside a folder the command may write."""
+    guarded = tree / "settings.json"
+    guarded.write_text("original", encoding="utf-8")
+    box = SrtSandbox(SandboxRules(write=(tree,), deny_write=(guarded,)), tree.parent / "s")
+
+    asyncio.run(box.run(f"echo changed > '{guarded}'", tree, 60))
+    asyncio.run(box.run(f"rm -f '{guarded}'; mv '{guarded}' moved.json", tree, 60))
+
+    assert guarded.read_text(encoding="utf-8") == "original"
+    assert not (tree / "moved.json").exists()
+
+
 def test_https_to_an_unlisted_host_is_blocked(tree):
     assert run(tree, "curl -sS -o /dev/null --max-time 20 https://example.com/").exit_code != 0
 
 
 def test_https_to_an_allowed_host_works(tree):
-    result = run(tree, "curl -sS -o /dev/null --max-time 20 https://pypi.org/simple/")
+    # HEAD: reachability through the proxy, not the ~47 MB index download (a slow link
+    # timed out mid-transfer in the Linux stage)
+    result = run(tree, "curl -sS -I -o /dev/null --max-time 20 https://pypi.org/simple/")
     assert result.exit_code == 0, result.stderr
 
 

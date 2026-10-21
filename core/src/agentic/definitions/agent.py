@@ -5,6 +5,7 @@ Settings such as tier, tools and limits are only *requests* here; org policy
 decides what is actually allowed (see agentic.policy.resolve).
 """
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -25,8 +26,25 @@ from agentic.yamlio import YamlFileError, load_yaml, read_text, split_front_matt
 #   acp:<agent>     -> any Agent Client Protocol agent via one generic adapter (acp:antigravity)
 #   remote:<service> -> hosted agents such as Devin (submit / poll / collect)
 BACKEND_PATTERN = r"^(native|claude-code|codex|opencode|acp:.+|remote:.+)$"
-# An agent's name: lower-case letters, digits and dashes (DF-07).
-AGENT_NAME = r"^[a-z0-9][a-z0-9-]{0,63}$"
+# An agent's name: lower-case letters, digits and dashes (DF-07), starting with a letter
+# - the run ledger records `<name>@<version>` only in that shape (review F1).
+AGENT_NAME = r"^[a-z][a-z0-9-]{0,63}$"
+# Names Windows maps to devices in every folder, with or without an extension: a file
+# named after one cannot be created there (DF-324, DF-180).
+WINDOWS_DEVICE_NAMES = frozenset(
+    ["CON", "PRN", "AUX", "NUL"]
+    + [f"COM{n}" for n in range(1, 10)]
+    + [f"LPT{n}" for n in range(1, 10)]
+)
+
+
+def windows_device_name(name: str) -> bool:
+    """Whether `name`, used as a file name, opens a Windows device (`nul`, `com1.md`)."""
+    return name.split(".", 1)[0].rstrip(" ").upper() in WINDOWS_DEVICE_NAMES
+
+
+def valid_agent_name(name: str) -> bool:
+    return re.fullmatch(AGENT_NAME, name) is not None and not windows_device_name(name)
 
 
 class Limits(BaseModel):
@@ -82,7 +100,7 @@ class AgentDefinition(BaseModel):
     # --- identity ---
     # a file name (state-<agent>.json, children/<agent>), a header and a ledger field:
     # lower case, so it is one file on case-insensitive disks too (Windows, macOS)
-    name: str = Field(pattern=AGENT_NAME)
+    name: str
     type: str = Field(pattern=r"^[a-z][a-z0-9-]*$")  # an agent type defined in org policy
     version: str
     owner: str | None = None
@@ -114,6 +132,18 @@ class AgentDefinition(BaseModel):
 
     # --- the Markdown body: what the agent is supposed to do, in plain English ---
     instructions: str
+
+    @field_validator("name")
+    @classmethod
+    def name_is_a_file_name(cls, value: str) -> str:
+        if re.fullmatch(AGENT_NAME, value) is None:
+            raise ValueError(
+                "use lower-case letters, digits and dashes, starting with a letter, "
+                "at most 64 characters - the name is also a file name"
+            )
+        if windows_device_name(value):
+            raise ValueError(f"{value!r} is a Windows device name, so no file can carry it")
+        return value
 
     @field_validator("instructions")
     @classmethod

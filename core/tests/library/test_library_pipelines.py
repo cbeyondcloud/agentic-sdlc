@@ -87,7 +87,22 @@ def fresh_identities(monkeypatch):
 
 
 @pytest.mark.parametrize("name", PIPELINES)
-def test_pipeline_passes_preflight_with_no_problems(library, standalone_policy, name):
+def test_pipeline_passes_preflight_with_no_problems(library, edited_policy, name):
+    report = preflight(
+        library.pipeline(name),
+        library,
+        edited_policy,
+        ResolveContext(),
+        actions=ACTIONS,
+        available_backends={"native"},
+    )
+    assert report.problems == [], report.text()  # no errors and no warnings
+
+
+@pytest.mark.parametrize("name", PIPELINES)
+def test_the_unedited_template_is_refused_for_its_placeholder_models(
+    library, standalone_policy, name
+):  # DF-225: before the first call reaches the gateway
     report = preflight(
         library.pipeline(name),
         library,
@@ -96,7 +111,7 @@ def test_pipeline_passes_preflight_with_no_problems(library, standalone_policy, 
         actions=ACTIONS,
         available_backends={"native"},
     )
-    assert report.problems == [], report.text()  # no errors and no warnings
+    assert not report.passed and {p.check for p in report.problems} == {"model"}
 
 
 @pytest.mark.parametrize("name", PIPELINES)

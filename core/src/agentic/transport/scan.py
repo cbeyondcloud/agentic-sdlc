@@ -9,6 +9,8 @@ one in, so a client built without a scanner still scans (block, default
 detectors).
 """
 
+import asyncio
+
 import httpx2
 
 from agentic.security import SecretScanner
@@ -35,7 +37,10 @@ class ScanningTransport(httpx2.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         await request.aread()
-        return await self.inner.handle_async_request(_scanned(request, self.scanner))
+        # tens of milliseconds for a large body: off the event loop (DF-153); the
+        # thread inherits the context variables, so the event still reaches its step log
+        scanned = await asyncio.to_thread(_scanned, request, self.scanner)
+        return await self.inner.handle_async_request(scanned)
 
     async def aclose(self) -> None:
         await self.inner.aclose()

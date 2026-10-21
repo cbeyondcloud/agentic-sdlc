@@ -24,7 +24,7 @@ from urllib.parse import quote
 
 import httpx2
 
-from agentic.hosting.base import CheckRun, HostingError, PullRequest, RepoRef
+from agentic.hosting.base import CheckRun, HostingError, PullRequest, RepoRef, splice_body
 from agentic.transport.network import NetworkSettings, ssl_context
 
 GITHUB_COM = "github.com"
@@ -139,8 +139,14 @@ class GitHubHost:
             return existing
 
     def update_pull_request(self, repo: RepoRef, number: int, *, body: str) -> PullRequest:
+        """Replace the generated part of the description; what a person wrote around it
+        is kept (DF-296). The description is read first, so an edit made meanwhile is
+        kept too, short of one landing between the two calls."""
         path = f"{self._repo_path(repo)}/pulls/{int(number)}"
-        return _pull_request(self._json("PATCH", path, json={"body": body}))
+        current = self._json("GET", path)
+        said = current.get("body") if isinstance(current, dict) else None
+        spliced = splice_body(said if isinstance(said, str) else None, body)
+        return _pull_request(self._json("PATCH", path, json={"body": spliced}))
 
     def checks(self, repo: RepoRef, sha: str) -> list[CheckRun]:
         commit = f"{self._repo_path(repo)}/commits/{quote(sha, safe='')}"
@@ -309,6 +315,11 @@ def _explain(where: str, response: httpx2.Response) -> str:
         meaning = "the token lacks permission for this repository (needs pull request write)"
     elif status == 404:
         meaning = "not found: the repository does not exist or the token cannot see it"
+    elif status in (301, 308):  # the API's answer for a renamed or transferred repository
+        meaning = (
+            "the repository was renamed or moved: point origin at its new address with "
+            "`git remote set-url origin <new url>` (the redirect is not followed)"
+        )
     elif 300 <= status < 400:
         meaning = "the API answered with a redirect, which is not followed"
     else:

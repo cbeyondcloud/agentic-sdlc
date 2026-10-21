@@ -62,7 +62,10 @@ def _unquote(text: str) -> tuple[str, str]:
                 out.append(int(digits, 8) & 0xFF)
                 i += 1 + len(digits)
                 continue
-            out.append(_ESCAPES.get(following, ord(following)))
+            if following in _ESCAPES:
+                out.append(_ESCAPES[following])
+            else:  # not one of git's escapes (DF-331): keep the character, whatever it is
+                out += following.encode("utf-8")
             i += 2
             continue
         out += char.encode("utf-8")

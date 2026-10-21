@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import threading
 
 import httpx2
 import pytest
@@ -59,6 +60,25 @@ def test_the_async_client_blocks_before_sending():
         asyncio.run(go())
     assert seen == []
     assert events == [SecretScanEvent("blocked", "model-call", {"AWSKeyDetector": 1})]
+
+
+def test_the_async_client_scans_off_the_event_loop():  # DF-153
+    """A large body takes tens of milliseconds to scan: never on the loop's thread."""
+    transport, _ = capturing()
+    threads: list[int] = []
+
+    class Spy(SecretScanner):
+        def check_body(self, content: bytes, where: str) -> bytes:
+            threads.append(threading.get_ident())
+            return super().check_body(content, where)
+
+    async def go() -> int:
+        async with make_async_client(BASE, IDENTITY, scanner=Spy(), _transport=transport) as c:
+            await c.post("/chat/completions", json=body("hello"))
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(go())
+    assert threads and threads[0] != loop_thread
 
 
 def test_mask_sends_the_masked_body_with_a_matching_length():

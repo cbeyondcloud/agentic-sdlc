@@ -41,6 +41,18 @@ def test_open_and_record_then_verify_clean(tmp_path: Path):
     assert [e["event"] for e in ledger.events()] == ["run_opened", "step_started"]
 
 
+def test_a_policy_repo_with_sha256_commit_ids_is_recorded(tmp_path: Path):  # DF-307
+    """git's SHA-256 object format gives 64-hex commit ids: such a repo can be a policy repo."""
+    identity = RunIdentity(team="platform", policy_version="git:" + "b" * 64)
+    ledger = RunLedger(tmp_path, "r-sha256")
+    ledger.open(
+        identity=identity, kind="feature", project="demo", owner="platform", criticality="low"
+    )
+
+    assert ledger.verify() == []
+    assert ledger.events()[0]["ext"]["agentic"]["policy_version"] == "git:" + "b" * 64
+
+
 def test_events_go_to_the_active_run_folder(tmp_path: Path):
     ledger = open_ledger(tmp_path)
 

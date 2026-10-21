@@ -337,7 +337,9 @@ class _Run:
         if engine.definitions.handoffs.digest != state.catalog_digest:
             raise EngineError(
                 f"the handoff templates changed since run {state.run_id} started "
-                "(a run validates against the templates it was started with)"
+                "(a run validates against the templates it was started with); an agentic "
+                "upgrade changes them too - finish paused runs before upgrading, or stop "
+                "this one and start it again (DF-34)"
             )
         self.recorder = engine.recorder_for(state.run_id)
         self.gates = engine.gates_for(state.run_id)
@@ -1401,6 +1403,8 @@ class _Run:
         children: dict[str, Decimal] | None = None,
     ) -> None:
         marks = self._marks if self._marks and self._marks[:2] == (step, iteration) else None
+        if outcome == "skipped":  # a skip ran nothing: an earlier attempt's marks mislead
+            marks = None
         self.state.history.append(
             StepRecord(
                 step=step,

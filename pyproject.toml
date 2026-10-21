@@ -13,7 +13,10 @@ requires-python = ">=3.12,<3.13"
 exclude-newer = "14 days"
 # certifi 2026.10.19 (uploaded 2026-10-20) fixes PYSEC-2026-4320: the release before it is
 # vulnerable, so the fix may not wait two weeks. Drop this line once it is 14 days old.
-exclude-newer-package = { certifi = "2026-10-21T00:00:00Z" }
+# virtualenv 21.14.7 (uploaded 2026-10-12; pre-commit's dependency) fixes CVE-2026-113725
+# in 21.14.5; the cutoff admits 21.14.7 and nothing newer. pip-audit fails without it.
+# Drop each entry once check.py warns that it is older than the window.
+exclude-newer-package = { certifi = "2026-10-21T00:00:00Z", virtualenv = "2026-10-13T00:00:00Z" }
 
 [tool.uv.workspace]
 members = ["core", "commons", "cli", "control-plane"]

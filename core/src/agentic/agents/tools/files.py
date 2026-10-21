@@ -18,6 +18,7 @@ import regex
 from pydantic_ai import Tool
 
 from agentic.agents.tools.context import ToolContext, guarded, refused
+from agentic.codeintel.tools import names_git
 
 MAX_READ_BYTES = 200_000
 MAX_LIST = 500
@@ -50,9 +51,15 @@ def _refusal(ctx: ToolContext, target: Path, *, reading: bool) -> str | None:
     if device := next((p for p in target.parts if _is_device(p)), None):
         return refused(f"{device} is a Windows device name")
     try:
-        target.resolve().relative_to(ctx.tree.resolve())
+        inside = target.resolve().relative_to(ctx.tree.resolve())
     except ValueError:
         return refused(f"{target.as_posix()} is outside the working tree")
+    # git's metadata is never read either: `.git/config` can hold a remote URL with a
+    # token, and a worktree's `.git` names the main repository (DF-339). Every alias
+    # counts (`.GIT`, `.git.`, `GIT~1`), as spelt and as resolved.
+    spelt = target.relative_to(ctx.tree) if target.is_relative_to(ctx.tree) else inside
+    if any(names_git(part) for part in (*spelt.parts, *inside.parts)):
+        return refused("git's metadata (.git) is not part of the working tree's files")
     blocks = list(ctx.guard.writes([target]))
     if reading:
         blocks = [b for b in blocks if b.wall != "framework"]
@@ -131,7 +138,9 @@ def search_tools(ctx: ToolContext) -> list[Tool]:
             for file in sorted(ctx.tree.glob(glob)):
                 if len(matches) >= MAX_MATCHES or scanned >= MAX_SEARCH_FILES:
                     break
-                if ".git" in file.relative_to(ctx.tree).parts or not file.is_file():
+                if any(names_git(p) for p in file.relative_to(ctx.tree).parts):
+                    continue
+                if not file.is_file():
                     continue
                 if file.stat().st_size > MAX_SEARCH_FILE_BYTES:
                     continue

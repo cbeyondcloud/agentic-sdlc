@@ -39,6 +39,16 @@ _CATEGORY_ROW = re.compile(
     r"^\|\s*\d+\s*\|\s*\*\*(?P<name>[^*]+)\*\*\s*\|\s*(?P<weight>\d+(?:\.\d+)?)\s*\|"
     r"\s*(?P<checks>.+?)\s*\|\s*$"
 )
+# `| 🟠 High | −0.5 | ... |` (a minus sign or a hyphen) and `| 🔴 Critical | caps final
+# score at **8.0** | ... |` in the scoring procedure's table
+_DEDUCTION_ROW = re.compile(
+    r"^\s*\|\s*\W*\s*(?P<severity>High|Medium|Low)\s*\|\s*[−-](?P<amount>\d+(?:\.\d+)?)\s*\|",
+    re.IGNORECASE,
+)
+_CAP_ROW = re.compile(
+    r"^\s*\|\s*\W*\s*Critical\s*\|\s*caps final score at \*\*(?P<cap>\d+(?:\.\d+)?)\*\*",
+    re.IGNORECASE,
+)
 
 
 class LifecycleError(Exception):
@@ -66,6 +76,33 @@ class RubricCategory:
     name: str
     weight: float
     checks: str  # what a reviewer checks under this category
+
+
+@dataclass(frozen=True)
+class RubricDeductions:
+    per_finding: dict[str, float]  # severity (lower case) -> points deducted per finding
+    critical_cap: float  # the final score's ceiling when any finding is critical
+
+
+def review_deductions() -> RubricDeductions:
+    """The review rubric's severity deductions and critical cap (Zyroflo's
+    `review-rubric.md`, its scoring procedure), so the Code Review agent's copy is
+    checked against them (DF-235)."""
+    path = content.root() / _RUBRIC
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise LifecycleError(f"review rubric not readable at {path}: {error}") from error
+    per_finding: dict[str, float] = {}
+    cap = None
+    for line in _section(lines, "## Scoring procedure"):
+        if row := _DEDUCTION_ROW.match(line):
+            per_finding[row["severity"].lower()] = float(row["amount"])
+        elif row := _CAP_ROW.match(line):
+            cap = float(row["cap"])
+    if not per_finding or cap is None:
+        raise LifecycleError(f"review rubric at {path}: no severity deductions or critical cap")
+    return RubricDeductions(per_finding, cap)
 
 
 def stages() -> list[Stage]:

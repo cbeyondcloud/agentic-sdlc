@@ -200,6 +200,38 @@ def test_an_agent_name_is_a_lowercase_slug(tmp_path: Path, name: str):
     assert "name:" in str(error.value)
 
 
+def test_a_bad_agent_name_is_explained_in_plain_words(tmp_path: Path):  # DF-324
+    path = write_agent(tmp_path, MINIMAL.replace("name: helper", "name: Dev_Agent"))
+
+    with pytest.raises(DefinitionError) as error:
+        load_agent(path)
+
+    message = str(error.value)
+    assert "64 characters" in message and "lower-case" in message
+    assert "String should match pattern" not in message
+
+
+@pytest.mark.parametrize("name", ["con", "nul", "aux", "prn", "com1", "lpt9"])
+def test_windows_device_names_are_refused(tmp_path: Path, name: str):  # DF-324
+    """`con.md` cannot be created on Windows, so the agent could never be shared."""
+    path = write_agent(tmp_path, MINIMAL.replace("name: helper", f"name: {name}"))
+
+    with pytest.raises(DefinitionError, match="device name"):
+        load_agent(path)
+
+
+@pytest.mark.parametrize("name", ["3d-modeler", "2fa-checker", "9"])
+def test_an_agent_name_starts_with_a_letter(tmp_path: Path, name: str):
+    """The run ledger records `<name>@<version>` only for a letter-first name, so a
+    digit-first agent would load and then fail mid-run on its first event (review F1)."""
+    path = write_agent(tmp_path, MINIMAL.replace("name: helper", f"name: '{name}'"))
+
+    with pytest.raises(DefinitionError) as error:
+        load_agent(path)
+
+    assert "starting with a letter," in str(error.value)
+
+
 def test_a_dashed_agent_name_with_digits_is_fine(tmp_path: Path):
     path = write_agent(tmp_path, MINIMAL.replace("name: helper", "name: qa-baseline-2"))
 

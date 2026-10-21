@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from agentic.engine.state import RunState
+from agentic.hosting.base import PR_BODY_END, PR_BODY_START
 
 TRAILER_KEYS = (
     "Agentic-Run",
@@ -43,6 +44,9 @@ NONE = "none"
 #: Proposed AGENTS.md additions are agent text: shown as inline code, bounded (DF-177).
 MAX_PROPOSALS = 20
 MAX_PROPOSAL_CHARS = 500
+#: `<!--` with a zero-width space inside: it reads the same, but opens no comment and
+#: so can never form a generated-part marker.
+_INERT_COMMENT = "<!\u200b--"
 _TRAILER = re.compile(r"([A-Za-z0-9][A-Za-z0-9-]*): (.*)")
 
 
@@ -117,16 +121,23 @@ def pr_body(
         path = f"{run_folder.rstrip('/')}/{rel}" if run_folder else rel
         return f"{label} `{_line(path)}`"
 
+    # a publish step runs before the run ends: say when the status was taken (DF-293)
+    status = (
+        "running (when this was published; `agentic pr open` refreshes it)"
+        if state.status == "running"
+        else state.status
+    )
     lines = [
+        PR_BODY_START,  # a re-publish replaces only what lies between the markers (DF-296)
         f"## Agentic run {title}",
         "",
         f"- Pipeline: `{state.pipeline}` {state.pipeline_version} ({state.regime})",
         f"- Started by: {_line(state.starter)}",
         f"- Policy version: `{state.policy_version}`",
-        f"- Status: {state.status}",
+        f"- Status: {status}",
     ]
-    if cost_usd is not None:
-        lines.append(f"- Cost: ${cost_usd}")
+    if cost_usd is not None:  # plain digits, never `1E-7` (DF-318)
+        lines.append(f"- Cost so far: ${format(cost_usd, 'f')}")
     if logs:
         lines.append(f"- Logs: {_line(logs)}")
     lines += ["", "### Handoffs", ""]
@@ -149,7 +160,10 @@ def pr_body(
             lines.append(f"- {_code(_cut(_line(text)))} (from {shown('handoff', rel)})")
         if len(proposed) > MAX_PROPOSALS:
             lines.append(f"- ... {len(proposed) - MAX_PROPOSALS} more in the run's handoffs")
-    return "\n".join(lines) + "\n"
+    # agent text (proposals, names) may hold an HTML comment opener: one would end the
+    # generated part early on a re-publish, or hide the rest of the description (F2)
+    inner = [line.replace("<!--", _INERT_COMMENT) for line in lines[1:]]
+    return "\n".join([PR_BODY_START, *inner, PR_BODY_END]) + "\n"
 
 
 def _line(value: object) -> str:

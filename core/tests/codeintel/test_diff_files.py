@@ -78,3 +78,10 @@ def test_impact_finds_the_files_of_a_no_prefix_diff(tmp_path, monkeypatch):
     intel.impact('+++ "b/pkg/caf\\303\\251.py"\n')
     assert asked[0]["files"] == ["a/x.py"]
     assert asked[1]["files"] == ["pkg/café.py"]
+
+
+def test_a_malformed_escape_above_latin_1_keeps_the_other_files():  # DF-331
+    """An agent-supplied diff with one bad quoted name must not lose every file."""
+    diff = '+++ "b/pkg/bad\\€.py"\n+++ b/pkg/good.py\n'  # a backslash before a euro sign
+    found = diff_files(diff)
+    assert "pkg/good.py" in found and any(name.endswith("bad\u20ac.py") for name in found)

@@ -94,8 +94,9 @@ class StepRunners:
             **kwargs,
         )
         skills = tool_context.skills if tool_context is not None else None
-        if isinstance(skills, SkillLibrary) and (prompt := skills.prompt_for(step.agent)):
-            return SkillPromptRunner(runner, prompt)  # the agent's skill block (M1-38)
+        if isinstance(skills, SkillLibrary) and step.agent.skills:
+            # the agent's skill block (M1-38), made when the step runs (DF-146)
+            return SkillPromptRunner(runner, lambda: skills.prompt_for(step.agent))
         return runner
 
 

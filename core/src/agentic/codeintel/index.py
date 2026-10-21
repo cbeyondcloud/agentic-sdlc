@@ -153,12 +153,15 @@ class LocalIndex:
     # ── state ───────────────────────────────────────────────────────────────
 
     def _readable(self) -> bool:
-        """Whether the index file is a database holding the graph's nodes."""
+        """Whether the index file is a database holding the graph's nodes. A locked or
+        busy database is another process using a valid index: readable, never thrown
+        away (a full rebuild; on Windows the open file cannot even be removed, DF-337)."""
         try:  # closed at once: Windows cannot remove a file that is still open
             with closing(sqlite3.connect(f"{self.db.resolve().as_uri()}?mode=ro", uri=True)) as c:
                 c.execute("select 1 from nodes limit 1").fetchall()
-        except sqlite3.Error:
-            return False
+        except sqlite3.Error as error:
+            said = str(error).lower()
+            return "no such table" not in said and ("locked" in said or "busy" in said)
         return True
 
     def _discard(self) -> None:

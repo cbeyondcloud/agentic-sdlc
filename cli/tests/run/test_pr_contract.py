@@ -87,7 +87,7 @@ def test_a_run_ends_by_pushing_its_branch_and_opening_the_pull_request(
     assert f"## Agentic run `{run_id}`" in body
     assert f".agentic/local/runs/{run_id}/handoffs/requirements-1.md" in body
     assert "sha256:" in body and "Started by: dev@example.invalid" in body
-    assert "- Cost: $0.0125\n" in body  # the BA's one call, as the gateway reported it
+    assert "- Cost so far: $0.0125\n" in body  # the BA's one call, as the gateway reported it
     assert f"- Logs: `agentic logs {run_id}` in the starter's checkout\n" in body
 
     recorded = json.loads((run_folder(workspace, run_id) / "pr.json").read_text("utf-8"))

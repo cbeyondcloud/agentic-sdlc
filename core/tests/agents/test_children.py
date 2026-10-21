@@ -338,7 +338,9 @@ def test_a_nested_spawn_is_refused_rather_than_waiting_for_a_slot(resolved):
     assert "max_concurrent" in made[0].grandchild.reason
 
 
-@pytest.mark.parametrize("name", ["../escape", "Security Review", "a" * 41, "", "-lead"])
+@pytest.mark.parametrize(
+    "name", ["../escape", "Security Review", "a" * 41, "", "-lead", "2nd-reviewer"]
+)
 def test_the_model_cannot_choose_any_child_name(resolved, name):
     s, made = spawner(parent(resolved))
     result = spawn(s, spec(name))

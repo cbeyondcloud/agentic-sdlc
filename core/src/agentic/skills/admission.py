@@ -2,12 +2,14 @@
 
 Each check names what it refused, so a person can fix it:
 
-  licence   the catalog entry's licence is one the catalog allows; the folder carries
+  licence   the catalog entry's licence is one org policy allows (catalog.yaml may
+            narrow that list, never widen it: DF-143); the folder carries
             the licence text (LICENSE*, unless the skill is `internal`); a licence in
             the SKILL.md front matter, if it is an SPDX id, agrees with the entry
   validate  `skills-ref validate` (the Agent Skills reference validator): SKILL.md
             exists, front matter fields, name format and name == folder name
   size      SKILL.md within `max_skill_tokens`, the folder within `max_total_bytes`
+            (each the smaller of org policy's and the catalog's)
   scan      static scan of every file:
               * scripts or binary files need a person's review (`scripts_reviewed_by`);
               * download-and-run lines, hidden Unicode (bidi, zero-width, tag
@@ -21,10 +23,13 @@ separate steps; this module is the static part.
 """
 
 import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
 from agentic.skills.catalog import (
+    DEFAULT_LICENCES,
+    AdmissionLimits,
     Catalog,
     CatalogError,
     SkillEntry,
@@ -107,22 +112,47 @@ def telemetry_urls(text: str) -> list[str]:
     return found
 
 
-def admit(folder: Path, key: str, catalog: Catalog) -> list[Rejection]:
-    """Every reason `folder` may not be catalogued as `key` ([] = admitted)."""
+def admit(
+    folder: Path,
+    key: str,
+    catalog: Catalog,
+    *,
+    licences: Collection[str] | None = None,
+    limits: AdmissionLimits | None = None,
+) -> list[Rejection]:
+    """Every reason `folder` may not be catalogued as `key` ([] = admitted).
+
+    `licences` and `limits` are org policy's (default: the framework's own list and
+    limits). The catalog under review can only narrow them - never widen - so one
+    policy-repo pull request cannot add a skill and also allow its licence (DF-143)."""
     entry = catalog.entry(key)
     if not folder.is_dir():
         return [Rejection("validate", ".", f"no skill folder at {folder}")]
+    floor = list(DEFAULT_LICENCES if licences is None else licences)
+    allowed = [name for name in catalog.licences if name in floor]
     return [
-        *_licence(folder, entry, catalog),
+        *_licence(folder, entry, allowed, floor),
         *_validate(folder),
-        *_size(folder, catalog),
+        *_size(folder, _narrowest(catalog.limits, limits or AdmissionLimits())),
         *_scan(folder, entry),
     ]
 
 
-def admit_catalog(root: Path) -> dict[str, list[Rejection]]:
+def _narrowest(catalog: AdmissionLimits, floor: AdmissionLimits) -> AdmissionLimits:
+    """Each limit the smaller of the catalog's and org policy's."""
+    names = type(floor).model_fields
+    return AdmissionLimits(**{n: min(getattr(catalog, n), getattr(floor, n)) for n in names})
+
+
+def admit_catalog(
+    root: Path,
+    *,
+    licences: Collection[str] | None = None,
+    limits: AdmissionLimits | None = None,
+) -> dict[str, list[Rejection]]:
     """Admit every skill of a catalog folder, plus the pin check: each catalogued skill
-    exists and matches its sha256, and no skill folder is uncatalogued."""
+    exists and matches its sha256, and no skill folder is uncatalogued. `licences` and
+    `limits` are org policy's, as for `admit`."""
     catalog = load_catalog(root)
     results: dict[str, list[Rejection]] = {}
     for key, entry in catalog.skills.items():
@@ -130,17 +160,18 @@ def admit_catalog(root: Path) -> dict[str, list[Rejection]]:
         if not folder.is_dir():
             results[key] = [Rejection("pin", key, f"no folder {folder.relative_to(root)}")]
             continue
+        checked = admit(folder, key, catalog, licences=licences, limits=limits)
         try:
             found = skill_digest(folder)
         except SkillsError as error:  # a link inside the skill: it has no digest
-            results[key] = [Rejection("pin", key, str(error)), *admit(folder, key, catalog)]
+            results[key] = [Rejection("pin", key, str(error)), *checked]
             continue
         pin = (
             [Rejection("pin", key, f"pinned {entry.sha256}, folder hashes to {found}")]
             if found != entry.sha256
             else []
         )
-        results[key] = pin + admit(folder, key, catalog)
+        results[key] = pin + checked
     for source in sorted(p for p in root.iterdir() if p.is_dir()):
         for folder in sorted(p for p in source.iterdir() if p.is_dir()):
             key = f"{source.name}/{folder.name}"
@@ -149,16 +180,18 @@ def admit_catalog(root: Path) -> dict[str, list[Rejection]]:
     return results
 
 
-def _licence(folder: Path, entry: SkillEntry, catalog: Catalog) -> list[Rejection]:
+def _licence(
+    folder: Path, entry: SkillEntry, allowed: list[str], floor: list[str]
+) -> list[Rejection]:
     found = []
-    if entry.licence not in catalog.licences:
-        found.append(
-            Rejection(
-                "licence",
-                "catalog.yaml",
-                f"licence {entry.licence!r} is not allowed (allowed: {catalog.licences})",
-            )
+    if entry.licence not in allowed:
+        why = (
+            f"licence {entry.licence!r} is not allowed by org policy (allowed: {floor}); "
+            "catalog.yaml may only narrow that list"
+            if entry.licence not in floor
+            else f"licence {entry.licence!r} is not allowed (allowed: {allowed})"
         )
+        found.append(Rejection("licence", "catalog.yaml", why))
     has_file = any(LICENCE_FILE.match(p.name) for p in folder.iterdir() if p.is_file())
     if entry.licence != "internal" and not has_file:
         found.append(Rejection("licence", ".", "no licence text (LICENSE, LICENSE.txt, ...)"))
@@ -182,8 +215,8 @@ def _validate(folder: Path) -> list[Rejection]:
     return [Rejection("validate", "SKILL.md", problem) for problem in validate(folder)]
 
 
-def _size(folder: Path, catalog: Catalog) -> list[Rejection]:
-    limits, found = catalog.limits, []
+def _size(folder: Path, limits: AdmissionLimits) -> list[Rejection]:
+    found = []
     skill_md = folder / "SKILL.md"
     if skill_md.is_file():
         tokens = estimate_tokens(skill_md.read_text(encoding="utf-8", errors="replace"))

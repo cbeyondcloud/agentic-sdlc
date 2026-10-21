@@ -4,7 +4,10 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
 from agentic.engine.state import ApprovalMark, Cursor, RunState, StepRecord
+from agentic.hosting.base import PR_BODY_END, PR_BODY_START
 from agentic.telemetry.trailers import (
     TRAILER_KEYS,
     CommitAudit,
@@ -133,14 +136,34 @@ def test_pr_body_with_nothing_to_link_shows_the_run_and_paths_as_code():
 
 def test_pr_body_shows_the_cost_and_where_the_logs_are():  # M1-68 acceptance
     body = pr_body(state(), run_link=None, cost_usd=Decimal("0.3250"), logs="`agentic logs r-pr`")
-    assert "- Cost: $0.3250\n" in body
+    assert "- Cost so far: $0.3250\n" in body
     assert "- Logs: `agentic logs r-pr`\n" in body
-    assert body.index("- Status:") < body.index("- Cost:") < body.index("### Handoffs")
+    assert body.index("- Status:") < body.index("- Cost so far:") < body.index("### Handoffs")
 
 
 def test_pr_body_without_cost_or_logs_leaves_their_lines_out():
     body = pr_body(state(), run_link=None)
-    assert "Cost:" not in body and "Logs:" not in body
+    assert "Cost so far:" not in body and "Logs:" not in body
+
+
+@pytest.mark.parametrize(("cost", "shown"), [("1E-7", "$0.0000001"), ("0E-7", "$0.0000000")])
+def test_a_tiny_cost_is_never_shown_in_scientific_notation(cost, shown):  # DF-318
+    body = pr_body(state(), run_link=None, cost_usd=Decimal(cost))
+    assert f"- Cost so far: {shown}\n" in body
+
+
+def test_a_running_status_says_it_is_the_status_at_publish_time():  # DF-293, DF-312
+    """A publish step runs before the run ends, so the body is written mid-run."""
+    run = state()
+    run.status = "running"
+    body = pr_body(run, run_link=None)
+    line = next(text for text in body.splitlines() if text.startswith("- Status:"))
+    assert "running" in line and "published" in line and "agentic pr open" in line
+
+
+def test_the_generated_description_is_marked_so_an_update_replaces_only_it():  # DF-296
+    body = pr_body(state(), run_link=None)
+    assert body.startswith(PR_BODY_START + "\n") and body.endswith(PR_BODY_END + "\n")
 
 
 def test_pr_body_marks_an_approval_a_rejection_superseded():

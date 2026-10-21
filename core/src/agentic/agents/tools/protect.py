@@ -9,7 +9,9 @@ placeholder, and the run goes on - review F2). What a tool returns (text;
 anything else as JSON) is, in order:
 
   1. shown with the run's tree as `.` - an absolute host path tells the model
-     (and its provider) about this machine (DF-23);
+     (and its provider) about this machine (DF-23); except a file's own content
+     (`read_file`), shown verbatim, because an edit copies its old text from it and
+     a rewritten path would never be found (DF-156);
   2. secret-scanned under the run's policy: a secret is masked, or the whole
      output withheld with a refusal the model can read and work around (DF-23);
      the transport scan stays as the last line;
@@ -23,6 +25,7 @@ A protected tool is a copy with the same name, schema, description and approval
 settings; only the function it calls is wrapped.
 """
 
+import asyncio
 import copy
 import dataclasses
 import functools
@@ -42,6 +45,8 @@ from agentic.security.untrusted import untrusted
 
 #: Tools whose output is instructions the org approved, not data.
 TRUSTED_TOOLS = frozenset({"activate_skill"})
+#: Tools whose output is a file's content: its paths are not rewritten (DF-156).
+VERBATIM_TOOLS = frozenset({"read_file"})
 
 
 def protect_tools(
@@ -64,7 +69,7 @@ def _protected(tool: Tool, scanner: SecretScanner, paths: re.Pattern | None, lab
         if isinstance(result, Refusal):
             return paths.sub(".", result) if paths else result  # written by us: not data
         text = result if isinstance(result, str) else to_json(result, fallback=str).decode()
-        text = paths.sub(".", text) if paths else text
+        text = paths.sub(".", text) if paths and tool.name not in VERBATIM_TOOLS else text
         try:
             text = scanner.check_text(text, where)
         except SecretBlocked as blocked:
@@ -81,7 +86,8 @@ def _protected(tool: Tool, scanner: SecretScanner, paths: re.Pattern | None, lab
         async def run_async(*args, **kwargs):
             if why := _refused_call(scanner, tool.name, args, kwargs):
                 return why
-            return finish(await function(*args, **kwargs))
+            result = await function(*args, **kwargs)
+            return await asyncio.to_thread(finish, result)  # the scan: off the loop (DF-153)
 
         wrapped = run_async
     else:

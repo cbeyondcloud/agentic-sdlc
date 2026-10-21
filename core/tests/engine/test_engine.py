@@ -109,6 +109,38 @@ def test_a_step_is_given_its_consumed_handoffs_and_the_request(make_harness):
     assert "step: design" in prompt and "request: Add CSV export" in prompt
 
 
+def test_a_changed_catalog_names_an_upgrade_as_a_cause(make_harness):  # DF-34
+    """The digest follows Pydantic's schema output, so a framework upgrade changes it
+    although nobody edited a template: the refusal must say so and what to do."""
+    h = make_harness(GATED, {"designer": [answer("design")], "dev": []})
+    start(h)
+    saved = h.store.load("r-1")
+    saved.catalog_digest = "sha256:" + "0" * 64
+    h.store.save(saved)
+
+    with pytest.raises(EngineError) as error:
+        run(h.engine.advance("r-1"))
+
+    message = str(error.value)
+    assert "templates changed" in message and "upgrade" in message
+
+
+def test_a_skipped_record_carries_no_marks_of_an_earlier_attempt(make_harness):  # DF-327
+    """A skip runs nothing, so base/commit marks left by an earlier attempt of the same
+    step and iteration would point a reader or a rollback at the wrong commits."""
+    from agentic.engine.engine import _Run
+
+    h = make_harness(GATED, {"designer": [answer("design")], "dev": []})
+    start(h)
+    state = h.store.load("r-1")
+    walk = _Run(h.engine, state)
+    walk._marks = ("develop", 1, {".": "a" * 40}, {".": "b" * 40})  # an earlier attempt's
+
+    walk._history("develop", 1, "skipped", started=h.clock.now(), detail="condition not met")
+
+    assert (state.history[-1].base, state.history[-1].commit) == (None, None)
+
+
 def test_run_json_is_saved_after_every_step(make_harness):
     h = make_harness(TWO_STEPS, {"ba": [answer("requirements")], "designer": [answer("design")]})
 

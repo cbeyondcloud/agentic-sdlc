@@ -26,6 +26,8 @@ it leaks nothing from this machine and blocking it would end the run on every
 later call. A tool call carrying a secret is refused before it runs (`refusal`).
 """
 
+import copy
+import dataclasses
 import json
 import logging
 import re
@@ -55,6 +57,10 @@ _TOKEN_TAIL = re.compile(r"[A-Za-z0-9_\-+/=.]*")
 _TOKEN = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-+/=.")
 _FLAGS = ((re.IGNORECASE, regex.IGNORECASE), (re.VERBOSE, regex.VERBOSE))
 DEADLINE_S = 10.0  # per scanned text, across all detectors
+# Detectors whose patterns cannot match without a literal, and backtrack over long lines
+# when run everywhere: they are run only within ANCHOR_WINDOW characters of it (DF-155).
+_ANCHORS = {"NpmDetector": re.compile("_authToken", re.IGNORECASE)}
+ANCHOR_WINDOW = 4096
 
 log = logging.getLogger("agentic.audit")
 
@@ -100,14 +106,26 @@ class Finding:
 
 @dataclass(frozen=True)
 class SecretScanEvent:
-    """One scan that found something: the audit record. Every value is an id."""
+    """One scan that found something: the audit record. Every value is an id. A scanner
+    bound to a step (`SecretScanner.for_step`) fills in whose scan it was (DF-154)."""
 
     action: Literal["blocked", "masked"]
     where: str  # "model-call", "tool:read_file", ...
     findings: dict[str, int]  # detector -> how many
+    run_id: str = ""
+    step: str = ""
+    agent: str = ""  # <name>@<version>
 
     def fields(self) -> dict[str, object]:
-        return {"action": self.action, "where": self.where, "findings": dict(self.findings)}
+        found: dict[str, object] = {
+            "action": self.action,
+            "where": self.where,
+            "findings": dict(self.findings),
+        }
+        for name in ("run_id", "step", "agent"):
+            if value := getattr(self, name):
+                found[name] = value
+        return found
 
 
 class SecretBlocked(Exception):
@@ -125,10 +143,16 @@ class SecretBlocked(Exception):
 
 def audit_log(event: SecretScanEvent) -> None:
     """The default `on_event`: a structured record on the `agentic.audit` logger, its
-    `audit` attribute the event (the run's audit sink, M1-44, takes it from there)."""
+    `audit` attribute the event (the run's audit sink, M1-44, takes it from there). The
+    same data goes in `fields`, which the step log keeps: the event is written into the
+    run folder in structured form (DF-147)."""
     audit = {"event": "secret_scan", **event.fields()}
     log.warning(
-        "secret scan %s %s: %s", event.action, event.where, event.findings, extra={"audit": audit}
+        "secret scan %s %s: %s",
+        event.action,
+        event.where,
+        event.findings,
+        extra={"audit": audit, "fields": audit},
     )
 
 
@@ -168,6 +192,16 @@ class SecretScanner:
         """From `OrgPolicy.secret_scan` (a `SecretScanPolicy`)."""
         return cls(policy.action, policy.detectors, on_event=on_event, allow=policy.allow_values)
 
+    def for_step(self, run_id: str, step: str, agent: str) -> "SecretScanner":
+        """This scanner with every event naming the run, step and agent it came from
+        (DF-154). Binding again replaces the identity; it never wraps twice."""
+        sink = getattr(self, "_unbound", None) or self.on_event
+        bound = copy.copy(self)
+        bound._unbound = sink
+        identity = {"run_id": run_id, "step": step, "agent": agent}
+        bound.on_event = lambda event: sink(dataclasses.replace(event, **identity))
+        return bound
+
     # ── finding and masking ───────────────────────────────────────────────────
 
     def findings(self, text: str, deadline: float | None = None) -> list[Finding]:
@@ -176,15 +210,17 @@ class SecretScanner:
         deadline = deadline if deadline is not None else time.monotonic() + self.deadline_s
         spans: list[Finding] = []
         for detector in self.detectors:
+            windows = _windows(detector.name, text)
             for pattern in detector.patterns:
                 group = "secret" if "secret" in pattern.groupindex else 0
-                left = max(deadline - time.monotonic(), 0.001)
-                for match in pattern.finditer(text, timeout=left):
-                    start, end = match.span(group)
-                    if end > start:
-                        span = _span(detector, text, start, end)
-                        if not self._allowed(text[span.start : span.end]):
-                            spans.append(span)
+                for start_at, end_at in windows:
+                    left = max(deadline - time.monotonic(), 0.001)
+                    for match in pattern.finditer(text, start_at, end_at, timeout=left):
+                        start, end = match.span(group)
+                        if end > start:
+                            span = _span(detector, text, start, end)
+                            if not self._allowed(text[span.start : span.end]):
+                                spans.append(span)
         return _merged(spans)
 
     def _allowed(self, found: str) -> bool:
@@ -284,6 +320,23 @@ class SecretScanner:
     def _kind(self, detector: str) -> str:
         found = _catalogue().get(detector)
         return found.kind if found else "content that could not be scanned in time"
+
+
+def _windows(detector: str, text: str) -> list[tuple[int, int]]:
+    """Where in `text` a detector's patterns are run: everywhere, or - for a pattern that
+    backtracks over every `//` of a long line - only around its required literal (DF-155).
+    A token is found whenever its literal lies within ANCHOR_WINDOW of it."""
+    anchor = _ANCHORS.get(detector)
+    if anchor is None:
+        return [(0, len(text))]
+    windows: list[tuple[int, int]] = []
+    for hit in anchor.finditer(text):
+        start, end = max(0, hit.start() - ANCHOR_WINDOW), hit.end() + ANCHOR_WINDOW
+        if windows and start <= windows[-1][1]:
+            windows[-1] = (windows[-1][0], end)
+        else:
+            windows.append((start, end))
+    return [(start, min(end, len(text))) for start, end in windows]
 
 
 def _span(detector: _Detector, text: str, start: int, end: int) -> Finding:
