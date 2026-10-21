@@ -68,7 +68,9 @@ def test_https_to_an_unlisted_host_is_blocked(tree):
 
 
 def test_https_to_an_allowed_host_works(tree):
-    result = run(tree, "curl -sS -o /dev/null --max-time 20 https://pypi.org/simple/")
+    # HEAD: reachability through the proxy, not the ~47 MB index download (a slow link
+    # timed out mid-transfer in the Linux stage)
+    result = run(tree, "curl -sS -I -o /dev/null --max-time 20 https://pypi.org/simple/")
     assert result.exit_code == 0, result.stderr
 
 

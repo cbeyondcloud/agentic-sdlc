@@ -46,7 +46,8 @@ CASES: list[tuple[str, str, str, str]] = [
     ("read denied folder", "cat {secrets}/key", "blocked", "exit"),
     (
         "HTTPS to allowed host",
-        f"curl -sS -o /dev/null --max-time 20 https://{ALLOWED_HOST}/simple/",
+        # a HEAD request: reachability, not bandwidth (the index page is ~47 MB)
+        f"curl -sS -I -o /dev/null --max-time 20 https://{ALLOWED_HOST}/simple/",
         "allowed",
         "exit",
     ),
