@@ -188,9 +188,14 @@ def test_missing_front_matter_rejected():
 
 def make_agent(name: str, consumes: list[str], produces: str | None) -> AgentDefinition:
     return AgentDefinition(
-        name=name, type="general", version="1.0.0", description=name, instructions="Do it.",
-        consumes=consumes, produces=produces,
-    )  # fmt: skip
+        name=name,
+        type="general",
+        version="1.0.0",
+        description=name,
+        instructions="Do it.",
+        consumes=consumes,
+        produces=produces,
+    )
 
 
 AGENTS = {
@@ -211,12 +216,19 @@ def test_compat_allows_loop_feedback():
     steps = [
         {"id": "requirements", "agent": "business-analyst"},
         {"id": "design", "agent": "design"},
-        {"loop": {"id": "build-review", "max_iterations": 3, "until": "x", "steps": [
-            {"id": "develop", "agent": "developer"},
-            {"id": "review", "agent": "code-review"},
-        ]}},
+        {
+            "loop": {
+                "id": "build-review",
+                "max_iterations": 3,
+                "until": "x",
+                "steps": [
+                    {"id": "develop", "agent": "developer"},
+                    {"id": "review", "agent": "code-review"},
+                ],
+            }
+        },
         {"id": "qa", "agent": "qa"},
-    ]  # fmt: skip
+    ]
 
     assert check_compatibility(pipeline(steps), AGENTS) == []
 

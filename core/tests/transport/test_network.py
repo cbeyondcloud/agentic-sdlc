@@ -8,16 +8,29 @@ import pytest
 
 from agentic.transport import CallIdentity, NetworkError, NetworkSettings, make_client
 
-IDENTITY = CallIdentity(team="payments", user="u123", repo="github.com/acme/api",
-                        pipeline="feature-delivery", run_id="r-net-1", step="build",
-                        agent="developer@1.2.0", policy_version="git:" + "a" * 40)  # fmt: skip
+IDENTITY = CallIdentity(
+    team="payments",
+    user="u123",
+    repo="github.com/acme/api",
+    pipeline="feature-delivery",
+    run_id="r-net-1",
+    step="build",
+    agent="developer@1.2.0",
+    policy_version="git:" + "a" * 40,
+)
 
 
 @pytest.fixture(autouse=True)
 def no_ambient_network_settings(monkeypatch):
     """The developer's own proxy and CA variables must not leak into these tests."""
-    names = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE",
-             "REQUESTS_CA_BUNDLE")  # fmt: skip
+    names = (
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+    )
     for name in (*names, *(n.lower() for n in names)):
         monkeypatch.delenv(name, raising=False)
 
@@ -43,8 +56,9 @@ def test_ssl_cert_file_from_the_environment_is_honoured(https_server, ca_bundle,
     sys.platform.startswith("linux"),
     reason="OpenSSL itself reads SSL_CERT_FILE when loading Linux system CAs",
 )
-def test_environment_ca_files_are_ignored_when_trust_env_is_off(https_server, ca_bundle,
-                                                                monkeypatch):  # fmt: skip
+def test_environment_ca_files_are_ignored_when_trust_env_is_off(
+    https_server, ca_bundle, monkeypatch
+):
     monkeypatch.setenv("SSL_CERT_FILE", str(ca_bundle))
 
     with pytest.raises(httpx2.ConnectError):
@@ -77,8 +91,7 @@ def test_no_proxy_bypasses_the_proxy(https_server, ca_bundle, connect_proxy, mon
     assert seen == []
 
 
-def test_trust_env_off_ignores_proxy_variables(https_server, ca_bundle, connect_proxy,
-                                               monkeypatch):  # fmt: skip
+def test_trust_env_off_ignores_proxy_variables(https_server, ca_bundle, connect_proxy, monkeypatch):
     proxy, seen = connect_proxy
     monkeypatch.setenv("HTTPS_PROXY", proxy)
     settings = NetworkSettings(ca_bundle=ca_bundle, trust_env=False)

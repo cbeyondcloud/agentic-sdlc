@@ -211,9 +211,11 @@ def edit(path: Path, old: str, new: str) -> None:
 
 def test_agent_type_caps_must_be_complete(policy_dir: Path):
     # A missing cap used to mean "unlimited" (review finding 3).
-    edit(policy_dir / "agent-types.yaml",
-         "max: { budget_usd: 5, max_turns: 80, max_minutes: 60 }",
-         "max: { budget_usd: 5, max_turns: 80 }")  # fmt: skip
+    edit(
+        policy_dir / "agent-types.yaml",
+        "max: { budget_usd: 5, max_turns: 80, max_minutes: 60 }",
+        "max: { budget_usd: 5, max_turns: 80 }",
+    )
 
     with pytest.raises(PolicyError) as error:
         load_policy(policy_dir)
@@ -231,8 +233,11 @@ def test_agent_type_must_name_a_known_tier(policy_dir: Path):
 
 
 def test_agent_type_tools_must_be_in_catalog(policy_dir: Path):
-    edit(policy_dir / "agent-types.yaml", "tools: [read_files, search, edit_files]",
-         "tools: [read_files, teleport]")  # fmt: skip
+    edit(
+        policy_dir / "agent-types.yaml",
+        "tools: [read_files, search, edit_files]",
+        "tools: [read_files, teleport]",
+    )
 
     with pytest.raises(PolicyError) as error:
         load_policy(policy_dir)

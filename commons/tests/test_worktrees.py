@@ -25,8 +25,9 @@ components:
 
 
 def git(where: Path, *args: str) -> str:
-    done = subprocess.run(["git", "-C", str(where), *GIT_USER, *args], capture_output=True,
-                          text=True, check=True)  # fmt: skip
+    done = subprocess.run(
+        ["git", "-C", str(where), *GIT_USER, *args], capture_output=True, text=True, check=True
+    )
     return done.stdout.strip()
 
 
@@ -40,8 +41,9 @@ def make_repo(path: Path) -> Path:
 
 
 def open_run(target: Path, run_id: str = "r1") -> RunWorktrees:
-    RunLedger(target, run_id).open(identity=IDENTITY, kind="feature", project="demo",
-                                   owner="platform", criticality="low")  # fmt: skip
+    RunLedger(target, run_id).open(
+        identity=IDENTITY, kind="feature", project="demo", owner="platform", criticality="low"
+    )
     return RunWorktrees(target, run_id)
 
 

@@ -163,15 +163,18 @@ class RunLedger:
 
     # ── identity ──────────────────────────────────────────────────────────────
 
-    def open(self, *, identity: RunIdentity, kind: str, project: str, owner: str,
-             criticality: str) -> dict:  # fmt: skip
+    def open(
+        self, *, identity: RunIdentity, kind: str, project: str, owner: str, criticality: str
+    ) -> dict:
         """Start the run under `identity` and record `run_opened`. Every input is
         checked before the run folder exists."""
         if self._has_events():
             recorded = self._recorded_identity()
             if recorded is not None and recorded != identity:
-                raise LedgerError(f"run {self.run_id} already belongs to another team or "
-                                  f"policy version - its identity never changes")  # fmt: skip
+                raise LedgerError(
+                    f"run {self.run_id} already belongs to another team or "
+                    f"policy version - its identity never changes"
+                )
             raise LedgerError(f"run {self.run_id} is already open - resume() it instead")
         fields = {"kind": kind, "project": project, "owner": owner, "criticality": criticality}
         _check_fields(fields)
@@ -211,8 +214,10 @@ class RunLedger:
         with _LOCK:
             held = _IDENTITIES.get(self.run_id)
             if held is not None and held != identity:
-                raise LedgerError(f"run {self.run_id} already belongs to another team or "
-                                  f"policy version in this process")  # fmt: skip
+                raise LedgerError(
+                    f"run {self.run_id} already belongs to another team or "
+                    f"policy version in this process"
+                )
             _IDENTITIES[self.run_id] = identity
         try:
             events.check_default_ext(self.run_id)
@@ -238,8 +243,9 @@ class RunLedger:
         emails - and the ledger stamps the time. `agent` adds that agent's ids to
         this event; the run's identity is added to every event."""
         if self.run_id not in _IDENTITIES:
-            raise LedgerError(f"run {self.run_id} has no identity in this process - open() or "
-                              f"resume() it first")  # fmt: skip
+            raise LedgerError(
+                f"run {self.run_id} has no identity in this process - open() or resume() it first"
+            )
         if "at" in fields:
             raise LedgerError("the ledger stamps each event's time - 'at' cannot be passed")
         if "ext" in fields:
@@ -276,8 +282,10 @@ class RunLedger:
         problems: list[str] = []
         for log in self._logs():
             if log.is_file() and _torn(log.read_bytes()) is not None:
-                problems.append(f"{log.name}: torn last line (an interrupted write); "
-                                "recover it with recover_torn_tail()")  # fmt: skip
+                problems.append(
+                    f"{log.name}: torn last line (an interrupted write); "
+                    "recover it with recover_torn_tail()"
+                )
         try:
             problems += events.verify(self.target, self.run_id)
             problems += self._identity_problems()
@@ -327,8 +335,10 @@ class RunLedger:
         return [kept for log in self._logs() if (kept := _recover(log)) is not None]
 
     def _logs(self) -> list[Path]:
-        return [events.events_path(self.target, self.run_id),
-                approve.approvals_path(self.target, self.run_id)]  # fmt: skip
+        return [
+            events.events_path(self.target, self.run_id),
+            approve.approvals_path(self.target, self.run_id),
+        ]
 
 
 #: A run id: one folder name, safe on Windows too.
@@ -340,8 +350,12 @@ _WINDOWS_DEVICE = re.compile(r"(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?", re.I
 def run_id_refusal(run_id: object) -> str:
     """Why `run_id` cannot name a run, or "". Checked before any folder is made:
     a run id can come from a branch name, which anyone opening a PR chooses."""
-    if (isinstance(run_id, str) and _RUN_ID.fullmatch(run_id) and not run_id.endswith(".")
-            and not _WINDOWS_DEVICE.fullmatch(run_id)):  # fmt: skip
+    if (
+        isinstance(run_id, str)
+        and _RUN_ID.fullmatch(run_id)
+        and not run_id.endswith(".")
+        and not _WINDOWS_DEVICE.fullmatch(run_id)
+    ):
         return ""
     return (
         "a run id is letters, digits, '.', '-' or '_' (starting with a letter or digit, "
@@ -367,9 +381,11 @@ def _check_fields(fields: dict) -> None:
 def _check_value(name: str, value: object) -> None:
     if isinstance(value, str):
         if not _EVENT_VALUE.fullmatch(value):
-            raise LedgerError(f"event field {name!r} must be an id (letters, digits and "
-                              f"._:/+=-; no spaces, no '@', at most 128) - events carry no "
-                              f"free text")  # fmt: skip
+            raise LedgerError(
+                f"event field {name!r} must be an id (letters, digits and "
+                f"._:/+=-; no spaces, no '@', at most 128) - events carry no "
+                f"free text"
+            )
     elif isinstance(value, dict):
         for key, item in value.items():
             _check_value(f"{name} key", key)
@@ -410,19 +426,24 @@ def _recover(log: Path) -> Path | None:
     try:
         _save_durably(kept, fragment)
     except OSError as error:
-        raise LedgerError(f"{log.name}: the torn line could not be preserved ({error}) - "
-                          f"nothing was changed") from error  # fmt: skip
+        raise LedgerError(
+            f"{log.name}: the torn line could not be preserved ({error}) - nothing was changed"
+        ) from error
     try:
         with log.open("r+b") as fh:
             if fh.seek(0, os.SEEK_END) != len(data):
-                raise LedgerError(f"{log.name} changed while it was being recovered - "
-                                  f"nothing was truncated; retry")  # fmt: skip
+                raise LedgerError(
+                    f"{log.name} changed while it was being recovered - "
+                    f"nothing was truncated; retry"
+                )
             fh.truncate(len(data) - len(fragment))
             fh.flush()
             os.fsync(fh.fileno())
     except OSError as error:
-        raise LedgerError(f"{log.name}: could not truncate the torn line ({error}); it is "
-                          f"preserved in {kept.name}") from error  # fmt: skip
+        raise LedgerError(
+            f"{log.name}: could not truncate the torn line ({error}); it is "
+            f"preserved in {kept.name}"
+        ) from error
     return kept
 
 

@@ -14,12 +14,29 @@ D = Decimal
 
 def cost(usd: Decimal | None) -> CallCost:
     if usd is None:
-        return CallCost(source="unavailable", cost_usd=None, tokens_in=None, tokens_out=None,
-                        tokens_cache_read=None, tokens_cache_write=None, model="m",
-                        request_id=None, trace_id=None, reason="stream ended early")  # fmt: skip
-    return CallCost(source="reported", cost_usd=usd, tokens_in=1, tokens_out=1,
-                    tokens_cache_read=None, tokens_cache_write=None, model="m",
-                    request_id=None, trace_id=None)  # fmt: skip
+        return CallCost(
+            source="unavailable",
+            cost_usd=None,
+            tokens_in=None,
+            tokens_out=None,
+            tokens_cache_read=None,
+            tokens_cache_write=None,
+            model="m",
+            request_id=None,
+            trace_id=None,
+            reason="stream ended early",
+        )
+    return CallCost(
+        source="reported",
+        cost_usd=usd,
+        tokens_in=1,
+        tokens_out=1,
+        tokens_cache_read=None,
+        tokens_cache_write=None,
+        model="m",
+        request_id=None,
+        trace_id=None,
+    )
 
 
 def spend(slice_, usd: str) -> Decimal:
@@ -274,7 +291,12 @@ def test_limit_hit_survives_pickling():  # review M4
 
     hit = pickle.loads(pickle.dumps(LimitHit("step", "build", D("1"), D("1.2"))))
     assert (hit.kind, hit.scope, hit.name, hit.limit_usd, hit.spent_usd) == (
-        "budget", "step", "build", D("1"), D("1.2"))  # fmt: skip
+        "budget",
+        "step",
+        "build",
+        D("1"),
+        D("1.2"),
+    )
 
 
 # ── snapshot and restore: the budget survives a pause or a crash (M1-21, DF-18) ──

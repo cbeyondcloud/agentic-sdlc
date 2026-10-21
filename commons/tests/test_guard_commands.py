@@ -10,8 +10,14 @@ import pytest
 from sdlc_commons.guards import Guard
 
 RUN = "r-table-1"
-DENY_SHELL = ("kubectl delete", "curl", "sudo", "terraform destroy", "aws s3 rm",
-              "docker run --privileged")  # fmt: skip
+DENY_SHELL = (
+    "kubectl delete",
+    "curl",
+    "sudo",
+    "terraform destroy",
+    "aws s3 rm",
+    "docker run --privileged",
+)
 
 #: (command, the wall that must refuse it)
 MUST_REFUSE = [

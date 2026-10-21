@@ -55,5 +55,6 @@ def _trust(context: ssl.SSLContext, path: Path, what: str) -> None:
     try:
         context.load_verify_locations(cafile=str(path))
     except (ssl.SSLError, OSError, ValueError) as error:
-        raise NetworkError(f"{what} is not a readable PEM certificate file: {path} "
-                           f"({error})") from error  # fmt: skip
+        raise NetworkError(
+            f"{what} is not a readable PEM certificate file: {path} ({error})"
+        ) from error

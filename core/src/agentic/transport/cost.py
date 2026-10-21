@@ -50,9 +50,11 @@ class CallCost:
     def __post_init__(self) -> None:
         if (self.cost_usd is None) != (self.source == "unavailable"):
             raise ValueError("a cost is None exactly when its source is 'unavailable'")
-        if self.cost_usd is not None and (not isinstance(self.cost_usd, Decimal)
-                                          or not self.cost_usd.is_finite()
-                                          or self.cost_usd < 0):  # fmt: skip
+        if self.cost_usd is not None and (
+            not isinstance(self.cost_usd, Decimal)
+            or not self.cost_usd.is_finite()
+            or self.cost_usd < 0
+        ):
             raise ValueError("a cost is a finite, non-negative Decimal")
         if self.source != "reported" and not self.reason:
             raise ValueError(f"a {self.source} cost must say why")
@@ -72,15 +74,18 @@ def estimate_usd(
     uncached = max(tokens_in - read - write, 0)
     read_price = price.cache_read_per_mtok
     write_price = price.cache_write_per_mtok
-    total = (uncached * price.input_per_mtok
-             + read * (read_price if read_price is not None else price.input_per_mtok)
-             + write * (write_price if write_price is not None else price.input_per_mtok)
-             + tokens_out * price.output_per_mtok)  # fmt: skip
+    total = (
+        uncached * price.input_per_mtok
+        + read * (read_price if read_price is not None else price.input_per_mtok)
+        + write * (write_price if write_price is not None else price.input_per_mtok)
+        + tokens_out * price.output_per_mtok
+    )
     return total / _MILLION
 
 
-def cost_from_response(headers: Mapping[str, str], body: Mapping | None,
-                       price_for: Pricer) -> CallCost:  # fmt: skip
+def cost_from_response(
+    headers: Mapping[str, str], body: Mapping | None, price_for: Pricer
+) -> CallCost:
     """The cost of one non-streaming response: header, then TokenLean's body cost,
     then usage x price, else unavailable."""
     h = _lower(headers)
@@ -90,15 +95,28 @@ def cost_from_response(headers: Mapping[str, str], body: Mapping | None,
     tokens = {
         "tokens_in": _count(usage.get("in"), opt.get("tokens_provider_billed")),
         "tokens_out": _count(usage.get("out"), opt.get("response_tokens")),
-        "tokens_cache_read": _count(usage.get("cache_read"), opt.get("cache_read_tokens"),
-                                    h.get("x-tokenlean-cache-read-tokens")),
-        "tokens_cache_write": _count(usage.get("cache_write"), opt.get("cache_write_tokens"),
-                                     h.get("x-tokenlean-cache-write-tokens")),
-    }  # fmt: skip
+        "tokens_cache_read": _count(
+            usage.get("cache_read"),
+            opt.get("cache_read_tokens"),
+            h.get("x-tokenlean-cache-read-tokens"),
+        ),
+        "tokens_cache_write": _count(
+            usage.get("cache_write"),
+            opt.get("cache_write_tokens"),
+            h.get("x-tokenlean-cache-write-tokens"),
+        ),
+    }
     model = h.get("x-tokenlean-routed-model") or _text(body.get("model"))
     cache_hit = opt.get("cache_hit") is True or h.get("x-tokenlean-cache", "").startswith("hit")
-    return _judge(h, opt.get("cost_actual_usd"), tokens, model, price_for, "response usage",
-                  cache_hit=cache_hit)  # fmt: skip
+    return _judge(
+        h,
+        opt.get("cost_actual_usd"),
+        tokens,
+        model,
+        price_for,
+        "response usage",
+        cache_hit=cache_hit,
+    )
 
 
 class StreamUsage:
@@ -137,8 +155,9 @@ class StreamUsage:
             elif counts and kind is None and counts.get("in") is not None:
                 self._finished = True  # OpenAI's final usage chunk
 
-    def result(self, headers: Mapping[str, str], price_for: Pricer,
-               model: str | None = None) -> CallCost:  # fmt: skip
+    def result(
+        self, headers: Mapping[str, str], price_for: Pricer, model: str | None = None
+    ) -> CallCost:
         h = _lower(headers)
         tokens = {
             "tokens_in": self._counts.get("in"),
@@ -150,11 +169,21 @@ class StreamUsage:
         ids = _ids(h, model)
         if _money(h.get(COST_HEADER)) is None:
             if not self._finished:
-                return CallCost(source="unavailable", cost_usd=None, **tokens, **ids,
-                                reason="the stream did not finish (no closing usage)")  # fmt: skip
+                return CallCost(
+                    source="unavailable",
+                    cost_usd=None,
+                    **tokens,
+                    **ids,
+                    reason="the stream did not finish (no closing usage)",
+                )
             if self._anthropic and not tokens["tokens_in"]:
-                return CallCost(source="unavailable", cost_usd=None, **tokens, **ids,
-                                reason="the stream reported no input tokens")  # fmt: skip
+                return CallCost(
+                    source="unavailable",
+                    cost_usd=None,
+                    **tokens,
+                    **ids,
+                    reason="the stream reported no input tokens",
+                )
         return _judge(h, None, tokens, model, price_for, "stream usage chunk", cache_hit=False)
 
 
@@ -170,8 +199,16 @@ def ensure_stream_usage(body: dict, route: Literal["openai", "anthropic"] = "ope
     return {**body, "stream_options": options}
 
 
-def _judge(h: dict[str, str], body_cost: object, tokens: dict, model: str | None,
-           price_for: Pricer, what: str, *, cache_hit: bool) -> CallCost:  # fmt: skip
+def _judge(
+    h: dict[str, str],
+    body_cost: object,
+    tokens: dict,
+    model: str | None,
+    price_for: Pricer,
+    what: str,
+    *,
+    cache_hit: bool,
+) -> CallCost:
     ids = _ids(h, model)
     billed = (tokens["tokens_in"] or 0) + (tokens["tokens_out"] or 0)
     for evidence in (h.get(COST_HEADER), body_cost):
@@ -180,21 +217,44 @@ def _judge(h: dict[str, str], body_cost: object, tokens: dict, model: str | None
             continue  # a zero with tokens billed and no cache hit is not believed
         return CallCost(source="reported", cost_usd=usd, **tokens, **ids)
     if tokens["tokens_in"] is None or tokens["tokens_out"] is None:
-        return CallCost(source="unavailable", cost_usd=None, **tokens, **ids,
-                        reason=f"no reported cost and no {what}")  # fmt: skip
+        return CallCost(
+            source="unavailable",
+            cost_usd=None,
+            **tokens,
+            **ids,
+            reason=f"no reported cost and no {what}",
+        )
     price = price_for(model) if model else None
     if price is None:
-        return CallCost(source="unavailable", cost_usd=None, **tokens, **ids,
-                        reason=f"no reported cost and no price for model {model!r}")  # fmt: skip
-    usd = estimate_usd(price, tokens["tokens_in"], tokens["tokens_out"],
-                       tokens["tokens_cache_read"], tokens["tokens_cache_write"])  # fmt: skip
-    return CallCost(source="estimated", cost_usd=usd, **tokens, **ids,
-                    reason=f"priced from {what} with the policy price for {model}")  # fmt: skip
+        return CallCost(
+            source="unavailable",
+            cost_usd=None,
+            **tokens,
+            **ids,
+            reason=f"no reported cost and no price for model {model!r}",
+        )
+    usd = estimate_usd(
+        price,
+        tokens["tokens_in"],
+        tokens["tokens_out"],
+        tokens["tokens_cache_read"],
+        tokens["tokens_cache_write"],
+    )
+    return CallCost(
+        source="estimated",
+        cost_usd=usd,
+        **tokens,
+        **ids,
+        reason=f"priced from {what} with the policy price for {model}",
+    )
 
 
 def _ids(h: dict[str, str], model: str | None) -> dict[str, str | None]:
-    return {"model": model, "request_id": h.get("x-tokenlean-request-id"),
-            "trace_id": h.get("x-trace-id")}  # fmt: skip
+    return {
+        "model": model,
+        "request_id": h.get("x-tokenlean-request-id"),
+        "trace_id": h.get("x-trace-id"),
+    }
 
 
 def _usage(raw: object) -> dict[str, int | None]:

@@ -93,8 +93,10 @@ def test_the_api_key_is_sent_as_a_bearer_token():
     assert seen[0].headers["Authorization"] == "Bearer tok-abc"
 
 
-@pytest.mark.parametrize("header", ["X-Step-Name", "X-Workflow-ID", "X-Session-ID",
-                                    "X-Complexity", "X-No-Cache", "x-route-to"])  # fmt: skip
+@pytest.mark.parametrize(
+    "header",
+    ["X-Step-Name", "X-Workflow-ID", "X-Session-ID", "X-Complexity", "X-No-Cache", "x-route-to"],
+)
 def test_tokenlean_behaviour_headers_are_refused(header):
     c, seen = client()
 
@@ -148,14 +150,17 @@ def test_an_active_span_traceparent_is_propagated(monkeypatch):
     assert seen[0].headers["traceparent"] == active
 
 
-@pytest.mark.parametrize(("field", "value"), [
-    ("user", "José"),  # non-ASCII
-    ("repo", "github.com/a/b\n"),  # a trailing newline
-    ("team", "a\r\nX-Evil: 1"),  # header injection
-    ("step", ""),
-    ("agent", "x" * 257),
-    ("tier", "fast\tlane"),
-])  # fmt: skip
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("user", "José"),  # non-ASCII
+        ("repo", "github.com/a/b\n"),  # a trailing newline
+        ("team", "a\r\nX-Evil: 1"),  # header injection
+        ("step", ""),
+        ("agent", "x" * 257),
+        ("tier", "fast\tlane"),
+    ],
+)
 def test_unsafe_identity_values_are_refused_by_field_name(field, value):
     with pytest.raises(IdentityError) as error:
         replace(IDENTITY, **{field: value})
@@ -183,8 +188,14 @@ def test_the_async_client_stamps_the_same_headers():
 # ── SP3 review fixes ──────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("url", ["https://evil.example/steal", "http://tl.example/v1/models",
-                                 "https://tl.example:8443/v1/models"])  # fmt: skip
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://evil.example/steal",
+        "http://tl.example/v1/models",
+        "https://tl.example:8443/v1/models",
+    ],
+)
 def test_a_request_to_any_other_host_is_refused_before_it_is_sent(url):  # review I7
     from agentic.transport import ForeignHostError
 
@@ -228,8 +239,9 @@ def test_a_malformed_caller_traceparent_is_replaced():  # review M8
     assert TRACEPARENT.fullmatch(seen[0].headers["traceparent"])
 
 
-@pytest.mark.parametrize("repo", ["https://token@github.com/acme/api",
-                                  "https://user:pass@gitlab.example/acme/api"])  # fmt: skip
+@pytest.mark.parametrize(
+    "repo", ["https://token@github.com/acme/api", "https://user:pass@gitlab.example/acme/api"]
+)
 def test_a_repo_url_carrying_credentials_is_refused(repo):  # review M9
     with pytest.raises(IdentityError, match="repo"):
         replace(IDENTITY, repo=repo)

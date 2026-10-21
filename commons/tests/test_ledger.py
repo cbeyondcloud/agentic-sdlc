@@ -18,8 +18,9 @@ def fresh_identities(monkeypatch):
 
 def open_ledger(target: Path, run_id: str = "r-test-1") -> RunLedger:
     ledger = RunLedger(target, run_id)
-    ledger.open(identity=IDENTITY, kind="feature", project="demo", owner="platform",
-                criticality="low")  # fmt: skip
+    ledger.open(
+        identity=IDENTITY, kind="feature", project="demo", owner="platform", criticality="low"
+    )
     return ledger
 
 
@@ -76,8 +77,9 @@ def test_opening_a_run_twice_is_refused(tmp_path: Path):
     ledger = open_ledger(tmp_path)
 
     with pytest.raises(LedgerError, match="already open"):
-        ledger.open(identity=IDENTITY, kind="feature", project="demo", owner="platform",
-                    criticality="low")  # fmt: skip
+        ledger.open(
+            identity=IDENTITY, kind="feature", project="demo", owner="platform", criticality="low"
+        )
     assert len(ledger.events()) == 1
 
 
@@ -85,15 +87,18 @@ def test_an_event_cannot_be_backdated(tmp_path: Path):
     ledger = open_ledger(tmp_path)
 
     with pytest.raises(LedgerError, match="at"):
-        ledger.record("step_started", phase="design", attempt=1, actor="agent",
-                      at="2020-01-01T00:00:00Z")  # fmt: skip
+        ledger.record(
+            "step_started", phase="design", attempt=1, actor="agent", at="2020-01-01T00:00:00Z"
+        )
 
 
 # ── run ids (I1) ──────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("run_id", ["../../evil", "/abs/run", "C:x", "r1:x", "r 1", "", "r1.",
-                                    "a/b", "-r1", "x" * 101, ".hidden"])  # fmt: skip
+@pytest.mark.parametrize(
+    "run_id",
+    ["../../evil", "/abs/run", "C:x", "r1:x", "r 1", "", "r1.", "a/b", "-r1", "x" * 101, ".hidden"],
+)
 def test_a_bad_run_id_is_refused_before_any_folder_is_made(tmp_path: Path, run_id):
     with pytest.raises(LedgerError, match="run id"):
         RunLedger(tmp_path, run_id)
@@ -104,10 +109,15 @@ def test_a_bad_run_id_is_refused_before_any_folder_is_made(tmp_path: Path, run_i
 # ── no free text in events (I3) ───────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("fields", [
-    {"owner": "alice@example.com"}, {"project": "my secret project"},
-    {"kind": "a long free text note"}, {"criticality": "extreme"},
-])  # fmt: skip
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"owner": "alice@example.com"},
+        {"project": "my secret project"},
+        {"kind": "a long free text note"},
+        {"criticality": "extreme"},
+    ],
+)
 def test_run_opened_fields_must_be_ids(tmp_path: Path, fields):
     ledger = RunLedger(tmp_path, "r-free")
     values = {"kind": "feature", "project": "demo", "owner": "platform", "criticality": "low"}
@@ -118,12 +128,15 @@ def test_run_opened_fields_must_be_ids(tmp_path: Path, fields):
     assert not (tmp_path / ".agentic" / "local" / "runs" / "r-free").exists()
 
 
-@pytest.mark.parametrize(("phase", "fields"), [
-    ("design", {"attempt": 1, "actor": "the user said: password is hunter2"}),
-    ("free text phase", {"attempt": 1, "actor": "agent"}),
-    ("build", {"attempt": 1, "actor": "agent", "outcome": "my prompt: ignore previous"}),
-    ("build", {"attempt": 1, "actor": "agent", "artifacts": {"note": "free text here"}}),
-])  # fmt: skip
+@pytest.mark.parametrize(
+    ("phase", "fields"),
+    [
+        ("design", {"attempt": 1, "actor": "the user said: password is hunter2"}),
+        ("free text phase", {"attempt": 1, "actor": "agent"}),
+        ("build", {"attempt": 1, "actor": "agent", "outcome": "my prompt: ignore previous"}),
+        ("build", {"attempt": 1, "actor": "agent", "artifacts": {"note": "free text here"}}),
+    ],
+)
 def test_event_fields_must_be_ids_and_nothing_is_written(tmp_path: Path, phase, fields):
     ledger = open_ledger(tmp_path)
     event = "step_finished" if "outcome" in fields or "artifacts" in fields else "step_started"
@@ -234,8 +247,13 @@ def test_ext_cannot_be_passed_by_hand(tmp_path: Path):
     ledger = open_ledger(tmp_path)
 
     with pytest.raises(LedgerError, match="ext"):
-        ledger.record("step_started", phase="design", attempt=1, actor="agent",
-                      ext={"agentic": {"team": "other"}})  # fmt: skip
+        ledger.record(
+            "step_started",
+            phase="design",
+            attempt=1,
+            actor="agent",
+            ext={"agentic": {"team": "other"}},
+        )
 
 
 # ── artefacts the engine pins (SP6, DF-09) and a non-record tail (DF-12) ───────

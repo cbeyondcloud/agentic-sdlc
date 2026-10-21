@@ -58,7 +58,7 @@ def pause(workdir: Path, state: Path) -> None:
         "messages": json.loads(ModelMessagesTypeAdapter.dump_json(result.all_messages())),
         "pending": [c.tool_call_id for c in result.output.approvals],
         "requests": result.usage.requests,
-    }), encoding="utf-8")  # fmt: skip
+    }), encoding="utf-8")
     print(
         f"A paused: pending={len(result.output.approvals)} tool ran in A: "
         f"{(workdir / 'out.txt').exists()} state bytes: {state.stat().st_size}"
@@ -84,7 +84,7 @@ def main() -> None:
             pause(workdir, state)
             # Process B: a fresh interpreter, started only after A finished.
             subprocess.run([sys.executable, __file__, "resume", str(workdir), str(state),
-                            decision], check=True)  # fmt: skip
+                            decision], check=True)
 
 
 if __name__ == "__main__":

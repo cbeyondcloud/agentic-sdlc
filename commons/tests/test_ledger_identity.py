@@ -26,8 +26,9 @@ def fresh_identities(monkeypatch):
 
 def open_ledger(target: Path, run_id: str = "r-id-1", identity=PAYMENTS) -> RunLedger:
     ledger = RunLedger(target, run_id)
-    ledger.open(identity=identity, kind="feature", project="demo", owner="platform",
-                criticality="low")  # fmt: skip
+    ledger.open(
+        identity=identity, kind="feature", project="demo", owner="platform", criticality="low"
+    )
     return ledger
 
 
@@ -122,8 +123,9 @@ def test_a_different_identity_for_a_run_is_refused(tmp_path: Path):
     platform = RunIdentity(team="platform", policy_version=POLICY)
 
     with pytest.raises(LedgerError, match="already belongs"):
-        RunLedger(tmp_path, "r-id-1").open(identity=platform, kind="feature", project="demo",
-                                           owner="platform", criticality="low")  # fmt: skip
+        RunLedger(tmp_path, "r-id-1").open(
+            identity=platform, kind="feature", project="demo", owner="platform", criticality="low"
+        )
 
 
 def test_verify_flags_events_whose_identity_differs_from_the_run(tmp_path: Path):

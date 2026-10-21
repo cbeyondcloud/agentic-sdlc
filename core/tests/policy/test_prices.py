@@ -19,9 +19,12 @@ def policy_dir(fixtures: Path, tmp_path: Path) -> Path:
 def test_prices_load_as_exact_decimals(policy_dir: Path):
     price = load_policy(policy_dir).prices["claude-sonnet-5-5"]
 
-    assert price == ModelPrice(input_per_mtok=Decimal("3"), output_per_mtok=Decimal("15"),
-                               cache_read_per_mtok=Decimal("0.3"),
-                               cache_write_per_mtok=Decimal("3.75"))  # fmt: skip
+    assert price == ModelPrice(
+        input_per_mtok=Decimal("3"),
+        output_per_mtok=Decimal("15"),
+        cache_read_per_mtok=Decimal("0.3"),
+        cache_write_per_mtok=Decimal("3.75"),
+    )
     assert isinstance(price.cache_read_per_mtok, Decimal)
 
 
@@ -48,12 +51,15 @@ def test_prices_are_optional(policy_dir: Path):
     assert load_policy(policy_dir).prices == {}
 
 
-@pytest.mark.parametrize("entry", [
-    "{ input_per_mtok: -1, output_per_mtok: 2 }",
-    "{ input_per_mtok: 1 }",
-    "{ input_per_mtok: 1, output_per_mtok: 2, surprise: 3 }",
-    "{ input_per_mtok: .nan, output_per_mtok: 2 }",
-])  # fmt: skip
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "{ input_per_mtok: -1, output_per_mtok: 2 }",
+        "{ input_per_mtok: 1 }",
+        "{ input_per_mtok: 1, output_per_mtok: 2, surprise: 3 }",
+        "{ input_per_mtok: .nan, output_per_mtok: 2 }",
+    ],
+)
 def test_a_bad_price_is_refused(policy_dir: Path, entry: str):
     (policy_dir / "prices.yaml").write_text(f"prices:\n  bad-model: {entry}\n", encoding="utf-8")
 

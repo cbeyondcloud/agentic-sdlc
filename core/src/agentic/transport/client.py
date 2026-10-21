@@ -39,12 +39,26 @@ from agentic.transport.scan import ScanningTransport, SyncScanningTransport
 
 #: Request headers TokenLean acts on (it caches, routes, adds memory or rewrites
 #: the prompt), read from its source 2026-10-19. Never sent unless allowed.
-BEHAVIOUR_HEADERS = frozenset({
-    "x-step-name", "x-step-inputs-hash", "x-template-version", "x-workflow-id",
-    "x-session-id", "x-complexity", "x-route-to", "x-no-cache", "x-compress-user",
-    "x-prefix-profile", "x-template-id", "x-echo-prompt", "x-confidence-score", "x-user-id",
-    "x-tenant-id", "x-rag-collection",
-})  # fmt: skip
+BEHAVIOUR_HEADERS = frozenset(
+    {
+        "x-step-name",
+        "x-step-inputs-hash",
+        "x-template-version",
+        "x-workflow-id",
+        "x-session-id",
+        "x-complexity",
+        "x-route-to",
+        "x-no-cache",
+        "x-compress-user",
+        "x-prefix-profile",
+        "x-template-id",
+        "x-echo-prompt",
+        "x-confidence-score",
+        "x-user-id",
+        "x-tenant-id",
+        "x-rag-collection",
+    }
+)
 _TRACEPARENT = re.compile(r"00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}")
 
 
@@ -190,8 +204,9 @@ def _stamper(base_url: str, identity: CallIdentity, allowed: frozenset[str]):
 
     def stamp(request: httpx2.Request) -> None:
         if _origin(request.url) != home:
-            raise ForeignHostError(f"model calls go only to {home[0]}://{home[1]} - refused a "
-                                   f"request to another host")  # fmt: skip
+            raise ForeignHostError(
+                f"model calls go only to {home[0]}://{home[1]} - refused a request to another host"
+            )
         for name in request.headers:
             normal = _normal(name)
             if normal.startswith("x-tokenlean-") or (

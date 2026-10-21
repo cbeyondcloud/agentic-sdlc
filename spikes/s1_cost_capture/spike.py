@@ -47,10 +47,10 @@ from agentic.transport import (
 
 PRICES = {"gpt-5-mini": ModelPrice(input_per_mtok=Decimal("0.25"), output_per_mtok=Decimal("2")),
           "claude-sonnet-5-5": ModelPrice(input_per_mtok=Decimal("3"),
-                                          output_per_mtok=Decimal("15"))}  # fmt: skip
+                                          output_per_mtok=Decimal("15"))}
 IDENTITY = CallIdentity(team="payments", user="u123", repo="github.com/acme/api",
                         pipeline="feature-delivery", run_id="r-s1", step="build",
-                        agent="developer@1.2.0", policy_version="git:" + "a" * 40)  # fmt: skip
+                        agent="developer@1.2.0", policy_version="git:" + "a" * 40)
 SENT: list[httpx.Request] = []
 
 
@@ -64,13 +64,13 @@ def openai_json() -> dict:
             "usage": {"prompt_tokens": 1200, "completion_tokens": 300, "total_tokens": 1500},
             "_token_opt": {"request_id": "req-1", "routed_model": "gpt-5-mini",
                            "tokens_provider_billed": 1200, "response_tokens": 300,
-                           "cost_actual_usd": 0.004321, "cache_hit": False}}  # fmt: skip
+                           "cost_actual_usd": 0.004321, "cache_hit": False}}
 
 
 def openai_sse() -> bytes:
     def chunk(choices, usage=None):
         return {"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "gpt-5-mini",
-                "choices": choices, "usage": usage}  # fmt: skip
+                "choices": choices, "usage": usage}
 
     events = [
         chunk([{"index": 0, "delta": {"role": "assistant", "content": "hel"}}]),
@@ -84,7 +84,7 @@ def anthropic_json() -> dict:
     return {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5",
             "content": [{"type": "text", "text": "hello from tokenlean"}],
             "stop_reason": "end_turn", "stop_sequence": None,
-            "usage": {"input_tokens": 1000, "output_tokens": 200}}  # fmt: skip
+            "usage": {"input_tokens": 1000, "output_tokens": 200}}
 
 
 def anthropic_sse() -> bytes:
@@ -102,7 +102,7 @@ def anthropic_sse() -> bytes:
                            "delta": {"stop_reason": "end_turn", "stop_sequence": None},
                            "usage": {"input_tokens": 812, "output_tokens": 95}}),
         ("message_stop", {"type": "message_stop"}),
-    ]  # fmt: skip
+    ]
     return b"".join(f"event: {n}\ndata: {json.dumps(d)}\n\n".encode() for n, d in events)
 
 
@@ -115,7 +115,7 @@ def tokenlean(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
     headers = {"x-tokenlean-request-id": "req-1",
                "x-tokenlean-routed-model": body.get("model", ""),
-               "x-trace-id": "0af7651916cd43dd8448eb211c80319c"}  # fmt: skip
+               "x-trace-id": "0af7651916cd43dd8448eb211c80319c"}
     return httpx.Response(
         200, headers=headers, json=anthropic_json() if anthropic else openai_json()
     )
@@ -137,12 +137,12 @@ class CostCapture(httpx.AsyncBaseTransport):
         if response.headers.get("content-type", "").startswith("text/event-stream"):
             return httpx.Response(response.status_code, headers=response.headers,
                                   stream=_TeeStream(response, self.on_cost),
-                                  request=request)  # fmt: skip
+                                  request=request)
         content = await response.aread()
         body = json.loads(content) if content else None
         self.on_cost(cost_from_response(response.headers, body, PRICES.get))
         return httpx.Response(response.status_code, headers=response.headers, content=content,
-                              request=request)  # fmt: skip
+                              request=request)
 
 
 class _TeeStream(httpx.AsyncByteStream):
@@ -185,7 +185,7 @@ async def main() -> None:
     # Q1 + Q2: OpenAI route, non-streaming
     SENT.clear()
     model = OpenAIChatModel("gpt-5-mini", provider=OpenAIProvider(
-        base_url="https://tl.example/v1", api_key="tok-x", http_client=client(costs.append)))  # fmt: skip
+        base_url="https://tl.example/v1", api_key="tok-x", http_client=client(costs.append)))
     result = await Agent(model).run("hi")
     sent = SENT[-1]
     print(
@@ -227,7 +227,7 @@ async def main() -> None:
     SENT.clear()
     try:
         amodel = AnthropicModel("claude-sonnet-5-5", provider=AnthropicProvider(
-            base_url="https://tl.example", api_key="tok-x", http_client=client(costs.append)))  # fmt: skip
+            base_url="https://tl.example", api_key="tok-x", http_client=client(costs.append)))
         result = await Agent(amodel).run("hi")
         print(
             "Q4 anthropic non-stream:",
@@ -263,7 +263,7 @@ async def main() -> None:
 
     model5 = OpenAIChatModel("gpt-5-mini", provider=OpenAIProvider(
         base_url="https://tl.example/v1", api_key="tok-x",
-        http_client=client(costs.append, before_send=reserve)))  # fmt: skip
+        http_client=client(costs.append, before_send=reserve)))
     try:
         await Agent(model5).run("hi")
         print("Q5: no exception (!)")

@@ -27,9 +27,15 @@ def agent_with(base: AgentDefinition, **changes) -> AgentDefinition:
 
 def minimal(name: str = "helper", type: str = "general", **settings) -> AgentDefinition:
     return AgentDefinition.model_validate(
-        {"name": name, "type": type, "version": "1.0.0", "description": "x",
-         "instructions": "Do it.", **settings}
-    )  # fmt: skip
+        {
+            "name": name,
+            "type": type,
+            "version": "1.0.0",
+            "description": "x",
+            "instructions": "Do it.",
+            **settings,
+        }
+    )
 
 
 def violation_fields(violations) -> set[str]:

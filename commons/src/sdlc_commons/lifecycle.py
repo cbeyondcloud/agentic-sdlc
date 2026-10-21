@@ -25,8 +25,16 @@ from tools.sdlc import stage as zyroflo_stage
 RUNS_ROOT = ".agentic/local/runs"
 
 _RUBRIC = Path("sdlc_templates") / "review-rubric.md"
-_FRONT_MATTER_FIELDS = ("phase", "name", "produces", "conditional", "gate", "needs",
-                        "evidence", "after_gate")  # fmt: skip
+_FRONT_MATTER_FIELDS = (
+    "phase",
+    "name",
+    "produces",
+    "conditional",
+    "gate",
+    "needs",
+    "evidence",
+    "after_gate",
+)
 _CATEGORY_ROW = re.compile(
     r"^\|\s*\d+\s*\|\s*\*\*(?P<name>[^*]+)\*\*\s*\|\s*(?P<weight>\d+(?:\.\d+)?)\s*\|"
     r"\s*(?P<checks>.+?)\s*\|\s*$"
@@ -82,12 +90,14 @@ def review_rubric() -> list[RubricCategory]:
     except OSError as error:
         raise LifecycleError(f"review rubric not readable at {path}: {error}") from error
     section = _section(lines, "## Categories")
-    rubric = [RubricCategory(m["name"].strip(), float(m["weight"]), m["checks"])
-              for m in map(_CATEGORY_ROW.match, section) if m]  # fmt: skip
+    rubric = [
+        RubricCategory(m["name"].strip(), float(m["weight"]), m["checks"])
+        for m in map(_CATEGORY_ROW.match, section)
+        if m
+    ]
     total = sum(c.weight for c in rubric)
     if not rubric or abs(total - 10) > 1e-9:
-        raise LifecycleError(f"review rubric at {path}: category weights sum to {total:g}, "
-                             f"not 10")  # fmt: skip
+        raise LifecycleError(f"review rubric at {path}: category weights sum to {total:g}, not 10")
     return rubric
 
 
@@ -103,12 +113,22 @@ def _load(entry) -> Stage:
         raise LifecycleError(f"{entry.phase}: SOP {path.name} is not valid: {error}") from error
     differs = [f for f in _FRONT_MATTER_FIELDS if getattr(declared, f) != getattr(entry, f)]
     if differs:
-        raise LifecycleError(f"{entry.phase}: SOP {path.name} disagrees with Zyroflo's catalog "
-                             f"on {', '.join(differs)}")  # fmt: skip
-    return Stage(phase=entry.phase, name=entry.name, gate=entry.gate, produces=entry.produces,
-                 conditional=entry.conditional, evidence=entry.evidence,
-                 after_gate=entry.after_gate, needs=entry.needs, sop=path,
-                 instructions=_body(text))  # fmt: skip
+        raise LifecycleError(
+            f"{entry.phase}: SOP {path.name} disagrees with Zyroflo's catalog "
+            f"on {', '.join(differs)}"
+        )
+    return Stage(
+        phase=entry.phase,
+        name=entry.name,
+        gate=entry.gate,
+        produces=entry.produces,
+        conditional=entry.conditional,
+        evidence=entry.evidence,
+        after_gate=entry.after_gate,
+        needs=entry.needs,
+        sop=path,
+        instructions=_body(text),
+    )
 
 
 def _body(text: str) -> str:

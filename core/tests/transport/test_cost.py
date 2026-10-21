@@ -49,10 +49,17 @@ def test_tokenlean_body_cost_is_reported_exactly(fixtures):
     data = fixture(fixtures, "openai_nonstream.json")
     cost = cost_from_response(data["headers"], data["body"], price_for)
 
-    assert cost == CallCost(source="reported", cost_usd=Decimal("0.004321"), tokens_in=1200,
-                            tokens_out=300, tokens_cache_read=None, tokens_cache_write=None,
-                            model="gpt-5-mini", request_id="req-1",
-                            trace_id="0af7651916cd43dd8448eb211c80319c")  # fmt: skip
+    assert cost == CallCost(
+        source="reported",
+        cost_usd=Decimal("0.004321"),
+        tokens_in=1200,
+        tokens_out=300,
+        tokens_cache_read=None,
+        tokens_cache_write=None,
+        model="gpt-5-mini",
+        request_id="req-1",
+        trace_id="0af7651916cd43dd8448eb211c80319c",
+    )
 
 
 def test_the_cost_header_wins_when_tokenlean_sends_it(fixtures):
@@ -109,9 +116,18 @@ def test_cache_tokens_come_from_the_headers_when_the_body_has_none(fixtures):
 def test_nothing_measured_means_none_not_zero():
     cost = cost_from_response({}, {"id": "x"}, price_for)
 
-    assert cost == CallCost(source="unavailable", cost_usd=None, tokens_in=None, tokens_out=None,
-                            tokens_cache_read=None, tokens_cache_write=None, model=None,
-                            request_id=None, trace_id=None, reason=cost.reason)  # fmt: skip
+    assert cost == CallCost(
+        source="unavailable",
+        cost_usd=None,
+        tokens_in=None,
+        tokens_out=None,
+        tokens_cache_read=None,
+        tokens_cache_write=None,
+        model=None,
+        request_id=None,
+        trace_id=None,
+        reason=cost.reason,
+    )
     assert cost.reason
 
 
@@ -148,7 +164,11 @@ def test_a_stream_that_ended_without_usage_is_unavailable(fixtures):
     cost = usage.result(headers, price_for)
 
     assert (cost.source, cost.cost_usd, cost.tokens_in, cost.tokens_out) == (
-        "unavailable", None, None, None)  # fmt: skip
+        "unavailable",
+        None,
+        None,
+        None,
+    )
     assert cost.reason
 
 
@@ -177,8 +197,11 @@ def test_ensure_stream_usage_leaves_non_stream_bodies_alone():
 
 
 def test_estimate_charges_cache_at_its_price_or_the_input_price():
-    priced = ModelPrice(input_per_mtok=Decimal("3"), output_per_mtok=Decimal("15"),
-                        cache_read_per_mtok=Decimal("0.3"))  # fmt: skip
+    priced = ModelPrice(
+        input_per_mtok=Decimal("3"),
+        output_per_mtok=Decimal("15"),
+        cache_read_per_mtok=Decimal("0.3"),
+    )
 
     # 1000 in of which 400 read from cache and 100 written: 500x3 + 400x0.3 + 100x3 + 10x15
     assert estimate_usd(priced, 1000, 10, cache_read=400, cache_write=100) == Decimal("0.00207")
@@ -186,13 +209,30 @@ def test_estimate_charges_cache_at_its_price_or_the_input_price():
 
 def test_a_call_cost_must_be_consistent():
     with pytest.raises(ValueError):
-        CallCost(source="unavailable", cost_usd=Decimal("1"), tokens_in=None, tokens_out=None,
-                 tokens_cache_read=None, tokens_cache_write=None, model=None, request_id=None,
-                 trace_id=None, reason="x")  # fmt: skip
+        CallCost(
+            source="unavailable",
+            cost_usd=Decimal("1"),
+            tokens_in=None,
+            tokens_out=None,
+            tokens_cache_read=None,
+            tokens_cache_write=None,
+            model=None,
+            request_id=None,
+            trace_id=None,
+            reason="x",
+        )
     with pytest.raises(ValueError):
-        CallCost(source="estimated", cost_usd=Decimal("1"), tokens_in=1, tokens_out=1,
-                 tokens_cache_read=None, tokens_cache_write=None, model="m", request_id=None,
-                 trace_id=None)  # fmt: skip
+        CallCost(
+            source="estimated",
+            cost_usd=Decimal("1"),
+            tokens_in=1,
+            tokens_out=1,
+            tokens_cache_read=None,
+            tokens_cache_write=None,
+            model="m",
+            request_id=None,
+            trace_id=None,
+        )
 
 
 # ── SP3 review fixes ──────────────────────────────────────────────────────────
@@ -237,16 +277,25 @@ def test_real_anthropic_input_from_message_start_counts_once_finished():
     cost = anthropic_events(start, delta).result({}, price_for)
 
     assert (cost.source, cost.tokens_in, cost.tokens_out, cost.cost_usd) == (
-        "estimated", 1000, 200, Decimal("0.006"))  # fmt: skip
+        "estimated",
+        1000,
+        200,
+        Decimal("0.006"),
+    )
 
 
 def test_anthropic_cache_tokens_are_added_to_input_not_subtracted():  # review I1
-    priced = {"claude-sonnet-5-5": ModelPrice(input_per_mtok=Decimal("3"),
-                                              output_per_mtok=Decimal("15"),
-                                              cache_read_per_mtok=Decimal("0.3"))}  # fmt: skip
-    body = {"model": "claude-sonnet-5-5",
-            "usage": {"input_tokens": 100, "output_tokens": 10,
-                      "cache_read_input_tokens": 100000}}  # fmt: skip
+    priced = {
+        "claude-sonnet-5-5": ModelPrice(
+            input_per_mtok=Decimal("3"),
+            output_per_mtok=Decimal("15"),
+            cache_read_per_mtok=Decimal("0.3"),
+        )
+    }
+    body = {
+        "model": "claude-sonnet-5-5",
+        "usage": {"input_tokens": 100, "output_tokens": 10, "cache_read_input_tokens": 100000},
+    }
     cost = cost_from_response({}, body, priced.get)
 
     assert (cost.tokens_in, cost.tokens_cache_read) == (100100, 100000)
@@ -272,9 +321,17 @@ def test_absurd_cost_values_are_not_evidence(fixtures, bad):  # review I2
 @pytest.mark.parametrize("usd", [Decimal("-3"), Decimal("NaN"), Decimal("Infinity")])
 def test_a_call_cost_must_be_finite_and_not_negative(usd):  # review I3
     with pytest.raises(ValueError):
-        CallCost(source="reported", cost_usd=usd, tokens_in=1, tokens_out=1,
-                 tokens_cache_read=None, tokens_cache_write=None, model="m", request_id=None,
-                 trace_id=None)  # fmt: skip
+        CallCost(
+            source="reported",
+            cost_usd=usd,
+            tokens_in=1,
+            tokens_out=1,
+            tokens_cache_read=None,
+            tokens_cache_write=None,
+            model="m",
+            request_id=None,
+            trace_id=None,
+        )
 
 
 def test_a_strange_digit_in_a_header_is_ignored_not_a_crash(fixtures):  # review M1
