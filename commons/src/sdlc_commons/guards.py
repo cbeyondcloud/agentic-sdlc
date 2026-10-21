@@ -250,18 +250,23 @@ class Guard:
             return [Block("not-allowed", why)]
         text = _FD_REDIRECT.sub(" ", _BOTH_PIPE.sub("|", _BOTH_REDIRECT.sub(">", command)))
         rules = (*self.allow_shell, *ALWAYS_ALLOWED)
-        refused: dict[str, None] = {}
+        refused: dict[tuple[str, bool], None] = {}
         for spelling in dict.fromkeys(
             (text, text.replace("\\", ""), _with_paths_as_programs(text))
         ):
             for words in _allow_segments(spelling):
                 if not any(_prefix_hits(rule, words) for rule in rules):
-                    refused[_program(words[0]) if words else "?"] = None
+                    program = _program(words[0]) if words else "?"
+                    refused[(program, bool(words) and _has_path(words[0]))] = None
         return [
             Block(
-                "not-allowed", f"{program!r} used this way is not on the allow list (agent policy)"
+                "not-allowed",
+                f"{program!r} given by a path is not covered by an allow rule - call it by "
+                f"name (agent policy)"
+                if by_path
+                else f"{program!r} used this way is not on the allow list (agent policy)",
             )
-            for program in refused
+            for program, by_path in refused
         ]
 
     def asks(self, command: str) -> list[str]:
@@ -817,7 +822,11 @@ def _prefix_hits(rule: str, words: list[str]) -> bool:
     wanted = rule.split()
     if not words or len(words) < len(wanted):
         return False
-    if _program(words[0]) not in {_program(o) for o in wanted[0].split("|")}:
+    heads = wanted[0].split("|")
+    if _has_path(words[0]):  # an agent can write an executable anywhere in its tree (DF-68)
+        if _path_program(words[0]) not in {_path_program(o) for o in heads if _has_path(o)}:
+            return False
+    elif _program(words[0]) not in {_program(o) for o in heads if not _has_path(o)}:
         return False
     return all(word in alts.split("|") for alts, word in zip(wanted[1:], words[1:], strict=False))
 
@@ -914,6 +923,20 @@ def _program(word: str) -> str:
 
 def _basename(path: str) -> str:
     return path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
+def _has_path(word: str) -> bool:
+    """Whether a program word names a path (`./x`, `bin\\x`, `C:\\x`), not a name PATH finds."""
+    return "/" in word or "\\" in word
+
+
+def _path_program(word: str) -> str:
+    """A program path in one spelling: forward slashes, no leading `./`, no suffix, any case."""
+    path = word.replace("\\", "/").lower()
+    while path.startswith("./"):
+        path = path[2:]
+    folder, _, name = path.rpartition("/")
+    return f"{folder}/{_program(name)}" if folder else _program(name)
 
 
 def _inside(path: Path, folder: Path) -> bool:
