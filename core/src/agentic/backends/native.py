@@ -58,7 +58,12 @@ class NativeBackend:
         is_child: bool = False,
     ) -> PydanticAIRunner:
         costs = CostLog()
-        scanner = self.scanner_for(step) if self.scanner_for is not None else None
+        # every scan event names this run, step and agent, on the model-call and the
+        # tool paths alike, whoever made the scanner (DF-154)
+        definition = step.agent.definition
+        who = (step.run_id, step.step, f"{definition.name}@{definition.version}")
+        made = self.scanner_for(step) if self.scanner_for is not None else SecretScanner()
+        scanner = made.for_step(*who)
         if self.model_for is not None:
             model = self.model_for(step)
         else:
@@ -73,8 +78,11 @@ class NativeBackend:
                 scanner=scanner,
                 _inner=self.network_transport,
             )
-        if tool_context is not None and tool_context.secret_scanner is None:
-            tool_context = replace(tool_context, secret_scanner=scanner)  # the step's policy
+        if tool_context is not None:  # the step's policy, bound to the step
+            given = tool_context.secret_scanner
+            tool_context = replace(
+                tool_context, secret_scanner=given.for_step(*who) if given else scanner
+            )
         tools = build_tools(step.agent, tool_context) if tool_context is not None else []
         if spawner is not None:  # a child's answer was shaped by what it read: data too
             tools += protect_tools(

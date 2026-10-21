@@ -197,7 +197,10 @@ def test_each_step_scans_with_the_scanner_made_for_it(resolved, tmp_path):
     asyncio.run(runner.run(AgentTask(instructions="Dev.", inputs={}, prompt=f"use {key}")))
 
     assert seen and all(key.encode() not in r.content for r in seen)
-    assert events[0] == ("develop", SecretScanEvent("masked", "model-call", {"AWSKeyDetector": 1}))
+    # the event names the run, the step and the agent (DF-154)
+    who = f"{agent.definition.name}@{agent.definition.version}"
+    expected = SecretScanEvent("masked", "model-call", {"AWSKeyDetector": 1}, "r-1", "develop", who)
+    assert events[0] == ("develop", expected)
 
 
 class OpenGuard:
@@ -229,7 +232,30 @@ def test_the_steps_scanner_also_scans_tool_output(resolved, tmp_path):  # review
 
     seen = read.function(path="conf.py")
     assert "[MASKED SECRET: AWS Access Key]" in seen and key not in seen
-    assert events == [SecretScanEvent("masked", "tool:read_file", {"AWSKeyDetector": 1})]
+    who = f"{agent.definition.name}@{agent.definition.version}"
+    assert events == [
+        SecretScanEvent("masked", "tool:read_file", {"AWSKeyDetector": 1}, "r-1", "develop", who)
+    ]
+
+
+def test_a_tool_context_scanner_from_the_caller_is_bound_to_the_step(resolved, tmp_path):
+    """The CLI hands every step the same policy scanner; its events must still say which
+    run, step and agent they came from (DF-154)."""
+    key = "AKIA" + "Z7Q4R2XW" + "9PLM3TKB"
+    (tmp_path / "tree").mkdir()
+    (tmp_path / "tree" / "conf.py").write_text(f"KEY = '{key}'\n", encoding="utf-8")
+    events: list[SecretScanEvent] = []
+    native = backend(model_for=lambda ctx: FunctionModel(lambda m, i: ModelResponse(parts=[])))
+    agent = resolved.model_copy(update={"tools": ["read_files"]})
+    shared = SecretScanner("mask", on_event=events.append)
+    context = ToolContext(tree=tmp_path / "tree", guard=OpenGuard(), secret_scanner=shared)
+    runner = native.runner(
+        step(agent, slice_()), tool_context=context, state_dir=tmp_path / "s", spawner=None
+    )
+    read = next(tool for tool in runner.tools if tool.name == "read_file")
+
+    read.function(path="conf.py")
+    assert [(e.run_id, e.step) for e in events] == [("r-1", "develop")]
 
 
 def scripted(seen: list[httpx2.Request], replies: list[dict]):

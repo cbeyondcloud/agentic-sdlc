@@ -25,6 +25,7 @@ A protected tool is a copy with the same name, schema, description and approval
 settings; only the function it calls is wrapped.
 """
 
+import asyncio
 import copy
 import dataclasses
 import functools
@@ -85,7 +86,8 @@ def _protected(tool: Tool, scanner: SecretScanner, paths: re.Pattern | None, lab
         async def run_async(*args, **kwargs):
             if why := _refused_call(scanner, tool.name, args, kwargs):
                 return why
-            return finish(await function(*args, **kwargs))
+            result = await function(*args, **kwargs)
+            return await asyncio.to_thread(finish, result)  # the scan: off the loop (DF-153)
 
         wrapped = run_async
     else:

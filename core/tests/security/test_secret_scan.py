@@ -313,3 +313,55 @@ def test_event_fields_are_ids_an_audit_ledger_accepts():
     fields = event.fields()
     assert LEDGER_ID.fullmatch(fields["action"]) and LEDGER_ID.fullmatch(fields["where"])
     assert all(LEDGER_ID.fullmatch(name) for name in fields["findings"])
+
+
+# ── M1 close-out (DF-147, DF-154, DF-155) ────────────────────────────────────
+
+URLS = "".join(f'fetch("https://cdn{n}.example.com/a/b/c{n}.js");' for n in range(20_000))
+NPM = "npm_" + "Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7" + "bC0eF3hJ6k"
+
+
+def test_a_minified_url_heavy_line_scans_in_linear_time():  # DF-155
+    """A 1 MB single line full of `//` made NpmDetector backtrack quadratically and hit
+    the deadline, so a minified bundle was blocked as unscannable."""
+    assert len(URLS) > 1_000_000
+    started = time.monotonic()
+    found = SecretScanner().findings(URLS)
+    assert found == [] and time.monotonic() - started < 2.0
+
+
+def test_an_npm_token_inside_a_long_line_is_still_found():  # DF-155
+    line = URLS[:400_000] + f"//registry.npmjs.org/:_authToken={NPM};" + URLS[:400_000]
+    masked, counts = SecretScanner("mask").mask(line)
+    assert counts["NpmDetector"] == 1 and NPM not in masked
+
+
+def test_a_scanner_bound_to_a_step_names_the_run_step_and_agent():  # DF-154
+    seen: list[SecretScanEvent] = []
+    scanner = SecretScanner("mask", on_event=seen.append)
+    bound = scanner.for_step("r-9", "develop", "developer@1.2.0")
+    rebound = bound.for_step("r-9", "review", "reviewer@1.0.0")  # never wrapped twice
+
+    bound.check_text(f"key {AWS}", "model-call")
+    rebound.check_text(f"key {AWS}", "model-call")
+    scanner.check_text(f"key {AWS}", "model-call")  # the original stays unbound
+
+    assert [(e.run_id, e.step, e.agent) for e in seen] == [
+        ("r-9", "develop", "developer@1.2.0"),
+        ("r-9", "review", "reviewer@1.0.0"),
+        ("", "", ""),
+    ]
+    assert seen[0].fields()["step"] == "develop" and "step" not in seen[2].fields()
+
+
+def test_the_audit_record_carries_its_fields_for_the_step_log(caplog):  # DF-147
+    """The step log (the run folder) keeps a record's `fields`: the event lands there in
+    structured form, tied to its run, step and agent."""
+    with caplog.at_level(logging.WARNING, logger="agentic.audit"):
+        SecretScanner("mask").for_step("r-9", "develop", "dev@1.0.0").check_text(
+            f"key {AWS}", "model-call"
+        )
+
+    (record,) = [r for r in caplog.records if r.name == "agentic.audit"]
+    assert record.fields == record.audit
+    assert record.fields["run_id"] == "r-9" and record.fields["agent"] == "dev@1.0.0"
