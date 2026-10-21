@@ -103,6 +103,49 @@ def test_no_pr_keeps_everything_local(repo, policy_repo, bare, github, monkeypat
     assert git(bare, "branch", "--list", "agentic/init") == "" and github.requests == []
 
 
+@pytest.fixture
+def empty(tmp_path: Path) -> Path:
+    """`git init` of a brand-new repository: no file, no commit, an origin (M1-70)."""
+    path = tmp_path / "work" / "new"
+    path.mkdir(parents=True)
+    git(path, "init", "-q", "-b", "main")
+    git(path, "remote", "add", "origin", f"https://{HOST}/acme/new.git")
+    return path
+
+
+def test_a_brand_new_empty_repo_gets_a_first_commit_to_merge(
+    empty, policy_repo, github, monkeypatch, capsys
+):  # M1-70: refused before ("runs on the default branch (main or master), not main")
+    monkeypatch.setenv("AGENTIC_GITHUB_TOKEN", TOKEN)
+    assert init_repo(empty, policy_repo, monkeypatch) == ExitCode.OK
+    out = json.loads(capsys.readouterr().out)
+    assert out["branch"] == "agentic/init"
+    assert git(empty, "rev-list", "--count", "agentic/init") == "1"  # the root commit
+    files = git(empty, "ls-tree", "-r", "--name-only", "agentic/init").splitlines()
+    assert sorted(files) == sorted(out["files"])
+    # no base branch exists for a pull request yet: nothing is pushed or opened
+    assert out["pull_request"]["opened"] is False
+    assert "no commits yet" in out["pull_request"]["why"]
+    assert out["next"] == {
+        "merge": "git merge --ff-only agentic/init",
+        "push": "git push -u origin main",
+    }
+    assert github.requests == []
+    assert git(empty, "status", "--porcelain") == ""  # the checkout is still untouched
+
+    git(empty, "merge", "-q", "--ff-only", "agentic/init")  # the steps it gave work
+    assert git(empty, "rev-parse", "HEAD") == out["commit"]
+
+
+def test_a_brand_new_empty_repo_tells_a_person_the_two_steps(
+    empty, policy_repo, github, monkeypatch, capsys
+):
+    monkeypatch.chdir(empty)
+    assert main(["init", "--repo", "--standalone", "--policy", str(policy_repo)]) == 0
+    shown = capsys.readouterr().out
+    assert "git merge --ff-only agentic/init" in shown and "git push -u origin main" in shown
+
+
 def test_a_failed_push_is_an_error_that_keeps_the_branch_and_the_manual_steps(
     repo, policy_repo, bare, github, monkeypatch, capsys, tmp_path
 ):

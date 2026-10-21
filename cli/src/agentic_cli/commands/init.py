@@ -146,12 +146,22 @@ def _init_repo(
     branch, commit = repo_setup.commit_on_branch(
         root.path, files, "chore: set up agentic for this repository (agentic init --repo)"
     )
-    steps = repo_setup.next_steps(root.origin, root.default_branch or "main", branch)
+    default = root.default_branch or "main"
+    if root.empty:
+        steps = repo_setup.first_commit_steps(default, branch)
+    else:
+        steps = repo_setup.next_steps(root.origin, default, branch)
     data = {"branch": branch, "commit": commit, "files": sorted(files), "kept": kept}
     data["next"] = steps
     failure: CliError | None = None
     if settings is None:
         data["pull_request"] = {"opened": False, "why": "--no-pr"}
+    elif root.empty:
+        why = (
+            "the repository has no commits yet, so there is no branch to open a pull "
+            f"request against: make {branch} its first commit"
+        )
+        data["pull_request"] = {"opened": False, "why": why}
     else:
         try:
             data["pull_request"] = _open_pull_request(root.path, branch, data, settings)
@@ -176,9 +186,11 @@ def _init_repo(
             verb = "Opened" if pull["created"] else "Updated"
             console.print(f"{verb} the pull request: {pull['url']}", markup=False)
             return
+        if root.empty:
+            console.print(f"No pull request: {pull['why']}.", markup=False)
         console.print("Next:")
-        console.print(f"  {steps['push']}", markup=False)
-        console.print(f"  {steps['pull_request']}", markup=False)
+        for step in steps.values():
+            console.print(f"  {step}", markup=False)
 
     out.result(data, show)
     if failure is not None:

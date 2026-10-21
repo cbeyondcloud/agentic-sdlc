@@ -150,16 +150,19 @@ def agents_md(repo: Path) -> str:
 
 
 def commit_on_branch(repo: Path, files: dict[str, str], message: str) -> tuple[str, str]:
-    """Commit `files` on top of HEAD on a new branch; returns (branch, commit)."""
+    """Commit `files` on top of HEAD on a new branch; returns (branch, commit). In a
+    repository with no commit yet, the branch starts with them (a root commit)."""
+    parent = ["-p", "HEAD"] if _git_out(repo, "rev-parse", "--verify", "-q", "HEAD") else []
     with tempfile.TemporaryDirectory(prefix="agentic-init-") as scratch:
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
-        _git_run(repo, env, "read-tree", "HEAD")
+        if parent:
+            _git_run(repo, env, "read-tree", "HEAD")
         for path, text in sorted(files.items()):
             data = text.encode("utf-8", "surrogateescape")  # the repo's own bytes round-trip
             blob = _git_run(repo, env, "hash-object", "-w", "--stdin", data=data)
             _git_run(repo, env, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}")
         tree = _git_run(repo, env, "write-tree")
-        commit = _git_run(repo, env, "commit-tree", tree, "-p", "HEAD", "-m", message)
+        commit = _git_run(repo, env, "commit-tree", tree, *parent, "-m", message)
     for n in range(1, 100):
         branch = BRANCH if n == 1 else f"{BRANCH}-{n}"
         if not _git_out(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
@@ -197,6 +200,15 @@ def pr_body(files: list[str], kept: list[str]) -> str:
         "Pipelines are managed in the org policy repository, not here.",
     ]
     return "\n".join(lines) + "\n"
+
+
+def first_commit_steps(default_branch: str, branch: str) -> dict[str, str]:
+    """A repository with no commit yet has no base branch to open a pull request
+    against: the setup branch becomes its first commit (M1-70)."""
+    return {
+        "merge": f"git merge --ff-only {branch}",
+        "push": f"git push -u origin {default_branch}",
+    }
 
 
 def next_steps(origin: str | None, default_branch: str, branch: str) -> dict[str, str]:

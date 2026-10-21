@@ -59,6 +59,7 @@ class RepoRoot:
     origin: str | None  # host/owner/repo of `origin`, or None
     default_branch: str | None
     config: RepoConfig | None  # developer mode: the committed `.agentic/config.yaml`
+    empty: bool = False  # no commit yet (`git init` and nothing since)
 
 
 def check_repo(
@@ -109,7 +110,13 @@ def check_repo(
             f"Found another .agentic at {nested[0].rsplit('/config.yaml', 1)[0]}",
             hint="a repository has one .agentic/ at its root; remove or merge the other one",
         )
-    return RepoRoot(path=top, origin=origin, default_branch=default_branch, config=config)
+    return RepoRoot(
+        path=top,
+        origin=origin,
+        default_branch=default_branch,
+        config=config,
+        empty=is_empty(top),
+    )
 
 
 def normalise_remote(url: str) -> str:
@@ -230,7 +237,14 @@ def _default_branch(top: Path) -> str | None:
     for name in ("main", "master"):
         if _git(top, "rev-parse", "--verify", "-q", f"refs/heads/{name}"):
             return name
+    if is_empty(top):  # `git init` and nothing since: the branch being started (M1-70)
+        return _git(top, "symbolic-ref", "--short", "-q", "HEAD") or None
     return None
+
+
+def is_empty(top: Path) -> bool:
+    """A repository with no commit yet (its HEAD is unborn)."""
+    return not _git(top, "rev-parse", "--verify", "-q", "HEAD")
 
 
 def _config_files(top: Path) -> list[str]:
