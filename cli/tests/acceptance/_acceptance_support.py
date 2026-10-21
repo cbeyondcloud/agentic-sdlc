@@ -281,17 +281,24 @@ class Scenario:
         git(repo, "remote", "set-url", "--push", "origin", str(self.bare))  # pushes go here
         self.monkeypatch.chdir(repo)
 
-    def init_standalone(self, repo: Path) -> dict:
+    def init_standalone(self, repo: Path, *, new_repo: bool = False) -> dict:
         """Set agentic up as spec §24 says, in standalone mode: the repo owner runs
         `init --repo --standalone` (its pull request opened through the adapter) and the
-        PR is merged; the developer runs `init --standalone` (not ready: the template's
+        PR is merged - or, in a `new_repo` with no commit, follows the two steps init
+        gives instead; the developer runs `init --standalone` (not ready: the template's
         models are placeholders), names real models in their policy copy, and runs it
         again (ready). Returns `init --repo`'s report."""
         setup = self.ok("--json", "init", "--repo", "--standalone").json()
-        assert setup["pull_request"]["opened"] is True, setup
-        pull = self.github.pulls[-1]
-        assert pull["head"]["ref"] == setup["branch"] and ".agentic/config.yaml" in pull["body"]
-        self.merge_setup_pull_request(repo, setup["branch"])
+        if new_repo:  # no base branch for a pull request yet
+            assert setup["pull_request"]["opened"] is False and self.github.pulls == []
+            for step in setup["next"].values():  # merge --ff-only, then push -u origin main
+                git(repo, *step.split()[1:])
+        else:
+            assert setup["pull_request"]["opened"] is True, setup
+            pull = self.github.pulls[-1]
+            assert pull["head"]["ref"] == setup["branch"]
+            assert ".agentic/config.yaml" in pull["body"]
+            self.merge_setup_pull_request(repo, setup["branch"])
 
         first = self.ok("--json", "init", "--standalone", code=1).json()
         models = [c for c in first["checks"] if c["name"] == "policy: models"]
