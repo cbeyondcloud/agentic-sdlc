@@ -10,11 +10,13 @@ from typing import Annotated
 
 import typer
 
+from agentic.hosting.git import push_branch
 from agentic.repoconfig import RepoConfig
 from agentic_cli import dev_init, repo_setup
 from agentic_cli.config import agentic_home, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.hosting import connect
 from agentic_cli.output import Output
 from agentic_cli.policy_source import LoadedPolicy, resolve_policy
 from agentic_cli.repo_guard import check_repo
@@ -48,6 +50,12 @@ def register(app: typer.Typer) -> None:
             help="Also install the org's on-request user-space tools (shows them, then asks).",
         ),
         yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask before installing."),
+        open_pr: bool = typer.Option(
+            True,
+            "--pr/--no-pr",
+            help="--repo: push the branch and open its pull request (default), or only "
+            "prepare the branch locally.",
+        ),
     ) -> None:
         """Set up agentic for this repository (run from the repo root)."""
         out: Output = ctx.obj
@@ -62,7 +70,8 @@ def register(app: typer.Typer) -> None:
         loaded = resolve_policy(standalone=standalone, policy_path=policy, home=home, config=config)
         try:
             if repo:
-                _init_repo(out, loaded, classification, team, pipeline or [])
+                settings = config if open_pr else None
+                _init_repo(out, loaded, classification, team, pipeline or [], settings)
             else:
                 _init_developer(out, loaded, home, config, install_missing, yes)
         finally:
@@ -109,7 +118,9 @@ def _init_repo(
     classification: str | None,
     team: str | None,
     pipelines: list[str],
+    settings: dict | None,
 ) -> None:
+    """`settings` (the user config) opens the pull request; None (`--no-pr`) does not."""
     root = check_repo(
         Path.cwd(),
         mode="repo",
@@ -138,6 +149,21 @@ def _init_repo(
     steps = repo_setup.next_steps(root.origin, root.default_branch or "main", branch)
     data = {"branch": branch, "commit": commit, "files": sorted(files), "kept": kept}
     data["next"] = steps
+    failure: CliError | None = None
+    if settings is None:
+        data["pull_request"] = {"opened": False, "why": "--no-pr"}
+    else:
+        try:
+            data["pull_request"] = _open_pull_request(root.path, branch, data, settings)
+        except _NotOpened as skipped:  # no known host or no token: the manual steps
+            data["pull_request"] = {"opened": False, "why": skipped.why}
+            out.warn(f"the pull request was not opened: {skipped.why}")
+        except CliError as error:  # the push or the API failed: an error, after the result
+            data["pull_request"] = {"opened": False, "why": str(error)}
+            manual = f"push and open it by hand: {steps['push']}, then {steps['pull_request']}"
+            hint = f"{error.hint}; or {manual}" if error.hint else manual
+            failure = CliError(str(error), ExitCode.ERROR, hint=hint)
+    pull = data["pull_request"]
 
     def show(console) -> None:
         console.print(f"Prepared branch [bold]{branch}[/bold] ({commit[:12]}) with:")
@@ -145,8 +171,51 @@ def _init_repo(
             console.print(f"  {path}", markup=False)
         for path in kept:
             console.print(f"Kept your {path} as it is (no draft proposed).", markup=False)
-        console.print("Your checkout was not changed. Next:")
+        console.print("Your checkout was not changed.")
+        if pull["opened"]:
+            verb = "Opened" if pull["created"] else "Updated"
+            console.print(f"{verb} the pull request: {pull['url']}", markup=False)
+            return
+        console.print("Next:")
         console.print(f"  {steps['push']}", markup=False)
         console.print(f"  {steps['pull_request']}", markup=False)
 
     out.result(data, show)
+    if failure is not None:
+        raise failure
+
+
+class _NotOpened(Exception):
+    """The pull request cannot be opened from here (no known host, no token)."""
+
+    def __init__(self, why: str) -> None:
+        super().__init__(why)
+        self.why = why
+
+
+def _open_pull_request(repo: Path, branch: str, data: dict, settings: dict) -> dict:
+    """Push `branch` and open (or find) its pull request through the hosting adapter."""
+    try:
+        conn = connect(repo, settings)
+    except CliError as error:
+        raise _NotOpened(f"{error}" + (f" ({error.hint})" if error.hint else "")) from error
+    with conn, conn.errors():
+        push_branch(repo, conn.remote, branch, secrets=[conn.token])
+        provider = conn.provider
+        existing = provider.find_pull_request(conn.repo, branch)
+        if existing is not None:
+            return {
+                "opened": True,
+                "created": False,
+                "number": existing.number,
+                "url": existing.url,
+            }
+        body = repo_setup.pr_body(data["files"], data["kept"])
+        pull = provider.open_pull_request(
+            conn.repo,
+            head=branch,
+            base=provider.default_branch(conn.repo),
+            title=repo_setup.PR_TITLE,
+            body=body,
+        )
+    return {"opened": True, "created": True, "number": pull.number, "url": pull.url}

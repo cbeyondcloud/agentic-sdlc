@@ -51,7 +51,7 @@ from agentic.transport import CallIdentity
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.wiring import StepWiring, production_scanner
-from agentic_cli.workspace import Workspace
+from agentic_cli.workspace import RUNS, Workspace
 from sdlc_commons.gates import ZyrofloGates, regime_block_on
 from sdlc_commons.ledger import RunIdentity, RunLedger
 from sdlc_commons.redaction import redactor
@@ -59,8 +59,26 @@ from sdlc_commons.redaction import redactor
 #: The backends this CLI builds. The claude-code backend is not wired yet (DF-74), so
 #: preflight refuses a step that names it instead of failing mid-run.
 CONFIGURED_BACKENDS: tuple[str, ...] = ("native",)
-#: Built-in actions (`github.open_pr` arrives with M1-58).
-ACTIONS: dict = {}
+
+
+def _publish(kind: str | None) -> Callable[["Runtime"], Callable]:
+    def make(rt: "Runtime") -> Callable:
+        from agentic_cli.publishing import publish_action  # it imports this module's peers
+
+        return publish_action(rt.ws, rt.store.runs_root, kind)
+
+    return make
+
+
+#: The publishing actions (M1-58), by name -> the provider kind they insist on: push the
+#: run's branch and open its pull request - on a GitHub host (`github.open_pr`, the
+#: spec's name), or on whatever host `origin` is (`open_pr`). Preflight checks their host
+#: and token before a run starts.
+PUBLISH_ACTIONS: dict[str, str | None] = {"github.open_pr": "github", "open_pr": None}
+#: Built-in actions, by the name a pipeline step gives: name -> (Runtime -> action).
+ACTIONS: dict[str, Callable[["Runtime"], Callable]] = {
+    name: _publish(kind) for name, kind in PUBLISH_ACTIONS.items()
+}
 SKILLS = Path(".agentic") / "local" / "skills"
 STATE = Path(".agentic") / "local" / "state"
 #: Charged for a call whose cost the gateway did not report and whose model has no price.
@@ -201,7 +219,29 @@ class Runtime:
                         "extra is not installed (agentic-core[codeintel])"
                     )
                     report.problems.append(Problem(None, "codeintel", detail))
+        report.problems += self._publish_problems(pipeline)
         return report
+
+    def _publish_problems(self, pipeline: PipelineDefinition) -> list[Problem]:
+        """A publishing step whose host or token is missing fails here, before any spend
+        (an error; a warning when the step has a `when` and may not run)."""
+        from agentic_cli.publishing import publish_check  # it imports this module's peers
+
+        steps = [
+            inner
+            for step in pipeline.steps
+            for inner in (step.loop.steps if isinstance(step, LoopStep) else [step])
+            if isinstance(inner, ActionStep) and inner.action in PUBLISH_ACTIONS
+        ]
+        problems, checked = [], {}
+        for step in steps:
+            kind = PUBLISH_ACTIONS[step.action]
+            if kind not in checked:
+                checked[kind] = publish_check(self.ws, kind)
+            if checked[kind]:
+                severity = "warning" if step.when else "error"
+                problems.append(Problem(step.id, "publish", checked[kind], severity=severity))
+        return problems
 
     def unenforced(self, name: str, report: PreflightReport) -> dict[str, list[str]]:
         """Per agent, its deny globs the OS sandbox cannot enforce (the file tools still
@@ -384,12 +424,13 @@ class Runtime:
             runner_factory=runners,
             block_on_for=regime_block_on,
             clock=SystemClock(),
-            actions=ACTIONS,
+            actions={name: make(self) for name, make in ACTIONS.items()},
             run_budget_usd=run_budget_usd,
             sandbox_label=decision.label,
             trees_for=wiring.trees_for,
             step_logs=StepLogs(self.redact(gateway)),
             redact=self.redact(gateway),  # pause reasons and step details in run.json
+            handoff_prefix=RUNS.as_posix(),  # repo-relative Agentic-Handoff trailers (DF-174)
         )
 
     def identity(self, step: StepContext) -> CallIdentity:

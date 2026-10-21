@@ -114,3 +114,20 @@ source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
 forbidden_modules = ["pydantic_evals"]
 allow_indirect_imports = true
 ignore_imports = ["agentic.eval.** -> pydantic_evals"]
+
+[[tool.importlinter.contracts]]
+name = "Hosting adapters only through the CLI's host registry (M1-58: providers behind one protocol)"
+type = "forbidden"
+source_modules = [
+    "agentic.agents",
+    "agentic.engine",
+    "agentic.definitions",
+    "agentic.policy",
+    "agentic.telemetry",
+    "sdlc_commons",
+    "agentic_cli",
+    "agentic_cp",
+]
+forbidden_modules = ["agentic.hosting.github"]
+allow_indirect_imports = true
+ignore_imports = ["agentic_cli.hosting -> agentic.hosting.github"]

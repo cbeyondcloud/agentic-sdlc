@@ -118,3 +118,23 @@ def test_pr_body_without_links_names_run_folder_paths():
     body = pr_body(state(), run_link=".agentic/local/runs/r-pr")
     assert "[design](handoffs/design-1.md)" in body
     assert "AGENTS.md" not in body  # no proposals section when there are none
+
+
+def test_pr_body_with_nothing_to_link_shows_the_run_and_paths_as_code():
+    """No control plane (DF-166): a link into the starter's git-ignored run folder would
+    be broken on the pull request page, so the run id and paths are shown as code."""
+    folder = ".agentic/local/runs/r-pr"
+    body = pr_body(state(), run_link=None, handoff_link=lambda rel: None, run_folder=folder)
+    assert "## Agentic run `r-pr`" in body
+    assert f"- design `{folder}/handoffs/design-1.md`" in body
+    assert "](" not in body  # no markdown link anywhere
+
+
+def test_pr_body_marks_an_approval_a_rejection_superseded():
+    run = state()
+    run.approvals.append(
+        ApprovalMark(gate="design-approval", approver="lead@example.com", at=T, superseded=True)
+    )
+    body = pr_body(run, run_link=None)
+    assert "- design-approval: ravi@example.com\n" in body
+    assert "- design-approval: lead@example.com (superseded by a later rejection)" in body

@@ -89,3 +89,38 @@ def test_a_keyring_failure_is_an_error_with_a_hint(home, monkeypatch, capsys):
     finally:
         keyring.set_keyring(previous)
     assert "AGENTIC_TOKENLEAN_API_KEY" in capsys.readouterr().err
+
+
+GITHUB_TOKEN = "ghp_" + "login" + "Fake0123456789"  # gitleaks:allow - built from pieces
+
+
+def test_login_for_github_stores_the_hosting_token(ring, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO(GITHUB_TOKEN + "\n"))
+    assert main(["--json", "login", "--for", "github", "--key-stdin"]) == ExitCode.OK
+    assert ring.stored == {(SERVICE, "github_token"): GITHUB_TOKEN}
+    shown = capsys.readouterr()
+    assert GITHUB_TOKEN not in shown.out + shown.err
+    assert json.loads(shown.out)["stored"] == "github_token"
+
+
+def test_login_for_a_configured_host_stores_its_credential(ring, home, monkeypatch):
+    (home / ".agentic").mkdir()
+    (home / ".agentic" / "config.yaml").write_text(
+        "git_hosts:\n  ghe.example.com:\n    kind: github\n    credential: ghe_token\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(GITHUB_TOKEN + "\n"))
+    assert main(["login", "--for", "ghe.example.com", "--key-stdin"]) == ExitCode.OK
+    assert ring.stored == {(SERVICE, "ghe_token"): GITHUB_TOKEN}
+
+
+def test_login_for_something_unknown_is_a_usage_error(ring, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO(GITHUB_TOKEN + "\n"))
+    assert main(["login", "--for", "svn", "--key-stdin"]) == ExitCode.USAGE
+    assert ring.stored == {} and "gateway" in capsys.readouterr().err
+
+
+def test_login_for_github_in_ci_names_its_variable(ring, monkeypatch, capsys):
+    monkeypatch.setenv("CI", "true")
+    assert main(["--json", "login", "--for", "github", "--key-stdin"]) == ExitCode.REFUSED
+    assert "AGENTIC_GITHUB_TOKEN" in json.loads(capsys.readouterr().err)["hint"]

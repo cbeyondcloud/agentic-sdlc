@@ -7,11 +7,13 @@ Every checkpoint commit an agent step makes ends with six trailers:
     Agentic-Agent: developer@1.2.0
     Agentic-Triggered-By: asha@example.com
     Agentic-Approved-By: ravi@example.com (gate: design-approval)
-    Agentic-Handoff: handoffs/design-1.md
+    Agentic-Handoff: .agentic/local/runs/r-2026-10-16-7f3a/handoffs/design-1.md
 
-`Agentic-Approved-By` names the run's latest approval before the commit, and
-`Agentic-Handoff` is repeated once per handoff the step consumed (its "why"; paths are
-relative to the run folder, `.agentic/local/runs/<run>/`). When there is none, the value
+`Agentic-Approved-By` names the run's latest approval before the commit that still
+stands - one a later rejection sent the work back past is superseded and never cited
+(DF-173) - and `Agentic-Handoff` is repeated once per handoff the step consumed (its
+"why"). Its path is repo-relative when the engine is given the runs folder (the CLI
+always is, DF-174), else relative to the run folder. When there is none, the value
 is `none`, so every commit carries all six and a reader never guesses.
 
 Values come partly from people (the starter, an approver), so each is made one line:
@@ -87,13 +89,27 @@ def parse_trailers(message: str) -> dict[str, list[str]]:
 def pr_body(
     state: RunState,
     *,
-    run_link: str,
-    handoff_link: Callable[[str], str] = lambda rel: rel,
+    run_link: str | None,
+    handoff_link: Callable[[str], str | None] = lambda rel: rel,
     proposals: Iterable[tuple[str, str]] = (),
+    run_folder: str = "",
 ) -> str:
-    """The pull request's description: the run, its handoffs (the why), its approvals."""
+    """The pull request's description: the run, its handoffs (the why), its approvals.
+
+    With no `run_link` (no control plane to link to), the run id is shown as code; a
+    handoff whose `handoff_link` is None is shown as its path, under `run_folder` when
+    given (DF-166): a link into the starter's git-ignored run folder would be broken."""
+    title = f"[{state.run_id}]({run_link})" if run_link else f"`{_line(state.run_id)}`"
+
+    def shown(label: str, rel: str) -> str:
+        link = handoff_link(rel)
+        if link:
+            return f"[{label}]({link})"
+        path = f"{run_folder.rstrip('/')}/{rel}" if run_folder else rel
+        return f"{label} `{_line(path)}`"
+
     lines = [
-        f"## Agentic run [{state.run_id}]({run_link})",
+        f"## Agentic run {title}",
         "",
         f"- Pipeline: `{state.pipeline}` {state.pipeline_version} ({state.regime})",
         f"- Started by: {_line(state.starter)}",
@@ -106,15 +122,19 @@ def pr_body(
     written = [r for r in state.history if r.handoff and not r.handoff.endswith(".invalid.md")]
     for record in written:
         label = record.step if record.iteration <= 1 else f"{record.step} #{record.iteration}"
-        lines.append(f"- [{label}]({handoff_link(record.handoff)}) `{record.digest}`")
+        lines.append(f"- {shown(label, record.handoff)} `{record.digest}`")
     if not written:
         lines.append("- none")
     lines += ["", "### Approvals", ""]
-    lines += [f"- {a.gate}: {_line(a.approver)}" for a in state.approvals] or ["- none"]
+    lines += [
+        f"- {a.gate}: {_line(a.approver)}"
+        + (" (superseded by a later rejection)" if a.superseded else "")
+        for a in state.approvals
+    ] or ["- none"]
     proposed = list(proposals)
     if proposed:
         lines += ["", "### Proposed AGENTS.md additions (review before accepting)", ""]
-        lines += [f"- {_line(text)} (from {handoff_link(rel)})" for rel, text in proposed]
+        lines += [f"- {_line(text)} (from {shown('handoff', rel)})" for rel, text in proposed]
     return "\n".join(lines) + "\n"
 
 
