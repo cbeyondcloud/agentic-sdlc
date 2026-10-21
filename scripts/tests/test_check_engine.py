@@ -37,6 +37,39 @@ def test_an_unknown_engine_name_is_an_error():
         container_engine({"CONTAINER_ENGINE": "lxc"}, _which("lxc"))
 
 
+def test_offline_leaves_out_only_the_checks_that_need_the_network():  # DF-97
+    from check import CHECKS, checks_for
+
+    assert checks_for(offline=False) == CHECKS
+    names = [name for name, _ in checks_for(offline=True)]
+    assert "known vulnerabilities" not in names
+    assert names == [name for name, _ in CHECKS if name != "known vulnerabilities"]
+
+
+def test_a_failed_vulnerability_check_points_at_offline():
+    from check import failure_hint
+
+    assert "--offline" in failure_hint("known vulnerabilities")
+    assert failure_hint("tests") == ""
+
+
+def test_an_offline_run_says_it_is_incomplete(monkeypatch, capsys):
+    import check
+
+    ran = []
+
+    def fake_run(cmd, cwd=None, env=None):
+        ran.append((cmd, (env or {}).get("UV_OFFLINE")))
+        return type("Done", (), {"returncode": 0})()
+
+    monkeypatch.setattr(check.subprocess, "run", fake_run)
+    assert check.run_native(offline=True) is True
+    out = capsys.readouterr().out
+    assert "INCOMPLETE" in out and "known vulnerabilities" in out
+    assert all(flag == "1" for _, flag in ran)
+    assert not any("pip-audit" in cmd for cmd, _ in ran)
+
+
 def test_the_secret_scan_runs_before_anything_writes_into_the_tree():
     # Tests leave compiled files whose folded constants look like keys (P0-03 follow-up).
     from check import linux_steps

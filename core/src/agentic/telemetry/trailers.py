@@ -40,6 +40,9 @@ TRAILER_KEYS = (
     "Agentic-Handoff",
 )
 NONE = "none"
+#: Proposed AGENTS.md additions are agent text: shown as inline code, bounded (DF-177).
+MAX_PROPOSALS = 20
+MAX_PROPOSAL_CHARS = 500
 _TRAILER = re.compile(r"([A-Za-z0-9][A-Za-z0-9-]*): (.*)")
 
 
@@ -142,10 +145,25 @@ def pr_body(
     proposed = list(proposals)
     if proposed:
         lines += ["", "### Proposed AGENTS.md additions (review before accepting)", ""]
-        lines += [f"- {_line(text)} (from {shown('handoff', rel)})" for rel, text in proposed]
+        for rel, text in proposed[:MAX_PROPOSALS]:
+            lines.append(f"- {_code(_cut(_line(text)))} (from {shown('handoff', rel)})")
+        if len(proposed) > MAX_PROPOSALS:
+            lines.append(f"- ... {len(proposed) - MAX_PROPOSALS} more in the run's handoffs")
     return "\n".join(lines) + "\n"
 
 
 def _line(value: object) -> str:
     """One line: every run of whitespace (newlines included) becomes one space."""
     return " ".join(str(value).split()) or NONE
+
+
+def _cut(text: str) -> str:
+    return text if len(text) <= MAX_PROPOSAL_CHARS else text[:MAX_PROPOSAL_CHARS] + " [... cut]"
+
+
+def _code(text: str) -> str:
+    """`text` as one inline code span: a fence longer than any backtick run inside it,
+    so agent text cannot end the span and render an image, a link or an @mention."""
+    longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
+    fence = "`" * (longest + 1)
+    return f"{fence} {text} {fence}"

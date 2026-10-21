@@ -7,6 +7,7 @@ secret scan.
     uv run python scripts/check.py           # on this machine (Windows/macOS/Linux)
     uv run python scripts/check.py --linux   # inside a clean Linux container (Docker or Podman)
     uv run python scripts/check.py --all     # both
+    uv run python scripts/check.py --offline # no network: skips pip-audit, says INCOMPLETE
 
 Run `--all` before pushing; it is not wired into a git hook.
 """
@@ -40,6 +41,9 @@ CHECKS: list[tuple[str, list[str]]] = [
         ["uv", "run", "pip-audit", "--skip-editable", "--progress-spinner", "off"],
     ),
 ]
+
+# Checks that need the network (PyPI/OSV): `--offline` skips them and says so (DF-97).
+NETWORK_CHECKS = ("known vulnerabilities",)
 
 # Checks that run only in the Linux container, where their pinned native binary is
 # installed (no unsigned binaries on developer laptops).
@@ -102,14 +106,37 @@ def linux_image(engine: str) -> str | None:
     return tag if subprocess.run(build).returncode == 0 else None
 
 
-def run_native() -> bool:
-    """Run every check on this machine; stop at the first failure."""
+def checks_for(offline: bool) -> list[tuple[str, list[str]]]:
+    """The native checks: all of them, or offline only those that need no network."""
+    return [c for c in CHECKS if c[0] not in NETWORK_CHECKS] if offline else CHECKS
+
+
+def failure_hint(name: str) -> str:
+    """What to try when a check fails for want of a network (DF-97)."""
+    if name in NETWORK_CHECKS:
+        return (
+            "this check needs PyPI/OSV; with no network, `--offline` runs the others "
+            "(an INCOMPLETE check - run again online before pushing)"
+        )
+    return ""
+
+
+def run_native(offline: bool = False) -> bool:
+    """Run every check on this machine; stop at the first failure. Offline, the network
+    checks are skipped, uv works from its cache, and the run says it is incomplete."""
     label = f"{platform.system()} (native)"
-    for name, cmd in CHECKS:
+    env = dict(os.environ, UV_OFFLINE="1") if offline else None
+    for name, cmd in checks_for(offline):
         print(f"[{label}] {name}: {' '.join(cmd)}", flush=True)
-        if subprocess.run(cmd, cwd=REPO_ROOT).returncode != 0:
+        if subprocess.run(cmd, cwd=REPO_ROOT, env=env).returncode != 0:
             print(f"[{label}] FAILED at: {name}")
+            if hint := failure_hint(name):
+                print(f"[{label}] {hint}")
             return False
+    if offline:
+        skipped = ", ".join(NETWORK_CHECKS)
+        print(f"[{label}] INCOMPLETE (offline): skipped {skipped} - run again online")
+        return True
     print(f"[{label}] all checks passed")
     return True
 
@@ -202,11 +229,18 @@ def main() -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--linux", action="store_true", help="run only in a Linux container")
     group.add_argument("--all", action="store_true", help="run natively and in Linux")
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="no network: skip the checks that need it (an incomplete check)",
+    )
     args = parser.parse_args()
+    if args.offline and (args.linux or args.all):
+        parser.error("--offline runs on this machine only (the Linux stage needs the network)")
 
     results = []
     if not args.linux:
-        results.append(run_native())
+        results.append(run_native(offline=args.offline))
     if args.linux or args.all:
         results.append(run_linux())
     return 0 if all(results) else 1

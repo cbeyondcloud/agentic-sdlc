@@ -94,3 +94,12 @@ def test_a_wrapped_agent_cli_sends_everything_through_the_proxy(tmp_path):
     assert "NO_PROXY=" not in box.command_prefix()
     everything = box.command_prefix(proxy_everything=True)
     assert "NO_PROXY=" in everything and "no_proxy=" in everything
+
+
+def test_the_settings_file_is_never_writable_inside_the_sandbox(tmp_path):  # DF-71
+    # a writable path holding the settings would let one command rewrite the next one's rules
+    box = sandbox(tmp_path)
+    box.command_prefix()
+    rules = json.loads(box.settings.read_text(encoding="utf-8"))["filesystem"]
+    assert box.settings.as_posix() in rules["denyWrite"]
+    assert (tmp_path / "s" / "tmp").as_posix() in rules["allowWrite"]

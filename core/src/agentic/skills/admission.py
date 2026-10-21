@@ -97,7 +97,8 @@ def telemetry_urls(text: str) -> list[str]:
     found = []
     for match in URL.finditer(text):
         url = match.group(0).rstrip(".,;:!?")
-        host_and_path = url.split("://", 1)[1]
+        # a #fragment never leaves the machine, so it cannot report anything (DF-139)
+        host_and_path = url.split("://", 1)[1].split("#", 1)[0]
         host = host_and_path.split("/", 1)[0].split(":", 1)[0].lower()
         if any(host == known or host.endswith("." + known) for known in TELEMETRY_HOSTS):
             found.append(url)

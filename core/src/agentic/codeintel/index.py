@@ -15,6 +15,11 @@ code-review-graph finds changes through git, which does not see untracked files,
 an agent's new files are marked intent-to-add - in a scratch copy of git's index, never
 the tree's own (SP9 review I2): the step checkpoints see the tree exactly as the agent
 left it. Every git call runs with fsmonitor off (SP9 review I5).
+
+code-review-graph parses files an agent wrote, so it and git run with the agent
+command environment (`safe_env`: no secrets, DF-88). An index that cannot be read (a
+crashed first build, a corrupt file) is thrown away and built again (DF-89), and one
+lock per data folder makes parallel tool calls build once (DF-92).
 """
 
 import hashlib
@@ -25,10 +30,13 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 from collections.abc import Sequence
+from contextlib import closing
 from pathlib import Path
 
 from agentic.codeintel.interface import CodeIntelError
+from agentic.sandbox.process import safe_env
 
 DB_NAME = "graph.db"
 STATE_NAME = "indexed-state.json"
@@ -39,6 +47,15 @@ NO_FSMONITOR = {
     "GIT_CONFIG_KEY_0": "core.fsmonitor",
     "GIT_CONFIG_VALUE_0": "false",
 }
+_LOCKS: dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(data_dir: Path) -> threading.Lock:
+    """One lock per data folder, however its path is spelled."""
+    key = os.path.normcase(os.path.abspath(data_dir))
+    with _LOCKS_GUARD:
+        return _LOCKS.setdefault(key, threading.Lock())
 
 
 def available() -> bool:
@@ -66,11 +83,12 @@ class LocalIndex:
     ) -> None:
         self.tree, self.data_dir, self.home_dir = Path(tree), Path(data_dir), Path(home_dir)
         self._cli = list(cli) if cli is not None else None
+        self._lock = _lock_for(self.data_dir)
 
     @property
     def env(self) -> dict[str, str]:
         return {
-            **os.environ,
+            **safe_env(),
             "CRG_DATA_DIR": str(self.data_dir),
             "CRG_HOME": str(self.home_dir),
             "GIT_INDEX_FILE": str(self.data_dir / SCRATCH_INDEX),
@@ -103,13 +121,16 @@ class LocalIndex:
 
     def ensure(self) -> None:
         """Build, update or keep the index so it reflects the tree as it is now."""
-        if self.fresh():
-            return
-        state, dirty = self._state(), self._dirty()
-        self._announce_new_files()
-        reverted = state is not None and state.get("dirty") and not dirty
-        self._run("build" if not self.db.is_file() or reverted else "update")
-        self._save_state(dirty)
+        with self._lock:
+            if self.db.is_file() and not self._readable():
+                self._discard()  # a crashed first build or a corrupt file (DF-89)
+            if self.fresh():
+                return
+            state, dirty = self._state(), self._dirty()
+            self._announce_new_files()
+            reverted = state is not None and state.get("dirty") and not dirty
+            self._run("build" if not self.db.is_file() or reverted else "update")
+            self._save_state(dirty)
 
     def indexed_files(self) -> set[str]:
         """The tree-relative files the index holds."""
@@ -130,6 +151,19 @@ class LocalIndex:
         return found
 
     # ── state ───────────────────────────────────────────────────────────────
+
+    def _readable(self) -> bool:
+        """Whether the index file is a database holding the graph's nodes."""
+        try:  # closed at once: Windows cannot remove a file that is still open
+            with closing(sqlite3.connect(f"{self.db.resolve().as_uri()}?mode=ro", uri=True)) as c:
+                c.execute("select 1 from nodes limit 1").fetchall()
+        except sqlite3.Error:
+            return False
+        return True
+
+    def _discard(self) -> None:
+        for name in (DB_NAME, f"{DB_NAME}-wal", f"{DB_NAME}-shm", STATE_NAME):
+            (self.data_dir / name).unlink(missing_ok=True)
 
     def _state(self) -> dict | None:
         try:
@@ -216,12 +250,16 @@ class LocalIndex:
     def _dirty(self) -> bool:
         return bool(self._git("status", "--porcelain"))
 
+    def _git_env(self, index: Path | None = None) -> dict[str, str]:
+        env = {**safe_env(), **NO_FSMONITOR}
+        if index is not None:
+            env["GIT_INDEX_FILE"] = str(index)
+        return env
+
     def _git(
         self, *args: str, strip: bool = True, stdin: str | None = None, index: Path | None = None
     ) -> str:
-        env = {**os.environ, **NO_FSMONITOR}
-        if index is not None:
-            env["GIT_INDEX_FILE"] = str(index)
+        env = self._git_env(index)
         try:
             done = subprocess.run(
                 ["git", "-C", str(self.tree), "-c", "core.fsmonitor=false", *args],

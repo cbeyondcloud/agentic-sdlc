@@ -225,6 +225,13 @@ class Guard:
         if self.allow_shell is not None:  # every command must be allowed (DF-16)
             for block in self._allow_refusals(command):
                 blocks.setdefault((block.wall, block.why), block)
+            if any(_sets_program_search(spelling) for spelling in spellings):
+                why = (
+                    "the command sets PATH, PATHEXT, COMSPEC, BASH_ENV or a loader variable "
+                    "(LD_*, DYLD_*), which can swap the program an allow rule names - "
+                    "run it with the environment the run gives (agent policy)"
+                )
+                blocks.setdefault(("not-allowed", why), Block("not-allowed", why))
         if _ANSI_QUOTING.search(command):
             why = "$'...' and $\"...\" quoting can hide a program (framework floor)"
             blocks.setdefault(("framework", why), Block("framework", why))
@@ -250,18 +257,23 @@ class Guard:
             return [Block("not-allowed", why)]
         text = _FD_REDIRECT.sub(" ", _BOTH_PIPE.sub("|", _BOTH_REDIRECT.sub(">", command)))
         rules = (*self.allow_shell, *ALWAYS_ALLOWED)
-        refused: dict[str, None] = {}
+        refused: dict[tuple[str, bool], None] = {}
         for spelling in dict.fromkeys(
             (text, text.replace("\\", ""), _with_paths_as_programs(text))
         ):
             for words in _allow_segments(spelling):
                 if not any(_prefix_hits(rule, words) for rule in rules):
-                    refused[_program(words[0]) if words else "?"] = None
+                    program = _program(words[0]) if words else "?"
+                    refused[(program, bool(words) and _has_path(words[0]))] = None
         return [
             Block(
-                "not-allowed", f"{program!r} used this way is not on the allow list (agent policy)"
+                "not-allowed",
+                f"{program!r} given by a path is not covered by an allow rule - call it by "
+                f"name (agent policy)"
+                if by_path
+                else f"{program!r} used this way is not on the allow list (agent policy)",
             )
-            for program in refused
+            for program, by_path in refused
         ]
 
     def asks(self, command: str) -> list[str]:
@@ -529,6 +541,8 @@ _VALUE_OPTIONS = frozenset(
 _SUBCOMMAND_REACH = 3  # how many plain words after the program may be the subcommand
 _POWERSHELL = frozenset({"powershell", "pwsh"})
 _SUFFIXES = (".exe", ".cmd", ".bat", ".com", ".ps1", ".sh")
+_WINDOWS = os.name == "nt"
+_WINDOWS_RUNS = frozenset({".com", ".exe", ".bat", ".cmd"})  # cmd's default PATHEXT
 
 
 class _TooComplex(Exception):
@@ -781,6 +795,22 @@ _FD_REDIRECT = re.compile(r"\d*[<>]&\d*-?")  # `2>&1`, `>&2`: no file, no progra
 _MAX_DEPTH = 3
 
 
+#: Variables that choose which file runs for a program name: an allow rule names a
+#: program and trusts the search, so a command may not change them (final review F3).
+#: Matched in any case - Windows ignores it and zsh ties `path` to PATH.
+_SEARCH_VARIABLES = r"(?:PATH|PATHEXT|COMSPEC|BASH_ENV|LD_\w*|DYLD_\w*)"
+_SEARCH_ASSIGNMENT = re.compile(_SEARCH_VARIABLES + r"\+?=", re.IGNORECASE)
+_POWERSHELL_SEARCH = re.compile(r"\$env:" + _SEARCH_VARIABLES + r"\b", re.IGNORECASE)
+
+
+def _sets_program_search(text: str) -> bool:
+    """Whether a command assigns a program-search variable anywhere: `PATH=x cmd`,
+    `export PATH=x`, cmd's `set "PATH=x"`, PowerShell's `$env:PATH = x`."""
+    if _POWERSHELL_SEARCH.search(text):
+        return True
+    return any(_SEARCH_ASSIGNMENT.match(word) for word in _words(text))
+
+
 def _allow_segments(text: str, depth: int = 0) -> list[list[str]]:
     """The words of every command in `text`, from its program onward: one list per
     segment, plus what an interpreter in it is told to run."""
@@ -817,7 +847,11 @@ def _prefix_hits(rule: str, words: list[str]) -> bool:
     wanted = rule.split()
     if not words or len(words) < len(wanted):
         return False
-    if _program(words[0]) not in {_program(o) for o in wanted[0].split("|")}:
+    heads = wanted[0].split("|")
+    if _has_path(words[0]):  # an agent can write an executable anywhere in its tree (DF-68)
+        if not any(_same_path_program(words[0], o) for o in heads if _has_path(o)):
+            return False
+    elif _program(words[0]) not in {_program(o) for o in heads if not _has_path(o)}:
         return False
     return all(word in alts.split("|") for alts, word in zip(wanted[1:], words[1:], strict=False))
 
@@ -914,6 +948,35 @@ def _program(word: str) -> str:
 
 def _basename(path: str) -> str:
     return path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
+def _has_path(word: str) -> bool:
+    """Whether a program word names a path (`./x`, `bin\\x`, `C:\\x`), not a name PATH finds."""
+    return "/" in word or "\\" in word
+
+
+def _same_path_program(word: str, rule: str) -> bool:
+    """Whether a program word names exactly the path an allow rule names (final review
+    F2): `pytest.sh` beside `pytest` is another file the agent can write. Only on Windows
+    are case and a missing suffix lenient: there cmd itself runs `pytest` as any of
+    `pytest.com/.exe/.bat/.cmd` and ignores case, so those spellings allow nothing more."""
+    path, wanted = _path_spelling(word), _path_spelling(rule)
+    if not _WINDOWS:
+        return path == wanted
+    path, wanted = path.lower(), wanted.lower()
+    if path == wanted:
+        return True
+    stem, dot, suffix = path.rpartition(".")
+    has_suffix = any(wanted.endswith(s) for s in _SUFFIXES)
+    return bool(dot) and f".{suffix}" in _WINDOWS_RUNS and stem == wanted and not has_suffix
+
+
+def _path_spelling(word: str) -> str:
+    """A program path in one spelling: forward slashes and no leading `./`."""
+    path = word.replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return path
 
 
 def _inside(path: Path, folder: Path) -> bool:

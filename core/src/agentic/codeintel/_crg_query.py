@@ -12,9 +12,22 @@ import json
 import os
 import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
 MAX_SYMBOLS = 150  # spike S5: tests_for for at most this many symbols of the seed file
+# Result limits as spike S5 measured them (DF-90), not code-review-graph's defaults
+# (100/100/500), which truncate hub files differently from the benchmark.
+MAX_IMPORTERS = 500
+MAX_FILE_TESTS = 500
+MAX_SYMBOL_TESTS = 200
+MAX_IMPACT = 5000
+
+
+def _connect(db: Path) -> sqlite3.Connection:
+    """The graph, read-only. The URI is built by pathlib: a `#`, `?` or `%` in the data
+    folder's path would otherwise open another file (DF-90)."""
+    return sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True)
 
 
 def _relative(raw: str, root: Path) -> str | None:
@@ -35,9 +48,13 @@ def _files(rows: list[dict], root: Path) -> list[str]:
 
 
 def _symbols(db: Path, seed: Path) -> list[str]:
-    with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as con:
+    """The classes and functions defined in `seed`: rows are narrowed by file name in SQL
+    (as spike S5 did), and only those paths are resolved and compared."""
+    with closing(_connect(db)) as con:
         rows = con.execute(
-            "select file_path, qualified_name from nodes where kind in ('Class', 'Function')"
+            "select file_path, qualified_name from nodes where kind in ('Class', 'Function') "
+            "and replace(file_path, char(92), '/') like ?",
+            (f"%/{seed.name}",),
         ).fetchall()
     target = seed.resolve()
     names = []
@@ -62,30 +79,33 @@ def _dedupe(paths: list[str], *exclude: str) -> list[str]:
 
 def _tests_for(tools, tree: Path, rel: str, db: Path) -> list[str]:
     root = tree.resolve()
-    found = _files(
-        tools.query_graph("tests_for", rel, repo_root=str(tree)).get("results", []), root
-    )
+    answer = tools.query_graph("tests_for", rel, repo_root=str(tree), max_results=MAX_FILE_TESTS)
+    found = _files(answer.get("results", []), root)
     for name in _symbols(db, tree / rel):
-        answer = tools.query_graph("tests_for", name, repo_root=str(tree))
+        answer = tools.query_graph(
+            "tests_for", name, repo_root=str(tree), max_results=MAX_SYMBOL_TESTS
+        )
         found += _files(answer.get("results", []), root)
     return _dedupe(found, rel)
 
 
 def _composed(tools, tree: Path, rel: str, db: Path) -> list[str]:
-    """Importers, then tests (file and symbols), then the rest of the impact (spike S5)."""
+    """Importers, then tests (file and symbols), then the rest of the impact in the
+    tool's own order (spike S5)."""
     root = tree.resolve()
-    importers = _files(
-        tools.query_graph("importers_of", rel, repo_root=str(tree)).get("results", []), root
-    )
+    answer = tools.query_graph("importers_of", rel, repo_root=str(tree), max_results=MAX_IMPORTERS)
+    importers = _files(answer.get("results", []), root)
     tests = _tests_for(tools, tree, rel, db)
-    impact = tools.get_impact_radius(changed_files=[rel], max_depth=2, repo_root=str(tree))
+    impact = tools.get_impact_radius(
+        changed_files=[rel], max_depth=2, max_results=MAX_IMPACT, repo_root=str(tree)
+    )
     impacted = [p for p in (_relative(f, root) for f in impact.get("impacted_files", [])) if p]
-    return _dedupe(importers + tests + sorted(impacted), rel)
+    return _dedupe(importers + tests + impacted, rel)
 
 
 def _overview(tree: Path, db: Path) -> str:
     root = tree.resolve()
-    with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as con:
+    with closing(_connect(db)) as con:
         files = con.execute("select count(distinct file_path) from nodes").fetchone()[0]
         nodes = con.execute("select count(*) from nodes").fetchone()[0]
         edges = con.execute("select count(*) from edges").fetchone()[0]

@@ -18,8 +18,21 @@ from pathlib import Path
 
 MAX_OUTPUT = 50_000
 KILL_WAIT_S = 5.0
-# Environment variables a command never sees: API keys, tokens and passwords.
-SECRET_NAME = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL", re.IGNORECASE)
+# Environment variables a command never sees: API keys, tokens, passwords, agent sockets
+# (DF-66). The short words count only as a whole part of the name: `GITHUB_PAT` and
+# `SSH_AUTH_SOCK` are secrets, `PATH` and `GIT_AUTHOR_NAME` are not.
+SECRET_NAME = re.compile(
+    r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|CREDENTIAL|PRIVATE|COOKIE"
+    r"|(?:^|_)(?:AUTH|PAT|DSN|PASS|CREDS)(?:_|$)",
+    re.IGNORECASE,
+)
+# A value carrying a credential, whatever its name: a URL with `user:password@`, or with
+# a long user part (`https://<token>@host`); `ssh://git@host` is a user name, not a secret.
+_URL_CREDENTIAL = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*://(?:[^/\s@:]*:[^/\s@]+|[^/\s@:]{20,})@")
+# Windows: `cmd.exe` and CreateProcess search the working folder before PATH unless this
+# is set, so an agent's `pytest.cmd` in the tree would run in place of the real one (DF-68).
+_NO_CWD_SEARCH = "NoDefaultCurrentDirectoryInExePath"
+_ABSOLUTE_ENTRY = re.compile(r"^(?:[/\\]|[A-Za-z]:[/\\]|%)")
 
 
 @dataclass(frozen=True)
@@ -30,9 +43,29 @@ class ShellResult:
     timed_out: bool
 
 
-def safe_env() -> dict[str, str]:
-    """This process's environment without secret-named variables."""
-    return {k: v for k, v in os.environ.items() if not SECRET_NAME.search(k)}
+def secret_value(value: str) -> bool:
+    """Whether an environment value carries a credential (a URL with one)."""
+    return bool(_URL_CREDENTIAL.search(value))
+
+
+def safe_env(
+    environ: Mapping[str, str] | None = None, *, windows: bool | None = None
+) -> dict[str, str]:
+    """The environment for an agent's command: `environ` (default: this process's)
+    without secret-named variables or credential-carrying values, with no relative
+    entry in PATH (a folder the agent can write), and on Windows with the working
+    folder never searched for a program."""
+    source = os.environ if environ is None else environ
+    windows = os.name == "nt" if windows is None else windows
+    env = {k: v for k, v in source.items() if not SECRET_NAME.search(k) and not secret_value(v)}
+    for name in [k for k in env if k.upper() == "PATH"]:
+        entries = env[name].split(os.pathsep)
+        env[name] = os.pathsep.join(e for e in entries if _ABSOLUTE_ENTRY.match(e))
+    if windows:
+        for name in [k for k in env if k.upper() == _NO_CWD_SEARCH.upper()]:
+            del env[name]
+        env[_NO_CWD_SEARCH] = "1"
+    return env
 
 
 class _Capture:
