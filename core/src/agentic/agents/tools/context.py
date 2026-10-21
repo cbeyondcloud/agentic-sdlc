@@ -133,12 +133,20 @@ SHOWN_CHARS = 200
 #: The first line of a `run_shell` result (agentic.agents.tools.shell): "exit N" or
 #: "timed out", then "stdout:" and "stderr:" sections.
 _SHELL_STATUS = re.compile(r"exit -?\d+|timed out")
+#: The only printed line ever logged: a test run's summary ("1 failed, 4 passed in
+#: 0.12s", with or without pytest's "=" rule). The log is written before the output is
+#: secret-scanned (`protect_tools`), so anything else a command prints stays out (F1).
+_COUNT = r"\d+ (?:passed|failed|skipped|deselected|xfailed|xpassed|errors?|warnings?|rerun)"
+_TEST_SUMMARY = re.compile(
+    rf"=*\s*(?:{_COUNT}(?:, {_COUNT})*|no tests ran)"
+    r"(?: in \d+(?:\.\d+)?s(?: \(\d+:\d\d:\d\d\))?)?\s*=*"
+)
 
 
 def _log_call(tool: Callable, args: tuple, kwargs: dict, result: object) -> None:
     """One record per tool call - what was asked (paths, commands, patterns; never file
-    text) and how it ended (ok, refused and why, or a command's exit status and the last
-    line it printed, e.g. a test run's summary). The step log redacts secrets."""
+    text) and how it ended (ok, refused and why, or a command's exit status - plus its
+    last printed line only when that is a test run's summary). The step log redacts."""
     fields: dict[str, object] = {"tool": tool.__name__}
     try:
         bound = inspect.signature(tool).bind(*args, **kwargs).arguments
@@ -159,7 +167,8 @@ def _log_call(tool: Callable, args: tuple, kwargs: dict, result: object) -> None
         if _SHELL_STATUS.fullmatch(first):
             printed = rest.removeprefix("stdout:\n").split("\nstderr:\n", 1)[0]
             last = next((line for line in reversed(printed.splitlines()) if line.strip()), "")
-            outcome = f"{first} - {_short(last.strip())}" if last.strip() else first
+            summary = _TEST_SUMMARY.fullmatch(last.strip())
+            outcome = f"{first} - {last.strip()}" if summary else first
     _LOG.info("tool %s: %s", tool.__name__, outcome, extra={"fields": fields})
 
 
