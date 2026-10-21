@@ -100,6 +100,15 @@ class Output:
         if not self.json_mode:
             self.err.print(message, markup=False)
 
+    def notice(self, data: dict, message: str) -> None:
+        """Something a script may need before the result (a run's id when it starts): on
+        stderr, as one compact JSON line with `--json`, else as `message`."""
+        if self.json_mode:
+            text = json.dumps(data, ensure_ascii=not _exact("stderr"))
+            self.err.print(text, markup=False, highlight=False, soft_wrap=True)
+        else:
+            self.err.print(message, markup=False)
+
     def warn(self, message: str) -> None:
         if not self.json_mode:
             self.err.print("[yellow]warning:[/yellow] ", end="", markup=True)

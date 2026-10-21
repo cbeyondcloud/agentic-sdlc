@@ -10,6 +10,7 @@ import pytest
 from _cli_support import FakeGateway, answer, git, write
 
 from agentic_cli import runtime
+from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 
 KEY = "tl-" + "fake-gateway-key-0003"  # gitleaks:allow (not a real key)
@@ -173,6 +174,31 @@ def test_a_refused_edit_is_kept_and_the_next_edit_continues_from_it(
     edited = workspace / ".agentic" / "local" / "runs" / run_id / list(entries[-1]["artifacts"])[0]
     assert "Fixed by a person." in edited.read_text("utf-8")
     assert drafts(workspace, run_id) == []  # decided: the draft is gone
+
+
+def test_an_edit_recorded_before_a_later_failure_does_not_point_at_a_stale_draft(
+    workspace, gateway, cli, editor, monkeypatch
+):
+    """DF-348: the engine recorded the edit, then the run failed further on. The draft is
+    no longer wanted (the next `agentic edit` would not offer it) and the message must not
+    say it was kept."""
+    from agentic_cli.commands import gates
+
+    run_id = started(cli)
+    real = gates.drive
+
+    def then_fail(*args, **kwargs):
+        real(*args, **kwargs)  # the decision is recorded and the run goes on
+        raise CliError("the next step failed", ExitCode.ERROR, hint="see agentic logs")
+
+    monkeypatch.setattr(gates, "drive", then_fail)
+    editor(SUMMARY, "Edited by a person.")
+    result = cli("edit", run_id)
+    assert result.code == ExitCode.ERROR and "the next step failed" in result.err
+    assert "kept" not in result.err
+    assert drafts(workspace, run_id) == []
+    entries, _ = ledgers(workspace, run_id)
+    assert entries[-1]["verdict"] == "approve"  # the edit itself was recorded
 
 
 def test_an_edit_saved_in_another_encoding_is_refused_and_kept(

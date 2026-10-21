@@ -26,7 +26,7 @@ from rich.syntax import Syntax
 
 from agentic.agents.models import GatewaySettings
 from agentic.engine.gates import Approve, Decision, Edit, Reject, StandaloneAuthorizer
-from agentic.engine.state import RunState
+from agentic.engine.state import RunState, RunStateError
 from agentic.yamlio import YamlFileError, split_front_matter
 from agentic_cli.commands.runs import _all_runs, _load
 from agentic_cli.driving import drive, exit_code_for, show_state, summary
@@ -128,7 +128,10 @@ def register(app: typer.Typer) -> None:
         decision = Edit(gate or state.pending.id, rt.user, rel, text, notes)
         try:
             _decide(out, rt, state, decision, gateway)
-        except CliError as error:  # refused or failed: the person's text is kept
+        except CliError as error:  # refused or failed: the person's text is kept...
+            if _moved_on(rt, state):  # ...unless the engine recorded it first (DF-348)
+                shutil.rmtree(draft.parent, ignore_errors=True)
+                raise
             kept = f"your edit is kept in {draft}; {again}"
             hint = f"{error.hint}; {kept}" if error.hint else kept
             raise CliError(str(error), error.code, hint=hint) from error
@@ -224,6 +227,25 @@ def _decide(
     redact = rt.redact()
     out.result(summary(result, redact), show_state(result, redact))
     raise typer.Exit(exit_code_for(result))
+
+
+def _moved_on(rt: Runtime, before: RunState) -> bool:
+    """Whether the run left the gate it waited at when `before` was read: the decision
+    was recorded, even if something failed afterwards."""
+    try:
+        now = rt.store.load(before.run_id)
+    except RunStateError:
+        return False
+    waited, pending = before.pending, now.pending
+    return (
+        pending is None
+        or waited is None
+        or (pending.id, pending.since)
+        != (
+            waited.id,
+            waited.since,
+        )
+    )
 
 
 def _role(rt: Runtime, state: RunState, gate: str) -> str | None:

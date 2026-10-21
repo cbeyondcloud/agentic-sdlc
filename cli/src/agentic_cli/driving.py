@@ -146,6 +146,15 @@ def next_steps(state: RunState) -> list[str]:
         return []
     if pending is None:
         return [f"agentic resume {run}"]
+    if pending.kind == "gate" and pending.id == f"{pending.step}-exhausted":
+        # an exhausted loop (the engine names its gate after the loop): a bare approval is
+        # refused until its exit condition holds, so edit and reject come first (DF-321)
+        return [
+            f"agentic show {run}",
+            f"agentic edit {run}   (or: agentic reject {run} --feedback '...', "
+            f"agentic stop {run} --reason ...; agentic approve {run} once its exit "
+            "condition holds)",
+        ]
     if pending.kind == "gate":
         return [
             f"agentic show {run}",

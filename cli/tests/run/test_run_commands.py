@@ -142,15 +142,49 @@ def test_the_runs_table_stays_readable_in_80_columns():
         "updated_at": "2026-10-21T10:15:00+00:00",
         "cost_usd": "0.123456",
     }
-    narrow = Console(width=80, record=True, no_color=True)
+    narrow = Console(width=80, record=True, no_color=True, force_terminal=True)
     _show_runs([row])(narrow)
     text = narrow.export_text()
     for word in (row["run_id"], "awaiting_gate", "design-approval", "0.123456"):
         assert word in text, text
-    wide = Console(width=140, record=True, no_color=True)
+    wide = Console(width=140, record=True, no_color=True, force_terminal=True)
     _show_runs([row])(wide)
     text = wide.export_text()
     assert "feature-delivery " in text and "2026-10-21" in text
+
+
+def test_the_runs_table_keeps_every_column_when_piped(monkeypatch):
+    """DF-351: Rich reports 80 columns for every pipe or redirect (`agentic runs | cat`,
+    CI logs): a pipe has no width, so the table keeps all its columns, whole."""
+    import io
+
+    from rich.console import Console
+
+    from agentic_cli.commands.runs import _show_runs
+
+    monkeypatch.delenv("COLUMNS", raising=False)
+    row = {
+        "run_id": "feature-delivery-20261021-101500-ab12",
+        "pipeline": "feature-delivery",
+        "status": "awaiting_gate",
+        "waiting_on": "design-approval",
+        "updated_at": "2026-10-21T10:15:00+00:00",
+        "cost_usd": "0.123456",
+    }
+    piped = Console(file=io.StringIO(), width=80, no_color=True, force_terminal=False)
+    _show_runs([row])(piped)
+    text = piped.file.getvalue()
+    for word in (row["run_id"], "feature-delivery ", "2026-10-21T10:15:00", "design-approval"):
+        assert word in text, text
+
+
+def test_a_json_run_names_its_run_on_stderr_when_it_starts(workspace, gateway, cli):
+    """DF-352: a script that is interrupted still learns the run id; stdout stays one
+    JSON document."""
+    result = cli("--json", "run", "deliver", "--input", "request=x", "--run-id", "named-2")
+    first = result.err.splitlines()[0]
+    assert json.loads(first) == {"started": "named-2"}
+    assert json.loads(result.out)["run_id"] == "named-2"
 
 
 def test_stop_ends_the_run_and_runs_hides_it(workspace, gateway, cli):
