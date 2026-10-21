@@ -129,7 +129,7 @@ def test_two_resumes_at_once_are_refused(make_harness):
     h = make_harness(
         GATED.format(extra=""), {"designer": [once_over_budget], "dev": [answer("dev-report")]}
     )
-    assert start(h).pending.id == "budget"
+    assert start(h).pending.id == "step-budget"
 
     async def both():
         return await asyncio.gather(
@@ -210,7 +210,7 @@ def test_a_handoff_changed_after_its_gate_pauses_the_next_step(make_harness):
         GATED.format(extra=""), {"designer": [answer("design")], "dev": [once_over_budget]}
     )
     start(h)
-    assert decide(h, Approve("design-approval", LEAD)).pending.id == "budget"
+    assert decide(h, Approve("design-approval", LEAD)).pending.id == "step-budget"
     (h.ledger("r-1").run_dir / "handoffs" / "design-1.md").write_text(
         "edited by hand", encoding="utf-8"
     )

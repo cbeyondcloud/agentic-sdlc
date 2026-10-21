@@ -176,3 +176,35 @@ def test_the_policy_scanner_reaches_every_step(repo, tmp_path, agent):  # DF-148
 
 def test_without_a_policy_scanner_the_default_blocks(repo, tmp_path, agent):
     assert wiring(repo, tmp_path).scanner_for(step(agent)).action == "block"
+
+
+def test_tools_carry_the_skills_and_a_codeintel_index_of_the_run_tree(repo, tmp_path, agent):
+    made = []
+    skills = object()
+
+    def codeintel_for(tree, data):
+        made.append((tree, data))
+        return "index"
+
+    w = StepWiring(
+        repo,
+        SandboxPolicy(),
+        UNSANDBOXED,
+        tmp_path / "state",
+        tmp_path / "home",
+        skills=skills,
+        codeintel_for=codeintel_for,
+    )
+    with_codeintel = agent.model_copy(update={"tools": ["read_files", "codeintel"]})
+    context = w.tools_for(step(with_codeintel))
+    assert context.skills is skills and context.codeintel == "index"
+    assert made == [(context.tree, tmp_path / "state" / RUN / "codeintel")]
+
+    without = w.tools_for(step(agent))  # no codeintel tool: no index is made
+    assert without.codeintel is None and len(made) == 1
+
+
+def test_unenforced_preview_creates_nothing(repo, tmp_path, agent):
+    w = wiring(repo, tmp_path)
+    assert w.unenforced_preview(agent) == ["**/*.pem"]
+    assert not (repo / ".sdlc-worktrees").exists()

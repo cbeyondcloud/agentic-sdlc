@@ -109,6 +109,8 @@ class BudgetSlice:
         self.unpriced_calls = 0
         self.unpriced_usd = Decimal(0)
         self.limit_changes: list[tuple[Decimal, Decimal]] = []  # (old, new), for the audit trail
+        # child name -> what its closed child slices spent, descendants included (M1-57)
+        self.child_spend: dict[str, Decimal] = {}
         self._ledger: BudgetLedger | None = parent._ledger if parent is not None else None
 
     def _changed(self) -> None:
@@ -230,6 +232,9 @@ class BudgetSlice:
             self.parent._spent += self._spent
             self.parent.unpriced_calls += self.unpriced_calls
             self.parent.unpriced_usd += self.unpriced_usd
+            if self.scope == "child":
+                spent = self.parent.child_spend.get(self.name, Decimal(0)) + self._spent
+                self.parent.child_spend[self.name] = spent
 
     def _in_flight(self) -> bool:
         return self._open_reservations > 0 or any(c._in_flight() for c in self._open_children)
@@ -311,6 +316,7 @@ def _snapshot(slice_: BudgetSlice) -> dict[str, Any]:
         "unpriced_calls": slice_.unpriced_calls,
         "unpriced_usd": str(slice_.unpriced_usd),
         "limit_changes": [[str(old), str(new)] for old, new in slice_.limit_changes],
+        "child_spend": {name: str(usd) for name, usd in slice_.child_spend.items()},
         "children": [_snapshot(child) for child in slice_._open_children],
     }
 
@@ -325,6 +331,10 @@ def _fill(slice_: BudgetSlice, data: dict[str, Any], ledger: BudgetLedger) -> No
     slice_.unpriced_usd = (
         _parse(data.get("unpriced_usd", "0"), "unpriced") or Decimal(0)
     ) + reserved
+    slice_.child_spend = {
+        name: _parse(usd, "child spend") or Decimal(0)
+        for name, usd in data.get("child_spend", {}).items()
+    }
     slice_.limit_changes = [
         (Decimal(old), Decimal(new)) for old, new in data.get("limit_changes", [])
     ]

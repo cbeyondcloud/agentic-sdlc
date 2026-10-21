@@ -8,7 +8,10 @@ and the guard are Zyroflo-backed (commons). This is the one place that joins the
                           from the step's resolved agent (its allow, ask and deny
                           lists), and a sandbox - `srt` with rules compiled from the
                           guard and org policy, or, when this machine has none and
-                          the regime allows it, a plain process (D38);
+                          the regime allows it, a plain process (D38); plus the
+                          repo's installed skills (M1-38) and, for an agent with the
+                          `codeintel` tool, a code-review-graph index of the run's
+                          tree kept in run state (DF-87);
   * `scanner_for(step)` - the secret scanner from org policy (`production_scanner`,
                           DF-148), for the backends' `scanner_for` and on every
                           step's `ToolContext.secret_scanner`; without one, the
@@ -16,10 +19,11 @@ and the guard are Zyroflo-backed (commons). This is the one place that joins the
 """
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from agentic.agents.tools import LocalProcessSandbox, ToolContext
+from agentic.agents.tools import LocalProcessSandbox, SkillCatalog, ToolContext
+from agentic.codeintel import CodeIntel
 from agentic.engine.engine import StepContext
 from agentic.policy import OrgPolicy, ResolvedAgent, SandboxPolicy
 from agentic.sandbox import SandboxRules, SrtSandbox, expand_home
@@ -45,6 +49,8 @@ class StepWiring:
     state_root: Path  # where per-run sandbox settings are kept
     home: Path = field(default_factory=Path.home)
     scanner: SecretScanner | None = None  # production_scanner(org policy), DF-148
+    skills: SkillCatalog | None = None  # the repo's installed skills
+    codeintel_for: Callable[[Path, Path], CodeIntel] | None = None  # (tree, data folder)
     _trees: dict[str, StepCheckpoints] = field(default_factory=dict, repr=False)
     _homes: dict[str, Path] = field(default_factory=dict, repr=False)
 
@@ -56,6 +62,16 @@ class StepWiring:
     def tools_for(self, step: StepContext) -> ToolContext:
         if self.decision.refusal:
             raise ValueError(self.decision.refusal)
+        return self._services(self._tools(step), step)
+
+    def _services(self, context: ToolContext, step: StepContext) -> ToolContext:
+        codeintel = None
+        if self.codeintel_for is not None and "codeintel" in step.agent.tools:
+            data = self.state_root / step.run_id / "codeintel"
+            codeintel = self.codeintel_for(context.tree, data)
+        return replace(context, skills=self.skills, codeintel=codeintel)
+
+    def _tools(self, step: StepContext) -> ToolContext:
         tree = self._home(step.run_id)
         guard = Guard.for_agent(self.target, step.run_id, step.agent)
         if not self.decision.use_srt:
@@ -87,6 +103,15 @@ class StepWiring:
         guard = Guard.for_agent(self.target, run_id, agent)
         found = (u for d in self._denials(guard, run_id) for u in d.unenforced)
         return list(dict.fromkeys(found))
+
+    def unenforced_preview(self, agent: ResolvedAgent) -> list[str]:
+        """The agent's own deny globs `srt` could not enforce, worked out on the
+        repository itself: nothing is created (for `run --dry-run`, DF-64). The
+        framework's protected globs are left out (DF-71: shown every time, they are
+        noise)."""
+        denials = Guard.for_agent(self.target, "dry-run", agent).write_denials(self.target)
+        own = set(agent.deny_paths)
+        return [glob for glob in denials.unenforced if glob in own]
 
     def _home(self, run_id: str) -> Path:
         """Where the run's agents work (made once per run, then reused)."""

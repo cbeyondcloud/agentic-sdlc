@@ -94,8 +94,11 @@ class InstalledSkills:
             raise SkillsError(f"{path!r} in the skill {name} is not text: {error}") from error
 
     def prompt_for(self, agent: "ResolvedAgent") -> str:
-        preload_all = self.catalog.preload_for.matches(agent.tier, agent.model)
-        return skill_prompt(agent, self, preload_all=preload_all)
+        return skill_prompt(agent, self, preload_all=self.preloads_all(agent))
+
+    def preloads_all(self, agent: "ResolvedAgent") -> bool:
+        """Whether the catalog's `preload_for` rule inlines all of this agent's skills."""
+        return self.catalog.preload_for.matches(agent.tier, agent.model)
 
     # ── helpers for the skill block ──────────────────────────────────────────
 
@@ -166,8 +169,12 @@ def skill_prompt(agent: "ResolvedAgent", library: InstalledSkills, *, preload_al
     has_tool = "activate_skill" in agent.tools
     inline_all = preload_all or not has_tool
     catalog = library.catalog.skills
-    pre = [n for n in usable if inline_all or catalog[n].loading == "pre"][:MAX_PRELOADED]
+    wanted = [n for n in usable if inline_all or catalog[n].loading == "pre"]
+    pre = wanted[:MAX_PRELOADED]
     rest = [n for n in usable if n not in pre]
+    if not has_tool:  # nothing can list the rest: say so (preflight refuses this, DF-144)
+        for name in wanted[MAX_PRELOADED:]:
+            library.record("skills.truncated", {"skill": name, "max_preloaded": MAX_PRELOADED})
     parts = []
     if pre:
         loaded = (library.load(n, list_files=has_tool) for n in pre)

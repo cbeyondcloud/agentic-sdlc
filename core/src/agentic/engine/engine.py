@@ -161,6 +161,7 @@ class Engine:
         sandbox_label: str = "none",
         trees_for: Callable[[str], StepTrees] | None = None,
         step_logs: StepLogs | None = None,
+        redact: Callable[[str], str] | None = None,
     ) -> None:
         self.definitions, self.policy, self.context = definitions, policy, context
         self.store, self.recorder_for, self.gates_for = store, recorder_for, gates_for
@@ -170,6 +171,9 @@ class Engine:
         self.sandbox_label = sandbox_label  # recorded on every run it starts
         self.trees_for = trees_for  # None: steps get no tree (tests, pipelines without code)
         self.step_logs = step_logs  # None: no per-step log files (M1-47)
+        # masks secrets in the reasons and details stored in run.json: a provider's error
+        # text can echo a key (the CLI passes its redactor; None: stored as it is)
+        self.redact: Callable[[str], str] = redact or _as_is
 
     async def start(
         self, pipeline: str, inputs: dict[str, str], starter: str, run_id: str
@@ -178,6 +182,7 @@ class Engine:
         if self.store.exists(run_id):
             raise EngineError(f"run {run_id} already exists - resume it instead")
         definition = self.definitions.pipeline(pipeline)
+        _check_inputs(definition, inputs)
         now = self.clock.now()
         state = RunState(
             run_id=run_id,
@@ -249,11 +254,22 @@ class Engine:
         extra_minutes: int = 0,
         extra_budget_usd: Decimal = Decimal(0),
         decisions: dict[str, bool | str] | None = None,
+        skip: bool = False,
+        who: str | None = None,
+        self_approval: Callable[[str, str], str | None] | None = None,
     ) -> RunState:
         """Continue a paused run: grant more time or budget, or answer pending tool
-        calls (`decisions`), then advance. A run waiting at a gate is decided instead."""
+        calls (`decisions`), then advance. A run waiting at a gate is decided instead.
+        More budget raises the run's limit only: it is refused for a run without one, and
+        for a step that reached its own budget (more run budget would not raise that).
+        `skip` routes around a condition that cannot be evaluated: the step it guards is
+        skipped, or a loop whose `until` it is ends as it stands (DF-59). A skip names
+        the person (`who`), who is recorded; in the regulated regime it may not be the
+        person who started the run (`self_approval`, as at a gate; default: same name)."""
         with self._lock(run_id):
             run = _Run(self, self.store.load(run_id))
+            if skip:
+                return await run.skip(who, self_approval)
             return await run.resume(extra_minutes, extra_budget_usd, decisions)
 
     async def decide(
@@ -270,6 +286,22 @@ class Engine:
         with self._lock(run_id):
             run = _Run(self, self.store.load(run_id))
             return await run.decide(decision, authorizer, self_approval)
+
+
+def _check_inputs(pipeline: PipelineDefinition, inputs: Mapping[str, str]) -> None:
+    """A pipeline that declares `inputs:` gets exactly those: none it does not know, and
+    every one not marked `required: false` (DF-54). A pipeline declaring none takes any."""
+    declared = pipeline.inputs
+    if not declared:
+        return
+    if unknown := sorted(set(inputs) - set(declared)):
+        raise EngineError(
+            f"unknown input {', '.join(unknown)} for pipeline {pipeline.name} "
+            f"(it takes: {', '.join(sorted(declared))})"
+        )
+    required = {name for name, spec in declared.items() if spec.get("required", True) is not False}
+    if missing := sorted(required - set(inputs)):
+        raise EngineError(f"missing input {', '.join(missing)} for pipeline {pipeline.name}")
 
 
 def pipeline_digest(pipeline: PipelineDefinition) -> str:
@@ -307,6 +339,7 @@ class _Run:
         self._tree_handle: StepTrees | None = None
         self._work: Path | None = None  # where the run's agents work (from prepare)
         self._marks: tuple | None = None  # (step, iteration, base, commit) of the attempt
+        self._children: dict[str, Decimal] = {}  # the settled step's spend per child
 
     # ── the walk ─────────────────────────────────────────────────────────────
 
@@ -345,8 +378,18 @@ class _Run:
                     f"run {state.run_id} waits for a decision on each of these tool calls, "
                     f"and only these: {pending.calls}"
                 )
+        if extra_budget > 0:
+            if pending is not None and pending.id == "step-budget":
+                raise EngineError(
+                    f"step {pending.step} of run {state.run_id} reached its own budget (the "
+                    "agent's limits.budget_usd): more run budget does not raise it"
+                )
+            if self.budget.run.limit_usd is None:
+                raise EngineError(
+                    f"run {state.run_id} has no budget limit: there is no run budget to raise"
+                )
         state.extra_minutes += extra_minutes
-        if extra_budget > 0 and self.budget.run.limit_usd is not None:
+        if extra_budget > 0:
             self.budget.run.raise_limit(self.budget.run.limit_usd + extra_budget)
         if pending is not None and pending.kind == "approval":
             step = self._step_at_cursor()
@@ -366,6 +409,52 @@ class _Run:
             self._after_step()
             return await self.go()
         self._clear_pending()
+        return await self.go()
+
+    async def skip(self, who: str | None, self_approval) -> RunState:
+        state, pending = self.state, self.state.pending
+        if pending is None or pending.kind != "pause" or pending.id != "condition":
+            raise EngineError(
+                f"run {state.run_id}: only a condition pause can be skipped "
+                f"(it waits on {pending.id if pending else 'nothing'})"
+            )
+        person = (who or "").strip()
+        if not person:
+            raise EngineError("a skip names the person who decided it")
+        if state.regime == "regulated":
+            if refusal := (self_approval or _same_person)(person, state.starter):
+                raise EngineError(
+                    f"four-eyes: {refusal} (someone else must skip a step of your own run)"
+                )
+        top = self.pipeline.steps[state.cursor.index]
+        skipped = top.loop.id if isinstance(top, LoopStep) and pending.step == top.loop.id else None
+        skipped = skipped or self._step_at_cursor().id
+        # the person's decision, in the approval ledger like a gate's (events carry no
+        # names): who skipped what, and why the step could not be decided by its condition
+        self.gates.record(
+            f"skip-{skipped}",
+            "approve",
+            person,
+            {},
+            step=skipped,
+            notes=f"skipped: its condition could not be evaluated ({pending.reason})",
+            extra={"regime": state.regime, "action": "skip"},
+        )
+        self._clear_pending()
+        if isinstance(top, LoopStep) and pending.step == top.loop.id:
+            self.recorder.record("step_finished", top.loop.id, outcome="skipped")
+            self._next()  # the loop ends as it stands
+        else:
+            iteration = state.cursor.loop_iteration or 1
+            self._history(
+                skipped,
+                iteration,
+                "skipped",
+                started=self.e.clock.now(),
+                detail=f"skipped by {person}",
+            )
+            self.recorder.record("step_finished", skipped, outcome="skipped")
+            self._after_step()
         return await self.go()
 
     def _clear_pending(self) -> None:
@@ -418,7 +507,7 @@ class _Run:
         self.state.pending = Pending(
             kind="gate",
             id=gate,
-            reason=reason,
+            reason=self.e.redact(reason),
             artefacts=artefacts,
             since=self.e.clock.now(),
             step=step,
@@ -874,7 +963,7 @@ class _Run:
                 name, "step", _usd(agent.limits.budget_usd)
             )
         except LimitHit as hit:
-            self._pause("budget", str(hit), step=step.id)
+            self._pause(_budget_pause(hit), str(hit), step=step.id)
             return False
         contract = None
         if agent.produces:
@@ -890,10 +979,12 @@ class _Run:
         attempt = self._attempt(step.id, iteration)
         if resume is None:
             self.recorder.record("step_started", step.id, attempt=attempt)
-        runner = self.e.runner_factory(
-            StepContext(self.state.run_id, step.id, iteration, agent, budget, contract)
-        )
         try:
+            # inside the try: a runner that cannot be built (no sandbox, no tool service)
+            # pauses the run and closes the step's slice, like any other step failure (DF-69)
+            runner = self.e.runner_factory(
+                StepContext(self.state.run_id, step.id, iteration, agent, budget, contract)
+            )
             with step_span(self.state.run_id, step.id, iteration, agent) as span:
                 if resume is None:
                     task = AgentTask(
@@ -914,21 +1005,42 @@ class _Run:
             self._close_slice(budget)
             raise
         except LimitHit as hit:
+            cost = budget.total_spent()
             self._close_slice(budget)
-            self._history(step.id, iteration, "stopped", started=started, detail=str(hit))
-            self.recorder.record("step_finished", step.id, outcome="budget")
-            self._pause("budget", str(hit), step=step.id)
+            self._children = _children(budget)
+            self._history(
+                step.id,
+                iteration,
+                "stopped",
+                started=started,
+                cost=cost,
+                children=self._children,
+                detail=str(hit),
+            )
+            self.recorder.record("step_finished", step.id, outcome="budget", cost=self._usd(cost))
+            pause = _budget_pause(hit, budget, _usd(agent.limits.budget_usd))
+            self._pause(pause, str(hit), step=step.id)
             return False
         except Exception as error:  # a provider, network or tool failure: a person decides
             cost = budget.total_spent()
             self._close_slice(budget)
+            self._children = _children(budget)
             reason = f"{type(error).__name__}: {error}"
-            self._history(step.id, iteration, "failed", started=started, cost=cost, detail=reason)
-            self.recorder.record("step_finished", step.id, outcome="error")
+            self._history(
+                step.id,
+                iteration,
+                "failed",
+                started=started,
+                cost=cost,
+                children=self._children,
+                detail=reason,
+            )
+            self.recorder.record("step_finished", step.id, outcome="error", cost=self._usd(cost))
             self._pause("step-error", reason, step=step.id)
             return False
         cost = budget.total_spent()
         closing = self._close_slice(budget)
+        self._children = _children(budget)
         # Only an answer is checkpointed: a stopped attempt's partial work is discarded by
         # the retry's fresh begin, so a later reject returns to the step's real base (I7);
         # a tool-approval pause keeps working in the tree.
@@ -957,7 +1069,7 @@ class _Run:
         agent: ResolvedAgent,
     ) -> bool:
         base = f"handoffs/{step}-{iteration}" + (f"-attempt{attempt}" if attempt > 1 else "")
-        usd = {"usd": str(cost)}
+        usd = self._usd(cost)
         if outcome.status == "completed":
             rel = f"{base}.md"
             digest = self.recorder.write_artifact(rel, outcome.output or "")
@@ -974,6 +1086,7 @@ class _Run:
                 handoff=rel,
                 digest=digest,
                 cost=cost,
+                children=self._children,
                 detail=closing,
             )
             self.recorder.record(
@@ -1003,13 +1116,16 @@ class _Run:
                 handoff=rel,
                 digest=digest,
                 cost=cost,
+                children=self._children,
                 detail=closing,
             )
             self.recorder.record("step_finished", step, outcome="invalid", cost=usd)
             self._wait("invalid-output", reason, step, {rel: digest})
             return False
         if outcome.status == "paused":
-            self._history(step, iteration, "paused", started=started, cost=cost)
+            self._history(
+                step, iteration, "paused", started=started, cost=cost, children=self._children
+            )
             self.recorder.record("step_finished", step, outcome="paused", cost=usd)
             self.state.pending = Pending(
                 kind="approval",
@@ -1026,7 +1142,15 @@ class _Run:
             return False
         # stopped: budget, turns, time (the step's time limit), stuck
         reason = outcome.detail or f"the step stopped: {outcome.stopped}"
-        self._history(step, iteration, "stopped", started=started, cost=cost, detail=reason)
+        self._history(
+            step,
+            iteration,
+            "stopped",
+            started=started,
+            cost=cost,
+            children=self._children,
+            detail=reason,
+        )
         self.recorder.record("step_finished", step, outcome=f"stopped-{outcome.stopped}", cost=usd)
         self._pause(f"step-{outcome.stopped}", reason, step=step)
         return False
@@ -1141,6 +1265,7 @@ class _Run:
         digest: str | None = None,
         cost: Decimal = Decimal(0),
         detail: str = "",
+        children: dict[str, Decimal] | None = None,
     ) -> None:
         marks = self._marks if self._marks and self._marks[:2] == (step, iteration) else None
         self.state.history.append(
@@ -1154,11 +1279,20 @@ class _Run:
                 commit=marks[3] if marks else None,
                 sandbox=self.e.sandbox_label,  # per step: a resume may run elsewhere (I6)
                 cost_usd=str(cost),
+                children_usd={name: str(usd) for name, usd in (children or {}).items()},
                 started_at=started,
                 ended_at=self.e.clock.now(),
-                detail=detail,
+                detail=self.e.redact(detail),
             )
         )
+
+    def _usd(self, cost: Decimal) -> dict:
+        """The `cost` of a step_finished event: the step's spend and, when it spawned
+        children, each child's (M1-57)."""
+        usd: dict = {"usd": str(cost)}
+        if self._children:
+            usd["children"] = {name: str(v) for name, v in self._children.items()}
+        return usd
 
     def _close_slice(self, budget: BudgetSlice) -> str:
         try:
@@ -1180,7 +1314,11 @@ class _Run:
 
     def _pause(self, pause_id: str, reason: str, *, step: str | None = None) -> RunState:
         self.state.pending = Pending(
-            kind="pause", id=pause_id, reason=reason, since=self.e.clock.now(), step=step
+            kind="pause",
+            id=pause_id,
+            reason=self.e.redact(reason),
+            since=self.e.clock.now(),
+            step=step,
         )
         self.state.status = "paused"
         self.save()
@@ -1231,6 +1369,33 @@ def _unlock_file(handle) -> None:
         import fcntl
 
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _as_is(text: str) -> str:
+    return text
+
+
+def _same_person(who: str, starter: str) -> str | None:
+    return "you started this run" if who.lower() == starter.lower() else None
+
+
+def _budget_pause(
+    hit: LimitHit, budget: BudgetSlice | None = None, own: Decimal | None = None
+) -> str:
+    """`budget` when the run's limit is what stopped the step (more run budget helps),
+    `step-budget` when the agent's own limit is (it does not; spec §8.4). A step's slice
+    is carved as the smaller of its agent's limit and what the run has left, so a step
+    slice smaller than `own` was capped by the run."""
+    if hit.scope == "run":
+        return "budget"
+    capped = budget is not None and budget.limit_usd is not None
+    if capped and (own is None or budget.limit_usd < own):
+        return "budget"
+    return "step-budget"
+
+
+def _children(budget: BudgetSlice) -> dict[str, Decimal]:
+    return dict(budget.child_spend)
 
 
 def _name(agent: ResolvedAgent) -> str:

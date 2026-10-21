@@ -5,10 +5,14 @@ from collections.abc import Callable
 
 import typer
 
-from agentic_cli.commands import basics, init, login
+from agentic_cli.commands import basics, catalog, cost, gates, init, login, runs
 
 COMMANDS: list[Callable[[typer.Typer], None]] = [
     basics.register,
     init.register,
     login.register,
+    catalog.register,
+    runs.register,
+    gates.register,
+    cost.register,
 ]

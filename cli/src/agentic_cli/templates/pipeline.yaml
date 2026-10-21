@@ -1,0 +1,54 @@
+# =============================================================================
+# PIPELINE DEFINITION TEMPLATE
+# Who may change pipelines: only org admins and team leads.
+#   Org mode: pipelines live in the org policy repo, in pipelines/ (org admins)
+#   or teams/<team>/pipelines/ (that team's leads), and change only through a
+#   pull request approved by them. Developers and repo maintainers request
+#   changes. A locally edited pipeline will not run.
+#   Standalone mode (no org): copy to .agentic/pipelines/<name>.yaml.
+# Required: name, version and at least one step.
+# Optional settings and extra step examples are commented out with sample
+# values; to use one, delete the leading "# " and keep the indentation.
+# The value in [brackets] is what applies if you leave the setting out.
+# Steps run top to bottom. Every step id, gate name and loop id must be unique.
+# =============================================================================
+
+name: my-pipeline                         # required; lowercase-with-hyphens, unique in the repo
+version: 0.1.0                            # required; MAJOR.MINOR.PATCH
+# regime: team                            # solo | team | regulated: how strict gates are   [team]
+# max_minutes: 240                        # wall-clock limit; then the run pauses for a person   [no limit]
+# inputs:                                 # what a run starts from
+#   request: { from: [text, file, jira] }   # e.g. agentic run my-pipeline --from-jira PROJ-1
+
+steps:                                    # required; at least one step
+
+  # --- agent step: runs one agent ---------------------------------------------
+  - id: requirements                      # unique step name
+    agent: business-analyst               # agent file name, without .md
+
+  # - id: design
+  #   agent: design
+  #   when: "requirements.size != 'trivial'"   # run only if true; can use earlier handoffs   [always]
+
+  # --- gate step: pauses the run until a person approves or rejects ------------
+  # - gate: design-approval               # unique gate name
+  #   approver_role: team-lead            # role allowed to approve: team-lead | approver | repo-maintainer | org-admin
+  #   four_eyes: false                    # true = approver must not be the person who started the run   [false]
+  #   on_reject: design                   # step a rejection sends the work back to   [the agent step before the gate]
+
+  # --- loop step: repeats its steps until a condition holds ---------------------
+  # - loop:
+  #     id: build-review                  # unique loop name
+  #     max_iterations: 3                 # 1 or more; the loop never runs forever
+  #     until: "review.open_blocking == 0"   # stop as soon as this is true (checked after each pass)
+  #     on_exhausted: gate                # gate | fail: what happens if max_iterations is reached   [gate]
+  #     steps:                            # agent and action steps only (no gates, no nested loops)
+  #       - id: develop
+  #         agent: developer
+  #       - id: review
+  #         agent: code-review
+
+  # --- action step: a built-in action, no model call ----------------------------
+  # - id: publish
+  #   action: github.open_pr              # built-in action name (github.open_pr; more come later)
+  #   when: "review.open_blocking == 0"   # optional condition   [always]
