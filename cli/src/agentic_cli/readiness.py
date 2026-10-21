@@ -21,7 +21,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Literal
 
 from rich.console import Console
@@ -169,7 +169,8 @@ def _git_bash(which) -> Item:
     candidates.append(GIT_BASH_DEFAULT)
     found = next((str(path) for path in candidates if path.is_file()), None)
     on_path = which("bash")
-    launcher = bool(on_path) and Path(on_path).parent.name.lower() == "system32"
+    # a Windows path whatever OS checks it (tests run this check on Linux too)
+    launcher = bool(on_path) and PureWindowsPath(on_path).parent.name.lower() == "system32"
     if found is None and on_path and not launcher:
         found = on_path
     fix = (
