@@ -204,19 +204,26 @@ def pr_body(files: list[str], kept: list[str]) -> str:
 
 def first_commit_steps(default_branch: str, branch: str) -> dict[str, str]:
     """A repository with no commit yet has no base branch to open a pull request
-    against: the setup branch becomes its first commit (M1-70)."""
+    against: the setup branch becomes its first commit (M1-70, owner decision 65)."""
     return {
         "merge": f"git merge --ff-only {branch}",
         "push": f"git push -u origin {default_branch}",
     }
 
 
-def next_steps(origin: str | None, default_branch: str, branch: str) -> dict[str, str]:
-    steps = {"push": f"git push -u origin {branch}"}
+def next_steps(
+    origin: str | None, default_branch: str, branch: str, *, local: bool = False
+) -> dict[str, str]:
+    """How the branch reaches the default branch: push it and open a pull request; with
+    `local` (standalone, or no origin), merging it into this clone is offered as well."""
+    push = f"git push -u origin {branch}"
+    steps = {"push": push if origin else f"git remote add origin <url>, then {push}"}
     if origin and origin.startswith("github.com/"):
         steps["pull_request"] = f"https://{origin}/compare/{default_branch}...{branch}?expand=1"
     else:
         steps["pull_request"] = f"open a pull request from {branch} into {default_branch}"
+    if local or not origin:
+        steps["merge"] = f"git merge {branch}"
     return steps
 
 

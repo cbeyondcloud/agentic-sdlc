@@ -25,6 +25,17 @@ def agentic_home(env: Mapping[str, str] = os.environ, home: Path | None = None) 
     return (home or Path.home()) / ".agentic"
 
 
+def local_policy_setting(config: Mapping[str, Any]) -> str | None:
+    """The local policy folder the user config names: `policy`, or `policy_repo` when no
+    `org` is set. With an org, `policy_repo` is where init fetches the org policy from
+    (often a URL); later commands read init's cache instead (DF-274)."""
+    for key in ("policy",) if config.get("org") else ("policy", "policy_repo"):
+        value = str(config.get(key) or "").strip()
+        if value:
+            return value
+    return None
+
+
 def user_config(home: Path) -> dict[str, Any]:
     """The user config (`<home>/config.yaml`); empty when the file does not exist."""
     path = home / CONFIG_FILE

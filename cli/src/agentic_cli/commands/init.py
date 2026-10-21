@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich.markup import escape
 
 from agentic.hosting.git import push_branch
 from agentic.repoconfig import RepoConfig
@@ -20,6 +21,7 @@ from agentic_cli.hosting import connect
 from agentic_cli.output import Output
 from agentic_cli.policy_source import LoadedPolicy, resolve_policy
 from agentic_cli.repo_guard import check_repo
+from agentic_cli.workspace import recorded_policy, recorded_root
 
 
 def register(app: typer.Typer) -> None:
@@ -67,7 +69,12 @@ def register(app: typer.Typer) -> None:
                 ExitCode.USAGE,
                 hint="add --yes after reviewing the tools with a plain `agentic init`",
             )
-        loaded = resolve_policy(standalone=standalone, policy_path=policy, home=home, config=config)
+        recorded = None
+        if standalone and policy is None and (found := recorded_policy(Path.cwd())):
+            recorded = recorded_root(found, Path.cwd())  # what init chose last time
+        loaded = resolve_policy(
+            standalone=standalone, policy_path=policy, home=home, config=config, recorded=recorded
+        )
         try:
             if repo:
                 settings = config if open_pr else None
@@ -105,10 +112,11 @@ def _init_developer(
     )
     out.result(report.to_json(), report.show)
     if not report.ready:
+        missing = [item.name for item in report.items if item.status == "missing"]
         raise CliError(
-            "init finished, but this machine is not ready",
+            f"init finished, but agents cannot run until this is fixed: {', '.join(missing)}",
             ExitCode.ERROR,
-            hint="fix the items marked missing above, then run `agentic init` again",
+            hint="each item marked missing above says how to fix it; then run `agentic init` again",
         )
 
 
@@ -150,7 +158,9 @@ def _init_repo(
     if root.empty:
         steps = repo_setup.first_commit_steps(default, branch)
     else:
-        steps = repo_setup.next_steps(root.origin, default, branch)
+        steps = repo_setup.next_steps(
+            root.origin, default, branch, local=loaded.mode == "standalone"
+        )
     data = {"branch": branch, "commit": commit, "files": sorted(files), "kept": kept}
     data["next"] = steps
     failure: CliError | None = None
@@ -162,6 +172,8 @@ def _init_repo(
             f"request against: make {branch} its first commit"
         )
         data["pull_request"] = {"opened": False, "why": why}
+    elif root.origin is None:  # nothing to push to: the local merge is the way
+        data["pull_request"] = {"opened": False, "why": "no origin remote"}
     else:
         try:
             data["pull_request"] = _open_pull_request(root.path, branch, data, settings)
@@ -176,7 +188,9 @@ def _init_repo(
     pull = data["pull_request"]
 
     def show(console) -> None:
-        console.print(f"Prepared branch [bold]{branch}[/bold] ({commit[:12]}) with:")
+        console.print(
+            f"Prepared branch [bold]{escape(branch)}[/bold] ({commit[:12]}) with:", markup=True
+        )
         for path in sorted(files):
             console.print(f"  {path}", markup=False)
         for path in kept:
@@ -188,9 +202,16 @@ def _init_repo(
             return
         if root.empty:
             console.print(f"No pull request: {pull['why']}.", markup=False)
-        console.print("Next:")
-        for step in steps.values():
-            console.print(f"  {step}", markup=False)
+            console.print("Next:")
+            for step in steps.values():
+                console.print(f"  {step}", markup=False)
+            return
+        console.print("Next, to share it with your team:")
+        console.print(f"  {steps['push']}", markup=False)
+        console.print(f"  {steps['pull_request']}", markup=False)
+        if "merge" in steps:
+            console.print("Or, to use it in this clone only:")
+            console.print(f"  {steps['merge']}", markup=False)
 
     out.result(data, show)
     if failure is not None:

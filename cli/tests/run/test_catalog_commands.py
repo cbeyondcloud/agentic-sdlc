@@ -166,6 +166,19 @@ def test_agents_new_uses_the_org_type_template_when_there_is_one(workspace, poli
     assert "Org template body." in text and "name: scout" in text
 
 
+def test_agents_new_writes_nothing_from_a_broken_org_template(workspace, policy_repo, cli):
+    """A file that does not load would break every later command in the repo (DF-220)."""
+    write(
+        policy_repo / "templates" / "agents" / "analyst.md",
+        "---\nname: my-agent\ntype: analyst\nversion: not-a-version\nno_such_field: 1\n"
+        "---\nOrg template body.\n",
+    )
+    result = cli("agents", "new", "scout", "--type", "analyst")
+    assert result.code == ExitCode.INVALID, result.err
+    assert "templates" in result.err and "analyst.md" in result.err
+    assert not (workspace / ".agentic" / "agents" / "scout.md").exists()
+
+
 def test_agents_new_refuses_an_unknown_type_or_a_bad_name(workspace, cli):
     unknown = cli("agents", "new", "x", "--type", "wizard")
     assert unknown.code == ExitCode.INVALID and "analyst" in unknown.err
@@ -184,6 +197,16 @@ def test_pipelines_new_warns_when_org_policy_ignores_repo_pipelines(workspace, p
     write(policy_repo / "policy" / "org.yaml", "allow_repo_pipelines: false\n")
     result = cli("pipelines", "new", "my-flow")
     assert result.code == ExitCode.OK and "allow_repo_pipelines" in result.err
+
+
+def test_an_ignored_repo_pipeline_is_named_where_people_look(workspace, policy_repo, cli):
+    """`pipelines new` warns once; later a run of it says 'no pipeline named' unless the
+    reason is shown with it (DF-222 f)."""
+    write(policy_repo / "policy" / "org.yaml", "allow_repo_pipelines: false\n")
+    assert cli("pipelines", "new", "my-flow").code == ExitCode.OK
+    for args in (["pipelines", "list"], ["validate"], ["run", "my-flow", "--dry-run"]):
+        result = cli(*args)
+        assert "ignored repo pipeline my-flow.yaml" in result.err, (args, result.err)
 
 
 def test_policy_show(workspace, cli):

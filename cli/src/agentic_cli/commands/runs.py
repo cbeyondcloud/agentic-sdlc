@@ -9,7 +9,8 @@
     agentic logs <run> [--step ID] [--level LEVEL] [--follow]   (M1-47's command)
 
 `logs` shows the run's per-step logs, redacted once more on read. `--follow` keeps
-printing new records until the run stops running (`--json --follow`: JSON Lines).
+printing new records until the run stops running (`--json --follow`: JSON Lines), then
+exits with the run's exit code.
 
 A run that waits for a person exits 4, one stopped (or paused at a limit) exits 5, a
 dry run whose preflight fails exits 3 with the report.
@@ -25,12 +26,15 @@ import asyncio
 import time
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich import box
 
-from agentic.engine.state import RunState, RunStateError
+from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
+from agentic_cli.commands.catalog import show_definition_warnings
 from agentic_cli.driving import (
     drive,
     engine_errors,
@@ -65,7 +69,10 @@ def register(app: typer.Typer) -> None:
         """Run a pipeline (or show what it would do, with --dry-run)."""
         out: Output = ctx.obj
         given = _inputs(inputs or [])
+        if run_id is not None:
+            _check_run_id(run_id)  # before the workspace, preflight and gateway (DF-219)
         rt = Runtime(Workspace.load())
+        show_definition_warnings(out, rt.ws)
         if dry_run:
             report = rt.preflight(pipeline, live=False)
             plan = rt.plan(pipeline, report)
@@ -86,6 +93,8 @@ def register(app: typer.Typer) -> None:
             )
         engine = rt.engine(run_budget_usd=limit, regime=rt.pipeline(pipeline).regime)
         run_id = run_id or new_run_id(pipeline)
+        # a live run prints nothing until it stops: name it now, for a Ctrl-C (DF-221)
+        out.progress(f"started run {run_id} (if interrupted: agentic resume {run_id})")
         state = drive(
             rt.redact(gateway),
             rt.store.path(run_id).parent,
@@ -177,7 +186,10 @@ def register(app: typer.Typer) -> None:
         follow: Annotated[
             bool,
             typer.Option(
-                "--follow", "-f", help="Keep printing new records until the run stops running."
+                "--follow",
+                "-f",
+                help="Keep printing new records until the run stops running; then exit "
+                "with the run's exit code.",
             ),
         ] = False,
     ) -> None:
@@ -220,9 +232,11 @@ def _follow(
     The status is read BEFORE each poll: once a status read says the run stopped
     running, the poll after it has every record written before that, so the last
     records are never missed. A run whose process died stays `running`: Ctrl-C ends
-    the follow (exit 130)."""
+    the follow (exit 130). It exits with the run's own exit code, as `run` would (0
+    completed, 1 failed, 4 waiting for a person, 5 stopped; DF-285)."""
     while True:
-        status = _load(rt, run_id).status
+        state = _load(rt, run_id)
+        status = state.status
         for record in tail.poll(final=status != "running"):
             clean = redact_record(record, redact)
             out.stream(clean, render_logs([clean]))
@@ -231,6 +245,7 @@ def _follow(
         _sleep(FOLLOW_INTERVAL_S)
     if not out.json_mode:
         out.err.print(f"run {run_id} is {status}", markup=False)
+    raise typer.Exit(exit_code_for(state))
 
 
 def _inputs(pairs: list[str]) -> dict[str, str]:
@@ -253,6 +268,13 @@ def _usd(text: str | None, flag: str) -> Decimal | None:
     if not amount.is_finite() or amount < 0:
         raise CliError(f"{flag} is an amount in USD, not {text!r}", ExitCode.USAGE)
     return amount
+
+
+def _check_run_id(run_id: str) -> None:
+    try:
+        RunStore(Path(".")).path(run_id)  # the engine's own rule, without touching disk
+    except RunStateError as error:
+        raise CliError(f"--run-id: {error}", ExitCode.USAGE) from error
 
 
 def _load(rt: Runtime, run_id: str) -> RunState:
@@ -293,34 +315,46 @@ def _list(out: Output, rt: Runtime, *, show_all: bool, limit: int | None = None)
         }
         for s in states
     ]
+    out.result(rows, _show_runs(rows))
 
+
+WIDE_COLUMNS = 100  # below this the runs table drops pipeline and updated (DF-222 b)
+NARROW = ("run", "status", "waiting on", "cost USD")
+
+
+def _show_runs(rows: list[dict]):
     def show(console) -> None:
         if not rows:
             console.print("no runs", markup=False)
             return
-        table = output_table("run", "pipeline", "status", "waiting on", "updated", "cost USD")
+        # an 80-column terminal (macOS Terminal's default) cannot fit six columns beside
+        # a whole run id; the pipeline is in the run id already
+        wide = console.width >= WIDE_COLUMNS
+        columns = ["run", "pipeline", "status", "waiting on", "updated", "cost USD"]
+        table = output_table(*(columns if wide else [c for c in columns if c in NARROW]))
+        if not wide:  # no borders, one space between columns: whole words in each
+            table.box, table.show_edge, table.padding = box.SIMPLE_HEAD, False, (0, 1, 0, 0)
         for r in rows:
-            table.add_row(
-                r["run_id"],
-                r["pipeline"],
-                r["status"],
-                r["waiting_on"] or "",
-                r["updated_at"][:19],
-                r["cost_usd"],
-            )
+            cells = [r["run_id"], r["pipeline"], r["status"], r["waiting_on"] or ""]
+            cells += [r["updated_at"][:19], r["cost_usd"]]
+            table.add_row(*(cells if wide else [cells[0], cells[2], cells[3], cells[5]]))
         console.print(table)
 
-    out.result(rows, show)
+    return show
 
 
 def _show_plan(plan: dict):
+    def layer(name: str) -> str:  # a standalone policy repo is not an org (DF-286)
+        return "policy" if name == "org" and not plan.get("org") else name
+
     def agent_line(step: dict, indent: str) -> str:
         if not step.get("resolved"):
             return f"{indent}{step['id']}: agent {step['agent']} (does not resolve, see below)"
         limits = step["limits"]
         line = (
             f"{indent}{step['id']}: {step['agent']}@{step['version']} ({step['type']}, "
-            f"{step['layer']}) - tier {step['tier']} -> {step['model']} on {step['backend']}; "
+            f"{layer(step['layer'])}) - tier {step['tier']} -> {step['model']} on "
+            f"{step['backend']}; "
             f"budget ${limits['budget_usd']:g}, {limits['max_turns']} turns, "
             f"{limits['max_minutes']} min, {limits['children']} children"
         )
@@ -335,7 +369,7 @@ def _show_plan(plan: dict):
 
     def show(console) -> None:
         console.print(
-            f"plan for {plan['pipeline']} {plan['version']} ({plan['layer']}): "
+            f"plan for {plan['pipeline']} {plan['version']} ({layer(plan['layer'])}): "
             f"regime {plan['regime']}, sandbox {plan['sandbox']}, policy {plan['policy_version']}",
             markup=False,
         )

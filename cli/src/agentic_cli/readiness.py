@@ -66,10 +66,11 @@ class Report:
 
     def show(self, console: Console) -> None:
         head = "[green]ready[/green]" if self.ready else "[red]NOT ready[/red]"
-        console.print(f"Readiness: {head}")
+        console.print(f"Readiness: {head}", markup=True)
         for item in self.items:
             mark = _MARK.get(item.status, "[blue]info[/blue]")
-            console.print(f"  [{mark}] {item.name}: ", end="")
+            console.print(f"  \\[{mark}] ", end="", markup=True)
+            console.print(f"{item.name}: ", end="", markup=False)
             console.print(item.detail, markup=False)
             if item.fix and item.status != "ok":
                 for line in item.fix.splitlines():
@@ -137,7 +138,7 @@ def _sandbox(policy, which, run, system, kernel_release, tree) -> list[Item]:
     refusing = ", ".join(policy.sandbox.required_for) or "no"
     items = []
     for check in report.checks:
-        name = f"sandbox: {check.name}"
+        name = "sandbox" if check.name == "sandbox" else f"sandbox: {check.name}"
         if check.ok:
             items.append(Item(name, "ok", check.detail, check.fix))
         else:

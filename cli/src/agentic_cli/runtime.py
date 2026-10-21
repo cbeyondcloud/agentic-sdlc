@@ -344,6 +344,7 @@ class Runtime:
             "pipeline": pipeline.name,
             "version": pipeline.version,
             "layer": self.ws.definitions().pipeline_source(pipeline.name),
+            "org": self.ws.settings.get("org") or None,  # None: a standalone policy
             "regime": pipeline.regime,
             "max_minutes": pipeline.max_minutes,
             "policy_version": self.ws.policy().version,

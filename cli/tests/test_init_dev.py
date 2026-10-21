@@ -281,6 +281,31 @@ def test_install_missing_with_json_needs_yes(setup_repo, policy_repo, deps, monk
     assert (agentic_home() / "tools" / "helper" / "1.0.0" / LINUX / "helper").is_file()
 
 
+def test_an_installed_tool_not_on_path_says_how_to_add_it(
+    setup_repo, policy_repo, deps, monkeypatch, capsys
+):
+    """Tools land in ~/.agentic/tools, which nothing puts on PATH yet (DF-191): the
+    report says so, with the command for this machine's shell."""
+    init(setup_repo, policy_repo, monkeypatch, "--install-missing", "--yes")
+    helper = item(report_of(capsys), "tool: helper")
+    folder = agentic_home() / "tools" / "helper" / "1.0.0" / LINUX
+    assert helper["status"] == "warn" and "not on PATH" in helper["detail"]
+    assert str(folder) in helper["fix"] and "~/.zshrc" in helper["fix"]
+    capsys.readouterr()
+    init(setup_repo, policy_repo, monkeypatch)  # already installed: still said
+    assert item(report_of(capsys), "tool: helper")["status"] == "warn"
+
+
+def test_the_path_fix_names_the_shell_of_each_os(tmp_path):
+    from agentic_cli.dev_init import path_fix
+
+    folder = tmp_path / "with space" / "bin"
+    windows = path_fix(folder, "Windows")
+    assert "PowerShell" in windows and f";{folder}'" in windows and "'User')" in windows
+    mac = path_fix(folder, "Darwin")
+    assert "~/.zshrc" in mac and f'"{folder}' in mac
+
+
 def test_an_index_that_cannot_be_built_is_reported(
     setup_repo, policy_repo, deps, monkeypatch, capsys
 ):

@@ -1,5 +1,6 @@
 """Where a command's inputs come from: repository, policy repo, team, user (M1-54)."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -74,6 +75,78 @@ def test_an_org_user_never_falls_back_to_a_personal_policy(repo, tmp_path):
         ws.policy()
     assert caught.value.code == ExitCode.REFUSED
     assert "no org policy found" in str(caught.value) and "agentic init" in caught.value.hint
+
+
+def test_an_org_users_policy_repo_url_is_the_source_and_runs_read_the_cache(repo, tmp_path):
+    """The documented org config names the repo init clones from (a URL); later commands
+    read init's cache, never the URL as a folder (DF-274)."""
+    home = tmp_path / "home"
+    write(
+        home / "config.yaml",
+        "org: acme\npolicy_repo: https://github.com/acme/agentic-org-policy.git\n",
+    )
+    (home / "policy" / "acme" / "repo" / "policy").mkdir(parents=True)
+    assert Workspace.load(repo, env={}, home=home).policy_repo == home / "policy" / "acme" / "repo"
+
+
+def test_the_standalone_policy_setting_init_reads_is_read_here_too(repo, policy_repo, tmp_path):
+    """`policy:` is the key `init --standalone` reads; both keys name a local folder."""
+    home = tmp_path / "home"
+    write(home / "config.yaml", f"policy: {policy_repo.as_posix()}\n")
+    assert Workspace.load(repo, env={}, home=home).policy_repo == policy_repo
+
+
+def record_init(repo: Path, source: str, mode: str = "standalone") -> None:
+    write(
+        repo / ".agentic" / "local" / "init.json",
+        json.dumps({"mode": mode, "policy_source": source}),
+    )
+
+
+def test_the_policy_init_used_for_this_repo_is_remembered(repo, policy_repo, tmp_path):
+    home = tmp_path / "home"
+    (home / "policy" / "standalone" / "policy").mkdir(parents=True)
+    record_init(repo, str(policy_repo / "policy"))  # --policy may name the policy/ folder
+    assert Workspace.load(repo, env={}, home=home).policy_repo == policy_repo
+
+    other = tmp_path / "other"
+    env = {"AGENTIC_POLICY_REPO": str(other)}  # an explicit setting still wins
+    assert Workspace.load(repo, env=env, home=home).policy_repo == other
+
+
+def test_a_recorded_policy_inside_the_repository_is_ignored(repo, tmp_path):
+    """A repository could commit its own init.json pointing at its own files: the policy
+    must never come from the code it governs."""
+    home = tmp_path / "home"
+    (home / "policy" / "standalone" / "policy").mkdir(parents=True)
+    (repo / "evil" / "policy").mkdir(parents=True)
+    record_init(repo, str(repo / "evil"))
+    assert Workspace.load(repo, env={}, home=home).policy_repo == home / "policy" / "standalone"
+    record_init(repo, "evil")  # a relative path is ignored too
+    assert Workspace.load(repo, env={}, home=home).policy_repo == home / "policy" / "standalone"
+
+
+def test_a_recorded_policy_that_is_gone_is_refused_not_replaced(repo, tmp_path):
+    """A custom policy moved, deleted or on an unplugged drive must not be swapped for
+    the standalone template without a word: the person believes theirs applies."""
+    home = tmp_path / "home"
+    (home / "policy" / "standalone" / "policy").mkdir(parents=True)
+    gone = tmp_path / "my-strict-policy"
+    for recorded in (gone, gone / "policy"):
+        record_init(repo, str(recorded))
+        with pytest.raises(CliError) as caught:
+            Workspace.load(repo, env={}, home=home).policy()
+        assert caught.value.code == ExitCode.REFUSED
+        assert str(gone) in str(caught.value)
+        assert "agentic init --standalone --policy" in caught.value.hint
+    (gone / "policy").mkdir(parents=True)  # back again (the drive is plugged in)
+    assert Workspace.load(repo, env={}, home=home).policy_repo == gone
+
+
+def test_an_org_init_record_is_not_a_local_policy(repo, tmp_path):
+    home = tmp_path / "home"
+    record_init(repo, "https://github.com/acme/agentic-org-policy.git", mode="org")
+    assert Workspace.load(repo, env={}, home=home).policy_repo is None
 
 
 def test_no_policy_is_refused_with_a_hint(repo, tmp_path):

@@ -26,6 +26,7 @@ with M2-20.
 
 import json
 import os
+import platform as _platform
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -149,7 +150,7 @@ def run_dev_init(
     )
     items += _policy_items(loaded)
     if loaded.mode == "standalone":
-        items.append(_runs_policy(root.path, home, loaded.root))
+        items.append(_runs_policy(root.path, home, loaded.root, loaded.source))
     items += _skills(root.path, local, loaded, config, deps.roles, audit)
     tools = _Tools(home, policy, deps, audit)
     items += tools.required()
@@ -208,7 +209,11 @@ def _policy_items(loaded: LoadedPolicy) -> list[Item]:
     where = f"org {loaded.org}" if loaded.mode == "org" else f"standalone {loaded.source}"
     items = [Item("policy", "ok", f"{where} ({policy.version})")]
     for warning in loaded.warnings:
-        items.append(Item("policy: cache", "warn", warning, "reconnect and run init again"))
+        if loaded.mode == "org":
+            items.append(Item("policy: cache", "warn", warning, "reconnect and run init again"))
+        else:
+            fix = "restore it and run init again, or pass --policy <folder> to choose one"
+            items.append(Item("policy: standalone", "warn", warning, fix))
     for note in loaded.notes:
         items.append(Item(f"policy: {loaded.mode}", "info", note))
     placeholders = sorted(name for name, tier in policy.tiers.items() if PLACEHOLDER in tier.model)
@@ -236,9 +241,10 @@ def _policy_items(loaded: LoadedPolicy) -> list[Item]:
     return items
 
 
-def _runs_policy(repo: Path, home: Path, policy_root: Path) -> Item:
-    """Whether later commands in this repo (`agentic run`...) will use this policy."""
-    found = Workspace.load(repo, home=home).policy_repo
+def _runs_policy(repo: Path, home: Path, policy_root: Path, source: str) -> Item:
+    """Whether later commands in this repo (`agentic run`...) will use this policy, once
+    init has recorded `source` for the repo in init.json (DF-274)."""
+    found = Workspace.load(repo, home=home).policy_repo_with(Path(source))
     if found is not None and _same_folder(found, policy_root):
         return Item("policy: runs", "info", f"later commands use {policy_root}")
     using = f"use {found}" if found is not None else "find no policy"
@@ -385,8 +391,10 @@ class _Tools:
                 continue
             on_path = self.deps.which(pin.binary)
             cached = self.fetcher.cached(name, pin)
-            if on_path or cached:
-                items.append(Item(f"tool: {name}", "ok", str(on_path or cached)))
+            if on_path:
+                items.append(Item(f"tool: {name}", "ok", str(on_path)))
+            elif cached:
+                items.append(self._off_path(name, Path(cached)))
             elif self.fetcher.platform not in pin.assets:
                 detail = f"not installed; no artefact for {self.fetcher.platform}"
                 items.append(Item(f"tool: {name}", "info", detail))
@@ -421,8 +429,36 @@ class _Tools:
                 items.append(Item(f"tool: {name}", "info", "not installed (declined)"))
             return items
         for name, pin in pending:
-            items.append(_tool_item(name, pin, self.fetcher.fetch(name, pin), required=False))
+            result = self.fetcher.fetch(name, pin)
+            if result.ok and result.path is not None and not self.deps.which(pin.binary):
+                items.append(self._off_path(name, Path(result.path)))
+            else:
+                items.append(_tool_item(name, pin, result, required=False))
         return items
+
+    def _off_path(self, name: str, binary: Path) -> Item:
+        """An installed on-request tool that PATH does not reach (DF-191): agentic and
+        the sandbox look tools up on PATH, so the report says how to add its folder."""
+        system = self.deps.system if self.deps.system is not None else _platform.system()
+        detail = f"installed at {binary}, not on PATH"
+        return Item(f"tool: {name}", "warn", detail, path_fix(binary.parent, system))
+
+
+def path_fix(folder: Path, system: str) -> str:
+    """How to put `folder` on PATH for the person's shell, then open a new terminal."""
+    if system == "Windows":
+        quoted = str(folder).replace("'", "''")
+        return (
+            "add it to your user PATH in PowerShell, then open a new terminal:\n"
+            "[Environment]::SetEnvironmentVariable('Path', "
+            f"[Environment]::GetEnvironmentVariable('Path', 'User') + ';{quoted}', 'User')"
+        )
+    shown = str(folder).replace("'", "'\\''")  # inside the single-quoted echo argument
+    return (
+        "add it to PATH in your shell profile, then open a new terminal "
+        "(zsh on macOS: ~/.zshrc; bash: ~/.bashrc):\n"
+        f"echo 'export PATH=\"{shown}:$PATH\"' >> ~/.zshrc"
+    )
 
 
 _TOOL_FIXES = {
