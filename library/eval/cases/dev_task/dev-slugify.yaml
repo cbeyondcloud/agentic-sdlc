@@ -1,0 +1,16 @@
+id: dev-slugify
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    slugify() drops accented letters ("Crème" becomes "cr-me"). Make it turn accented
+    letters into their plain form, keeping the existing behaviour. Make the failing test
+    pass without breaking the others.
+  workspace: workspaces/dev-slugify
+expected:
+  tests:
+    fail_to_pass: [tests/test_textutil.py::test_slugify_strips_accents]
+    pass_to_pass: [tests/test_textutil.py::test_slugify_basic]
+tags: [python]

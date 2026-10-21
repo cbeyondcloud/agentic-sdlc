@@ -1,0 +1,27 @@
+id: qa-reset-limits
+agent: qa
+case_class: qa
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the password reset limits against their acceptance criteria. Criterion ids are
+    the requirement id and the criterion's position, e.g. REQ-1.2.
+  handoff_files:
+    requirements: golden/requirements/02-password-reset-rate-limit.md
+  handoffs:
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: Both limits added; refused requests return 429 for both limits.
+      files_changed: [auth/password_reset.py, auth/rate_limit.py]
+      tests_run: {passed: 377, failed: 0, skipped: 0}
+      ---
+      # Development report: reset limits
+
+      ## What changed
+      Per-account (3/hour) and per-address (20/hour) sliding windows. Both refusals
+      answer HTTP 429 "too many requests". No audit event is written yet.
+expected:
+  failing_criteria: [REQ-1.2, REQ-3.1]
+tags: [auth]

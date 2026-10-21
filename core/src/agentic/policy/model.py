@@ -34,6 +34,9 @@ class TierSpec(_Strict):
     model: str
     effort: str | None = None
     temperature: float | None = None
+    # The model's family for the eval judge rule (spike S10), when its id's prefix before
+    # '/' does not say it (a gateway alias, a team's own deployment).
+    family: str | None = None
 
 
 class ClassificationRule(_Strict):
@@ -150,6 +153,20 @@ class SandboxPolicy(_Strict):
         if problems:
             raise ValueError("; ".join(problems))
         return self
+
+
+class EvalPolicy(_Strict):
+    """Agent evaluation defaults (M1-63, spike S10); an A/B plan may set its own."""
+
+    repeats: int = Field(default=3, ge=1)  # runs per case per variant
+    # A/B guard: median cost per run B/A may rise by at most this fraction
+    max_cost_increase: float = Field(default=0.25, ge=0)
+    # Spend cap per eval or A/B in USD; at the cap the run stops as INCOMPLETE
+    budget_usd: float = Field(default=100, gt=0)
+    budget_usd_by_agent: dict[str, float] = {}  # e.g. a costlier QA or Developer agent
+
+    def budget_for(self, agent: str) -> float:
+        return self.budget_usd_by_agent.get(agent, self.budget_usd)
 
 
 class SecretScanPolicy(_Strict):
@@ -285,6 +302,7 @@ class OrgPolicy(_Strict):
     index_export_workflow: bool = False
     sandbox: SandboxPolicy = SandboxPolicy()  # D38
     secret_scan: SecretScanPolicy = SecretScanPolicy()  # M1-41
+    eval: EvalPolicy = EvalPolicy()  # M1-63
     # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
     # (`secret_scan`: the backend calls the model itself, past the framework's scanner)
     unhonoured: dict[

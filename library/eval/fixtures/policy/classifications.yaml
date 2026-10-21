@@ -1,0 +1,5 @@
+default_classification: internal
+classifications:
+  internal:
+    allowed_tiers: [balanced, eval-judge]
+    allowed_backends: [native]

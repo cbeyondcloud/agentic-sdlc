@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "The agentic command-line tool"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "agentic-core",
+    "agentic-core[eval]",
     "sdlc-commons",
     "rich>=15.0,<16",
     "typer==0.27.3",

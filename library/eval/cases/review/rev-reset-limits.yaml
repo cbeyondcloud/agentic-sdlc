@@ -1,0 +1,43 @@
+id: rev-reset-limits
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: Review this change, which rate limits password reset requests.
+  handoff_files:
+    requirements: golden/requirements/02-password-reset-rate-limit.md
+  diff: |
+    --- a/auth/password_reset.py
+    +++ b/auth/password_reset.py
+    @@ -1,11 +1,17 @@
+     from auth.rate_limit import SlidingWindow
+     from auth.users import find_user
+     from notifications.email import send_reset_email
+
+
+     def request_reset(cache, email, client_ip):
+    +    per_ip = SlidingWindow(cache, f"reset:ip:{client_ip}", limit=20, window_s=3600)
+    +    if not per_ip.allow():
+    +        return 429, {"error": "too many requests"}
+         user = find_user(email)
+         if user is None:
+    -        return 200, {"message": "If the account exists, we sent an email."}
+    +        return 404, {"error": "no such account"}
+    +    per_account = SlidingWindow(cache, f"reset:acct:{user.id}", limit=3, window_s=3600)
+    +    if not per_account.allow():
+    +        return 429, {"error": "too many reset emails for this account"}
+         send_reset_email(user)
+         return 200, {"message": "If the account exists, we sent an email."}
+expected:
+  golden: golden/review/02-password-reset-rate-limit.md
+  seeded_defects:
+    - file: auth/password_reset.py
+      lines: [12, 12]
+      category: security
+      note: a 404 for unknown emails reveals whether an account exists
+    - file: auth/password_reset.py
+      lines: [14, 15]
+      category: security
+      note: the per-account limit answers differently from success, which also reveals the account
+tags: [auth, security]

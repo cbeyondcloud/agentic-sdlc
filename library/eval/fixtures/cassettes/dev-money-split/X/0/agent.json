@@ -1,0 +1,15 @@
+{
+ "key": "dev-money-split/X/0/agent",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:a12872824bfcc384df666e6cc02b426e019d0668e8018481c9238e7177484e3f",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"agent-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: split_evenly() spreads the remainder one cent at a time over the first shares.\\ncommits: [\\\"e2f3a4b fix(money): keep the remainder when splitting\\\"]\\nfiles_changed: [money.py]\\ntests_run: {passed: 2, failed: 0, skipped: 0}\\ndeviations_from_design: []\\nopen_questions: []\\n---\\n# Development report: money split\\n\\n## Summary\\nThe remainder of the integer division is added one cent each to the first shares.\\n\\n## What changed\\n`money.py`: `split_evenly` uses `divmod` and adds 1 to the first `remainder` shares.\\n\\n## Tests run\\n2 passed, 0 failed.\\n\\n## Deviations from the design\\nNone.\\n\\n## Notes for review\\n`parts` of 0 still raises ZeroDivisionError, as before.\\n\\n## Open questions\\nNone.\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

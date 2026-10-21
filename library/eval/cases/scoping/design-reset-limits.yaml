@@ -1,0 +1,18 @@
+id: design-reset-limits
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: Design the password reset rate limits described in the approved requirements.
+  handoff_files:
+    requirements: golden/requirements/02-password-reset-rate-limit.md
+expected:
+  golden: golden/design/02-password-reset-rate-limit.md
+  key_points:
+    - sliding windows rather than fixed clock-hour windows
+    - identical responses and timing for existing and unknown accounts
+    - behaviour when the limit store is unavailable
+    - reuse of the existing limiter or cache
+rubric: design
+tags: [auth, security]

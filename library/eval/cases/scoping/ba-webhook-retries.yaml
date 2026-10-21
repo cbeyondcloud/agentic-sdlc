@@ -1,0 +1,18 @@
+id: ba-webhook-retries
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Integrators complain that they lose webhook events whenever their endpoint is down
+    for a few minutes, and they cannot see which events failed. Write the requirements.
+expected:
+  golden: golden/requirements/03-webhook-retries.md
+  key_points:
+    - temporary failures are retried with increasing delays for a bounded time
+    - permanent client errors are not retried
+    - integrators can list failed deliveries
+    - integrators can replay a failed delivery
+rubric: ba-requirements
+tags: [integrations]

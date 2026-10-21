@@ -1,0 +1,15 @@
+{
+ "key": "design-bulk-tagging/X/0/judge",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:07ef1d537d7a901884992a9e4097728c38e7b822fcf0a48a7481d6e21010ae22",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"judge-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_design-bulk-tagging_0\", \"type\": \"function\", \"function\": {\"name\": \"final_result\", \"arguments\": \"{\\\"scores\\\": [{\\\"criterion\\\": \\\"options\\\", \\\"score\\\": 1, \\\"evidence\\\": \\\"# Design: bulk tagging\\\"}, {\\\"criterion\\\": \\\"rationale\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Design: bulk tagging\\\"}, {\\\"criterion\\\": \\\"impact\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Design: bulk tagging\\\"}, {\\\"criterion\\\": \\\"risks\\\", \\\"score\\\": 0, \\\"evidence\\\": \\\"\\\"}, {\\\"criterion\\\": \\\"coverage\\\", \\\"score\\\": 1, \\\"evidence\\\": \\\"# Design: bulk tagging\\\"}]}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

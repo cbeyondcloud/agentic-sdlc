@@ -1,0 +1,227 @@
+"""Judges (M1-63, spike S10): pointwise rubric with evidence, pairwise with position swap,
+and judge resolution from the admin-mapped `eval-judge` tier. No real model is called."""
+
+import asyncio
+import json
+from pathlib import Path
+
+import pytest
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
+from pydantic_ai.models.function import AgentInfo, FunctionModel
+
+from agentic.eval.blind import LeakCheck
+from agentic.eval.judge import (
+    JUDGE_TIER,
+    JudgeError,
+    PairwiseJudge,
+    Rubric,
+    RubricJudge,
+    load_rubric,
+    model_family,
+    resolve_judge,
+)
+from agentic.policy import OrgPolicy
+
+RUBRIC = {
+    "id": "ba-requirements",
+    "version": 1,
+    "kind": "requirements",
+    "instructions": "Grade the requirements handoff.",
+    "criteria": [
+        {"id": c, "title": c.title(), "anchors": {0: "absent", 1: "partial", 2: "complete"}}
+        for c in ("problem", "criteria", "testability", "scope", "consistency")
+    ],
+}
+OUTPUT = "## Requirements\nREQ-1: users export invoices as CSV.\nOut of scope: PDF.\n"
+
+
+def last_user_text(messages: list[ModelMessage]) -> str:
+    parts = [p for m in messages for p in m.parts if getattr(p, "part_kind", "") == "user-prompt"]
+    return str(parts[-1].content)
+
+
+def rubric_judge(scores: dict[str, int], evidence: str | dict[str, str], log: list):
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        log.append({"prompt": last_user_text(messages), "settings": info.model_settings})
+        quotes = evidence if isinstance(evidence, dict) else dict.fromkeys(scores, evidence)
+        args = {
+            "scores": [
+                {"criterion": c, "score": s, "evidence": quotes[c]} for c, s in scores.items()
+            ]
+        }
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, args)])
+
+    return FunctionModel(answer)
+
+
+def test_rubric_loads_and_has_a_stable_hash(tmp_path: Path):
+    path = tmp_path / "ba.yaml"
+    path.write_text(json.dumps(RUBRIC), encoding="utf-8")  # JSON is YAML
+    rubric = load_rubric(path)
+    assert rubric.key == "ba-requirements@1" and rubric.max_score == 10
+    assert rubric.sha == Rubric.model_validate(RUBRIC).sha
+    changed = {**RUBRIC, "instructions": "Grade it harder."}
+    assert Rubric.model_validate(changed).sha != rubric.sha
+
+
+def test_rubric_shape_is_enforced():
+    with pytest.raises(ValueError, match="5 criteria"):
+        Rubric.model_validate({**RUBRIC, "criteria": RUBRIC["criteria"][:4]})
+    bad = [dict(c) for c in RUBRIC["criteria"]]
+    bad[0] = {**bad[0], "anchors": {0: "a", 2: "c"}}
+    with pytest.raises(ValueError, match="anchors 0, 1 and 2"):
+        Rubric.model_validate({**RUBRIC, "criteria": bad})
+
+
+def test_rubric_total_is_the_sum_with_evidence_at_temperature_zero():
+    log: list = []
+    scores = {"problem": 2, "criteria": 1, "testability": 1, "scope": 2, "consistency": 2}
+    model = rubric_judge(scores, "REQ-1: users export invoices as CSV.", log)
+    judge = RubricJudge(model, Rubric.model_validate(RUBRIC), model_id="family-b/judge-1")
+    result = asyncio.run(judge.score(OUTPUT, reference="golden text", key_points=["export as CSV"]))
+    assert result.total == 8
+    assert result.per_criterion["problem"] == 2 and result.reasks == 0
+    assert result.model_id == "family-b/judge-1" and result.rubric_key == "ba-requirements@1"
+    assert log[0]["settings"]["temperature"] == 0
+    prompt = log[0]["prompt"]
+    assert "golden text" in prompt and "export as CSV" in prompt and OUTPUT.strip() in prompt
+
+
+def test_a_quote_not_in_the_output_is_re_asked_once_then_unmeasurable():
+    log: list = []
+    scores = dict.fromkeys(("problem", "criteria", "testability", "scope", "consistency"), 2)
+    model = rubric_judge(scores, "a sentence the output never says", log)
+    judge = RubricJudge(model, Rubric.model_validate(RUBRIC), model_id="family-b/judge-1")
+    result = asyncio.run(judge.score(OUTPUT))
+    assert len(log) == 2  # the first answer and one re-ask
+    assert "verbatim" in log[1]["prompt"]
+    assert result.total is None  # unmeasurable, never a number
+    assert result.reasks == 1 and result.per_criterion["problem"] is None
+
+
+def test_a_zero_needs_no_quote():
+    log: list = []
+    scores = {"problem": 0, "criteria": 2, "testability": 2, "scope": 2, "consistency": 2}
+    quotes = dict.fromkeys(scores, "Out of scope: PDF.")
+    quotes["problem"] = ""
+    judge = RubricJudge(
+        rubric_judge(scores, quotes, log), Rubric.model_validate(RUBRIC), model_id="m/j"
+    )
+    assert asyncio.run(judge.score(OUTPUT)).total == 8
+
+
+def test_judge_inputs_pass_the_leak_check():
+    leaks = LeakCheck(["with-skill"])
+    scores = dict.fromkeys(("problem", "criteria", "testability", "scope", "consistency"), 0)
+    judge = RubricJudge(
+        rubric_judge(scores, "", []), Rubric.model_validate(RUBRIC), model_id="m/j", leaks=leaks
+    )
+    asyncio.run(judge.score("Made with-skill.\n" + OUTPUT))
+    assert leaks.leaks == ["with-skill"]
+
+
+def pairwise_model(choose):
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        prompt = last_user_text(messages)
+        first = prompt.split("<response_1>")[1].split("</response_1>")[0]
+        second = prompt.split("<response_2>")[1].split("</response_2>")[0]
+        winner = choose(first, second)
+        args = {"winner": winner, "reason": "because"}
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, args)])
+
+    return FunctionModel(answer)
+
+
+def test_a_position_biased_judge_gives_a_tie():
+    judge = PairwiseJudge(pairwise_model(lambda a, b: "1"), model_id="m/j")
+    result = asyncio.run(judge.compare("answer A", "answer B"))
+    assert result.score_b == 0.5 and not result.consistent
+
+
+def test_a_real_preference_survives_the_swap():
+    judge = PairwiseJudge(
+        pairwise_model(lambda a, b: "1" if "better" in a else "2"), model_id="m/j"
+    )
+    result = asyncio.run(judge.compare("plain", "better answer"))
+    assert result.score_b == 1.0 and result.consistent
+    tie = asyncio.run(
+        PairwiseJudge(pairwise_model(lambda a, b: "tie"), model_id="m/j").compare("a", "b")
+    )
+    assert tie.score_b == 0.5 and tie.consistent
+
+
+def policy(**tiers) -> OrgPolicy:
+    return OrgPolicy.model_validate(
+        {
+            "tiers": tiers,
+            "classifications": {
+                "internal": {"allowed_tiers": list(tiers), "allowed_backends": ["native"]},
+                "restricted": {"allowed_tiers": ["balanced"], "allowed_backends": ["native"]},
+            },
+            "default_classification": "internal",
+            "agent_types": {
+                "general": {
+                    "description": "x",
+                    "tier": "balanced",
+                    "backends": ["native"],
+                    "limits": {
+                        "max": {"budget_usd": 1, "max_turns": 1, "max_minutes": 1},
+                        "children_max": {
+                            "max_total": 0,
+                            "max_concurrent": 0,
+                            "max_depth": 0,
+                            "per_child": {"budget_usd": 0, "max_turns": 0, "max_minutes": 0},
+                        },
+                    },
+                }
+            },
+            "version": "sha256:" + "0" * 64,
+        }
+    )
+
+
+def test_model_family_is_the_vendor_prefix_unless_overridden():
+    assert model_family("Family-A/model-x") == "family-a"
+    assert model_family("bare-model") == "bare-model"
+    assert model_family("gateway/model-x", override="family-c") == "family-c"
+
+
+def test_judge_from_a_different_family():
+    org = policy(
+        balanced={"model": "family-a/m1"},
+        **{JUDGE_TIER: {"model": "family-b/judge"}},
+    )
+    choice = resolve_judge(org, ["family-a/m1"])
+    assert (choice.model, choice.family, choice.same_family) == (
+        "family-b/judge",
+        "family-b",
+        False,
+    )
+
+
+def test_same_family_is_flagged():
+    org = policy(
+        balanced={"model": "router/m1", "family": "family-a"},
+        **{JUDGE_TIER: {"model": "family-a/judge"}},
+    )
+    assert resolve_judge(org, ["router/m1"]).same_family is True
+
+
+def test_missing_judge_tier_refused():
+    with pytest.raises(JudgeError, match="eval-judge"):
+        resolve_judge(policy(balanced={"model": "family-a/m1"}), ["family-a/m1"])
+
+
+def test_judge_tier_must_be_allowed_for_the_repo_class():
+    org = policy(balanced={"model": "family-a/m1"}, **{JUDGE_TIER: {"model": "family-b/j"}})
+    with pytest.raises(JudgeError, match="restricted"):
+        resolve_judge(org, ["family-a/m1"], classification="restricted")
+
+
+def test_no_classification_means_the_org_default_never_no_check():
+    """F6: leaving the classification out must not skip the data-classification gate."""
+    org = policy(balanced={"model": "family-a/m1"}, **{JUDGE_TIER: {"model": "family-b/j"}})
+    strict = org.model_copy(update={"default_classification": "restricted"})
+    with pytest.raises(JudgeError, match="restricted"):
+        resolve_judge(strict, ["family-a/m1"])
+    assert resolve_judge(org, ["family-a/m1"]).model == "family-b/j"

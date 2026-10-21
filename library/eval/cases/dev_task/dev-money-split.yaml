@@ -1,0 +1,15 @@
+id: dev-money-split
+agent: developer
+case_class: dev_task
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    split_evenly(1000, 3) loses a cent. Spread the remainder so the shares add up to the
+    total and differ by at most one cent. Make the failing test pass.
+  workspace: workspaces/dev-money-split
+expected:
+  tests:
+    fail_to_pass: [tests/test_money.py::test_remainder_is_not_lost]
+    pass_to_pass: [tests/test_money.py::test_even_split]
+tags: [python]

@@ -28,6 +28,10 @@ skills = ["skills-ref==0.1.1"]
 # Telemetry (M1-43): the OpenTelemetry SDK, so spans are recorded and exported. Without it
 # the API alone (a core dependency) makes every span a no-op. Pure Python, Apache-2.0.
 telemetry = ["opentelemetry-sdk==1.45.1"]
+# Agent evaluation (M1-63, spike S10): pydantic-evals runs cases, repeats and evaluators
+# under our own blinding, judging and statistics (agentic.eval). Pure Python, MIT; the same
+# release as pydantic-ai, and its other dependencies are already locked.
+eval = ["pydantic-evals==2.54.0"]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]

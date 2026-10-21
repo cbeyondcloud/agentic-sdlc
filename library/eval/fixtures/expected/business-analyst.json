@@ -1,0 +1,390 @@
+{
+  "agent": "business-analyst",
+  "agent_version": "0.1.0",
+  "aggregates": {
+    "X": {
+      "cost_usd": {
+        "ci_high": 0.003675,
+        "ci_low": 0.0021,
+        "median": 0.0021,
+        "n_scored": 4,
+        "unscored": [],
+        "value": 0.0026249999999999997
+      },
+      "rubric": {
+        "ci_high": 9.5,
+        "ci_low": 7.5,
+        "median": 8.5,
+        "n_scored": 4,
+        "unscored": [],
+        "value": 8.5
+      },
+      "schema_valid": {
+        "ci_high": 1.0,
+        "ci_low": 1.0,
+        "median": 1.0,
+        "n_scored": 4,
+        "unscored": [],
+        "value": 1.0
+      },
+      "tokens": {
+        "ci_high": 2450.0,
+        "ci_low": 1400.0,
+        "median": 1400.0,
+        "n_scored": 4,
+        "unscored": [],
+        "value": 1750.0
+      }
+    }
+  },
+  "budget_hit": false,
+  "budget_usd": 5.0,
+  "cases": [
+    "ba-bulk-tagging",
+    "ba-invoice-export",
+    "ba-reset-limits",
+    "ba-webhook-retries"
+  ],
+  "corpus_manifest_sha": "sha256:e06ee048dc597ae36e27fb0b0b6cace0e34547bae33ca121cc524d5323ac9bc0",
+  "cost_total_usd": 0.021,
+  "cost_unmeasured_runs": 0,
+  "judge": {
+    "family": "family-b",
+    "model": "family-b/judge-model",
+    "rubrics": {
+      "ba-requirements@1": "sha256:ad0e2f6d3db9c1a4509ab02327f687ab9b5c5aeafb0b1adedd95b1d64bcec10b"
+    },
+    "same_family": false,
+    "tier": "eval-judge"
+  },
+  "judge_cost_usd": 0.0168,
+  "k": 2,
+  "kind": "requirements",
+  "labels": {
+    "X": "business-analyst@0.1.0"
+  },
+  "leaks": [],
+  "mode": "replay",
+  "model_changed": false,
+  "model_ids": [
+    "agent-model"
+  ],
+  "problems": [],
+  "runs": [
+    {
+      "case_id": "ba-bulk-tagging",
+      "cost_estimated": false,
+      "cost_usd": 0.0042,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "acceptance": 2,
+          "consistency": 2,
+          "coverage": 1,
+          "problem": 1,
+          "scope": 1
+        },
+        "reasks": 0,
+        "rubric_key": "ba-requirements@1",
+        "rubric_sha": "sha256:ad0e2f6d3db9c1a4509ab02327f687ab9b5c5aeafb0b1adedd95b1d64bcec10b"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0042,
+        "rubric": 7.0,
+        "schema_valid": 1.0,
+        "tokens": 2800.0
+      },
+      "model_ids": [
+        "agent-model",
+        "agent-model"
+      ],
+      "output_sha": "sha256:7a63e235416de177b17eb7370cc96a605ec2872909b0f409b2a63a30a225d8b0",
+      "repeat": 0,
+      "requests": 2,
+      "run_id": "ba-bulk-tagging.X.0",
+      "status": "completed",
+      "tokens_in": 2000,
+      "tokens_out": 800
+    },
+    {
+      "case_id": "ba-bulk-tagging",
+      "cost_estimated": false,
+      "cost_usd": 0.0042,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "acceptance": 2,
+          "consistency": 2,
+          "coverage": 1,
+          "problem": 1,
+          "scope": 1
+        },
+        "reasks": 0,
+        "rubric_key": "ba-requirements@1",
+        "rubric_sha": "sha256:ad0e2f6d3db9c1a4509ab02327f687ab9b5c5aeafb0b1adedd95b1d64bcec10b"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0042,
+        "rubric": 7.0,
+        "schema_valid": 1.0,
+        "tokens": 2800.0
+      },
+      "model_ids": [
+        "agent-model",
+        "agent-model"
+      ],
+      "output_sha": "sha256:16fdb229cf0911ef4208b5e7799963b7d8ead158e55b4a5b7eb901de6fe8d088",
+      "repeat": 1,
+      "requests": 2,
+      "run_id": "ba-bulk-tagging.X.1",
+      "status": "completed",
+      "tokens_in": 2000,
+      "tokens_out": 800
+    },
+    {
+      "case_id": "ba-invoice-export",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "acceptance": 2,
+          "consistency": 2,
+          "coverage": 2,
+          "problem": 2,
+          "scope": 2
+        },
+        "reasks": 0,
+        "rubric_key": "ba-requirements@1",
+        "rubric_sha": "sha256:ad0e2f6d3db9c1a4509ab02327f687ab9b5c5aeafb0b1adedd95b1d64bcec10b"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 10.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:70740493dd817e476f55ac64976a676dc159f25a1343d86e8377593766480632",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "ba-invoice-export.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "ba-invoice-export",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "acceptance": 2,
+          "consistency": 2,
+          "coverage": 2,
+          "problem": 2,
+          "scope": 2
+        },
+        "reasks": 0,
+        "rubric_key": "ba-requirements@1",
+        "rubric_sha": "sha256:ad0e2f6d3db9c1a4509ab02327f687ab9b5c5aeafb0b1adedd95b1d64bcec10b"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 10.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:7e02688a3a6f0b288591013022e4db490bf939607a9971a3d841fd40ba2ce27b",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "ba-invoice-export.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "ba-reset-limits",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "acceptance": 2,
+          "consistency": 2,
+          "coverage": 2,
+          "problem": 2,
+          "scope": 1
+        },
+        "reasks": 0,
+        "rubric_key": "ba-requirements@1",
+        "rubric_sha": "sha256:ad0e2f6d3db9c1a4509ab02327f687ab9b5c5aeafb0b1adedd95b1d64bcec10b"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 9.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:46713632e1c5631865189205d89a2231bc6a10ca7398beae7631cacf58a10515",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "ba-reset-limits.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "ba-reset-limits",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "acceptance": 2,
+          "consistency": 2,
+          "coverage": 2,
+          "problem": 2,
+          "scope": 1
+        },
+        "reasks": 0,
+        "rubric_key": "ba-requirements@1",
+        "rubric_sha": "sha256:ad0e2f6d3db9c1a4509ab02327f687ab9b5c5aeafb0b1adedd95b1d64bcec10b"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 9.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:83063974041e8350b566de3373ab4ff3611433fea2213e0c174bee0d521fdc1d",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "ba-reset-limits.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "ba-webhook-retries",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "acceptance": 2,
+          "consistency": 1,
+          "coverage": 1,
+          "problem": 2,
+          "scope": 2
+        },
+        "reasks": 0,
+        "rubric_key": "ba-requirements@1",
+        "rubric_sha": "sha256:ad0e2f6d3db9c1a4509ab02327f687ab9b5c5aeafb0b1adedd95b1d64bcec10b"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 8.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:02410d6344fab80280c465b6f26997201d66db667c0de830fc4fac30b8704eab",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "ba-webhook-retries.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "ba-webhook-retries",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "acceptance": 2,
+          "consistency": 1,
+          "coverage": 1,
+          "problem": 2,
+          "scope": 2
+        },
+        "reasks": 0,
+        "rubric_key": "ba-requirements@1",
+        "rubric_sha": "sha256:ad0e2f6d3db9c1a4509ab02327f687ab9b5c5aeafb0b1adedd95b1d64bcec10b"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 8.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:8bdbd4044363fd7ba338e3ad2eb696257c9341bece057d76cf533f643641ef13",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "ba-webhook-retries.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    }
+  ],
+  "schema_version": 1,
+  "seed": 0,
+  "split": "all",
+  "stale_cassettes": 0,
+  "unscored_runs": [],
+  "verbosity_r": {
+    "X": 0.9113346345279643
+  },
+  "verdict": "MEASURED"
+}

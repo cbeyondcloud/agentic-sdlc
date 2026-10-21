@@ -1,0 +1,15 @@
+{
+ "key": "ba-reset-limits/X/1/judge",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:5097e85f203c55c3401fa2914890d02e10937aa808ede31184f0562626303c34",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"judge-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_ba-reset-limits_0\", \"type\": \"function\", \"function\": {\"name\": \"final_result\", \"arguments\": \"{\\\"scores\\\": [{\\\"criterion\\\": \\\"problem\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Requirements: rate limiting password resets\\\"}, {\\\"criterion\\\": \\\"acceptance\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Requirements: rate limiting password resets\\\"}, {\\\"criterion\\\": \\\"scope\\\", \\\"score\\\": 1, \\\"evidence\\\": \\\"# Requirements: rate limiting password resets\\\"}, {\\\"criterion\\\": \\\"coverage\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Requirements: rate limiting password resets\\\"}, {\\\"criterion\\\": \\\"consistency\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Requirements: rate limiting password resets\\\"}]}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

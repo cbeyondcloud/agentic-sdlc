@@ -1,0 +1,19 @@
+id: ba-invoice-export
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Finance asks: "We copy last month's invoices out of the invoice list by hand every
+    month to reconcile them. Can we get an export to CSV?" Write the requirements.
+expected:
+  golden: golden/requirements/01-invoice-csv-export.md
+  key_points:
+    - only finance users may export
+    - large months need a background job, not a synchronous request
+    - the file has a fixed, named column order
+    - a month with no invoices still gives a file with the header row
+    - the user is told when the file is ready, and the link expires
+rubric: ba-requirements
+tags: [billing]

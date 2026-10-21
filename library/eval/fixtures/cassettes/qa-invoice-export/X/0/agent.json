@@ -1,0 +1,15 @@
+{
+ "key": "qa-invoice-export/X/0/agent",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:ce251c6709c1f488b1b435058b27691120e0a9cca41efca4e36e3533b4474f00",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"agent-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: The export endpoint and file pass; the ready email is missing, so REQ-3.1 fails.\\nverdict: fail\\ntests: {passed: 201, failed: 0, skipped: 0}\\nacceptance_results:\\n  - {criterion_id: REQ-1.1, passed: true, evidence: \\\"the POST endpoint returns a job id\\\"}\\n  - {criterion_id: REQ-1.2, passed: true, evidence: \\\"role check test\\\"}\\n  - {criterion_id: REQ-2.1, passed: true, evidence: \\\"column order test\\\"}\\n  - {criterion_id: REQ-2.2, passed: true, evidence: \\\"empty month test\\\"}\\n  - {criterion_id: REQ-3.1, passed: false, evidence: \\\"no email is sent yet (deviation in the dev report)\\\"}\\n  - {criterion_id: REQ-3.2, passed: true, evidence: \\\"storage links expire by default\\\"}\\ndependency_scan: {blocked_licences: [], vulnerabilities: []}\\nopen_questions: []\\n---\\n# Test report: invoice export (part 1)\\n\\n## Summary\\nFive criteria pass; REQ-3.1 fails because no email is sent.\\n\\n## Verdict\\nFail.\\n\\n## Test results\\n201 passed, 0 failed, 0 skipped.\\n\\n## Acceptance criteria\\nREQ-3.1 fails; the others pass.\\n\\n## Dependency scan\\nNo new dependencies.\\n\\n## Open questions\\nNone.\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

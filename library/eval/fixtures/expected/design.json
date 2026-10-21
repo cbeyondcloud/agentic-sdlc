@@ -1,0 +1,388 @@
+{
+  "agent": "design",
+  "agent_version": "0.1.0",
+  "aggregates": {
+    "X": {
+      "cost_usd": {
+        "ci_high": 0.0021,
+        "ci_low": 0.0021,
+        "median": 0.0021,
+        "n_scored": 4,
+        "unscored": [],
+        "value": 0.0021
+      },
+      "rubric": {
+        "ci_high": 9.75,
+        "ci_low": 6.75,
+        "median": 9.0,
+        "n_scored": 4,
+        "unscored": [],
+        "value": 8.5
+      },
+      "schema_valid": {
+        "ci_high": 1.0,
+        "ci_low": 1.0,
+        "median": 1.0,
+        "n_scored": 4,
+        "unscored": [],
+        "value": 1.0
+      },
+      "tokens": {
+        "ci_high": 1400.0,
+        "ci_low": 1400.0,
+        "median": 1400.0,
+        "n_scored": 4,
+        "unscored": [],
+        "value": 1400.0
+      }
+    }
+  },
+  "budget_hit": false,
+  "budget_usd": 5.0,
+  "cases": [
+    "design-bulk-tagging",
+    "design-invoice-export",
+    "design-reset-limits",
+    "design-webhook-retries"
+  ],
+  "corpus_manifest_sha": "sha256:e06ee048dc597ae36e27fb0b0b6cace0e34547bae33ca121cc524d5323ac9bc0",
+  "cost_total_usd": 0.0168,
+  "cost_unmeasured_runs": 0,
+  "judge": {
+    "family": "family-b",
+    "model": "family-b/judge-model",
+    "rubrics": {
+      "design@1": "sha256:645a0efe3fcf5b54136875c1da4c2680245e9075474362852410c0fa82a87360"
+    },
+    "same_family": false,
+    "tier": "eval-judge"
+  },
+  "judge_cost_usd": 0.0168,
+  "k": 2,
+  "kind": "design",
+  "labels": {
+    "X": "design@0.1.0"
+  },
+  "leaks": [],
+  "mode": "replay",
+  "model_changed": false,
+  "model_ids": [
+    "agent-model"
+  ],
+  "problems": [],
+  "runs": [
+    {
+      "case_id": "design-bulk-tagging",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "coverage": 1,
+          "impact": 2,
+          "options": 1,
+          "rationale": 2,
+          "risks": 0
+        },
+        "reasks": 0,
+        "rubric_key": "design@1",
+        "rubric_sha": "sha256:645a0efe3fcf5b54136875c1da4c2680245e9075474362852410c0fa82a87360"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 6.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:4471ea2372a17313600c82742f1014a2d38536b7b705f7e80feeccf821a2bddc",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "design-bulk-tagging.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "design-bulk-tagging",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "coverage": 1,
+          "impact": 2,
+          "options": 1,
+          "rationale": 2,
+          "risks": 0
+        },
+        "reasks": 0,
+        "rubric_key": "design@1",
+        "rubric_sha": "sha256:645a0efe3fcf5b54136875c1da4c2680245e9075474362852410c0fa82a87360"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 6.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:9eb0325c6385ca483d471823cef60c21d236ee6f85af9712e670f9cd1d6c74b7",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "design-bulk-tagging.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "design-invoice-export",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "coverage": 2,
+          "impact": 2,
+          "options": 2,
+          "rationale": 2,
+          "risks": 2
+        },
+        "reasks": 0,
+        "rubric_key": "design@1",
+        "rubric_sha": "sha256:645a0efe3fcf5b54136875c1da4c2680245e9075474362852410c0fa82a87360"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 10.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:0d73b160f79e29e806b22a17ec01ef3858bba7943ec99af80825c8c2e56863a5",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "design-invoice-export.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "design-invoice-export",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "coverage": 2,
+          "impact": 2,
+          "options": 2,
+          "rationale": 2,
+          "risks": 2
+        },
+        "reasks": 0,
+        "rubric_key": "design@1",
+        "rubric_sha": "sha256:645a0efe3fcf5b54136875c1da4c2680245e9075474362852410c0fa82a87360"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 10.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:4a6bb12310ffd264834db108d754df673bf38c60428f42fd17169c45be25ea0c",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "design-invoice-export.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "design-reset-limits",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "coverage": 2,
+          "impact": 2,
+          "options": 1,
+          "rationale": 2,
+          "risks": 2
+        },
+        "reasks": 0,
+        "rubric_key": "design@1",
+        "rubric_sha": "sha256:645a0efe3fcf5b54136875c1da4c2680245e9075474362852410c0fa82a87360"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 9.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:10b88f0a2047407e55a58e33ad3b6fc50ee0051a8b8b1836eddea267e0a4def5",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "design-reset-limits.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "design-reset-limits",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "coverage": 2,
+          "impact": 2,
+          "options": 1,
+          "rationale": 2,
+          "risks": 2
+        },
+        "reasks": 0,
+        "rubric_key": "design@1",
+        "rubric_sha": "sha256:645a0efe3fcf5b54136875c1da4c2680245e9075474362852410c0fa82a87360"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 9.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:a5625fcf54b721b1d6a72d1b1491f2f5adab01da8676d3014df842790b90cc31",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "design-reset-limits.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "design-webhook-retries",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "coverage": 2,
+          "impact": 2,
+          "options": 2,
+          "rationale": 2,
+          "risks": 1
+        },
+        "reasks": 0,
+        "rubric_key": "design@1",
+        "rubric_sha": "sha256:645a0efe3fcf5b54136875c1da4c2680245e9075474362852410c0fa82a87360"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 9.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:745598c4f0acabdb4c23ebbc0c7efe7c3fa58b12af226b9c8bbb490614f37fcc",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "design-webhook-retries.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "design-webhook-retries",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": {
+        "model_id": "family-b/judge-model",
+        "per_criterion": {
+          "coverage": 2,
+          "impact": 2,
+          "options": 2,
+          "rationale": 2,
+          "risks": 1
+        },
+        "reasks": 0,
+        "rubric_key": "design@1",
+        "rubric_sha": "sha256:645a0efe3fcf5b54136875c1da4c2680245e9075474362852410c0fa82a87360"
+      },
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "rubric": 9.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:d05aed6dbc8c2ca110028874f7e0228776b7280fb0f9d86b59553a9d7445844e",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "design-webhook-retries.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    }
+  ],
+  "schema_version": 1,
+  "seed": 0,
+  "split": "all",
+  "stale_cassettes": 0,
+  "unscored_runs": [],
+  "verbosity_r": {
+    "X": 0.9957929668850208
+  },
+  "verdict": "MEASURED"
+}

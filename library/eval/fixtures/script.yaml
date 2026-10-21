@@ -1,0 +1,36 @@
+# What the scripted upstream answers when the fixture cassettes are recorded
+# (scripts/record_eval_fixtures.py). No model is involved: these are hand-written
+# answers, so fixture mode tests the harness's plumbing and metric code, not quality.
+#
+# answers: case id -> the agent's answer per call, in order (a second entry is the answer
+#          to the contract's retry message); paths relative to library/eval/.
+# judge:   case id -> rubric criterion scores (missing criteria score 2).
+# cost_usd: what each recorded call reports in x-tokenlean-cost-usd.
+cost_usd: "0.0021"
+answers:
+  ba-invoice-export: [golden/requirements/01-invoice-csv-export.md]
+  ba-reset-limits: [golden/requirements/02-password-reset-rate-limit.md]
+  ba-webhook-retries: [golden/requirements/03-webhook-retries.md]
+  ba-bulk-tagging: [fixtures/answers/ba-bulk-tagging-invalid.md, fixtures/answers/ba-bulk-tagging.md]
+  design-invoice-export: [golden/design/01-invoice-csv-export.md]
+  design-reset-limits: [golden/design/02-password-reset-rate-limit.md]
+  design-webhook-retries: [golden/design/03-webhook-retries.md]
+  design-bulk-tagging: [fixtures/answers/design-bulk-tagging.md]
+  rev-invoice-export: [golden/review/01-invoice-csv-export.md]
+  rev-reset-limits: [golden/review/02-password-reset-rate-limit.md]
+  rev-webhook-retries: [golden/review/03-webhook-retries.md]
+  rev-discount-rounding: [fixtures/answers/rev-discount-rounding.md]
+  qa-webhook-retries: [golden/test-report/03-webhook-retries.md]
+  qa-invoice-export: [fixtures/answers/qa-invoice-export.md]
+  qa-reset-limits: [fixtures/answers/qa-reset-limits.md]
+  dev-slugify: [fixtures/answers/dev-slugify.md]
+  dev-money-split: [fixtures/answers/dev-money-split.md]
+judge:
+  ba-invoice-export: {}
+  ba-reset-limits: {scope: 1}
+  ba-webhook-retries: {consistency: 1, coverage: 1}
+  ba-bulk-tagging: {problem: 1, scope: 1, coverage: 1}
+  design-invoice-export: {}
+  design-reset-limits: {options: 1}
+  design-webhook-retries: {risks: 1}
+  design-bulk-tagging: {options: 1, risks: 0, coverage: 1}
