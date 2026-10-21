@@ -44,6 +44,7 @@ from agentic.eval import stats
 from agentic.eval.blind import LeakCheck, Scrubber, assign_labels
 from agentic.eval.cases import EvalCase
 from agentic.eval.corpus import CorpusError, load_corpus, rubric_path
+from agentic.eval.gate import GATE_AGENTS, GateReport, evaluate_gate, render_gate
 from agentic.eval.judge import (
     JUDGE_TIER,
     JudgeError,
@@ -458,6 +459,51 @@ class EvalLedger:
                 raise ValueError(f"unknown eval event {event!r}")
         except LedgerError as error:
             raise CliError(f"the eval ledger refused {event}: {error}", ExitCode.ERROR) from error
+
+
+# ── the quality gate (M1-64) ──────────────────────────────────────────────────
+
+
+def run_gate(
+    report_dirs: list[Path],
+    *,
+    policy: Path | None = None,
+    agents: list[str] | None = None,
+    out: Path | None = None,
+) -> tuple[GateReport, Path]:
+    """Compare `eval run` reports with policy `eval.targets` (or the M1-64 defaults) and
+    write gate.json and gate.md."""
+    reports = [_report(folder) for folder in report_dirs]
+    targets = _load(lambda: load_policy(policy)).eval.targets if policy is not None else {}
+    gate = evaluate_gate(reports, targets=targets, agents=agents or list(GATE_AGENTS))
+    folder = out or Path(".agentic") / "local" / "eval" / f"gate-{datetime.now(UTC):%Y%m%dT%H%M%S}"
+    _write(folder / "gate.json", json.dumps(gate.model_dump(mode="json"), indent=2) + "\n")
+    _write(folder / "gate.md", render_gate(gate))
+    return gate, folder
+
+
+def gate_failure(gate: GateReport, folder: Path) -> CliError | None:
+    if gate.verdict == "NOT_A_GATE":
+        return CliError(
+            f"these reports cannot decide the gate: {gate.problems[0]}",
+            ExitCode.INVALID,
+            hint="gate on live `eval run` reports of the whole holdout split, one per agent",
+        )
+    if gate.verdict == "FAIL":
+        missed = [f"{r.agent} {r.metric}" for r in gate.rows if r.verdict == "FAIL"]
+        return CliError(
+            f"the gate failed: {', '.join(missed)} missed their targets",
+            ExitCode.ERROR,
+            hint=f"see {folder / 'gate.md'}",
+        )
+    if gate.verdict == "INCOMPLETE":
+        unmeasured = [f"{r.agent} {r.metric}" for r in gate.rows if r.verdict == "NOT_MEASURED"]
+        return CliError(
+            f"the gate is incomplete: {', '.join(unmeasured)} not measured",
+            ExitCode.ERROR,
+            hint=f"see {folder / 'gate.md'}",
+        )
+    return None
 
 
 # ── human calibration ─────────────────────────────────────────────────────────

@@ -156,6 +156,21 @@ class SandboxPolicy(_Strict):
         return self
 
 
+class EvalTarget(_Strict):
+    """One gate target (M1-64): a report metric's value (or median) at least or at most."""
+
+    metric: str
+    statistic: Literal["value", "median"] = "value"
+    at_least: float | None = None
+    at_most: float | None = None
+
+    @model_validator(mode="after")
+    def one_bound(self) -> Self:
+        if (self.at_least is None) == (self.at_most is None):
+            raise ValueError(f"target {self.metric!r}: give exactly one of at_least or at_most")
+        return self
+
+
 class EvalPolicy(_Strict):
     """Agent evaluation defaults (M1-63, spike S10); an A/B plan may set its own."""
 
@@ -165,6 +180,9 @@ class EvalPolicy(_Strict):
     # Spend cap per eval or A/B in USD; at the cap the run stops as INCOMPLETE
     budget_usd: float = Field(default=100, gt=0)
     budget_usd_by_agent: dict[str, float] = {}  # e.g. a costlier QA or Developer agent
+    # The quality gate's targets by agent ('*': every agent); an agent named here replaces
+    # its defaults (agentic.eval.gate.DEFAULT_TARGETS, the M1-64 initial targets)
+    targets: dict[str, list[EvalTarget]] = {}
 
     def budget_for(self, agent: str) -> float:
         return self.budget_usd_by_agent.get(agent, self.budget_usd)

@@ -385,6 +385,44 @@ def test_live_calls_carry_the_users_team(tmp_path: Path, monkeypatch):
     assert seen and set(seen) == {"payments"}
 
 
+def test_eval_gate_compares_reports_with_targets(tmp_path: Path, capsys):
+    """DF-243 (gate half): `eval gate` writes gate.json/gate.md; fixture reports (replay, a
+    tag subset) are named as not a gate (exit 3), never passed."""
+    _, ba = run(tmp_path, "business-analyst")
+    _, qa = run(tmp_path, "qa")
+    capsys.readouterr()
+    out = tmp_path / "gate"
+    code = main(
+        [
+            "--json",
+            "eval",
+            "gate",
+            "--report",
+            str(ba),
+            "--report",
+            str(qa),
+            "--agent",
+            "business-analyst",
+            "--agent",
+            "qa",
+            "--out",
+            str(out),
+        ]
+    )
+    assert code == ExitCode.INVALID
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["verdict"] == "NOT_A_GATE"
+    gate = json.loads((out / "gate.json").read_text(encoding="utf-8"))
+    assert {r["agent"] for r in gate["rows"]} == {"business-analyst", "qa"}
+    assert any("live" in p for p in gate["problems"])
+    assert "Why this is not a gate" in (out / "gate.md").read_text(encoding="utf-8")
+
+
+def test_eval_gate_needs_a_report(tmp_path: Path, capsys):
+    assert main(["eval", "gate", "--report", str(tmp_path / "none")]) == ExitCode.INVALID
+    assert "report.json" in capsys.readouterr().err
+
+
 def test_a_rubric_id_cannot_leave_the_corpus(tmp_path: Path, capsys):
     """F1: `rubric: ../../outside` must neither read nor write outside the corpus."""
     corpus = corpus_copy(tmp_path / "t")

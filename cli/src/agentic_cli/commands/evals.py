@@ -4,6 +4,8 @@
                      [--mode live|record|replay] [--budget-usd N] [--out DIR]
                      [--policy DIR] [--agents DIR] [--cassettes DIR] [--gateway URL]
                      [--classification CLASS] [--tag TAG]
+    agentic eval gate --report DIR [--report DIR ...] [--agent NAME ...] [--policy DIR]
+                      [--out DIR]
     agentic eval calibrate export --report DIR [--out FILE]
     agentic eval calibrate score  --report DIR --scores FILE --scores FILE
 
@@ -12,6 +14,10 @@ voided the run, or nothing could be scored; 2 refused (no judge tier, a class wh
 tiers exclude the agent's or the judge's, no key, a judge that fails calibration); 3 an
 invalid corpus, policy or agent, or cases of mixed classes; 5 the budget cap stopped
 the run. The report is written (and shown) even when the exit code is not 0.
+
+`eval gate` exits 0 when every target is met, 1 when one is missed or not measured,
+and 3 when the reports cannot decide a gate (not live, not the whole holdout split, not
+MEASURED, mixed corpora); gate.json and gate.md are written either way.
 """
 
 from pathlib import Path
@@ -102,6 +108,29 @@ def register(app: typer.Typer) -> None:
         if (error := evaluation.failure(result)) is not None:
             raise error
 
+    @group.command("gate")
+    def gate(
+        ctx: typer.Context,
+        report: Annotated[
+            list[Path], typer.Option(help="A folder `eval run` wrote (once per agent).")
+        ],
+        agent: Annotated[
+            list[str] | None,
+            typer.Option(help="An agent the gate covers (default: the five built-in agents)."),
+        ] = None,
+        policy: Annotated[
+            Path | None, typer.Option(help="The org policy folder (its eval.targets).")
+        ] = None,
+        out: Annotated[Path | None, typer.Option(help="Where to write the gate report.")] = None,
+    ) -> None:
+        """Compare eval reports with the quality gate's targets (M1-64)."""
+        output: Output = ctx.obj
+        result, folder = evaluation.run_gate(report, policy=policy, agents=agent, out=out)
+        data = {**result.model_dump(mode="json"), "report": str(folder / "gate.json")}
+        output.result(data, lambda console: _show_gate(console, data))
+        if (error := evaluation.gate_failure(result, folder)) is not None:
+            raise error
+
     @calibrate.command("export")
     def export(
         ctx: typer.Context,
@@ -157,6 +186,17 @@ def _show_run(console, data: dict) -> None:
     if data["stale_cassettes"]:
         console.print(
             f"  {data['stale_cassettes']} stale cassettes: prompts changed; re-record soon",
+            markup=False,
+        )
+    console.print(f"report: {data['report']}", markup=False)
+
+
+def _show_gate(console, data: dict) -> None:
+    console.print(f"gate: {data['verdict']}", markup=False)
+    for row in data["rows"]:
+        value = "-" if row["value"] is None else f"{row['value']:.3f}"
+        console.print(
+            f"  {row['agent']} {row['metric']} {row['target']}: {value} {row['verdict']}",
             markup=False,
         )
     console.print(f"report: {data['report']}", markup=False)
