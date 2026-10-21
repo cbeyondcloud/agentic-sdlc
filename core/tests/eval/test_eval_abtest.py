@@ -73,6 +73,16 @@ def test_a_clear_win_promotes():
     assert result.bootstrap["ci_low"] > 0 and len(result.per_case_diffs) == 20
 
 
+def test_the_result_reports_the_spread_of_the_differences():
+    """DF-261: sigma_d lets the power tables be re-run from a live A/B."""
+    from statistics import stdev
+
+    a = per_case({c: 6.0 for c in CASES}, noise=0.5, seed=1)
+    b = per_case({c: 7.0 for c in CASES}, noise=0.5, seed=2)
+    result = decide(plan(), a, b, costs_a=COSTS, costs_b=COSTS, **JUDGED)
+    assert result.sigma_d == pytest.approx(stdev(result.per_case_diffs.values()))
+
+
 def test_noise_shows_no_benefit():
     a = per_case({c: 6.0 for c in CASES}, noise=1.0, seed=1)
     b = per_case({c: 6.0 for c in CASES}, noise=1.0, seed=2)

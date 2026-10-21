@@ -132,6 +132,60 @@ def pairwise_model(choose):
     return FunctionModel(answer)
 
 
+def test_long_outputs_are_cut_at_one_cap_for_every_variant():
+    """DF-261 (S10 verbosity check): length cannot buy score past the cap."""
+    from agentic.eval.judge import JUDGE_CHAR_CAP, cap_for_judge
+
+    long = "word " * JUDGE_CHAR_CAP
+    capped = cap_for_judge(long)
+    assert len(capped) < JUDGE_CHAR_CAP + 200 and "truncated" in capped
+    assert cap_for_judge("short") == "short"
+    seen: list[str] = []
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(last_user_text(messages))
+        return ModelResponse(
+            parts=[ToolCallPart(info.output_tools[0].name, {"winner": "tie", "reason": "r"})]
+        )
+
+    asyncio.run(PairwiseJudge(FunctionModel(answer), model_id="m/j").compare(long, long + "b"))
+    assert all(len(prompt) < 2 * JUDGE_CHAR_CAP + 1000 for prompt in seen)
+
+
+def test_the_rubric_evaluator_shows_the_judge_a_capped_output():
+    from _eval_support import REQUIREMENTS_ANSWER, scoping_case
+    from pydantic_evals.evaluators import EvaluatorContext
+
+    from agentic.eval.judge import JUDGE_CHAR_CAP
+    from agentic.eval.metrics import RubricMetric
+    from agentic.eval.records import RunRecord, RunRequest
+
+    class Judge:
+        async def score(self, output, **kwargs):
+            raise AssertionError(len(output))
+
+    case = scoping_case("c1")
+    answer = (
+        "---\nkind: requirements\nschema_version: 1\nrun_id: r\nstep: s\nagent: a@1\n"
+        "produced_at: 2026-10-21T10:00:00Z\n" + REQUIREMENTS_ANSWER.removeprefix("---\n")
+    )
+    record = RunRecord(status="completed", output=answer + "padding " * JUDGE_CHAR_CAP)
+    ctx = EvaluatorContext(
+        name="c1.X.0",
+        inputs=RunRequest(case, "X", 0, "requirements", "c1.X.0"),
+        metadata=None,
+        expected_output=None,
+        output=record,
+        duration=0.0,
+        _span_tree=None,
+        attributes={},
+        metrics={},
+    )
+    with pytest.raises(AssertionError) as raised:
+        asyncio.run(RubricMetric(judge_for=lambda request: Judge()).evaluate(ctx))
+    assert int(str(raised.value)) < JUDGE_CHAR_CAP + 200
+
+
 def test_a_position_biased_judge_gives_a_tie():
     judge = PairwiseJudge(pairwise_model(lambda a, b: "1"), model_id="m/j")
     result = asyncio.run(judge.compare("answer A", "answer B"))

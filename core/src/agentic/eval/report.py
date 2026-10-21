@@ -22,7 +22,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from pathlib import Path
-from statistics import fmean, median
+from statistics import fmean, median, stdev
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -96,6 +96,8 @@ class MetricAggregate(_Model):
     ci_high: float | None = None
     n_scored: int
     unscored: list[str]  # case ids this metric could not score
+    # SD across cases of the per-case value (mean, or rate): S10's sigma for the power tables
+    sigma_case: float | None = None
 
 
 class JudgeInfo(_Model):
@@ -411,6 +413,7 @@ def _mean(runs: list[EvalRun], cases: list[str], name: str, seed: int) -> Metric
         ci_high=boot.ci_high,
         n_scored=len(values),
         unscored=unscored,
+        sigma_case=stdev(values) if len(values) > 1 else None,
     )
 
 
@@ -434,12 +437,14 @@ def _ratio(
         boot = stats.cluster_bootstrap_ratio(pairs, seed=seed)
     except stats.Unmeasurable:
         return MetricAggregate(value=None, n_scored=0, unscored=unscored)
+    rates = [n / d for n, d in pairs if d]
     return MetricAggregate(
         value=boot.mean,
         ci_low=boot.ci_low,
         ci_high=boot.ci_high,
         n_scored=len(pairs),
         unscored=unscored,
+        sigma_case=stdev(rates) if len(rates) > 1 else None,
     )
 
 

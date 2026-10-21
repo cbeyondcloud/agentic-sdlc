@@ -40,7 +40,7 @@ from pydantic_evals.evaluators import Evaluator, EvaluatorContext
 
 from agentic.eval.blind import Scrubber
 from agentic.eval.cases import EvalCase, SeededDefect
-from agentic.eval.judge import RubricJudge
+from agentic.eval.judge import RubricJudge, cap_for_judge
 from agentic.eval.records import RunRecord, RunRequest
 from agentic.eval.validate import criteria_ids, parse_hunks
 from agentic.handoffs import BLOCK_ON_DEFAULT, Handoff, HandoffError, parse_handoff
@@ -269,7 +269,8 @@ class RubricMetric(Evaluator[RunRequest, RunRecord, None]):
             return {}
         if parse_document(record.output, ctx.inputs.kind) is None or record.status != "completed":
             return {"rubric": 0.0}  # an invalid document delivers nothing to grade
-        record.judged = self.scrubber.scrub(judge_view(record.output or ""))  # what it sees
+        # what it sees: no envelope, no model names, at most JUDGE_CHAR_CAP characters
+        record.judged = cap_for_judge(self.scrubber.scrub(judge_view(record.output or "")))
         record.judge_reference = self.reference(case)  # people calibrating see these too
         record.judge_key_points = list(case.expected.key_points)
         try:

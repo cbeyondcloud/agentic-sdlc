@@ -8,6 +8,7 @@
         "ci_low": 0.0021,
         "median": 0.0021,
         "n_scored": 4,
+        "sigma_case": 0.00105,
         "unscored": [],
         "value": 0.0026249999999999997
       },
@@ -16,6 +17,7 @@
         "ci_low": 7.5,
         "median": 8.5,
         "n_scored": 4,
+        "sigma_case": 1.2909944487358056,
         "unscored": [],
         "value": 8.5
       },
@@ -24,6 +26,7 @@
         "ci_low": 1.0,
         "median": 1.0,
         "n_scored": 4,
+        "sigma_case": 0.0,
         "unscored": [],
         "value": 1.0
       },
@@ -32,6 +35,7 @@
         "ci_low": 1400.0,
         "median": 1400.0,
         "n_scored": 4,
+        "sigma_case": 700.0,
         "unscored": [],
         "value": 1750.0
       }

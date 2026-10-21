@@ -51,6 +51,17 @@ CRITERIA = 5  # S10 rubric shape: 5 criteria x 0-2 = 10
 JUDGE_SETTINGS = {"temperature": 0.0}  # the default; the eval-judge tier may set its own
 MIN_EVIDENCE = 12  # characters of a quote, after collapsing whitespace
 UNKNOWN_FAMILY = "unknown"
+# S10 verbosity check: every output a judge sees is cut at the same length, so length
+# cannot buy score past it (about 6k tokens: far above a good handoff's length)
+JUDGE_CHAR_CAP = 24_000
+TRUNCATED = "\n[... truncated at {cap} characters: every output is cut at the same length]"
+
+
+def cap_for_judge(text: str, cap: int = JUDGE_CHAR_CAP) -> str:
+    """`text` cut at `cap` characters, with a note saying so."""
+    return text if len(text) <= cap else text[:cap] + TRUNCATED.format(cap=cap)
+
+
 JUDGE_INSTRUCTIONS = """\
 You are a strict, impartial grader of software delivery documents. You grade one \
 document against a rubric. Apply each criterion's anchors literally; do not reward \
@@ -284,7 +295,9 @@ class PairwiseJudge:
         )
 
     async def compare(self, a: str, b: str, *, reference: str | None = None) -> PairwiseResult:
-        """Judge (A, B) and (B, A); a win counts only if it survives the swap."""
+        """Judge (A, B) and (B, A); a win counts only if it survives the swap. Both are
+        cut at the same cap first (verbosity check)."""
+        a, b = cap_for_judge(a), cap_for_judge(b)
         first = await self._ask(a, b, reference)  # B shown second
         second = await self._ask(b, a, reference)  # B shown first
         b_when_second = {"1": 0.0, "2": 1.0, "tie": 0.5}[first]

@@ -3,7 +3,9 @@ verdict, JSON + Markdown, and the deterministic view CI compares."""
 
 import json
 from pathlib import Path
+from statistics import stdev
 
+import pytest
 from _eval_support import scoping_case
 
 from agentic.eval.records import RunRecord, RunRequest
@@ -56,6 +58,25 @@ def test_aggregates_average_repeats_within_a_case_first():
     assert report.aggregates["X"]["schema_valid"].value == (1.0 + 0.5) / 2
     assert report.verdict == "MEASURED"
     assert report.cases == ["c1", "c2"] and report.k == 2
+
+
+def test_each_aggregate_reports_the_spread_across_cases():
+    """DF-261: the per-case SD of every metric, for re-running the power tables."""
+    report = report_of(
+        [
+            run("c1", 0, {"rubric": 6.0}),
+            run("c1", 1, {"rubric": 8.0}),
+            run("c2", 0, {"rubric": 9.0}),
+            run("c3", 0, {"defects_caught": 1.0, "defects_total": 2.0, "defect_recall": 0.5}),
+            run("c4", 0, {"defects_caught": 2.0, "defects_total": 2.0, "defect_recall": 1.0}),
+        ]
+    )
+    rubric = report.aggregates["X"]["rubric"]
+    assert rubric.sigma_case == pytest.approx(stdev([7.0, 9.0]))  # of the case means
+    recall = report.aggregates["X"]["defect_recall"]
+    assert recall.sigma_case == pytest.approx(stdev([0.5, 1.0]))  # of the per-case rates
+    single = report_of([run("c1", 0, {"rubric": 6.0})])
+    assert single.aggregates["X"]["rubric"].sigma_case is None  # one case has no spread
 
 
 def test_ratio_metrics_are_pooled_over_defects():
