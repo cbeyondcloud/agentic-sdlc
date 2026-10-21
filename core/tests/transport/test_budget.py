@@ -340,3 +340,31 @@ def test_a_reservation_is_in_the_snapshot_at_once():  # SP6 review I5
     step.reserve(D("0.4"))  # the process may die while the call is in flight
 
     assert seen and seen[-1]["children"][0]["reserved"] == "0.4"
+
+
+# ── M1-81 hardening (DF-52) ──────────────────────────────────────────────────
+
+
+def test_close_children_keeps_their_spend_and_releases_their_hold():
+    """After a crash, a restored step's open children are closed before it runs again:
+    their spend stays, their whole limit is no longer held (DF-52)."""
+    ledger = BudgetLedger(Decimal("10"))
+    step = ledger.run.open("design-1", "step", Decimal("1"))
+    child = step.open("helper", "child", Decimal("0.8"))
+    spend(child, "0.1")
+    restored = BudgetLedger.restore(ledger.snapshot()).open_slice("design-1")
+    assert restored.available() == Decimal("0.2")
+
+    restored.close_children()
+
+    assert restored.available() == Decimal("0.9")
+    assert restored.child_spend == {"helper": Decimal("0.1")}
+
+
+def test_close_children_is_refused_while_a_call_is_in_flight():
+    step = BudgetLedger(None).run.open("design-1", "step", Decimal("1"))
+    step.open("helper", "child", Decimal("0.5")).reserve(Decimal("0.1"))
+
+    with pytest.raises(BudgetError, match="in flight"):
+        step.close_children()
+    assert len(step._open_children) == 1

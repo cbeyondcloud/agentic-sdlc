@@ -166,6 +166,7 @@ class PydanticAIRunner:
         self.contract = contract
         self.scanner = scanner or SecretScanner()
         self._invalid: tuple[str, list[str]] | None = None  # the last refused answer
+        self._refused = 0  # answers refused in this run: past OUTPUT_RETRIES it is invalid
         self.tools, self.is_child = list(tools), is_child
         self.stuck_check = stuck_check or detector_check(StuckDetector())
         self.run_id, self.policy_version = run_id, policy_version
@@ -253,7 +254,7 @@ class PydanticAIRunner:
         self, agent: Agent, prompt: str | None, instructions: str, **run_kwargs
     ) -> AgentOutcome:
         seen: dict = {"text": None, "run": None, "stuck": None}
-        self._invalid = None
+        self._invalid, self._refused = None, 0
         earlier_hit = self.costs.limit_hit  # a hit from an earlier run was already acted on
 
         async def go():
@@ -283,10 +284,12 @@ class PydanticAIRunner:
                 result = await asyncio.wait_for(go(), self.time_limit_s)
         except TimeoutError:
             return self._stopped("time", seen)
-        except UsageLimitExceeded:
-            return self._stopped("turns", seen)
+        except UsageLimitExceeded:  # after a refused answer: its errors say why (DF-37)
+            return self._stopped("turns", seen, refused=self._invalid)
         except UnexpectedModelBehavior:
-            if self._invalid is None:
+            # invalid only when the answers used up their retries: anything else (a
+            # tool's retry limit, an empty response) is the step's real failure (DF-36)
+            if self._invalid is None or self._refused <= OUTPUT_RETRIES:
                 raise
             text, errors = self._invalid
             return AgentOutcome(
@@ -338,6 +341,7 @@ class PydanticAIRunner:
                 document, errors = contract.check(output)
                 if errors:
                     self._invalid = (output, errors)
+                    self._refused += 1
                     raise ModelRetry(retry_message(errors))
                 return document
 
@@ -383,7 +387,15 @@ class PydanticAIRunner:
         turns = self.agent.limits.max_turns
         return UsageLimits(request_limit=turns) if turns else None
 
-    def _stopped(self, reason: Stopped, seen: dict, detail: str | None = None) -> AgentOutcome:
+    def _stopped(
+        self,
+        reason: Stopped,
+        seen: dict,
+        detail: str | None = None,
+        refused: tuple[str, list[str]] | None = None,
+    ) -> AgentOutcome:
+        """With `refused` (the last answer the contract refused), its errors go with the
+        outcome, so a gate can say why no handoff came out."""
         return AgentOutcome(
             status="stopped",
             output=seen["text"],
@@ -391,6 +403,7 @@ class PydanticAIRunner:
             usage=_usage(seen),
             costs=self.costs,
             detail=detail,
+            errors=list(refused[1]) if refused else [],
         )
 
     def _budget(self, hit: LimitHit, seen: dict) -> AgentOutcome:

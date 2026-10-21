@@ -21,6 +21,7 @@ from typing import Any
 
 from ruamel.yaml import YAML, YAMLError
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
+from ruamel.yaml.representer import SafeRepresenter
 
 Loc = tuple[str | int, ...]
 
@@ -58,6 +59,7 @@ def dump_yaml(data: Mapping[str, Any]) -> str:
     """Block-style YAML for documents the framework writes: keys in the given order,
     UTF-8 text kept, long lines never folded, LF line endings."""
     yaml = YAML(typ="safe", pure=True)
+    yaml.Representer = _Representer
     yaml.default_flow_style = False
     yaml.allow_unicode = True
     yaml.width = 4096
@@ -66,6 +68,19 @@ def dump_yaml(data: Mapping[str, Any]) -> str:
     out = io.StringIO()
     yaml.dump(dict(data), out)
     return out.getvalue()
+
+
+class _Representer(SafeRepresenter):
+    """Writes a string holding U+0085 double-quoted (as `\\N`): in a plain or single-quoted
+    scalar YAML reads it as a line break and folds it to a space (DF-40)."""
+
+    def represent_str(self, data: str):
+        if "\x85" in data:
+            return self.represent_scalar("tag:yaml.org,2002:str", data, style='"')
+        return super().represent_str(data)
+
+
+_Representer.add_representer(str, _Representer.represent_str)
 
 
 def split_front_matter(text: str) -> tuple[str, str]:

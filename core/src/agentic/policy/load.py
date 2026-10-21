@@ -125,7 +125,9 @@ def policy_version(root: Path) -> str:
 
     `git:<commit>` when the folder is inside a git repo with no uncommitted
     changes under it; otherwise `sha256:<digest>` of the policy files' names and
-    bytes, so two different policies never share a version.
+    text, so two different policies never share a version. Only the files
+    `load_policy` reads are hashed, as LF text without a byte-order mark: a Windows
+    checkout (CRLF, an editor's BOM) gets the version a Linux or macOS one gets (DF-02).
     """
     try:
         dirty = _git(root, "status", "--porcelain", "--", ".")
@@ -134,10 +136,14 @@ def policy_version(root: Path) -> str:
     except (OSError, subprocess.CalledProcessError):
         pass  # not a git repo, or git not installed
 
+    files = [p for p in _visible_entries(root) if p.is_file() and p.name in FILE_FIELDS]
+    files += [p for p in _visible_entries(root / "teams") if p.is_file() and p.suffix == ".yaml"]
     digest = hashlib.sha256()
-    for path in sorted(root.rglob("*.yaml")):
+    for path in sorted(files, key=lambda p: p.relative_to(root).as_posix()):
+        text = path.read_bytes().removeprefix(b"\xef\xbb\xbf")
+        text = text.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
         digest.update(path.relative_to(root).as_posix().encode() + b"\0")
-        digest.update(path.read_bytes() + b"\0")
+        digest.update(text + b"\0")
     return f"sha256:{digest.hexdigest()}"
 
 

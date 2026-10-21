@@ -182,3 +182,25 @@ def test_field_error_names_the_line(tmp_path: Path):
         load_agent(path)
 
     assert "temperature: Input should be less than or equal to 2 (line 6)" in str(error.value)
+
+
+# ── M1-81 hardening (DF-07) ──────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", ["Developer", "dev agent", "../x", "dev/x", "dev_x", "-dev", ""])
+def test_an_agent_name_is_a_lowercase_slug(tmp_path: Path, name: str):
+    """The name becomes a file name (state-<agent>.json, children/<agent>), a request
+    header and a ledger field: lower-case letters, digits and dashes only, so it is the
+    same file on a case-insensitive Windows or macOS disk as on Linux (DF-07)."""
+    path = write_agent(tmp_path, MINIMAL.replace("name: helper", f"name: '{name}'"))
+
+    with pytest.raises(DefinitionError) as error:
+        load_agent(path)
+
+    assert "name:" in str(error.value)
+
+
+def test_a_dashed_agent_name_with_digits_is_fine(tmp_path: Path):
+    path = write_agent(tmp_path, MINIMAL.replace("name: helper", "name: qa-baseline-2"))
+
+    assert load_agent(path).name == "qa-baseline-2"

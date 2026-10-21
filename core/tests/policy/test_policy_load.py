@@ -256,3 +256,39 @@ def test_team_limits_must_name_a_known_agent_type(policy_dir: Path):
         load_policy(policy_dir)
 
     assert "dev" in str(error.value)
+
+
+# ── M1-81 hardening (DF-02, DF-78) ───────────────────────────────────────────
+
+
+def test_policy_version_ignores_line_endings_and_bom(policy_dir: Path, tmp_path: Path):
+    """A Windows checkout (CRLF, an editor's BOM) gets the version a Linux or macOS
+    checkout gets, so audit records agree across machines (DF-02)."""
+    lf = load_policy(policy_dir).version
+    crlf = tmp_path / "crlf"
+    shutil.copytree(policy_dir, crlf)
+    for path in crlf.rglob("*.yaml"):
+        text = path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        path.write_bytes(b"\xef\xbb\xbf" + text)
+
+    assert load_policy(crlf).version == lf
+
+
+def test_policy_version_hashes_only_the_files_the_policy_is_read_from(policy_dir: Path):
+    """A hidden file is not read by load_policy, so it is not part of the version (DF-02)."""
+    before = load_policy(policy_dir).version
+    (policy_dir / ".draft.yaml").write_text("tiers: {}\n", encoding="utf-8")
+    (policy_dir / "teams" / ".old.yaml").write_text("x: 1\n", encoding="utf-8")
+
+    assert load_policy(policy_dir).version == before
+
+
+def test_a_misspelt_tier_effort_is_refused_at_load(policy_dir: Path):
+    """A typo in a tier's effort is caught when the policy loads, not at a model call
+    in the middle of a run (DF-78)."""
+    edit(policy_dir / "tiers.yaml", "effort: high", "effort: hgh")
+
+    with pytest.raises(PolicyError) as error:
+        load_policy(policy_dir)
+
+    assert "effort" in str(error.value)

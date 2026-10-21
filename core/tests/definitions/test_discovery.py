@@ -158,3 +158,35 @@ def test_a_kind_defined_by_the_team_can_be_produced(tmp_path: Path):
 
     found = DefinitionSet.discover(org=None, team=team, repo=repo)
     assert found.handoffs.schema("threat-model").title == "Threat model"
+
+
+# ── M1-81 hardening (DF-03) ──────────────────────────────────────────────────
+
+
+def test_an_agent_file_must_be_named_after_its_agent(tmp_path: Path):
+    """reviewer.md defining `name: developer` would silently replace developer.md (or the
+    org's developer) by sort order: refused, naming the file and both names (DF-03)."""
+    repo = make_layer(tmp_path / "repo", agents={"developer": "the developer"})
+    write(
+        repo / "agents" / "reviewer.md",
+        "---\nname: developer\ntype: general\nversion: 1.0.0\ndescription: copy\n---\nDo it.\n",
+    )
+
+    with pytest.raises(DefinitionError) as error:
+        DefinitionSet.discover(org=None, team=None, repo=repo)
+
+    assert error.value.path == repo / "agents" / "reviewer.md"
+    assert "reviewer.md defines agent 'developer'" in str(error.value)
+
+
+def test_an_agent_file_name_is_compared_exactly(tmp_path: Path):
+    """Developer.md for `name: developer` is a different file name on Linux CI than on a
+    Windows or macOS laptop, so the case must match too (DF-03)."""
+    repo = make_layer(tmp_path / "repo")
+    write(
+        repo / "agents" / "Developer.md",
+        "---\nname: developer\ntype: general\nversion: 1.0.0\ndescription: d\n---\nDo it.\n",
+    )
+
+    with pytest.raises(DefinitionError, match="defines agent 'developer'"):
+        DefinitionSet.discover(org=None, team=None, repo=repo)

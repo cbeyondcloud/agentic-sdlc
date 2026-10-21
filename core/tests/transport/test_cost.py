@@ -295,3 +295,64 @@ def test_ensure_stream_usage_replaces_a_broken_stream_options():
     fixed = ensure_stream_usage({"stream": True, "stream_options": "yes"})
 
     assert fixed["stream_options"] == {"include_usage": True}
+
+
+# ── M1-81 hardening (DF-20): tool-call streams and several choices ───────────
+
+
+def test_an_openai_stream_of_tool_call_chunks_is_priced_once_from_its_usage_chunk():
+    """Tool-call deltas carry no usage; only the closing usage chunk is priced, once."""
+    chunk = {"model": "gpt-5-mini", "choices": [{"delta": {"tool_calls": [{"index": 0}]}}]}
+    events = [
+        {**chunk, "usage": None},
+        {**chunk, "choices": [{"delta": {"tool_calls": [{"index": 0, "function": {}}]}}]},
+        {"model": "gpt-5-mini", "choices": [{"finish_reason": "tool_calls", "delta": {}}]},
+        {
+            "model": "gpt-5-mini",
+            "choices": [],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 40},
+        },
+    ]
+    usage = StreamUsage()
+    for event in events:
+        usage.observe(event)
+
+    cost = usage.result({}, price_for)
+
+    assert (cost.source, cost.tokens_in, cost.tokens_out) == ("estimated", 1000, 40)
+    assert cost.cost_usd == Decimal("0.00033")
+
+
+def test_an_anthropic_stream_with_tool_use_blocks_is_priced_from_its_closing_counts():
+    """content_block events of a tool call carry no usage; the message's counts decide."""
+    start = {
+        "type": "message_start",
+        "message": {"model": "claude-sonnet-5-5", "usage": {"input_tokens": 500}},
+    }
+    events = [
+        start,
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use"}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "usage": {"output_tokens": 60}},
+        {"type": "message_stop"},
+    ]
+
+    cost = anthropic_events(*events).result({}, price_for)
+
+    assert (cost.source, cost.tokens_in, cost.tokens_out) == ("estimated", 500, 60)
+    assert cost.cost_usd == Decimal("0.0024")
+
+
+def test_a_response_with_several_choices_is_priced_once_from_its_usage():
+    """`n > 1` returns several choices but one usage covering them all: one charge."""
+    body = {
+        "model": "gpt-5-mini",
+        "choices": [{"index": 0, "message": {}}, {"index": 1, "message": {}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 300},
+    }
+
+    cost = cost_from_response({}, body, price_for)
+
+    assert (cost.source, cost.tokens_in, cost.tokens_out) == ("estimated", 100, 300)
+    assert cost.cost_usd == Decimal("0.000625")

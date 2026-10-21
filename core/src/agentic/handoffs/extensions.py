@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, TypeAdapter, ValidationError, create_model
+from pydantic import AfterValidator, BaseModel, Field, TypeAdapter, ValidationError, create_model
 
 from agentic.definitions import DefinitionError
 from agentic.handoffs.finalise import FRAMEWORK_FIELDS
@@ -178,6 +178,10 @@ def _apply(schema: HandoffSchema, ext: HandoffExtension, problems: list[str]) ->
                 old = examples.get(spec.name)
                 if spec.values is not None and old not in spec.values:
                     examples[spec.name] = spec.values[0]  # the template stays valid
+        elif hasattr(schema.model, spec.name):  # failure(), a validator: the engine calls them
+            problems.append(
+                f"{spec.name}: clashes with a name the handoff model uses; choose another{where}"
+            )
         else:
             added = _add(spec, where, problems)
             if added is not None:
@@ -273,8 +277,16 @@ def _add(spec: FieldSpec, where: str, problems: list[str]):
         )
         return None
     if spec.required:
+        if spec.type == "string":  # a blank value says nothing (DF-33); no schema change
+            return (Annotated[str, AfterValidator(_not_blank)], ...)
         return (annotation, ...)
     return (annotation, []) if spec.type == "list" else (annotation | None, None)
+
+
+def _not_blank(value: str) -> str:
+    if not value.strip():
+        raise ValueError("a required value must not be blank")
+    return value
 
 
 # ── reading one file ─────────────────────────────────────────────────────────
@@ -285,6 +297,12 @@ def _field_spec(name, raw, layer, at, problems) -> FieldSpec | None:
         problems.append(
             f"{name}: a field name is lowercase letters, digits and underscores, "
             f"starting with a letter{at('fields', name)}"
+        )
+        return None
+    if name.startswith("model_") or hasattr(BaseModel, name):  # json, copy, model_dump (DF-31)
+        problems.append(
+            f"{name}: clashes with a name the handoff model uses; choose another"
+            f"{at('fields', name)}"
         )
         return None
     if not isinstance(raw, dict):
@@ -332,11 +350,20 @@ def _section(index, raw, layer, at, problems) -> Section | None:
     for key in sorted(set(raw) - _SECTION_KEYS):
         problems.append(f"sections[{index}].{key}: unexpected key{where}")
     heading, guidance = raw.get("heading"), raw.get("guidance")
-    if not (isinstance(heading, str) and 0 < len(heading.strip()) <= 80 and "#" not in heading):
-        problems.append(f"sections[{index}].heading: 1-80 characters, no '#'{where}")
+    # one line: a body line can never match a heading with a line break in it (DF-32)
+    if not (
+        isinstance(heading, str)
+        and 0 < len(heading.strip()) <= 80
+        and "#" not in heading
+        and len(heading.strip().splitlines()) == 1
+    ):
+        problems.append(f"sections[{index}].heading: 1-80 characters on one line, no '#'{where}")
         return None
     if not (isinstance(guidance, str) and guidance.strip()):
         problems.append(f"sections[{index}].guidance: say what the agent writes there{where}")
+        return None
+    if "-->" in guidance or "<!--" in guidance:  # it is rendered inside <!-- ... --> (DF-32)
+        problems.append(f"sections[{index}].guidance: may not contain '<!--' or '-->'{where}")
         return None
     return Section(heading.strip(), guidance.strip(), layer)
 

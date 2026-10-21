@@ -158,3 +158,44 @@ def test_a_contract_checks_block_on_and_clock_at_once():  # review M1
         HandoffContract(DESIGN, "r", "s", "a@1", block_on=frozenset(), clock=lambda: FIXED)
     with pytest.raises(ValueError, match="timezone"):
         HandoffContract(DESIGN, "r", "s", "a@1", clock=lambda: datetime(2026, 10, 19))
+
+
+# ── M1-81 hardening (DF-36, DF-37) ───────────────────────────────────────────
+
+
+def test_a_later_unrelated_failure_is_not_reported_as_an_invalid_answer(resolved, tmp_path):
+    """One refused answer, then the model breaks a tool's retry limit: that failure is
+    the step's real problem. Reporting `invalid` with the old text would send a person
+    to fix a document that is not the issue (DF-36)."""
+    from pydantic_ai import ModelRetry, Tool
+    from pydantic_ai.exceptions import UnexpectedModelBehavior
+
+    def flaky() -> str:
+        """Always asks to be called again."""
+        raise ModelRetry("try again")
+
+    calls = {"n": 0}
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[TextPart(PROSE)])
+        return ModelResponse(parts=[ToolCallPart("flaky", {}, tool_call_id=f"c{calls['n']}")])
+
+    r = runner(resolved, FunctionModel(respond), tmp_path, contract=CONTRACT, tools=[Tool(flaky)])
+
+    with pytest.raises(UnexpectedModelBehavior, match="flaky"):
+        run(r)
+
+
+def test_a_turn_limit_after_a_refused_answer_keeps_its_errors(resolved, tmp_path):
+    """With one turn, a refused answer cannot be retried: the run stops on its turn
+    limit, and the gate still says why the answer was refused (DF-37)."""
+    from agentic.definitions import Limits
+
+    one_turn = resolved.model_copy(update={"limits": Limits(max_turns=1)})
+    outcome = run(runner(one_turn, answers(PROSE, VALID), tmp_path, contract=CONTRACT))
+
+    assert (outcome.status, outcome.stopped) == ("stopped", "turns")
+    assert outcome.output == PROSE
+    assert outcome.errors and "must be one handoff document" in outcome.errors[0]

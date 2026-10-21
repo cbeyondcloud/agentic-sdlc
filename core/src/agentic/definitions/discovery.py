@@ -77,6 +77,14 @@ class DefinitionSet:
                 continue
             for path in _files(root / "agents", ".md"):
                 agent = load_agent(path)
+                if path.stem != agent.name:  # else it silently replaces <name>.md (DF-03)
+                    raise DefinitionError(
+                        path,
+                        [
+                            f"{path.name} defines agent '{agent.name}': name the file "
+                            f"{agent.name}.md, or set name: {path.stem}"
+                        ],
+                    )
                 found.agents[agent.name] = (agent, layer)
                 agent_files[agent.name] = path
             for path in _files(root / "handoffs", ".yaml"):

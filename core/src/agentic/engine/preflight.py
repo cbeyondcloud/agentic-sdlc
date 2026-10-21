@@ -22,6 +22,7 @@ from agentic.definitions import AgentStep, DefinitionSet, LoopStep, PipelineDefi
 from agentic.definitions.pipeline import ActionStep, GateStep
 from agentic.engine.expressions import ExpressionError, cel_name, compile_condition
 from agentic.handoffs.compat import CONDITIONAL, check_compatibility
+from agentic.handoffs.kinds import HandoffBase
 from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
 from agentic.policy.resolve import kind_violations
 from agentic.skills.loader import MAX_PRELOADED
@@ -174,6 +175,27 @@ def preflight(
                 Problem(step.id, "action", f"unknown action {step.action!r}", sorted(actions))
             )
 
+    made: list[str] = []  # every kind an agent step produces, in pipeline order
+    outside: list[tuple[int, AgentStep, str]] = []  # (position in `made`, step, kind)
+
+    def judging(step: AgentStep, kind: str) -> None:
+        """A step outside any loop whose handoff can report a failure (a review, a test
+        report) and that no later step replaces (a baseline test report is replaced by
+        QA's): nothing can send a failure back, so the run pauses at its end (DF-265)."""
+        schema = definitions.handoffs.schemas.get(kind)
+        if schema is None or getattr(schema.model, "failure", None) is HandoffBase.failure:
+            return
+        problems.append(
+            Problem(
+                step.id,
+                "judging-step",
+                f"its {kind} can report a failure, but the step is outside any loop: a "
+                f"failing {kind} cannot be routed back, so the run pauses failing-handoff "
+                "at its end (put the step in a loop whose `until` reads it)",
+                severity="warning",
+            )
+        )
+
     for step in pipeline.steps:
         if isinstance(step, AgentStep | ActionStep):
             if step.when:
@@ -181,6 +203,8 @@ def preflight(
             agent_step(step) if isinstance(step, AgentStep) else action_step(step)
             if isinstance(step, AgentStep) and (kind := produces(step)):
                 produced.add(kind)
+                outside.append((len(made), step, kind))
+                made.append(kind)
         elif isinstance(step, LoopStep):
             body_kinds: set[str] = set()
             for inner in step.loop.steps:
@@ -189,6 +213,7 @@ def preflight(
                 agent_step(inner) if isinstance(inner, AgentStep) else action_step(inner)
                 if isinstance(inner, AgentStep) and (kind := produces(inner)):
                     body_kinds.add(kind)
+                    made.append(kind)
             condition(step.loop.id, step.loop.until, produced | body_kinds)
             produced |= body_kinds
         elif isinstance(step, GateStep):
@@ -204,6 +229,10 @@ def preflight(
                         list(earlier_agent_steps),
                     )
                 )
+
+    for position, step, kind in outside:
+        if kind not in made[position + 1 :]:  # its handoff is the run's last word on `kind`
+            judging(step, kind)
 
     agents = {**{name: defn for name, (defn, _) in definitions.agents.items()}, **report.resolved}
     for v in check_compatibility(pipeline, agents):

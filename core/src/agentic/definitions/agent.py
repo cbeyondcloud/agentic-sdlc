@@ -25,6 +25,8 @@ from agentic.yamlio import YamlFileError, load_yaml, read_text, split_front_matt
 #   acp:<agent>     -> any Agent Client Protocol agent via one generic adapter (acp:antigravity)
 #   remote:<service> -> hosted agents such as Devin (submit / poll / collect)
 BACKEND_PATTERN = r"^(native|claude-code|codex|opencode|acp:.+|remote:.+)$"
+# An agent's name: lower-case letters, digits and dashes (DF-07).
+AGENT_NAME = r"^[a-z0-9][a-z0-9-]{0,63}$"
 
 
 class Limits(BaseModel):
@@ -78,7 +80,9 @@ class AgentDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # --- identity ---
-    name: str
+    # a file name (state-<agent>.json, children/<agent>), a header and a ledger field:
+    # lower case, so it is one file on case-insensitive disks too (Windows, macOS)
+    name: str = Field(pattern=AGENT_NAME)
     type: str = Field(pattern=r"^[a-z][a-z0-9-]*$")  # an agent type defined in org policy
     version: str
     owner: str | None = None
