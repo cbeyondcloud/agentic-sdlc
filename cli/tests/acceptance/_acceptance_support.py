@@ -281,6 +281,25 @@ class Scenario:
         git(repo, "remote", "set-url", "--push", "origin", str(self.bare))  # pushes go here
         self.monkeypatch.chdir(repo)
 
+    def init_standalone(self, repo: Path) -> dict:
+        """Set agentic up as spec §24 says, in standalone mode: the repo owner runs
+        `init --repo --standalone` (its pull request opened through the adapter) and the
+        PR is merged; the developer runs `init --standalone` (not ready: the template's
+        models are placeholders), names real models in their policy copy, and runs it
+        again (ready). Returns `init --repo`'s report."""
+        setup = self.ok("--json", "init", "--repo", "--standalone").json()
+        assert setup["pull_request"]["opened"] is True, setup
+        pull = self.github.pulls[-1]
+        assert pull["head"]["ref"] == setup["branch"] and ".agentic/config.yaml" in pull["body"]
+        self.merge_setup_pull_request(repo, setup["branch"])
+
+        first = self.ok("--json", "init", "--standalone", code=1).json()
+        models = [c for c in first["checks"] if c["name"] == "policy: models"]
+        assert models and models[0]["status"] == "missing", first
+        self.choose_models(without_sandbox=not sandbox_available())
+        self.ok("--json", "init", "--standalone")
+        return setup
+
     def merge_setup_pull_request(self, repo: Path, branch: str) -> None:
         """A person reviews and merges `agentic init --repo`'s pull request (stubbed: a
         local merge of the pushed branch, then main pushed back)."""

@@ -21,7 +21,7 @@
     "x-tokenlean-cost-usd": "0.0125",
     "x-tokenlean-request-id": "acceptance"
    },
-   "body": "{\"id\": \"chatcmpl-requirements-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Split a total evenly between payers.\\nsize: small\\nitems:\\n  - id: REQ-1\\n    statement: An invoice total can be split evenly between several payers.\\n    acceptance_criteria:\\n      - WHEN a total is split between N payers THE system SHALL return N shares that add up to the total.\\nopen_questions:\\n  - When the total does not divide evenly, who pays the extra cents?\\n---\\n# Requirements: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## User scenarios\\n<!-- One story per journey, most important first, each marked P1, P2 or P3: who wants what and why, why it has that priority, and how it can be tested on its own. Under each story list its acceptance criteria in EARS form (WHEN <trigger> THE system SHALL <response>), matching the items above. -->\\n\\n## Edge cases\\n<!-- Boundary conditions and failures to handle: empty or huge inputs, missing permissions, timeouts, concurrent use. -->\\n\\n## Functional requirements\\n<!-- One bullet per item above, by id: \\\"REQ-1: The system MUST ...\\\". -->\\n\\n## Success criteria\\n<!-- Measurable outcomes that show the feature works, independent of how it is built (times, rates, counts). -->\\n\\n## Assumptions\\n<!-- Defaults you chose where the request was silent, and what the work depends on. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+   "body": "{\"id\": \"chatcmpl-requirements-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Split a total evenly; the first payers take the extra cents.\\nsize: small\\nitems:\\n  - id: REQ-1\\n    statement: An invoice total can be split evenly between several payers.\\n    acceptance_criteria:\\n      - WHEN a total is split between N payers THE system SHALL return N shares that add up to the total.\\nopen_questions:\\n  - When the total does not divide evenly, who pays the extra cents?\\n---\\n# Requirements: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## User scenarios\\n<!-- One story per journey, most important first, each marked P1, P2 or P3: who wants what and why, why it has that priority, and how it can be tested on its own. Under each story list its acceptance criteria in EARS form (WHEN <trigger> THE system SHALL <response>), matching the items above. -->\\n\\n## Edge cases\\n<!-- Boundary conditions and failures to handle: empty or huge inputs, missing permissions, timeouts, concurrent use. -->\\n\\n## Functional requirements\\n<!-- One bullet per item above, by id: \\\"REQ-1: The system MUST ...\\\". -->\\n\\n## Success criteria\\n<!-- Measurable outcomes that show the feature works, independent of how it is built (times, rates, counts). -->\\n\\n## Assumptions\\nAmounts are whole cents, as in invoices.money.\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
   },
   {
    "path": "/v1/chat/completions",
@@ -47,7 +47,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:58cee791a5a161c5e79d5bf0ce2011c470e518d0ec4eaba9f90653029e85a2e7",
+   "request_sha": "sha256:1088da0100de4f1c708a7f95bcb51fa6c3fca223d983decd914aace29bbfe826",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -58,7 +58,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:95bc1c0975a4462f553a0df2acb3a06463b14a92ba0c64efca347cb4abbcb802",
+   "request_sha": "sha256:3fb99ceb1819d994bb94c5f4cc3cdfa41d405ac1c4d0c8b235bfa9b079c94ec9",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -69,7 +69,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:f0a6391b53780c57649e7195fc03d45d24a4e765d962a917d241d44f4f4c98aa",
+   "request_sha": "sha256:139f082103cf4416a4a6df16bf504f9298a4275d2728ad628f17ad52b6933f66",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -80,7 +80,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:5bb04439df57f75c13d12bfdd56a5c6f8846b87dd4cab617c93f8229daa9995c",
+   "request_sha": "sha256:3f59f4ec95382995f6fe9342cd17b9a2a8aa8a98f33c0e3512aea42c239c8ef5",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -91,7 +91,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:d11716cd7007360c2c0a87f198a9ad11dedcb280977d8ebe3ccbe8a2ef63ee4c",
+   "request_sha": "sha256:f274b65caf5e79d84729d8a19882653a83c96cb47585926ba81cd33296e0f3a9",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -102,7 +102,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:d689796e335d8a38cfd63085642e91ed13f07d653197efa763f9b6d0e5d447c0",
+   "request_sha": "sha256:cd5d45abf8461e50ed88ef1d9c999bdbc5f9ae9d3479c3e262ef77b0b9f79799",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -113,7 +113,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:7e6fb197c4d62a4cea1b1fc1f21a5171fb3df0270b649a614ba1ccc0e6174e3b",
+   "request_sha": "sha256:b3862322c6c303278f4f8ebb96b02936d142074fc0e74f619ea070c9f5586b21",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -124,7 +124,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:9396b669ddd51e5291bb5cbb03a314ff4163bb561b7767f687d97ba08fe2be82",
+   "request_sha": "sha256:4e50ff841b84075f0401ce82568955cee3761d84bfe91378e3f631245d24af32",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -135,7 +135,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:4dbed007ebda84358aabdae1e2cee50df1926cae5d343052c98d710900a9f188",
+   "request_sha": "sha256:54ccb73ea97a3a0f77637e0fcd6d1e54b5be4500a34e6f87e21feca4295f78e3",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -146,7 +146,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:335ce3de68964da72f5b96954d841fe32d08434933377e38893317af34977e52",
+   "request_sha": "sha256:dac3a6fbd9710863df665b9f299cd5d9e402bcc7d167bb417ae94c87a9519686",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -157,7 +157,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:31e5374f0eb817ccea68270536f08763de68e80bf9aa17be09cecc66caf60037",
+   "request_sha": "sha256:9081a7bae38cd6246574a6946fd3b5c81b87c12ae77b4c5c33e2a1d19539fe07",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -168,7 +168,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:56b17bc07ad863d6654d271046c7ec107c12190da46f65c04f01a2f920d6a452",
+   "request_sha": "sha256:bbf07eb8fea03468447abe1bce41226f9c209c5fd95d1fccb9eef593f23fd6bd",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -179,7 +179,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:da46844324b3fac24e7e8ca32f6fe289a7bc7f97275b87370ff843345540d575",
+   "request_sha": "sha256:79068f5e108cf2e3c16ab4f3da70d934a2f40850ef9dea1f59653f544b32f9d7",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -190,7 +190,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:1aa0ea28e76a73be49d85d4ecb75394fe0e1a1f60962f6315b88450109c72016",
+   "request_sha": "sha256:8eef49d7a861b8065dabb78daee454e5aee89b269eb99d488ee6c3eac16cf9dd",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -201,7 +201,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:5340f94f2a98e3195447ce82b68fc80f540d72a2f42bd067e249eefb2f9615d0",
+   "request_sha": "sha256:293e673164af82f5a3458df426f30d70c45bfbfb035b20bac421c27a2f042468",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -212,18 +212,18 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:3564ca3aa311212c188da049dbffcaaa4eeeb7e576568e55a8ec2731646b56db",
+   "request_sha": "sha256:7ecf442fb1fd0a8322f75673e495bd6496f5f5b0122a20e03acd9093af9c0eb6",
    "status": 200,
    "content_type": "application/json",
    "headers": {
     "x-tokenlean-cost-usd": "0.0125",
     "x-tokenlean-request-id": "acceptance"
    },
-   "body": "{\"id\": \"chatcmpl-qa-4\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: '1 test fails: the extra cents go to the last payers.'\\nverdict: fail\\ntests:\\n  passed: 4\\n  failed: 1\\n  skipped: 0\\nfailures:\\n  - tests/test_split.py::test_remainder_goes_to_first_payers\\nbaseline_failures: []\\nacceptance_results:\\n  - criterion_id: REQ-1\\n    passed: true\\n    evidence: tests/test_split.py\\n  - criterion_id: REQ-2\\n    passed: false\\n    evidence: tests/test_split.py::test_remainder_goes_to_first_payers\\ndependency_scan:\\n  blocked_licences: []\\n  vulnerabilities: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Test report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Verdict\\nFail: the extra cents now go to the last payers (REQ-2).\\n\\n## Test results\\n<!-- The suites run, their counts, the baseline they were judged against, and every failure with its cause, new failures first. -->\\n\\n## Acceptance criteria\\n<!-- Each criterion by id: pass or fail, with the evidence (a test, a log, a manual check). -->\\n\\n## Dependency scan\\n<!-- New dependencies with their licences, blocked licences and known vulnerabilities found. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+   "body": "{\"id\": \"chatcmpl-qa-4\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: the extra cents now go to the last payers.\\nverdict: fail\\ntests:\\n  passed: 4\\n  failed: 1\\n  skipped: 0\\nfailures:\\n  - tests/test_split.py::test_remainder_goes_to_first_payers\\nbaseline_failures: []\\nacceptance_results:\\n  - criterion_id: REQ-1\\n    passed: true\\n    evidence: tests/test_split.py\\n  - criterion_id: REQ-2\\n    passed: false\\n    evidence: tests/test_split.py\\ndependency_scan:\\n  blocked_licences: []\\n  vulnerabilities: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Test report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Verdict\\nFail: the extra cents now go to the last payers.\\n\\n## Test results\\n<!-- The suites run, their counts, the baseline they were judged against, and every failure with its cause, new failures first. -->\\n\\n## Acceptance criteria\\n<!-- Each criterion by id: pass or fail, with the evidence (a test, a log, a manual check). -->\\n\\n## Dependency scan\\n<!-- New dependencies with their licences, blocked licences and known vulnerabilities found. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:7eed9e9d573eb202e34e8436a24945af30c71c4b66b8b88f53f4570d88cc57d1",
+   "request_sha": "sha256:aad4e622811ab94d8bdd82ff694beae0bfedfb20766bd1187de2780bafbafffa",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -234,7 +234,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:6af66e8350c0b0ba7de7a18e961d8408912b72710d593896777c2e8d423efae0",
+   "request_sha": "sha256:0508574bf28b0921a84f8ceafb44c0e48b56be7ca87a6dcea17df756d7d2572c",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -245,7 +245,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:09f77f51fa6c0d6747b85ac2b8f9c5ed4f8e0efb7134ab39b2a9371c34913aee",
+   "request_sha": "sha256:f59a45df4117d25c46bb647e7fd5fd52fa43664773c04fb303f2b904b9495608",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -256,7 +256,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:3525a31a3dacea414f4c4c0e707118643ef1d15b934358cf088b4a24e9164502",
+   "request_sha": "sha256:e8e029b4701eb5199be93af0ca14caf5a238e0c3ab23f804aede7d09c4b41edf",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -267,7 +267,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:c130534a91e64bd7593422c6366acea376b55bec2f097c2b78522fb14e0542d3",
+   "request_sha": "sha256:e53e682d8a9c53cbdb862e420141165c4247add2de3e31b143afcfdb9cc718af",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -278,7 +278,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:f933ebd0b9b2954f3aa58595654e6a6d983fe4ab3e02dfe922fd65572da23bd8",
+   "request_sha": "sha256:00e20d23baa070e2276009a823b20281c0125ce17afaf96abdbf83b0ca8f8ba3",
    "status": 200,
    "content_type": "application/json",
    "headers": {
