@@ -9,7 +9,9 @@ secret scan.
     uv run python scripts/check.py --all     # both
     uv run python scripts/check.py --offline # no network: skips pip-audit, says INCOMPLETE
 
-Run `--all` before pushing; it is not wired into a git hook.
+Run `--all` before pushing; it is not wired into a git hook. Exit codes: 0 every check
+passed, 1 a check failed, 3 INCOMPLETE (an offline run: the network checks were skipped,
+so `check.py --offline && git push` does not push, DF-332).
 """
 
 from __future__ import annotations
@@ -19,13 +21,18 @@ import hashlib
 import io
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import tarfile
+import tomllib
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+PASSED, INCOMPLETE, FAILED = "passed", "incomplete", "failed"
+EXIT_INCOMPLETE = 3
 
 # The checks, in order. Each is a command run from the repo root.
 CHECKS: list[tuple[str, list[str]]] = [
@@ -121,10 +128,55 @@ def failure_hint(name: str) -> str:
     return ""
 
 
-def run_native(offline: bool = False) -> bool:
+def _span_days(span: str) -> int | None:
+    """Days in a uv relative span ('14 days', '2 weeks', 'P14D'); None if not relative."""
+    text = span.strip().lower()
+    if found := re.fullmatch(r"p(?:(\d+)w)?(?:(\d+)d)?", text):
+        return int(found[1] or 0) * 7 + int(found[2] or 0)
+    if found := re.fullmatch(r"(\d+)\s*(day|days|week|weeks)", text):
+        return int(found[1]) * (7 if found[2].startswith("week") else 1)
+    return None
+
+
+def stale_exceptions(settings: dict, today: date) -> list[str]:
+    """Each `exclude-newer-package` exception in `settings` (pyproject.toml, parsed) whose
+    date the release-age window has passed: the exception no longer lets a fix in early,
+    it only holds the package back (DF-330). One warning line per package."""
+    uv = settings.get("tool", {}).get("uv", {})
+    days = _span_days(str(uv.get("exclude-newer", "")))
+    exceptions = uv.get("exclude-newer-package") or {}
+    if days is None or not isinstance(exceptions, dict):
+        return []
+    found = []
+    for name, when in sorted(exceptions.items()):
+        try:
+            cutoff = datetime.fromisoformat(str(when).replace("Z", "+00:00")).date()
+        except ValueError:
+            continue
+        if cutoff + timedelta(days=days) <= today:
+            found.append(
+                f"{name}: its exclude-newer-package exception ({cutoff}) is older than the "
+                f"{days}-day release-age window - remove it from pyproject.toml, or it holds "
+                f"{name} back from later fixes"
+            )
+    return found
+
+
+def _warn_stale_exceptions(label: str) -> None:
+    try:
+        settings = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return  # the lock check reports a broken pyproject.toml
+    for line in stale_exceptions(settings, date.today()):
+        print(f"[{label}] WARNING: {line}")
+
+
+def run_native(offline: bool = False) -> str:
     """Run every check on this machine; stop at the first failure. Offline, the network
-    checks are skipped, uv works from its cache, and the run says it is incomplete."""
+    checks are skipped, uv works from its cache, and the run says it is incomplete.
+    Returns PASSED, INCOMPLETE or FAILED."""
     label = f"{platform.system()} (native)"
+    _warn_stale_exceptions(label)
     env = dict(os.environ, UV_OFFLINE="1") if offline else None
     for name, cmd in checks_for(offline):
         print(f"[{label}] {name}: {' '.join(cmd)}", flush=True)
@@ -132,13 +184,13 @@ def run_native(offline: bool = False) -> bool:
             print(f"[{label}] FAILED at: {name}")
             if hint := failure_hint(name):
                 print(f"[{label}] {hint}")
-            return False
+            return FAILED
     if offline:
         skipped = ", ".join(NETWORK_CHECKS)
         print(f"[{label}] INCOMPLETE (offline): skipped {skipped} - run again online")
-        return True
+        return INCOMPLETE
     print(f"[{label}] all checks passed")
-    return True
+    return PASSED
 
 
 def tracked_files_tar() -> bytes:
@@ -242,8 +294,10 @@ def main() -> int:
     if not args.linux:
         results.append(run_native(offline=args.offline))
     if args.linux or args.all:
-        results.append(run_linux())
-    return 0 if all(results) else 1
+        results.append(PASSED if run_linux() else FAILED)
+    if FAILED in results:
+        return 1
+    return EXIT_INCOMPLETE if INCOMPLETE in results else 0
 
 
 if __name__ == "__main__":

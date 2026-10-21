@@ -63,7 +63,7 @@ def test_an_offline_run_says_it_is_incomplete(monkeypatch, capsys):
         return type("Done", (), {"returncode": 0})()
 
     monkeypatch.setattr(check.subprocess, "run", fake_run)
-    assert check.run_native(offline=True) is True
+    assert check.run_native(offline=True) == check.INCOMPLETE
     out = capsys.readouterr().out
     assert "INCOMPLETE" in out and "known vulnerabilities" in out
     assert all(flag == "1" for _, flag in ran)
@@ -77,3 +77,55 @@ def test_the_secret_scan_runs_before_anything_writes_into_the_tree():
     names = [name for name, _ in linux_steps()]
     assert names.index("secret scan") < names.index("tests")
     assert names.index("secret scan") < names.index("lock file up to date")
+
+
+def _ran(returncode):
+    return lambda *args, **kwargs: type("Done", (), {"returncode": returncode})()
+
+
+def test_an_offline_run_exits_with_its_own_code(monkeypatch):  # DF-332
+    # `check.py --offline && git push` must not look like a full pass
+    import check
+
+    monkeypatch.setattr(check.subprocess, "run", _ran(0))
+    monkeypatch.setattr(check, "stale_exceptions", lambda *args: [])
+    monkeypatch.setattr(sys, "argv", ["check.py", "--offline"])
+    assert check.main() == check.EXIT_INCOMPLETE != 0
+
+
+def test_a_failed_offline_run_is_still_a_failure(monkeypatch):
+    import check
+
+    monkeypatch.setattr(check.subprocess, "run", _ran(1))
+    monkeypatch.setattr(check, "stale_exceptions", lambda *args: [])
+    monkeypatch.setattr(sys, "argv", ["check.py", "--offline"])
+    assert check.main() == 1
+
+
+def test_a_release_age_exception_older_than_the_window_is_reported():  # DF-330
+    from datetime import date
+
+    from check import stale_exceptions
+
+    settings = {
+        "tool": {
+            "uv": {
+                "exclude-newer": "14 days",
+                "exclude-newer-package": {
+                    "certifi": "2026-10-21T00:00:00Z",
+                    "fresh": "2026-11-01T00:00:00Z",
+                },
+            }
+        }
+    }
+    assert stale_exceptions(settings, date(2026, 11, 3)) == []
+    stale = stale_exceptions(settings, date(2026, 11, 4))
+    assert len(stale) == 1 and "certifi" in stale[0] and "remove" in stale[0]
+
+
+def test_no_exceptions_means_nothing_to_report():
+    from datetime import date
+
+    from check import stale_exceptions
+
+    assert stale_exceptions({"tool": {"uv": {"exclude-newer": "14 days"}}}, date.today()) == []
