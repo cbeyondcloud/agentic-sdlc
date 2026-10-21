@@ -5,6 +5,7 @@ description = "The agentic command-line tool"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "agentic-core[eval]",
+    "httpx2>=2.13.1,<2.14",
     "sdlc-commons",
     "rich>=15.0,<16",
     "typer==0.27.3",

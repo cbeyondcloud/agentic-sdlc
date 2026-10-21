@@ -17,6 +17,7 @@ version = "0.1.0"
 source = { editable = "cli" }
 dependencies = [
     { name = "agentic-core", extra = ["eval"] },
+    { name = "httpx2" },
     { name = "rich" },
     { name = "sdlc-commons" },
     { name = "typer" },
@@ -25,6 +26,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agentic-core", extras = ["eval"], editable = "core" },
+    { name = "httpx2", specifier = ">=2.13.1,<2.14" },
     { name = "rich", specifier = ">=15.0,<16" },
     { name = "sdlc-commons", editable = "commons" },
     { name = "typer", specifier = "==0.27.3" },
