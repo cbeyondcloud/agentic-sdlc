@@ -9,7 +9,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 
 from agentic_cp.db_roles import INSERT_ONLY
-from agentic_cp.tables import TENANT_TABLES, metadata
+from agentic_cp.tables import GLOBAL_UNIQUE, TENANT_TABLES, metadata
 from agentic_cp.tenancy.context import tenant_tx
 
 pytestmark = pytest.mark.anyio
@@ -51,7 +51,7 @@ async def test_every_table_is_tenant_owned_and_forced(db):
             assert command == "*" and "app.tenant_id" in using and "app.tenant_id" in check
             constraints = await conn.execute(
                 text(
-                    "select conname, contype, "
+                    "select conname, contype::text, "
                     "(select array_agg(a.attname order by k.ord) from unnest(conkey) "
                     "with ordinality k(attnum, ord) join pg_attribute a "
                     "on a.attrelid = conrelid and a.attnum = k.attnum) "
@@ -65,6 +65,8 @@ async def test_every_table_is_tenant_owned_and_forced(db):
                     assert columns[0] == "tenant_id", (table, name)
                 elif kind == "f" and columns == ["tenant_id"]:
                     continue  # the tenant reference itself
+                elif kind == "u" and len(columns) == 1 and (table, columns[0]) in GLOBAL_UNIQUE:
+                    continue  # a credential hash, looked up before the tenant is known
                 else:
                     assert "tenant_id" in columns, (table, name)
 

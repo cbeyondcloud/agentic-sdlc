@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 import pytest
+from apiclient import Api, Client, FakeClock, bootstrap, settings_for
 from isolation import create_probe, probe_row, probe_table
 from pg import (
     APP_ROLE,
@@ -29,6 +30,7 @@ from pg import (
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from agentic_cp.app import create_app
 from agentic_cp.db import engine_for, migrate_async
 from agentic_cp.db_roles import grant_runtime
 from agentic_cp.tenancy.context import tenant_tx
@@ -175,6 +177,31 @@ async def probe(two_tenants) -> tuple[TestDb, UUID, UUID]:
             for _ in range(2):
                 await conn.execute(probe_table.insert().values(await probe_row(conn, tenant)))
     return db, a, b
+
+
+@pytest.fixture
+async def api(db: TestDb) -> AsyncIterator[Api]:
+    """The app with tenants a and b bootstrapped (each with an org admin and token)."""
+    clock = FakeClock()
+    a = await bootstrap(db, clock, "tenant-a", "Tenant A")
+    b = await bootstrap(db, clock, "tenant-b", "Tenant B")
+    harness = Api(db, clock, a, b)
+    try:
+        yield harness
+    finally:
+        await harness.http.aclose()
+
+
+@pytest.fixture
+def api_for():
+    """A client on the app for a database prepared some other way (operator commands)."""
+    clients: list[Client] = []
+
+    def make(db: TestDb) -> Client:
+        clients.append(Client(create_app(settings_for(db), engine=db.app)))
+        return clients[-1]
+
+    return make
 
 
 @pytest.fixture

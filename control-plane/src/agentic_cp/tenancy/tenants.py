@@ -48,11 +48,14 @@ async def create_tenant(
     slug: str,
     name: str,
     *,
+    tenant_id: UUID | None = None,
     policy_repo: str | None = None,
     policy_branch: str = "main",
     gateway_tenant: str | None = None,
 ) -> TenantRow:
-    """Create a tenant (owner role only). A used or malformed slug is refused."""
+    """Create a tenant (owner role only). A used or malformed slug is refused. A caller
+    that must work inside the new tenant in the same transaction picks its `tenant_id`
+    first (the bootstrap)."""
     if not re.fullmatch(SLUG_PATTERN, slug):
         raise TenancyError(
             "a tenant slug is lower-case letters, digits and '-', starting with a letter "
@@ -69,6 +72,7 @@ async def create_tenant(
             policy_repo_url=policy_repo,
             policy_branch=policy_branch,
             gateway_tenant=gateway_tenant,
+            **({"id": tenant_id} if tenant_id is not None else {}),
         )
         .returning(*tenants.c)
     )

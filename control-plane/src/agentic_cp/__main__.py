@@ -6,6 +6,12 @@
     db grant-runtime      create or re-align the runtime role of AGENTIC_CP_DATABASE_URL
     admin audit verify --tenant S
                           verify one tenant's audit chain
+    admin tenant create --slug S --name N --admin-email E [--policy-repo URL]
+                        [--policy-branch B] [--gateway-tenant T]
+                          create a tenant, its roles and first org admin; prints the token once
+    admin tenant list     list tenants
+    admin issue-token --tenant S --email E
+                          a recovery token for an existing user of one tenant
     openapi [--write | --check]
                           write or compare control-plane/openapi.json
 
@@ -92,8 +98,12 @@ def _migrate(args: argparse.Namespace) -> int:
 
 
 async def _migrate_and_regrant(settings: Settings) -> str:
+    from agentic_cp.app import utc_now
     from agentic_cp.db import make_owner_engine, migrate_async
     from agentic_cp.db_roles import grant_runtime, runtime_role_exists
+    from agentic_cp.rbac.defaults import seed_roles
+    from agentic_cp.tenancy.context import tenant_tx
+    from agentic_cp.tenancy.tenants import list_tenants
 
     head = await migrate_async(_owner_dsn(settings), settings.db_schema)
     engine = make_owner_engine(settings)
@@ -101,6 +111,12 @@ async def _migrate_and_regrant(settings: Settings) -> str:
         async with engine.begin() as conn:
             if await runtime_role_exists(conn, settings.runtime_role):
                 await grant_runtime(conn, settings.runtime_role, None, settings.db_schema)
+            known = await list_tenants(conn)
+        for tenant in known:  # a release's new builtin roles reach every tenant
+            async with tenant_tx(engine, tenant.id) as conn:
+                added = await seed_roles(conn, clock=utc_now)
+            if added:
+                print(f"tenant {tenant.slug}: added roles {', '.join(added)}")
     finally:
         await engine.dispose()
     return head
@@ -177,6 +193,112 @@ def _audit_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_token(value: str) -> None:
+    print("token (shown once - store it now):")
+    print(value)
+
+
+def _tenant_create(args: argparse.Namespace) -> int:
+    from agentic_cp.app import utc_now
+    from agentic_cp.auth.bootstrap import bootstrap_tenant
+    from agentic_cp.auth.users import UserError
+    from agentic_cp.db import make_owner_engine
+    from agentic_cp.tenancy.context import TenancyError
+    from agentic_cp.tenancy.tenants import TenantExists
+
+    settings = _settings()
+    _owner_dsn(settings)
+
+    async def run():
+        engine = make_owner_engine(settings)
+        try:
+            return await bootstrap_tenant(
+                engine,
+                settings,
+                slug=args.slug,
+                name=args.name,
+                admin_email=args.admin_email,
+                policy_repo=args.policy_repo,
+                policy_branch=args.policy_branch,
+                gateway_tenant=args.gateway_tenant,
+                clock=utc_now,
+            )
+        finally:
+            await engine.dispose()
+
+    try:
+        result = asyncio.run(run())
+    except TenantExists as error:
+        raise CommandError(str(error), 2) from None
+    except (TenancyError, UserError) as error:
+        raise CommandError(str(error), 3) from None
+    print(f"tenant {result.tenant.slug} created (id {result.tenant.id})")
+    print(f"first org admin: {args.admin_email.strip().lower()}")
+    _print_token(result.token)
+    return 0
+
+
+def _tenant_list(args: argparse.Namespace) -> int:
+    from agentic_cp.db import make_owner_engine
+    from agentic_cp.tenancy.tenants import list_tenants
+
+    settings = _settings()
+    _owner_dsn(settings)
+
+    async def run():
+        engine = make_owner_engine(settings)
+        try:
+            async with engine.begin() as conn:
+                return await list_tenants(conn)
+        finally:
+            await engine.dispose()
+
+    for tenant in asyncio.run(run()):
+        repo = tenant.policy_repo_url or "-"
+        print(f"{tenant.slug}\t{tenant.status}\t{tenant.name}\t{repo}@{tenant.policy_branch}")
+    return 0
+
+
+def _issue_token(args: argparse.Namespace) -> int:
+    """Admin recovery: a token for an existing user of one named tenant."""
+    from agentic_cp.app import utc_now
+    from agentic_cp.audit import OPERATOR, AuditEvent, append, format_at
+    from agentic_cp.auth.tokens import issue_token, token_lifetime
+    from agentic_cp.auth.users import UserError, user_by_email
+
+    settings = _settings()
+    _owner_dsn(settings)
+
+    async def work(conn, tenant):
+        try:
+            user = await user_by_email(conn, args.email)
+        except UserError as error:
+            raise CommandError(str(error), 3) from None
+        if user is None:
+            raise CommandError(f"no user {args.email!r} in tenant {tenant.slug}", 3)
+        expires_at = utc_now() + token_lifetime(settings, user.kind, None)
+        token_id, value = await issue_token(
+            conn, user_id=user.id, name="recovery", expires_at=expires_at, created_by=OPERATOR
+        )
+        await append(
+            conn,
+            AuditEvent(
+                event="token.issued",
+                actor=OPERATOR,
+                actor_kind="system",
+                target=f"token:{token_id}",
+                after={"name": "recovery", "user": user.email, "expires_at": format_at(expires_at)},
+            ),
+            clock=utc_now,
+        )
+        return value
+
+    value = asyncio.run(_with_tenant(settings, args.tenant, work))
+    print(f"token issued for {args.email.strip().lower()} in tenant {args.tenant}")
+    _print_token(value)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m agentic_cp", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -203,6 +325,24 @@ def build_parser() -> argparse.ArgumentParser:
     audit_verify = audit.add_parser("verify", help="verify one tenant's audit chain")
     audit_verify.add_argument("--tenant", required=True, help="the tenant's slug")
     audit_verify.set_defaults(run=_audit_verify)
+
+    tenant = admin_commands.add_parser("tenant", help="tenants").add_subparsers(
+        dest="tenant_command", required=True
+    )
+    create = tenant.add_parser("create", help="create a tenant and its first org admin")
+    create.add_argument("--slug", required=True)
+    create.add_argument("--name", required=True)
+    create.add_argument("--admin-email", required=True)
+    create.add_argument("--policy-repo", default=None, help="URL without credentials")
+    create.add_argument("--policy-branch", default="main")
+    create.add_argument("--gateway-tenant", default=None, help="the TokenLean tenant (ND-16)")
+    create.set_defaults(run=_tenant_create)
+    tenant.add_parser("list", help="list tenants").set_defaults(run=_tenant_list)
+
+    issue = admin_commands.add_parser("issue-token", help="a recovery token for one user")
+    issue.add_argument("--tenant", required=True, help="the tenant's slug")
+    issue.add_argument("--email", required=True)
+    issue.set_defaults(run=_issue_token)
 
     openapi = commands.add_parser("openapi", help="write or check openapi.json")
     mode = openapi.add_mutually_exclusive_group()

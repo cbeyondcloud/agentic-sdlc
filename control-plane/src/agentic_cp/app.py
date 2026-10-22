@@ -15,10 +15,10 @@ from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from agentic.orgapi import PROBLEM_MEDIA_TYPE, Problem
+from agentic_cp.auth.api import router as auth_router
 from agentic_cp.db import current_revision, head_revision, make_engine
 from agentic_cp.db_roles import AUDIT, TENANCY, enforcement_status
-from agentic_cp.errors import ApiProblem, install_problem_handlers, log
+from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, install_problem_handlers, log
 from agentic_cp.settings import Settings
 
 Clock = Callable[[], datetime]
@@ -63,6 +63,7 @@ def create_app(
     app.state.git = git
     app.state.rate_limiter = rate_limiter
     install_problem_handlers(app)
+    app.include_router(auth_router)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:
@@ -81,12 +82,6 @@ def create_app(
 class Readiness(BaseModel):
     status: str
     db_enforced: bool
-
-
-#: Documented on routes that answer problems (the OpenAPI document shows the shape).
-PROBLEM_RESPONSES: dict = {
-    "default": {"model": Problem, "content": {PROBLEM_MEDIA_TYPE: {}}},
-}
 
 
 async def serve_preflight(settings: Settings, engine: AsyncEngine | None = None) -> str | None:

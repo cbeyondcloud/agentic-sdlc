@@ -35,12 +35,16 @@ log = logging.getLogger("agentic_cp.db_roles")
 #: a credential (or nothing) to tenant ids only, by exact match (DR-3).
 DEFINER_FUNCTIONS: dict[str, str] = {
     "active_tenant_ids": "active_tenant_ids()",
+    "resolve_token": "resolve_token(bytea)",
 }
 
 #: Extra policies a tenant-owned table may carry besides `tenant_isolation`: table ->
 #: policy name. Each is `FOR SELECT`, granted to the owner role only, and active only while
 #: a registered definer function runs (ruling R1).
-LOOKUP_POLICIES: dict[str, str] = {}
+LOOKUP_POLICIES: dict[str, str] = {
+    "tokens": "credential_lookup",
+    "users": "credential_lookup",
+}
 
 #: Evidence tables: the runtime role may only SELECT and INSERT (M2-05).
 INSERT_ONLY: tuple[str, ...] = ("audit_log", "run_events", "policy_versions")
@@ -272,11 +276,17 @@ async def _check(
         isolation = table_policies.pop(POLICY, None)
         if not _is_isolation(isolation, "tenant_id"):
             status.fail(TENANCY, f"table {table} lacks the {POLICY} policy")
-        for extra, (command, permissive, roles, _, _) in table_policies.items():
+        for extra, (command, permissive, roles, using, _) in table_policies.items():
             if LOOKUP_POLICIES.get(table) != extra:
                 status.fail(TENANCY, f"table {table} has an unregistered policy {extra}")
-            elif command != "r" or not permissive or 0 in roles or oid in roles:
-                status.fail(TENANCY, f"lookup policy {extra} on {table} is wider than SELECT")
+            elif (
+                command != "r"
+                or not permissive
+                or 0 in roles
+                or oid in roles
+                or "app.credential_lookup" not in using
+            ):
+                status.fail(TENANCY, f"lookup policy {extra} on {table} is wider than allowed")
     enabled, _ = present.get("tenants", (False, False))
     tenant_policies = dict(by_table.get("tenants", {}))
     if not enabled or not _is_isolation(tenant_policies.pop("own_tenant", None), "id"):

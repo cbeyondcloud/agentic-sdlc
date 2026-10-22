@@ -32,6 +32,16 @@ _STATUS_CODES = {
 }
 
 
+#: Documented on every route that can answer a problem (the OpenAPI document shows it).
+PROBLEM_RESPONSES: dict = {
+    "default": {
+        "model": Problem,
+        "description": "An RFC 9457 problem document",
+        "content": {PROBLEM_MEDIA_TYPE: {}},
+    },
+}
+
+
 class ApiProblem(Exception):
     """Raised by routes and dependencies; rendered as a problem document."""
 

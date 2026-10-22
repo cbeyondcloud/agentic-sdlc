@@ -6,8 +6,15 @@ from agentic.orgapi.models import (
     PROBLEM_MEDIA_TYPE,
     TOKEN_PREFIX,
     WEBHOOK_TOKEN_PREFIX,
+    AssignmentRef,
+    Me,
     Problem,
     RequestModel,
+    TenantRef,
+    TokenInfo,
+    TokenIssued,
+    TokenRequest,
+    UserRef,
 )
 
 __all__ = [
@@ -16,6 +23,13 @@ __all__ = [
     "PROBLEM_MEDIA_TYPE",
     "TOKEN_PREFIX",
     "WEBHOOK_TOKEN_PREFIX",
+    "AssignmentRef",
+    "Me",
     "Problem",
     "RequestModel",
+    "TenantRef",
+    "TokenInfo",
+    "TokenIssued",
+    "TokenRequest",
+    "UserRef",
 ]

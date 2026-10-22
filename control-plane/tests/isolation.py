@@ -16,6 +16,7 @@ import itertools
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -127,3 +128,73 @@ async def _audit_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
         "prev": "",
         "hash": f"sha256:{seq:064x}",
     }
+
+
+@register("users")
+async def _user_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    return {
+        "tenant_id": tenant_id,
+        "id": uuid.uuid4(),
+        "email": f"user-{next(_sequence)}@example.test",
+        "kind": "human",
+    }
+
+
+async def _insert(conn: AsyncConnection, table: str, row: dict[str, Any]) -> dict[str, Any]:
+    from agentic_cp.tables import metadata
+
+    await conn.execute(metadata.tables[table].insert().values(row))
+    return row
+
+
+@register("tokens")
+async def _token_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    return {
+        "tenant_id": tenant_id,
+        "id": uuid.uuid4(),
+        "user_id": user["id"],
+        "name": "isolation",
+        "token_sha256": uuid.uuid4().bytes + uuid.uuid4().bytes,
+        "created_by": "system:test",
+        "expires_at": datetime.now(UTC) + timedelta(days=1),
+    }
+
+
+@register("roles")
+async def _role_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    return {
+        "tenant_id": tenant_id,
+        "name": f"custom-{next(_sequence)}",
+        "permissions": ["run.trigger"],
+    }
+
+
+@register("assignments")
+async def _assignment_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    role = await _insert(conn, "roles", await _role_row(conn, tenant_id))
+    return {
+        "tenant_id": tenant_id,
+        "id": uuid.uuid4(),
+        "user_id": user["id"],
+        "role": role["name"],
+        "scope_kind": "team",
+        "scope_value": "payments",
+        "created_by": "system:test",
+    }
+
+
+# ── endpoint cases ────────────────────────────────────────────────────────────
+
+
+async def _token_in_b(api) -> dict[str, str]:
+    issued = await api.post("/v1/tokens", api.b.admin_token, {"name": "b-only"})
+    assert issued.status_code == 201, issued.text
+    return {"id": issued.json()["id"]}
+
+
+ENDPOINT_CASES += [
+    EndpointCase("tokens", "DELETE", "/v1/tokens/{id}", _token_in_b),
+    EndpointCase("tokens", "GET", "/v1/tokens", _token_in_b, must_not_list=True),
+]
