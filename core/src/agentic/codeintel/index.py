@@ -18,8 +18,13 @@ left it. Every git call runs with fsmonitor off (SP9 review I5).
 
 code-review-graph parses files an agent wrote, so it and git run with the agent
 command environment (`safe_env`: no secrets, DF-88). An index that cannot be read (a
-crashed first build, a corrupt file) is thrown away and built again (DF-89), and one
-lock per data folder makes parallel tool calls build once (DF-92).
+crashed first build, a corrupt file) is thrown away and built again (DF-89). One lock
+per data folder makes parallel tool calls build once (DF-92) - within this process, and
+through a lock file across processes sharing the folder (DF-338).
+
+code-review-graph runs as a contained process tree (`run_contained`): a build that
+outlives its step - the run's time limit, a stopped run - is killed with the step's
+process scope instead of running on for up to BUILD_TIMEOUT_S (DF-328).
 """
 
 import hashlib
@@ -35,12 +40,17 @@ from collections.abc import Sequence
 from contextlib import closing
 from pathlib import Path
 
+from filelock import FileLock
+
+from agentic.backends.processes import run_contained
 from agentic.codeintel.interface import CodeIntelError
 from agentic.sandbox.process import safe_env
 
 DB_NAME = "graph.db"
 STATE_NAME = "indexed-state.json"
 SCRATCH_INDEX = "git-index"
+LOCK_NAME = "build.lock"
+BUILD_TIMEOUT_S = 1800
 #: Never let repository config run a command for git (a filesystem monitor).
 NO_FSMONITOR = {
     "GIT_CONFIG_COUNT": "1",
@@ -121,7 +131,8 @@ class LocalIndex:
 
     def ensure(self) -> None:
         """Build, update or keep the index so it reflects the tree as it is now."""
-        with self._lock:
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        with self._lock, FileLock(self.data_dir / LOCK_NAME):
             if self.db.is_file() and not self._readable():
                 self._discard()  # a crashed first build or a corrupt file (DF-89)
             if self.fresh():
@@ -230,15 +241,7 @@ class LocalIndex:
         if command in ("build", "update"):
             argv.append("-q")
         try:
-            done = subprocess.run(
-                argv,
-                env=self.env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=1800,
-            )
+            done = run_contained(argv, env=self.env, timeout=BUILD_TIMEOUT_S)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise CodeIntelError(f"code-review-graph {command} could not run: {error}") from error
         if done.returncode != 0:
