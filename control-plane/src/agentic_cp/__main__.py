@@ -10,6 +10,8 @@
                         [--policy-branch B] [--gateway-tenant T]
                           create a tenant, its roles and first org admin; prints the token once
     admin tenant list     list tenants
+    admin tenant set-policy-repo --tenant S --repo URL [--branch B]
+                          point one tenant at its git policy repo
     admin issue-token --tenant S --email E
                           a recovery token for an existing user of one tenant
     openapi [--write | --check]
@@ -259,6 +261,48 @@ def _tenant_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tenant_set_policy_repo(args: argparse.Namespace) -> int:
+    """Point one tenant at its policy repo (same rules as `PUT /v1/tenant/policy-source`)."""
+    from sqlalchemy import update
+
+    from agentic.orgapi.models import checked_branch
+    from agentic_cp.app import utc_now
+    from agentic_cp.audit import OPERATOR, AuditEvent, append
+    from agentic_cp.gitops import RepoUrlError, check_repo_url
+    from agentic_cp.tables import tenants
+
+    settings = _settings()
+    _owner_dsn(settings)
+    try:
+        repo = check_repo_url(args.repo, allow_local=settings.allow_local_repos)
+        branch = checked_branch(args.branch)
+    except (RepoUrlError, ValueError) as error:
+        raise CommandError(str(error), 3) from None
+
+    async def work(conn, tenant):
+        await conn.execute(
+            update(tenants)
+            .where(tenants.c.id == tenant.id)
+            .values(policy_repo_url=repo, policy_branch=branch)
+        )
+        await append(
+            conn,
+            AuditEvent(
+                event="tenant.policy_source_changed",
+                actor=OPERATOR,
+                actor_kind="system",
+                target=f"tenant:{tenant.slug}",
+                before={"repo": tenant.policy_repo_url, "branch": tenant.policy_branch},
+                after={"repo": repo, "branch": branch},
+            ),
+            clock=utc_now,
+        )
+
+    asyncio.run(_with_tenant(settings, args.tenant, work))
+    print(f"tenant {args.tenant}: policy repo set (branch {branch}); the worker syncs it next")
+    return 0
+
+
 def _issue_token(args: argparse.Namespace) -> int:
     """Admin recovery: a token for an existing user of one named tenant."""
     from agentic_cp.app import utc_now
@@ -338,6 +382,11 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--gateway-tenant", default=None, help="the TokenLean tenant (ND-16)")
     create.set_defaults(run=_tenant_create)
     tenant.add_parser("list", help="list tenants").set_defaults(run=_tenant_list)
+    source = tenant.add_parser("set-policy-repo", help="point one tenant at its policy repo")
+    source.add_argument("--tenant", required=True, help="the tenant's slug")
+    source.add_argument("--repo", required=True, help="https:// or ssh:// URL, no credentials")
+    source.add_argument("--branch", default="main")
+    source.set_defaults(run=_tenant_set_policy_repo)
 
     issue = admin_commands.add_parser("issue-token", help="a recovery token for one user")
     issue.add_argument("--tenant", required=True, help="the tenant's slug")

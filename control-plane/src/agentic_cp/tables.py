@@ -34,7 +34,15 @@ metadata = MetaData(
 
 #: Every tenant-owned table, in creation order. A table in the schema that is neither
 #: `tenants` nor listed here fails the catalogue test and `enforcement_status`.
-TENANT_TABLES: tuple[str, ...] = ("audit_log", "users", "tokens", "roles", "assignments")
+TENANT_TABLES: tuple[str, ...] = (
+    "audit_log",
+    "users",
+    "tokens",
+    "roles",
+    "assignments",
+    "policy_versions",
+    "policy_active",
+)
 
 #: A tenant's slug: lower-case, starts with a letter, 2-63 characters.
 SLUG_PATTERN = "^[a-z][a-z0-9-]{1,62}$"
@@ -155,6 +163,44 @@ assignments = Table(
     CheckConstraint(
         "(scope_kind = 'org' and scope_value = '') or (scope_kind = 'team' and scope_value <> '')",
         name="assignments_scope_value",
+    ),
+)
+
+#: Every policy commit a tenant's sync has seen (M2-02): insert-only for the runtime role.
+#: An accepted version carries its bundle (`git archive`, gzipped, `mtime=0`) and digests;
+#: a rejected one its problems. `teams` are the policy's teams (the assignment guard, R14).
+policy_versions = Table(
+    "policy_versions",
+    metadata,
+    _tenant_id(),
+    Column("version", Text, primary_key=True),
+    Column("commit", Text, nullable=False),
+    Column("branch", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("problems", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("teams", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("bundle", BYTEA, nullable=True),
+    Column("digest", Text, nullable=True),
+    Column("tree_digest", Text, nullable=True),
+    Column("commit_at", DateTime(timezone=True), nullable=True),
+    Column("received_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("status in ('accepted', 'rejected')", name="policy_versions_status_known"),
+    CheckConstraint(
+        "(status = 'accepted') = (bundle is not null and digest is not null)",
+        name="policy_versions_bundle_iff_accepted",
+    ),
+)
+
+#: The tenant's active policy version: the one updatable pointer into `policy_versions`.
+policy_active = Table(
+    "policy_active",
+    metadata,
+    _tenant_id(),
+    Column("version", Text, nullable=False),
+    Column("branch", Text, nullable=False),
+    Column("activated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    ForeignKeyConstraint(
+        ["tenant_id", "version"], ["policy_versions.tenant_id", "policy_versions.version"]
     ),
 )
 

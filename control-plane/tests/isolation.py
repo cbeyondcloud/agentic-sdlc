@@ -13,10 +13,12 @@ row for its table, not yet inserted, with unique keys on every call."""
 from __future__ import annotations
 
 import itertools
+import tempfile
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -195,6 +197,33 @@ async def _assignment_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, A
     }
 
 
+def _version_row(tenant_id: UUID) -> dict[str, Any]:
+    commit = uuid.uuid4().hex + uuid.uuid4().hex[:8]
+    return {
+        "tenant_id": tenant_id,
+        "version": f"git:{commit}",
+        "commit": commit,
+        "branch": "main",
+        "status": "accepted",
+        "problems": [],
+        "teams": ["payments"],
+        "bundle": b"bundle",
+        "digest": f"sha256:{commit:0>64}",
+        "tree_digest": f"sha256:{commit:0>64}",
+    }
+
+
+@register("policy_versions")
+async def _policy_version_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    return _version_row(tenant_id)
+
+
+@register("policy_active")
+async def _policy_active_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    version = await _insert(conn, "policy_versions", _version_row(tenant_id))
+    return {"tenant_id": tenant_id, "version": version["version"], "branch": "main"}
+
+
 # ── endpoint cases ────────────────────────────────────────────────────────────
 
 
@@ -234,6 +263,17 @@ async def _audit_record_in_b(api) -> dict[str, str]:
     return values
 
 
+async def _policy_version_in_b(api) -> dict[str, str]:
+    from policy_repos import make_policy_repo, url
+
+    repo = make_policy_repo(Path(tempfile.mkdtemp(prefix="cp-iso-")) / "policy")
+    made = await api.put(
+        "/v1/tenant/policy-source", api.b.admin_token, {"repo": url(repo), "branch": "main"}
+    )
+    assert made.status_code == 200 and made.json()["sync"]["kind"] == "activated", made.text
+    return {"version": made.json()["sync"]["version"]}
+
+
 ENDPOINT_CASES += [
     EndpointCase("tokens", "DELETE", "/v1/tokens/{id}", _token_in_b),
     EndpointCase("tokens", "GET", "/v1/tokens", _token_in_b, must_not_list=True),
@@ -258,4 +298,6 @@ ENDPOINT_CASES += [
     EndpointCase("rbac", "GET", "/v1/rbac/assignments", _assignment_in_b, must_not_list=True),
     EndpointCase("rbac", "GET", "/v1/rbac/roles", _role_in_b, must_not_list=True),
     EndpointCase("audit", "GET", "/v1/audit", _audit_record_in_b, must_not_list=True),
+    EndpointCase("policy", "GET", "/v1/policy/versions/{version}/bundle", _policy_version_in_b),
+    EndpointCase("policy", "GET", "/v1/policy/versions", _policy_version_in_b, must_not_list=True),
 ]

@@ -1,6 +1,58 @@
 {
   "components": {
     "schemas": {
+      "ActivePolicy": {
+        "description": "`GET /v1/policy/active`: the tenant's validated policy and where its bundle is.",
+        "properties": {
+          "activated_at": {
+            "format": "date-time",
+            "title": "Activated At",
+            "type": "string"
+          },
+          "branch": {
+            "title": "Branch",
+            "type": "string"
+          },
+          "bundle_path": {
+            "title": "Bundle Path",
+            "type": "string"
+          },
+          "commit_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit At"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          },
+          "tree_digest": {
+            "title": "Tree Digest",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "branch",
+          "digest",
+          "tree_digest",
+          "activated_at",
+          "bundle_path"
+        ],
+        "title": "ActivePolicy",
+        "type": "object"
+      },
       "Assignment": {
         "properties": {
           "email": {
@@ -426,6 +478,128 @@
         "title": "Me",
         "type": "object"
       },
+      "PolicySource": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/tenant/policy-source`: where the tenant's policy repo lives. A URL with\ncredentials is refused (git credentials are mounted per tenant, ND-15).",
+        "properties": {
+          "branch": {
+            "default": "main",
+            "title": "Branch",
+            "type": "string"
+          },
+          "repo": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Repo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo"
+        ],
+        "title": "PolicySource",
+        "type": "object"
+      },
+      "PolicySourceChanged": {
+        "description": "The tenant after a policy-source change, and the sync it triggered.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "policy_branch": {
+            "title": "Policy Branch",
+            "type": "string"
+          },
+          "policy_repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Repo"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "sync": {
+            "$ref": "#/components/schemas/SyncOutcome"
+          },
+          "webhook_configured": {
+            "default": false,
+            "title": "Webhook Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "policy_branch",
+          "sync"
+        ],
+        "title": "PolicySourceChanged",
+        "type": "object"
+      },
+      "PolicyVersionInfo": {
+        "properties": {
+          "active": {
+            "default": false,
+            "title": "Active",
+            "type": "boolean"
+          },
+          "branch": {
+            "title": "Branch",
+            "type": "string"
+          },
+          "digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Digest"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "branch",
+          "status",
+          "received_at"
+        ],
+        "title": "PolicyVersionInfo",
+        "type": "object"
+      },
       "Problem": {
         "description": "An RFC 9457 problem document. `code` is a stable machine name\n(`auth.invalid_token`, ...); `hint` is a next step the CLI prints as is. A problem never\nechoes a submitted secret and never names another tenant.",
         "properties": {
@@ -541,6 +715,86 @@
           "permissions"
         ],
         "title": "RoleUpdate",
+        "type": "object"
+      },
+      "SyncOutcome": {
+        "description": "What one policy sync did. `failed`: the repo could not be fetched (`problems` says\nwhy, credentials scrubbed).",
+        "properties": {
+          "kind": {
+            "enum": [
+              "unchanged",
+              "activated",
+              "rejected",
+              "busy",
+              "unconfigured",
+              "failed"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "SyncOutcome",
+        "type": "object"
+      },
+      "TenantInfo": {
+        "description": "`GET /v1/tenant`: the caller's tenant (credentials never shown).",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "policy_branch": {
+            "title": "Policy Branch",
+            "type": "string"
+          },
+          "policy_repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Repo"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "webhook_configured": {
+            "default": false,
+            "title": "Webhook Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "policy_branch"
+        ],
+        "title": "TenantInfo",
         "type": "object"
       },
       "TenantRef": {
@@ -710,6 +964,20 @@
           "email"
         ],
         "title": "UserRef",
+        "type": "object"
+      },
+      "WebhookIssued": {
+        "description": "The webhook path, carrying the new hook token: shown once, never again.",
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "WebhookIssued",
         "type": "object"
       }
     },
@@ -943,6 +1211,239 @@
         "summary": "Me",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/v1/policy/active": {
+      "get": {
+        "description": "The tenant's active policy version and where to download its bundle.",
+        "operationId": "get_active_v1_policy_active_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivePolicy"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Active",
+        "tags": [
+          "policy"
+        ]
+      }
+    },
+    "/v1/policy/sync": {
+      "post": {
+        "description": "Sync the tenant's policy now (org `policy.edit.org`); 202 when a sync is running.",
+        "operationId": "manual_sync_v1_policy_sync_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncOutcome"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncOutcome"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Manual Sync",
+        "tags": [
+          "policy"
+        ]
+      }
+    },
+    "/v1/policy/versions": {
+      "get": {
+        "description": "The tenant's policy versions, newest first, accepted and rejected.",
+        "operationId": "list_versions_v1_policy_versions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PolicyVersionInfo"
+                  },
+                  "title": "Response List Versions V1 Policy Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Versions",
+        "tags": [
+          "policy"
+        ]
+      }
+    },
+    "/v1/policy/versions/{version}/bundle": {
+      "get": {
+        "description": "An accepted version's bundle (`git archive`, gzipped); `ETag` is its digest.",
+        "operationId": "get_bundle_v1_policy_versions__version__bundle_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/gzip": {}
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Bundle",
+        "tags": [
+          "policy"
+        ]
+      }
+    },
+    "/v1/policy/webhook/{hook_token}": {
+      "post": {
+        "description": "A push to the tenant's policy repo: sync that tenant after answering (R15).",
+        "operationId": "webhook_v1_policy_webhook__hook_token__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hook_token",
+            "required": true,
+            "schema": {
+              "title": "Hook Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Webhook V1 Policy Webhook  Hook Token  Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "summary": "Webhook",
+        "tags": [
+          "policy"
         ]
       }
     },
@@ -1355,6 +1856,130 @@
         "summary": "Put Role",
         "tags": [
           "rbac"
+        ]
+      }
+    },
+    "/v1/tenant": {
+      "get": {
+        "description": "The caller's tenant: its name and policy source (never a credential).",
+        "operationId": "get_tenant_v1_tenant_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Tenant",
+        "tags": [
+          "tenant"
+        ]
+      }
+    },
+    "/v1/tenant/policy-source": {
+      "put": {
+        "description": "Point the tenant at its policy repo and branch (org `policy.edit.org`), then sync.",
+        "operationId": "put_policy_source_v1_tenant_policy_source_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicySource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicySourceChanged"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Policy Source",
+        "tags": [
+          "tenant"
+        ]
+      }
+    },
+    "/v1/tenant/webhook-token": {
+      "post": {
+        "description": "A new policy-repo webhook URL for the tenant (org `policy.edit.org`); the previous\none stops working. The token is in this response only (ND-14).",
+        "operationId": "rotate_webhook_token_v1_tenant_webhook_token_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookIssued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Webhook Token",
+        "tags": [
+          "tenant"
         ]
       }
     },

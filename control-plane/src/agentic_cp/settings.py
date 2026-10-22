@@ -50,6 +50,13 @@ class Settings(BaseModel):
     policy_poll_seconds: Annotated[int, Field(ge=10)] = 60
     policy_workdir: Path = Path(tempfile.gettempdir()) / "agentic-cp" / "policy"
     git_config_dir: Path | None = None
+    """`<dir>/<tenant-slug>.gitconfig`, when present, is that tenant's GIT_CONFIG_GLOBAL
+    (a mounted secret naming a credential helper; ND-15)."""
+    git_timeout_seconds: Annotated[int, Field(ge=5, le=3600)] = 120
+    allow_local_repos: bool = False
+    """Accept `file://` and path repository URLs (R12). Development and tests only: in a
+    shared deployment a tenant admin could otherwise read the server's disk."""
+    codeowners_refresh_minutes: Annotated[int, Field(ge=1)] = 60
     require_db_enforcement: bool = True
     """Fail closed (readyz 503, serve refuses) unless the database enforces insert-only
     evidence and tenant isolation (DR-4). False only for local development."""

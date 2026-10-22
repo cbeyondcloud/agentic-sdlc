@@ -15,6 +15,9 @@ pytestmark = pytest.mark.anyio
 
 OBJECT_ROUTES = [c for c in ENDPOINT_CASES if not c.must_not_list]
 LIST_ROUTES = [c for c in ENDPOINT_CASES if c.must_not_list]
+#: Routes whose path parameter is a credential, not an object id: each has its own test
+#: (`test_webhook_token_resolves_only_its_tenant`).
+CREDENTIAL_ROUTES = {"POST /v1/policy/webhook/{hook_token}"}
 
 
 def _fill(path: str, values: dict[str, str]) -> str:
@@ -53,7 +56,7 @@ def test_every_object_route_has_an_isolation_case():
             continue
         for method in operations:
             routes.add(f"{method.upper()} {path}")
-    covered = {f"{c.method} {c.path}" for c in OBJECT_ROUTES}
+    covered = {f"{c.method} {c.path}" for c in OBJECT_ROUTES} | CREDENTIAL_ROUTES
     assert routes <= covered, sorted(routes - covered)
 
 

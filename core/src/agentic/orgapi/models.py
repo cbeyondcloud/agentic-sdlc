@@ -5,11 +5,12 @@ the CLI can depend on it without pulling the server in (import contract)."""
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from agentic.orgapi.rbac import EffectivePermissions
 
@@ -170,6 +171,79 @@ class AuditEntry(BaseModel):
 
 class AuditVerification(BaseModel):
     problems: list[str]
+
+
+#: A git branch name a tenant may track (a subset of `git check-ref-format --branch`).
+BRANCH_NAME = re.compile(
+    r"(?!-)(?!.*\.\.)(?!.*//)(?!.*@\{)(?!.*\.lock$)(?!.*/\.)(?!\.)[A-Za-z0-9._/-]{1,200}(?<![./])"
+)
+
+
+def checked_branch(value: str) -> str:
+    if not BRANCH_NAME.fullmatch(value):
+        raise ValueError("not a branch name git accepts (letters, digits, '.', '_', '-', '/')")
+    return value
+
+
+class TenantInfo(BaseModel):
+    """`GET /v1/tenant`: the caller's tenant (credentials never shown)."""
+
+    slug: str
+    name: str
+    policy_repo: str | None = None
+    policy_branch: str
+    webhook_configured: bool = False
+
+
+class PolicySource(RequestModel):
+    """`PUT /v1/tenant/policy-source`: where the tenant's policy repo lives. A URL with
+    credentials is refused (git credentials are mounted per tenant, ND-15)."""
+
+    repo: str = Field(min_length=1, max_length=500)
+    branch: Annotated[str, AfterValidator(checked_branch)] = "main"
+
+
+class SyncOutcome(BaseModel):
+    """What one policy sync did. `failed`: the repo could not be fetched (`problems` says
+    why, credentials scrubbed)."""
+
+    kind: Literal["unchanged", "activated", "rejected", "busy", "unconfigured", "failed"]
+    version: str | None = None
+    problems: list[str] = Field(default_factory=list)
+
+
+class PolicySourceChanged(TenantInfo):
+    """The tenant after a policy-source change, and the sync it triggered."""
+
+    sync: SyncOutcome
+
+
+class WebhookIssued(BaseModel):
+    """The webhook path, carrying the new hook token: shown once, never again."""
+
+    path: str = Field(repr=False)
+
+
+class ActivePolicy(BaseModel):
+    """`GET /v1/policy/active`: the tenant's validated policy and where its bundle is."""
+
+    version: str
+    branch: str
+    digest: str
+    tree_digest: str
+    activated_at: datetime
+    commit_at: datetime | None = None
+    bundle_path: str
+
+
+class PolicyVersionInfo(BaseModel):
+    version: str
+    branch: str
+    status: Literal["accepted", "rejected"]
+    problems: list[str] = Field(default_factory=list)
+    digest: str | None = None
+    received_at: datetime
+    active: bool = False
 
 
 class Problem(BaseModel):

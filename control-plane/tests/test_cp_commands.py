@@ -58,6 +58,29 @@ async def test_grant_runtime_command_is_idempotent(operator_env):
     assert (await api.get("/v1/me", api.a.admin_token)).status_code == 200
 
 
+async def test_set_policy_repo_sets_one_tenant_and_audits_it(operator_env, capsys):
+    api = operator_env
+    repo = "https://git.example.test/acme/policy.git"
+    argv = ("admin", "tenant", "set-policy-repo", "--tenant", "tenant-a", "--repo", repo)
+    assert await _run(*argv, "--branch", "prod") == 0
+    async with api.db.owner.begin() as conn:
+        rows = dict((await conn.execute(select(tenants.c.slug, tenants.c.policy_repo_url))).all())
+    assert rows == {"tenant-a": repo, "tenant-b": None}
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        record = (await read_records(conn))[-1]
+    assert record.event == "tenant.policy_source_changed" and record.actor == "system:operator"
+    assert record.after == {"repo": repo, "branch": "prod"}
+    secret = "https://u:" + "p4ss" + "@git.example.test/x.git"
+    assert (
+        await _run("admin", "tenant", "set-policy-repo", "--tenant", "tenant-a", "--repo", secret)
+        == 3
+    )
+    assert "p4ss" not in capsys.readouterr().err
+    local = ("admin", "tenant", "set-policy-repo", "--tenant", "tenant-a", "--repo", "/srv/x")
+    assert await _run(*local) == 3
+    assert await _run(*argv, "--branch=-bad") == 3
+
+
 async def test_commands_need_the_owner_dsn(api, monkeypatch, capsys):
     monkeypatch.setenv("AGENTIC_CP_DATABASE_URL", api.db.app_dsn)
     monkeypatch.delenv("AGENTIC_CP_OWNER_DATABASE_URL", raising=False)

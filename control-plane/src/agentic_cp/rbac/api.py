@@ -29,6 +29,7 @@ from agentic_cp.auth.deps import Caller
 from agentic_cp.auth.tokens import TokenContext
 from agentic_cp.auth.users import UserError, create_user, normalise_email, user_by_email
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
+from agentic_cp.policy_sync.service import active_teams
 from agentic_cp.rbac import store
 from agentic_cp.rbac.authz import Org, Repo, Team, authorize, describe, require
 from agentic_cp.rbac.defaults import BUILTIN, ORG_ADMIN
@@ -222,6 +223,14 @@ async def create_assignment(body: AssignmentRequest, request: Request, ctx: Call
                 "rbac.not_assignable",
                 f"a team lead may assign only team-assignable roles, not {role.name}",
             )
+        if body.team and (teams := await active_teams(conn)) is not None:
+            if body.team not in teams:  # R14, DF-404: the active policy names the teams
+                raise ApiProblem(
+                    422,
+                    "rbac.unknown_team",
+                    f"team {body.team!r} is not in the tenant's active policy",
+                    hint=f"add policy/teams/{body.team}.yaml to the policy repo first",
+                )
         try:
             user = await user_by_email(conn, body.email) or await create_user(conn, body.email)
         except UserError as error:

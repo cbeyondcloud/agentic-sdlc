@@ -17,6 +17,7 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
 """
 
 import hashlib
+import re
 import subprocess
 from pathlib import Path
 
@@ -60,8 +61,19 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
 }
 
 
-def load_policy(root: Path) -> OrgPolicy:
-    """Load and validate every policy file under `root`. Raises PolicyError."""
+#: A version id the run ledger accepts (`sdlc_commons.ledger.FIELDS["policy_version"]`): a
+#: git commit (SHA-1, or SHA-256's 64 hex) or a content hash.
+VERSION_PATTERN = re.compile(r"git:[0-9a-f]{40}(?:[0-9a-f]{24})?|sha256:[0-9a-f]{64}")
+
+
+def load_policy(root: Path, *, version: str | None = None) -> OrgPolicy:
+    """Load and validate every policy file under `root`. Raises PolicyError.
+
+    `version` is the id a caller already knows - the commit the control plane validated,
+    for a policy extracted from its bundle (SP15) - instead of the one computed from the
+    folder; it must have the ledger's shape."""
+    if version is not None and not VERSION_PATTERN.fullmatch(version):
+        raise PolicyError(root, ["the policy version must be git:<commit> or sha256:<digest>"])
     problems: list[str] = []
     data: dict[str, object] = {"teams": {}}
 
@@ -95,7 +107,7 @@ def load_policy(root: Path) -> OrgPolicy:
     if problems:
         raise PolicyError(root, problems)
 
-    data["version"] = policy_version(root)
+    data["version"] = version if version is not None else policy_version(root)
     try:
         return OrgPolicy.model_validate(data)
     except ValidationError as error:
@@ -144,6 +156,27 @@ def policy_version(root: Path) -> str:
         text = text.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
         digest.update(path.relative_to(root).as_posix().encode() + b"\0")
         digest.update(text + b"\0")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def tree_digest(root: Path) -> str:
+    """`sha256:` over every file under `root` (a policy repo tree), `.git` skipped: for each
+    file in POSIX-path order, the length-prefixed path then the length-prefixed bytes,
+    exactly as stored (DF-140: without the lengths, `a`+`bc` and `ab`+`c` would collide).
+
+    The control plane computes it over the tree it validated and the CLI over the copy it
+    extracted, so a locally edited cache is found; the bytes are not normalised, because the
+    bundle carries LF text on every platform."""
+    digest = hashlib.sha256()
+    files = sorted(
+        (path.relative_to(root).as_posix(), path)
+        for path in root.rglob("*")
+        if path.is_file() and ".git" not in path.relative_to(root).parts
+    )
+    for rel, path in files:
+        name, data = rel.encode("utf-8"), path.read_bytes()
+        digest.update(len(name).to_bytes(8, "big") + name)
+        digest.update(len(data).to_bytes(8, "big") + data)
     return f"sha256:{digest.hexdigest()}"
 
 
