@@ -38,6 +38,8 @@ LOGGED_ENV = (
     "FAKE_ROUTE",
     "FAKE_INHERITED",
     "OPENAI_API_KEY",
+    "NO_PROXY",
+    "no_proxy",
 )
 
 
@@ -59,7 +61,9 @@ class FakeAgent:
     async def initialize(self, protocol_version, client_capabilities=None, client_info=None, **kw):
         caps = client_capabilities.model_dump(mode="json", by_alias=True, exclude_none=True)
         env = {name: os.environ.get(name) for name in LOGGED_ENV}
-        self.log("initialize", protocol=protocol_version, capabilities=caps, env=env)
+        self.log(
+            "initialize", protocol=protocol_version, capabilities=caps, env=env, argv=sys.argv[2:]
+        )
         self.log("cwd", cwd=os.getcwd())
         methods = [
             schema.AuthMethodAgent(id=name, name=name)

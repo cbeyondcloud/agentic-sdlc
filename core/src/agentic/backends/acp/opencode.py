@@ -12,8 +12,11 @@ plus what the 1.18.35 source shows, applied to every run:
     object is passed again as `OPENCODE_PERMISSION`, which OpenCode merges last;
   * nothing from the repository: `OPENCODE_DISABLE_PROJECT_CONFIG` skips the project's
     `opencode.json`, `.opencode/` folders (agents, commands, plugins) and instruction
-    files - a planted file can add no MCP server, plugin or instructions (DF-124) - and
-    `--pure` loads no external plugins;
+    files - a planted file can add no MCP server, agent or instructions (DF-124) - and
+    `--pure` loads no external plugins. OpenCode's newer internal plugin loader ignores
+    both and still imports `.opencode/plugin(s)/*.js|ts` and `plugin(s)` packages from
+    project config (found by the contract tests), so a tree carrying either is refused
+    before OpenCode starts (`code_in_tree`), and the agent may never edit those files;
   * nothing that runs code or phones out on its own: no formatter, LSP, snapshot,
     sharing, auto-update, model-list fetch or skills from other tools. One request
     cannot be switched off: OpenCode installs its plugin package from
@@ -28,7 +31,9 @@ callback is a second gate.
 """
 
 import json
+import re
 from collections.abc import Sequence
+from pathlib import Path
 
 from agentic.backends.acp.profile import AcpProfile, Launch, ShellRules, StepSetup, spelled_out
 from agentic.backends.capabilities import CAPABILITIES
@@ -69,6 +74,59 @@ QUIET = {
 }
 
 
+#: What OpenCode would load from the repository (edit patterns, matched from the tree):
+#: never written by the agent, so it cannot plant code for the next step.
+_OWN_FILES = (
+    ".opencode/*",
+    "*/.opencode/*",
+    "opencode.json",
+    "*/opencode.json",
+    "opencode.jsonc",
+    "*/opencode.jsonc",
+)
+_CONFIG_NAMES = ("opencode.json", "opencode.jsonc")
+_PLUGIN_KEY = re.compile(r'"plugins?"\s*:')
+
+
+def code_in_tree(tree: Path) -> list[str]:
+    """The files in `tree` that OpenCode 1.18.35 would run as code whatever its config
+    says: its internal plugin loader reads every `.opencode/` folder and project config
+    from the working folder up to the repository root even with project config disabled
+    and `--pure` (found by the contract tests) - plugin files in `.opencode/plugin(s)/`
+    and `plugin(s)` entries (npm packages) in an `opencode.json[c]`. One reason each."""
+    found: list[str] = []
+    for folder in _up_to_repository(Path(tree)):
+        for sub in ("plugin", "plugins"):
+            plugins = folder / ".opencode" / sub
+            if plugins.is_dir():
+                found += [
+                    f"{path}: an OpenCode plugin"
+                    for path in sorted(plugins.iterdir())
+                    if path.suffix in (".js", ".ts") and path.is_file()
+                ]
+        for config in [folder / n for n in _CONFIG_NAMES] + [
+            folder / ".opencode" / n for n in _CONFIG_NAMES
+        ]:
+            try:
+                text = config.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if _PLUGIN_KEY.search(text):
+                found.append(f"{config}: names OpenCode plugins (npm packages)")
+    return found
+
+
+def _up_to_repository(tree: Path) -> list[Path]:
+    """`tree` and its parents up to the repository root (the first holding `.git`); the
+    tree alone when it is in no repository."""
+    folders = []
+    for folder in [tree, *tree.parents]:
+        folders.append(folder)
+        if (folder / ".git").exists():
+            return folders
+    return [tree]
+
+
 def _paths(glob: str) -> list[str]:
     """A deny-path glob as OpenCode edit patterns, matched against the path relative to
     the tree, where `*` also crosses `/`: `**/x` also covers `x` at the top."""
@@ -90,6 +148,7 @@ def opencode_permissions(tools: Sequence[str], rules: ShellRules) -> dict:
             perms[key] = {"*": "allow"}
             for glob in rules.deny_paths:
                 perms[key].update({pattern: "deny" for pattern in _paths(glob)})
+            perms[key].update({pattern: "deny" for pattern in _OWN_FILES})
         elif key == "bash":
             bash = {"*": "deny"}
             for action, prefixes in (("allow", rules.allow), ("ask", rules.ask)):
@@ -187,7 +246,11 @@ def configure(setup: StepSetup) -> Launch:
 
 OPENCODE = AcpProfile(
     name="opencode",
-    command=("opencode", "acp", "--pure"),
+    # In ACP mode OpenCode serves its own HTTP API and calls it: on loopback only (mDNS
+    # or a config could bind every interface), on the port the runner gives it, called
+    # directly - the sandbox's proxy takes everything else, a gateway on 127.0.0.1 too
+    command=("opencode", "acp", "--pure", "--hostname", "127.0.0.1", "--mdns=false"),
+    own_server=("--port", "127.0.0.1"),
     version="1.18.35",
     configure=configure,
     quiet=QUIET,
@@ -201,4 +264,5 @@ OPENCODE = AcpProfile(
         "NO_PROXY",
     ),
     session_cost=True,
+    refuse_tree=code_in_tree,
 )

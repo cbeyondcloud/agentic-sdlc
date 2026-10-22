@@ -11,6 +11,7 @@ import pytest
 from agentic.backends.acp.opencode import (
     OPENCODE,
     PERMISSION_KEYS,
+    code_in_tree,
     configure,
     opencode_config,
     opencode_permissions,
@@ -107,7 +108,7 @@ def test_a_deny_overrides_an_allow_that_covers_it():
 
 def test_denied_paths_become_edit_denies_matched_from_the_tree():
     edit = opencode_permissions(CODING, RULES)["edit"]
-    assert list(edit.items()) == [
+    assert list(edit.items())[:5] == [
         ("*", "allow"),
         ("infra/*", "deny"),
         (".env", "deny"),
@@ -118,6 +119,74 @@ def test_denied_paths_become_edit_denies_matched_from_the_tree():
 
 def test_edit_is_denied_without_the_capability():
     assert opencode_permissions(["read_files", "run_shell"], RULES)["edit"] == "deny"
+
+
+def test_the_agent_can_never_edit_what_opencode_would_load_as_code():
+    edit = opencode_permissions(CODING, ShellRules())["edit"]
+    for pattern in (".opencode/*", "*/.opencode/*", "opencode.json", "*/opencode.jsonc"):
+        assert edit[pattern] == "deny", pattern
+
+
+# ── code a tree would make OpenCode load (1.18.35 ignores the flag for these) ──
+
+
+def repo(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    return root
+
+
+def write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize("name", ["plugins/evil.js", "plugin/evil.ts"])
+def test_a_plugin_file_in_the_tree_is_found(tmp_path, name):
+    root = repo(tmp_path)
+    write(root / ".opencode" / name, "export default {}")
+    (found,) = code_in_tree(root)
+    assert name.split("/")[1] in found
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        "opencode.json",
+        "opencode.jsonc",
+        ".opencode/opencode.json",
+    ],
+)
+def test_a_plugin_entry_in_a_project_config_is_found(tmp_path, config):
+    root = repo(tmp_path)
+    write(root / config, '{\n  // our plugins\n  "plugin": ["opencode-evil@1.0.0"]\n}\n')
+    (found,) = code_in_tree(root)
+    assert Path(config).name in found
+
+
+def test_a_plugin_above_the_tree_inside_the_repository_is_found(tmp_path):
+    root = repo(tmp_path)
+    write(root / ".opencode" / "plugins" / "evil.js", "x")
+    tree = root / "services" / "api"
+    tree.mkdir(parents=True)
+    assert len(code_in_tree(tree)) == 1
+
+
+def test_nothing_above_the_repository_is_looked_at(tmp_path):
+    write(tmp_path / ".opencode" / "plugins" / "outside.js", "x")
+    root = repo(tmp_path)
+    assert code_in_tree(root) == []
+
+
+def test_a_project_config_without_plugins_is_fine(tmp_path):
+    root = repo(tmp_path)
+    write(root / "opencode.json", '{"model": "x/y", "mcp": {}, "instructions": ["A.md"]}')
+    write(root / ".opencode" / "agents" / "build.md", "---\n---\nhi\n")
+    assert code_in_tree(root) == []
+
+
+def test_the_profile_refuses_such_a_tree():
+    assert OPENCODE.refuse_tree is code_in_tree
 
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -193,7 +262,16 @@ def test_project_config_is_never_loaded(coder):  # DF-124
 
 def test_the_profile_is_pinned_and_quiet():
     assert OPENCODE.name == "opencode"
-    assert OPENCODE.command == ("opencode", "acp", "--pure")
+    # its own server, which it calls over HTTP, on loopback only (never mDNS/0.0.0.0)
+    assert OPENCODE.command == (
+        "opencode",
+        "acp",
+        "--pure",
+        "--hostname",
+        "127.0.0.1",
+        "--mdns=false",
+    )
+    assert OPENCODE.own_server == ("--port", "127.0.0.1")
     assert OPENCODE.version == "1.18.35"
     for switch in (
         "OPENCODE_DISABLE_AUTOUPDATE",

@@ -87,9 +87,16 @@ class AcpProfile:
     quiet: Mapping[str, str] = field(default_factory=dict)  # egress and update switches
     egress_hosts: tuple[str, ...] = ()  # hosts it tries besides the gateway; srt blocks them
     inherit: tuple[str, ...] = ()  # the user's variables it may see (CA bundle, shell path)
+    # A server of its own that it calls over HTTP: (the flag that sets its port, its host).
+    # The runner gives it a free port and has exactly that host:port skip any proxy - a
+    # gateway elsewhere on loopback still goes through the sandbox's proxy.
+    own_server: tuple[str, str] | None = None
     # The agent sums every model call at the prices `configure` wrote (policy's) and
     # reports the session's cost: the step is charged from that.
     session_cost: bool = False
+    # What in a tree the agent would run as code whatever its config says (one reason
+    # per file): the agent is never started in such a tree - fail closed.
+    refuse_tree: Callable[[Path], list[str]] | None = None
 
 
 #: The variables that name a home or config folder, on every OS.

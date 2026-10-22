@@ -239,6 +239,22 @@ def test_without_them_neither_is_called(world):
     assert world.events("authenticate") == [] and world.events("set_mode") == []
 
 
+def test_a_tree_the_profile_refuses_never_starts_the_agent(world):
+    profile = fake_profile(refuse_tree=lambda tree: [f"{tree.name}/.agent/plugins/x.js"])
+    with pytest.raises(RuntimeError, match=r"refuses .*\.agent/plugins/x\.js"):
+        run(world.runner([[{"say": "VALID"}]], profile=profile))
+    assert not world.log.exists()
+
+
+def test_an_agent_that_fails_to_start_a_session_names_its_stderr(world, tmp_path):
+    crash = tmp_path / "crash.py"
+    crash.write_text("import sys\nsys.stderr.write('boom: no config dir')\nsys.exit(3)\n", "utf-8")
+    runner = world.runner([])
+    runner.command = [sys.executable, str(crash)]
+    with pytest.raises(RuntimeError, match="boom: no config dir"):
+        run(runner)
+
+
 def test_an_agent_on_another_protocol_version_is_refused(world):
     with pytest.raises(RuntimeError, match="protocol"):
         run(world.runner([[{"say": "VALID"}]], protocol=2))
@@ -338,6 +354,33 @@ def test_a_missing_agent_command_is_a_clear_error():
 def test_an_npm_shim_is_refused_with_a_hint(shim):
     with pytest.raises(RuntimeError, match="executable"):
         resolve_command(("agent", "acp"), which=lambda name: shim)
+
+
+def test_the_agent_s_own_server_gets_a_free_port_called_directly(world, monkeypatch):
+    profile = fake_profile(own_server=("--port", "127.0.0.1"), inherit=("NO_PROXY",))
+    monkeypatch.setenv("NO_PROXY", "corp.example")
+    run(world.runner([[{"say": "VALID"}]], profile=profile))
+    (init,) = world.events("initialize")
+    argv = init["argv"]
+    port = int(argv[argv.index("--port") + 1])
+    assert 0 < port < 65536
+    # only that one host:port skips a proxy: a gateway elsewhere on loopback does not
+    assert init["env"]["NO_PROXY"] == f"corp.example,127.0.0.1:{port}"
+    assert init["env"]["no_proxy"] == init["env"]["NO_PROXY"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="wrapping needs macOS, Linux or WSL2")
+def test_under_a_wrap_only_the_own_server_bypasses_the_sandbox_proxy(world):
+    runner = world.runner([], profile=fake_profile(own_server=("--port", "127.0.0.1")))
+    runner.wrap = ["srt", "--settings", "s.json", "--", "env", "NO_PROXY="]
+    argv, env = runner._launch()
+    at = argv.index("srt")
+    assert argv[at : at + 6] == ["srt", "--settings", "s.json", "--", "env", "NO_PROXY="]
+    port = argv[argv.index("--port") + 1]
+    direct = f"127.0.0.1:{port}"
+    assert argv[at + 6 : at + 9] == ["env", f"NO_PROXY={direct}", f"no_proxy={direct}"]
+    assert argv[at + 9] == sys.executable
+    assert env["NO_PROXY"] == direct
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="the refusal is for native Windows")

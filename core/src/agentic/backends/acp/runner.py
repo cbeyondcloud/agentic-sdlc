@@ -21,6 +21,7 @@ import asyncio
 import math
 import os
 import shutil
+import socket
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -88,6 +89,14 @@ def resolve_command(command: Sequence[str], which=shutil.which) -> list[str]:
             "agent's own (signed) executable instead"
         )
     return [found, *command[1:]]
+
+
+def _free_port(host: str) -> int:
+    """A port free on `host` now. Inside srt the agent has a network namespace of its own,
+    so nothing else can take it; unwrapped the window is a moment."""
+    with socket.socket() as probe:
+        probe.bind((host, 0))
+        return probe.getsockname()[1]
 
 
 @dataclass
@@ -244,18 +253,36 @@ class AcpRunner:
         if process is not None and process.returncode is None:
             kill_tree(process.pid)
 
-    def _argv(self) -> list[str]:
+    def _launch(self) -> tuple[list[str], dict[str, str]]:
+        """The argv and environment the agent starts with: under `wrap` when given, as a
+        session leader on POSIX, its own server (if any) on a free port called directly."""
         if self.wrap and os.name == "nt":
             raise RuntimeError(
                 "wrapping an agent CLI in a sandbox needs macOS, Linux or WSL2 (D38)"
             )
-        return session_leader([*(self.wrap or []), *resolve_command(self.command)])
+        command, env = resolve_command(self.command), dict(self.env)
+        if self.profile.own_server is not None:
+            flag, host = self.profile.own_server
+            direct = f"{host}:{_free_port(host)}"
+            command += [flag, direct.rsplit(":", 1)[1]]
+            given = [h.strip() for h in env.get("NO_PROXY", "").split(",") if h.strip()]
+            env["NO_PROXY"] = env["no_proxy"] = ",".join(dict.fromkeys([*given, direct]))
+            if self.wrap:  # inside, the sandbox's proxy takes everything else
+                command = ["env", f"NO_PROXY={direct}", f"no_proxy={direct}", *command]
+        return session_leader([*(self.wrap or []), *command]), env
 
     async def _session(self, task: AgentTask) -> AgentOutcome:
         import acp
         from acp import schema
 
-        argv = self._argv()
+        refused = self.profile.refuse_tree(self.cwd) if self.profile.refuse_tree else []
+        if refused:
+            raise RuntimeError(
+                f"the {self.profile.name} backend refuses this tree: the agent would run "
+                f"code from it whatever its config says - {'; '.join(refused)}. Remove "
+                "those files from the branch, or run the step on another backend"
+            )
+        argv, env = self._launch()
         shutil.rmtree(self.home, ignore_errors=True)  # a retried step starts clean
         self.home.mkdir(parents=True, exist_ok=True)
         write_files(self.home, self.files)
@@ -264,31 +291,18 @@ class AcpRunner:
                 self._client,
                 argv[0],
                 *argv[1:],
-                env=self.env,
+                env=env,
                 cwd=str(self.cwd),
                 transport_kwargs={"stderr": stderr, "limit": STDIO_LIMIT},
             ) as (conn, process):
                 self._process = process
-                capabilities = schema.ClientCapabilities(
-                    fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False),
-                    terminal=False,
-                )
-                init = await conn.initialize(
-                    protocol_version=PROTOCOL_VERSION,
-                    client_capabilities=capabilities,
-                    client_info=schema.Implementation(name="agentic", version="1"),
-                )
-                if init.protocol_version != PROTOCOL_VERSION:
+                try:
+                    sid = await self._open(conn, schema)
+                except (ConnectionError, acp.RequestError) as error:
                     raise RuntimeError(
-                        f"the {self.profile.name} agent speaks ACP protocol "
-                        f"{init.protocol_version}; only {PROTOCOL_VERSION} is supported"
-                    )
-                if self.profile.auth_method:
-                    await conn.authenticate(method_id=self.profile.auth_method)
-                session = await conn.new_session(cwd=str(self.cwd), mcp_servers=[])
-                sid = session.session_id
-                if self.profile.mode:
-                    await conn.set_session_mode(session_id=sid, mode_id=self.profile.mode)
+                        f"the {self.profile.name} agent did not start a session ({error}); "
+                        f"its stderr ends: {self._stderr_tail()}"
+                    ) from error
                 first = [
                     acp.text_block(_instructions(task, self.contract)),
                     acp.text_block(task.prompt),
@@ -303,6 +317,36 @@ class AcpRunner:
                 if errors:
                     return self._outcome("invalid", text, errors=errors)
                 return self._outcome("completed", accepted if accepted is not None else text)
+
+    async def _open(self, conn, schema) -> str:
+        """Initialize (ACP v1 only), authenticate and open a session; its id."""
+        capabilities = schema.ClientCapabilities(
+            fs=schema.FileSystemCapabilities(read_text_file=False, write_text_file=False),
+            terminal=False,
+        )
+        init = await conn.initialize(
+            protocol_version=PROTOCOL_VERSION,
+            client_capabilities=capabilities,
+            client_info=schema.Implementation(name="agentic", version="1"),
+        )
+        if init.protocol_version != PROTOCOL_VERSION:
+            raise RuntimeError(
+                f"the {self.profile.name} agent speaks ACP protocol {init.protocol_version}; "
+                f"only {PROTOCOL_VERSION} is supported"
+            )
+        if self.profile.auth_method:
+            await conn.authenticate(method_id=self.profile.auth_method)
+        session = await conn.new_session(cwd=str(self.cwd), mcp_servers=[])
+        if self.profile.mode:
+            await conn.set_session_mode(session_id=session.session_id, mode_id=self.profile.mode)
+        return session.session_id
+
+    def _stderr_tail(self, limit: int = 2000) -> str:
+        try:
+            text = (self.home / _STDERR).read_bytes().decode("utf-8", errors="replace")
+        except OSError:
+            return "(no stderr)"
+        return text[-limit:].strip() or "(empty)"
 
     async def _turn(self, conn, session_id: str, blocks: list) -> str:
         self._client.begin()
