@@ -6,17 +6,18 @@ append their audit record in the same transaction (the API does both)."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from agentic_cp.tables import assignments, roles, users
+from agentic_cp.tables import assignments, repo_maintainers, repos, roles, users
 from agentic_cp.tenancy.context import require_tenant_id
 from agentic_cp.tenancy.tenants import current_tenant
 
 ORG_ADMIN = "org-admin"
+REPO_MAINTAINER = "repo-maintainer"
 
 
 @dataclass(frozen=True)
@@ -32,11 +33,13 @@ class Grant:
 
 @dataclass(frozen=True)
 class PolicyRows:
-    """One tenant's RBAC policy as plain data: role -> permissions, and the grants."""
+    """One tenant's RBAC policy as plain data: role -> permissions, the grants, and the
+    team of each repo someone maintains."""
 
     tenant_id: UUID
     roles: dict[str, frozenset[str]]
     grants: list[Grant]
+    repo_teams: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -83,10 +86,30 @@ async def load_rows(conn: AsyncConnection) -> tuple[int, PolicyRows]:
         )
         .where(users.c.status == "active")
     )
+    grants = [Grant(user, role, _scope(kind, value)) for user, role, kind, value in grant_rows]
+    maintainer_rows = await conn.execute(
+        select(repo_maintainers.c.user_id, repo_maintainers.c.repo_key, repos.c.team)
+        .join(
+            users,
+            (users.c.tenant_id == repo_maintainers.c.tenant_id)
+            & (users.c.id == repo_maintainers.c.user_id),
+        )
+        .join(
+            repos,
+            (repos.c.tenant_id == repo_maintainers.c.tenant_id)
+            & (repos.c.repo_key == repo_maintainers.c.repo_key),
+        )
+        .where(users.c.status == "active")
+    )
+    repo_teams: dict[str, str] = {}
+    for user, key, team in maintainer_rows:  # derived only (DF-405): never assigned by hand
+        grants.append(Grant(user, REPO_MAINTAINER, f"repo:{key}"))
+        repo_teams[key] = team
     rows = PolicyRows(
         tenant_id=tenant.id,
         roles={name: frozenset(perms) for name, perms in role_rows},
-        grants=[Grant(user, role, _scope(kind, value)) for user, role, kind, value in grant_rows],
+        grants=grants,
+        repo_teams=repo_teams,
     )
     return tenant.rbac_revision, rows
 

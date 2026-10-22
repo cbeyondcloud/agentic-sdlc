@@ -118,7 +118,7 @@ async def _migrate_and_regrant(settings: Settings) -> str:
             async with tenant_tx(engine, tenant.id) as conn:
                 added = await seed_roles(conn, clock=utc_now)
             if added:
-                print(f"tenant {tenant.slug}: added roles {', '.join(added)}")
+                print(f"tenant {tenant.slug}: seeded roles {', '.join(added)}")
     finally:
         await engine.dispose()
     return head

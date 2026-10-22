@@ -24,6 +24,7 @@ from agentic_cp.gitops import GitRunner
 from agentic_cp.policy_sync.api import router as policy_router
 from agentic_cp.rbac.api import router as rbac_router
 from agentic_cp.rbac.authz import EnforcerCache
+from agentic_cp.rbac.repos_api import router as repos_router
 from agentic_cp.settings import Settings
 from agentic_cp.tenancy.api import router as tenant_router
 
@@ -75,6 +76,7 @@ def create_app(
     app.include_router(audit_router)
     app.include_router(tenant_router)
     app.include_router(policy_router)
+    app.include_router(repos_router)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:

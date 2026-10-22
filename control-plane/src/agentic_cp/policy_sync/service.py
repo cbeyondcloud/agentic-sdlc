@@ -93,18 +93,27 @@ async def active_policy(conn: AsyncConnection) -> ActivePolicy | None:
     )
 
 
-async def active_teams(conn: AsyncConnection) -> list[str] | None:
-    """The teams of the tenant's active policy, or None when no policy is active (R14)."""
+async def _active_column(conn: AsyncConnection, column) -> list[str] | None:
     row = (
         await conn.execute(
-            select(policy_versions.c.teams).join(
+            select(column).join(
                 policy_active,
                 (policy_versions.c.tenant_id == policy_active.c.tenant_id)
                 & (policy_versions.c.version == policy_active.c.version),
             )
         )
     ).first()
-    return list(row.teams) if row is not None else None
+    return list(row[0]) if row is not None else None
+
+
+async def active_teams(conn: AsyncConnection) -> list[str] | None:
+    """The teams of the tenant's active policy, or None when no policy is active (R14)."""
+    return await _active_column(conn, policy_versions.c.teams)
+
+
+async def active_repo_patterns(conn: AsyncConnection) -> list[str] | None:
+    """The active policy's `allowed_repo_patterns`, or None when no policy is active."""
+    return await _active_column(conn, policy_versions.c.repo_patterns)
 
 
 async def sync_once(
@@ -159,6 +168,7 @@ async def sync_once(
                 status="rejected" if built.problems else "accepted",
                 problems=built.problems,
                 teams=built.teams,
+                repo_patterns=built.repo_patterns,
                 bundle=None if built.problems else built.bundle,
                 digest=None if built.problems else built.digest,
                 tree_digest=None if built.problems else built.tree,
@@ -229,6 +239,7 @@ async def _activate(
 class Built:
     problems: list[str]
     teams: list[str]
+    repo_patterns: list[str]
     bundle: bytes
     digest: str
     tree: str
@@ -297,7 +308,7 @@ def _build(git: GitRunner, workdir: Path, tenant: TenantRow, commit: str, versio
             f"{MAX_BUNDLE_BYTES} are served"
         )
     if problems:
-        return Built(problems, [], b"", "", "")
+        return Built(problems, [], [], b"", "", "")
     with tempfile.TemporaryDirectory(prefix="agentic-cp-policy-") as scratch:
         root = Path(scratch) / "tree"
         with tarfile.open(fileobj=io.BytesIO(archive), mode="r:") as tar:
@@ -306,9 +317,10 @@ def _build(git: GitRunner, workdir: Path, tenant: TenantRow, commit: str, versio
         found, policy = validate_policy_tree(root, version)
         tree = tree_digest(root)
     teams = sorted(policy.teams) if policy is not None else []
+    patterns = list(policy.allowed_repo_patterns) if policy is not None else []
     bundle = gzip_bytes(archive)
     digest = "sha256:" + hashlib.sha256(bundle).hexdigest()
-    return Built(found, teams, bundle, digest, tree)
+    return Built(found, teams, patterns, bundle, digest, tree)
 
 
 def gzip_bytes(data: bytes) -> bytes:

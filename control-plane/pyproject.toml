@@ -17,6 +17,9 @@ dependencies = [
     "asyncpg==0.31.0",
     "greenlet==3.5.6",
     "alembic==1.20.0",
+    # CODEOWNERS matching (MIT, pure Python, no dependencies; 2026-06-28), imported only by
+    # agentic_cp.rbac.codeowners.
+    "codeowners==0.9.0",
     # RBAC engine (owner decision row 77), imported only by agentic_cp.rbac.authz. Its
     # dependencies are pinned because their newest releases are younger than two weeks.
     "pycasbin==2.8.0",

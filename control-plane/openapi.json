@@ -98,8 +98,24 @@
         "type": "object"
       },
       "AssignmentRef": {
-        "description": "A role held at org scope or within one team.",
+        "description": "A role held at org scope, within one team, or - derived from CODEOWNERS, never\nassigned by hand - for one repo (`derived` is then true).",
         "properties": {
+          "derived": {
+            "default": false,
+            "title": "Derived",
+            "type": "boolean"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
           "role": {
             "title": "Role",
             "type": "string"
@@ -107,7 +123,8 @@
           "scope": {
             "enum": [
               "org",
-              "team"
+              "team",
+              "repo"
             ],
             "title": "Scope",
             "type": "string"
@@ -436,6 +453,47 @@
         "title": "EffectivePermissions",
         "type": "object"
       },
+      "HandlesInfo": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "handles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Handles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "email",
+          "handles"
+        ],
+        "title": "HandlesInfo",
+        "type": "object"
+      },
+      "HandlesUpdate": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/users/{email}/handles`: the person's host-qualified handles (`rbac.assign`).",
+        "properties": {
+          "handles": {
+            "items": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Handles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "handles"
+        ],
+        "title": "HandlesUpdate",
+        "type": "object"
+      },
       "Me": {
         "description": "`GET /v1/me`: who the token belongs to, in which tenant, and what they hold.",
         "properties": {
@@ -661,6 +719,135 @@
           "db_enforced"
         ],
         "title": "Readiness",
+        "type": "object"
+      },
+      "RepoInfo": {
+        "description": "A registered repo and the maintainers its CODEOWNERS names (ND-6).",
+        "properties": {
+          "codeowners_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codeowners Path"
+          },
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit"
+          },
+          "maintainers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Maintainers",
+            "type": "array"
+          },
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed At"
+          },
+          "remote": {
+            "title": "Remote",
+            "type": "string"
+          },
+          "repo_key": {
+            "title": "Repo Key",
+            "type": "string"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          },
+          "unresolved": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unresolved",
+            "type": "array"
+          }
+        },
+        "required": [
+          "repo_key",
+          "remote",
+          "team"
+        ],
+        "title": "RepoInfo",
+        "type": "object"
+      },
+      "RepoMaintainers": {
+        "properties": {
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit"
+          },
+          "unresolved": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unresolved",
+            "type": "array"
+          },
+          "users": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Users",
+            "type": "array"
+          }
+        },
+        "required": [
+          "users"
+        ],
+        "title": "RepoMaintainers",
+        "type": "object"
+      },
+      "RepoRegistration": {
+        "additionalProperties": false,
+        "description": "`POST /v1/repos`: register a repo for a team (`agent.edit.repo` in that team).",
+        "properties": {
+          "remote": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Remote",
+            "type": "string"
+          },
+          "team": {
+            "pattern": "^[a-z][a-z0-9-]{0,62}$",
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "remote",
+          "team"
+        ],
+        "title": "RepoRegistration",
         "type": "object"
       },
       "RoleInfo": {
@@ -1792,7 +1979,7 @@
         ]
       },
       "put": {
-        "description": "Create or replace a role (org `rbac.assign`). Org admins always keep `rbac.assign`.",
+        "description": "Create or replace a role (org `rbac.assign`). Org admins always keep `rbac.assign`.\nThe caller's right is checked before the body (DF-417): without `rbac.assign` every\nrequest is a 403, whatever it asks for.",
         "operationId": "put_role_v1_rbac_roles__name__put",
         "parameters": [
           {
@@ -1856,6 +2043,162 @@
         "summary": "Put Role",
         "tags": [
           "rbac"
+        ]
+      }
+    },
+    "/v1/repos": {
+      "post": {
+        "description": "Register a repo for a team (`agent.edit.repo` there); its remote must match the\nactive policy's `allowed_repo_patterns`. Registering again is a no-op.",
+        "operationId": "register_repo_v1_repos_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepoRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoInfo"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Register Repo",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/v1/repos/{repo_key}/maintainers": {
+      "get": {
+        "description": "Who CODEOWNERS makes a maintainer of the repo, and what stays unresolved.",
+        "operationId": "get_maintainers_v1_repos__repo_key__maintainers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repo_key",
+            "required": true,
+            "schema": {
+              "title": "Repo Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoMaintainers"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Maintainers",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/v1/repos/{repo_key}/refresh": {
+      "post": {
+        "description": "Fetch the repo's CODEOWNERS now (`agent.edit.repo` in the repo's team).",
+        "operationId": "refresh_repo_v1_repos__repo_key__refresh_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repo_key",
+            "required": true,
+            "schema": {
+              "title": "Repo Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Refresh Repo",
+        "tags": [
+          "repos"
         ]
       }
     },
@@ -2111,6 +2454,65 @@
         "summary": "Delete Token",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/v1/users/{email}/handles": {
+      "put": {
+        "description": "Set a person's host-qualified handles (org `rbac.assign`; ND-6: never self-declared);\nevery repo's maintainers are re-resolved against them.",
+        "operationId": "put_handles_v1_users__email__handles_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email",
+            "required": true,
+            "schema": {
+              "title": "Email",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandlesUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandlesInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Handles",
+        "tags": [
+          "repos"
         ]
       }
     }

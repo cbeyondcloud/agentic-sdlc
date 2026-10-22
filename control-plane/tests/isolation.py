@@ -218,6 +218,34 @@ async def _policy_version_row(conn: AsyncConnection, tenant_id: UUID) -> dict[st
     return _version_row(tenant_id)
 
 
+def _repo_row(tenant_id: UUID) -> dict[str, Any]:
+    name = f"app-{next(_sequence)}"
+    return {
+        "tenant_id": tenant_id,
+        "repo_key": f"git.example.test/acme/{name}",
+        "remote": f"https://git.example.test/acme/{name}.git",
+        "team": "payments",
+        "registered_by": "system:test",
+    }
+
+
+@register("repos")
+async def _repos_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    return _repo_row(tenant_id)
+
+
+@register("repo_maintainers")
+async def _repo_maintainer_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    repo = await _insert(conn, "repos", _repo_row(tenant_id))
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    return {
+        "tenant_id": tenant_id,
+        "repo_key": repo["repo_key"],
+        "user_id": user["id"],
+        "source_entry": "line 1: /.agentic/",
+    }
+
+
 @register("policy_active")
 async def _policy_active_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
     version = await _insert(conn, "policy_versions", _version_row(tenant_id))
@@ -274,6 +302,35 @@ async def _policy_version_in_b(api) -> dict[str, str]:
     return {"version": made.json()["sync"]["version"]}
 
 
+async def _repo_in_b(api) -> dict[str, str]:
+    """A repo registered in tenant b only (its git mapped onto a local repo)."""
+    from policy_repos import (
+        APP_KEY,
+        APP_REMOTE,
+        LocalHosts,
+        make_app_repo,
+        make_org_policy_repo,
+        url,
+    )
+
+    from agentic_cp.gitops import GitRunner
+
+    class MappedGit(LocalHosts, GitRunner):
+        pass
+
+    scratch = Path(tempfile.mkdtemp(prefix="cp-iso-"))
+    policy = make_org_policy_repo(scratch / "policy")
+    app = make_app_repo(scratch / "app", "/.agentic/ @alice\n")
+    api.app.state.git = MappedGit(api.settings, {APP_REMOTE: app})
+    source = {"repo": url(policy), "branch": "main"}
+    assert (await api.put("/v1/tenant/policy-source", api.b.admin_token, source)).status_code == 200
+    made = await api.post(
+        "/v1/repos", api.b.admin_token, {"remote": APP_REMOTE, "team": "payments"}
+    )
+    assert made.status_code == 201, made.text
+    return {"repo_key": APP_KEY}
+
+
 ENDPOINT_CASES += [
     EndpointCase("tokens", "DELETE", "/v1/tokens/{id}", _token_in_b),
     EndpointCase("tokens", "GET", "/v1/tokens", _token_in_b, must_not_list=True),
@@ -300,4 +357,13 @@ ENDPOINT_CASES += [
     EndpointCase("audit", "GET", "/v1/audit", _audit_record_in_b, must_not_list=True),
     EndpointCase("policy", "GET", "/v1/policy/versions/{version}/bundle", _policy_version_in_b),
     EndpointCase("policy", "GET", "/v1/policy/versions", _policy_version_in_b, must_not_list=True),
+    EndpointCase("repos", "GET", "/v1/repos/{repo_key}/maintainers", _repo_in_b),
+    EndpointCase("repos", "POST", "/v1/repos/{repo_key}/refresh", _repo_in_b),
+    EndpointCase(
+        "users",
+        "PUT",
+        "/v1/users/{email}/handles",
+        _user_in_b,
+        body={"handles": ["git.example.test:someone"]},
+    ),
 ]

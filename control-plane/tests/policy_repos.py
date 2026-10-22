@@ -83,6 +83,46 @@ def break_tiers(repo: Path) -> str:
     return commit(repo, "break tiers")
 
 
+#: The remotes the repo tests register (a realistic host; LocalHosts maps them to disk).
+APP_REMOTE = "https://git.example.test/acme/app.git"
+APP_KEY = "git.example.test/acme/app"
+ORG_YAML = (
+    "allowed_repo_patterns: ['git.example.test/acme/*']\n"
+    "allow_repo_pipelines: false\n"
+    "secret_scan:\n  action: block\n"
+)
+
+
+def make_org_policy_repo(path: Path, *, teams: tuple[str, ...] = ("payments", "billing")) -> Path:
+    """A policy repo whose org.yaml allows `git.example.test/acme/*`."""
+    repo = make_policy_repo(path, teams=teams)
+    write(repo, "policy/org.yaml", ORG_YAML)
+    commit(repo, "allow acme repos")
+    return repo
+
+
+def make_app_repo(path: Path, codeowners: str, *, where: str = ".github/CODEOWNERS") -> Path:
+    path.mkdir(parents=True)
+    git(path, "init", "-q")
+    write(path, "README.md", "app\n")
+    write(path, where, codeowners)
+    commit(path, "codeowners")
+    return path
+
+
+class LocalHosts:
+    """Mixin for a GitRunner: arguments equal to a mapped remote are replaced by the local
+    repo's `file://` URL, so tests use realistic remotes without a network."""
+
+    def __init__(self, settings, hosts: dict[str, Path]) -> None:
+        super().__init__(settings)  # type: ignore[call-arg]
+        self.hosts = hosts
+
+    def run(self, args, *, cwd, tenant_slug=None):
+        mapped = [url(self.hosts[a]) if a in self.hosts else a for a in args]
+        return super().run(mapped, cwd=cwd, tenant_slug=tenant_slug)  # type: ignore[misc]
+
+
 def remove(path: Path) -> None:
     def writable(func, target, _error):
         os.chmod(target, 0o700)

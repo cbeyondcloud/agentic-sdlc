@@ -35,7 +35,7 @@ async def test_migrate_seeds_missing_builtin_roles_in_every_tenant(operator_env,
             await conn.execute(select(tenants.c.rbac_revision).where(tenants.c.id == api.a.id))
         ).scalar_one()
     assert await _run("migrate") == 0
-    assert "tenant-a: added roles exec-viewer" in capsys.readouterr().out
+    assert "tenant-a: seeded roles exec-viewer" in capsys.readouterr().out
     async with tenant_tx(api.db.app, api.a.id) as conn:
         names = set((await conn.execute(select(roles.c.name))).scalars())
         assert "exec-viewer" in names

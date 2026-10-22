@@ -188,6 +188,7 @@ forbidden_modules = [
     "alembic",
     "asyncpg",
     "casbin",
+    "codeowners",
 ]
 allow_indirect_imports = true
 
@@ -198,3 +199,11 @@ source_modules = ["agentic_cp"]
 forbidden_modules = ["casbin"]
 allow_indirect_imports = true
 ignore_imports = ["agentic_cp.rbac.authz -> casbin"]
+
+[[tool.importlinter.contracts]]
+name = "codeowners only in agentic_cp.rbac.codeowners (SP15 Task 8)"
+type = "forbidden"
+source_modules = ["agentic_cp"]
+forbidden_modules = ["codeowners"]
+allow_indirect_imports = true
+ignore_imports = ["agentic_cp.rbac.codeowners -> codeowners"]

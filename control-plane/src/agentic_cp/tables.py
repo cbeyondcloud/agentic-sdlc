@@ -42,6 +42,8 @@ TENANT_TABLES: tuple[str, ...] = (
     "assignments",
     "policy_versions",
     "policy_active",
+    "repos",
+    "repo_maintainers",
 )
 
 #: A tenant's slug: lower-case, starts with a letter, 2-63 characters.
@@ -141,6 +143,7 @@ roles = Table(
     Column("builtin", Boolean, nullable=False, server_default="false"),
     Column("team_assignable", Boolean, nullable=False, server_default="false"),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("seed_permissions", ARRAY(Text), nullable=True),
     CheckConstraint("name ~ '^[a-z][a-z0-9-]{1,62}$'", name="roles_name_format"),
 )
 
@@ -184,6 +187,7 @@ policy_versions = Table(
     Column("tree_digest", Text, nullable=True),
     Column("commit_at", DateTime(timezone=True), nullable=True),
     Column("received_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("repo_patterns", ARRAY(Text), nullable=False, server_default="{}"),
     CheckConstraint("status in ('accepted', 'rejected')", name="policy_versions_status_known"),
     CheckConstraint(
         "(status = 'accepted') = (bundle is not null and digest is not null)",
@@ -202,6 +206,38 @@ policy_active = Table(
     ForeignKeyConstraint(
         ["tenant_id", "version"], ["policy_versions.tenant_id", "policy_versions.version"]
     ),
+)
+
+#: Repos registered in a tenant (M2-03): `owners` are the CODEOWNERS owners of the agentic
+#: paths (host-qualified handles and emails), `unresolved` the `@org/team` entries (ND-6).
+repos = Table(
+    "repos",
+    metadata,
+    _tenant_id(),
+    Column("repo_key", Text, primary_key=True),
+    Column("remote", Text, nullable=False),
+    Column("team", Text, nullable=False),
+    Column("owners", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("unresolved", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("codeowners_path", Text, nullable=True),
+    Column("codeowners_commit", Text, nullable=True),
+    Column("refreshed_at", DateTime(timezone=True), nullable=True),
+    Column("registered_by", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+#: Derived maintainers: users of the tenant whose handle or email CODEOWNERS names.
+repo_maintainers = Table(
+    "repo_maintainers",
+    metadata,
+    _tenant_id(),
+    Column("repo_key", Text, primary_key=True),
+    Column("user_id", UUID(as_uuid=True), primary_key=True),
+    Column("source_entry", Text, nullable=False),
+    ForeignKeyConstraint(
+        ["tenant_id", "repo_key"], ["repos.tenant_id", "repos.repo_key"], ondelete="CASCADE"
+    ),
+    ForeignKeyConstraint(["tenant_id", "user_id"], ["users.tenant_id", "users.id"]),
 )
 
 #: Unique constraints that deliberately span tenants: credential hashes, looked up before

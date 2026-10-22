@@ -140,22 +140,30 @@ class EnforcerCache:
 
     def __init__(self, max_tenants: int = 256) -> None:
         self.max_tenants = max_tenants
-        self._entries: OrderedDict[UUID, tuple[int, casbin.Enforcer]] = OrderedDict()
+        self._entries: OrderedDict[UUID, tuple[int, casbin.Enforcer, dict[str, str]]] = (
+            OrderedDict()
+        )
 
     async def get(self, tenant_id: UUID, revision: int, conn: AsyncConnection) -> casbin.Enforcer:
+        return (await self.entry(tenant_id, revision, conn))[0]
+
+    async def entry(
+        self, tenant_id: UUID, revision: int, conn: AsyncConnection
+    ) -> tuple[casbin.Enforcer, dict[str, str]]:
+        """The tenant's enforcer and the team of each repo someone maintains."""
         cached = self._entries.get(tenant_id)
         if cached is not None and cached[0] >= revision:
             self._entries.move_to_end(tenant_id)
-            return cached[1]
+            return cached[1], cached[2]
         current, rows = await load_rows(conn)
         if rows.tenant_id != tenant_id:  # the transaction is in another tenant
             raise ValueError("the enforcer was asked for a tenant other than the transaction's")
         enforcer = build_enforcer(rows)
-        self._entries[tenant_id] = (current, enforcer)
+        self._entries[tenant_id] = (current, enforcer, dict(rows.repo_teams))
         self._entries.move_to_end(tenant_id)
         while len(self._entries) > self.max_tenants:
             self._entries.popitem(last=False)
-        return enforcer
+        return enforcer, dict(rows.repo_teams)
 
 
 async def authorize(
@@ -205,8 +213,9 @@ async def require(
 async def effective_permissions(
     ctx: TokenContext, *, conn: AsyncConnection, cache: EnforcerCache
 ) -> EffectivePermissions:
-    """The caller's permissions at org scope and in each team they hold a role in."""
-    enforcer = await cache.get(ctx.tenant_id, ctx.rbac_revision, conn)
+    """The caller's permissions at org scope, in each team they hold a role in, and in each
+    repo they maintain (with that repo's team)."""
+    enforcer, repo_teams = await cache.entry(ctx.tenant_id, ctx.rbac_revision, conn)
     subject = f"user:{ctx.user_id}"
     prefix = f"{ctx.tenant_id}|"
     scopes = sorted(
@@ -238,4 +247,5 @@ async def effective_permissions(
                 if PERMISSIONS[p] == "repo"
                 and decide(enforcer, ctx.tenant_id, ctx.user_id, p, Repo(key)).allowed
             )
-    return EffectivePermissions(org=org, teams=teams, repos=repos)
+    shown = {key: team for key, team in repo_teams.items() if key in repos}
+    return EffectivePermissions(org=org, teams=teams, repos=repos, repo_teams=shown)

@@ -40,12 +40,12 @@ def tenant_info(tenant: TenantRow) -> TenantInfo:
     )
 
 
-def checked_url(url: str, request: Request) -> str:
+def checked_url(url: str, request: Request, *, prefix: str = "policy") -> str:
     """The URL when a tenant may use it; a 422 problem that never repeats it otherwise."""
     try:
         return check_repo_url(url, allow_local=request.app.state.settings.allow_local_repos)
     except RepoUrlError as error:
-        code = "policy.credentials_in_url" if error.credentials else "repo.bad_url"
+        code = f"{prefix}.credentials_in_url" if error.credentials else "repo.bad_url"
         raise ApiProblem(422, code, str(error)) from None
 
 

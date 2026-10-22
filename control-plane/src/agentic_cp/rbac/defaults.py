@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
@@ -124,33 +124,63 @@ async def seed_roles(
     actor: str = OPERATOR,
     audit: bool = True,
 ) -> list[str]:
-    """Add the missing builtin roles to the transaction's tenant; returns their names.
-    Adding any bumps `rbac_revision` and is audited (`rbac.seeded`) in this transaction;
+    """Bring the transaction's tenant's builtin roles up to this release; returns the names
+    of the roles added or extended.
+
+    A missing builtin role is added. An existing one gains the permissions this release's
+    seed has and the previous seed (`seed_permissions`) did not - permissions new in this
+    release - and keeps every edit the tenant made, removals included (R22, DF-419). A role
+    seeded before `seed_permissions` existed is taken as seeded with this release.
+
+    A change bumps `rbac_revision` and is audited (`rbac.seeded`) in this transaction;
     `audit=False` is for a caller that records the roles in its own audit record (the
     tenant bootstrap's `rbac.bootstrap`)."""
-    existing = set((await conn.execute(select(roles.c.name))).scalars())
-    missing = [spec for spec in DEFAULT_ROLES if spec.name not in existing]
-    if not missing:
-        return []
-    tenant_id = await require_tenant_id(conn)
-    await conn.execute(
-        insert(roles)
-        .values(
-            [
-                {
-                    "tenant_id": tenant_id,
-                    "name": spec.name,
-                    "permissions": list(spec.permissions),
-                    "builtin": True,
-                    "team_assignable": spec.team_assignable,
-                }
-                for spec in missing
-            ]
+    existing = {
+        row.name: row
+        for row in await conn.execute(
+            select(roles.c.name, roles.c.permissions, roles.c.builtin, roles.c.seed_permissions)
         )
-        .on_conflict_do_nothing()
-    )
+    }
+    missing = [spec for spec in DEFAULT_ROLES if spec.name not in existing]
+    extended: dict[str, list[str]] = {}
+    for spec in DEFAULT_ROLES:
+        row = existing.get(spec.name)
+        if row is None or not row.builtin:
+            continue
+        seeded = set(row.seed_permissions) if row.seed_permissions is not None else None
+        new = sorted(set(spec.permissions) - seeded) if seeded is not None else []
+        values: dict = {}
+        if new:
+            values["permissions"] = sorted(set(row.permissions) | set(new))
+            extended[spec.name] = new
+        if seeded != set(spec.permissions):
+            values["seed_permissions"] = sorted(spec.permissions)
+        if values:
+            await conn.execute(update(roles).where(roles.c.name == spec.name).values(**values))
+    if missing:
+        tenant_id = await require_tenant_id(conn)
+        await conn.execute(
+            insert(roles)
+            .values(
+                [
+                    {
+                        "tenant_id": tenant_id,
+                        "name": spec.name,
+                        "permissions": list(spec.permissions),
+                        "seed_permissions": sorted(spec.permissions),
+                        "builtin": True,
+                        "team_assignable": spec.team_assignable,
+                    }
+                    for spec in missing
+                ]
+            )
+            .on_conflict_do_nothing()
+        )
+    if not missing and not extended:
+        return []
     revision = await bump_rbac_revision(conn)
-    names = [spec.name for spec in missing]
+    added = [spec.name for spec in missing]
+    names = added + sorted(extended)
     if not audit:
         return names
     await append(
@@ -160,7 +190,7 @@ async def seed_roles(
             actor=actor,
             actor_kind="system",
             target="roles",
-            after={"roles": names, "rbac_revision": revision},
+            after={"roles": added, "added": extended, "rbac_revision": revision},
         ),
         clock=clock,
     )

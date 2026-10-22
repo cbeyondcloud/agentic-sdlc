@@ -115,7 +115,10 @@ class GitRunner:
         """Run `git <args>` in `cwd`; returns stdout. `GitError` on failure."""
         local = "user" if self.settings.allow_local_repos else "never"
         argv = ["git", *FLAGS, "-c", f"protocol.file.allow={local}", *args]
-        return self._spawn(argv, self.env(tenant_slug), cwd, self.settings.git_timeout_seconds)
+        try:
+            return self._spawn(argv, self.env(tenant_slug), cwd, self.settings.git_timeout_seconds)
+        except GitError as error:  # every message, whoever raised it, leaves scrubbed
+            raise GitError(scrub(str(error))[:300]) from None
 
     def _spawn(self, argv: Sequence[str], env: Mapping[str, str], cwd: Path, timeout: int) -> bytes:
         try:
@@ -132,6 +135,5 @@ class GitRunner:
                 for line in done.stderr.decode("utf-8", errors="replace").splitlines()
                 if line.strip()
             ]
-            message = lines[-1] if lines else f"git exited with {done.returncode}"
-            raise GitError(scrub(message)[:300])
+            raise GitError(lines[-1] if lines else f"git exited with {done.returncode}")
         return done.stdout

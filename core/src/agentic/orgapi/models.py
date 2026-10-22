@@ -47,11 +47,14 @@ class UserRef(BaseModel):
 
 
 class AssignmentRef(BaseModel):
-    """A role held at org scope or within one team."""
+    """A role held at org scope, within one team, or - derived from CODEOWNERS, never
+    assigned by hand - for one repo (`derived` is then true)."""
 
     role: str
-    scope: Literal["org", "team"]
+    scope: Literal["org", "team", "repo"]
     team: str | None = None
+    repo: str | None = None
+    derived: bool = False
 
 
 class Me(BaseModel):
@@ -244,6 +247,47 @@ class PolicyVersionInfo(BaseModel):
     digest: str | None = None
     received_at: datetime
     active: bool = False
+
+
+#: A host-qualified handle as CODEOWNERS names people: `github.com:alice`.
+HANDLE = r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$"
+
+
+class RepoRegistration(RequestModel):
+    """`POST /v1/repos`: register a repo for a team (`agent.edit.repo` in that team)."""
+
+    remote: str = Field(min_length=1, max_length=500)
+    team: str = Field(pattern=TEAM_SLUG)
+
+
+class RepoInfo(BaseModel):
+    """A registered repo and the maintainers its CODEOWNERS names (ND-6)."""
+
+    repo_key: str
+    remote: str
+    team: str
+    maintainers: list[str] = Field(default_factory=list)
+    unresolved: list[str] = Field(default_factory=list)
+    codeowners_path: str | None = None
+    commit: str | None = None
+    refreshed_at: datetime | None = None
+
+
+class RepoMaintainers(BaseModel):
+    users: list[str]
+    unresolved: list[str] = Field(default_factory=list)
+    commit: str | None = None
+
+
+class HandlesUpdate(RequestModel):
+    """`PUT /v1/users/{email}/handles`: the person's host-qualified handles (`rbac.assign`)."""
+
+    handles: list[Annotated[str, Field(pattern=HANDLE)]] = Field(max_length=20)
+
+
+class HandlesInfo(BaseModel):
+    email: str
+    handles: list[str]
 
 
 class Problem(BaseModel):

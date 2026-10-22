@@ -31,7 +31,8 @@ from agentic_cp.auth.tokens import (
 from agentic_cp.auth.users import user_by_id
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
 from agentic_cp.rbac.authz import effective_permissions
-from agentic_cp.tables import assignments
+from agentic_cp.rbac.store import REPO_MAINTAINER
+from agentic_cp.tables import assignments, repo_maintainers
 from agentic_cp.tenancy.context import tenant_tx
 from agentic_cp.tenancy.tenants import current_tenant
 
@@ -39,12 +40,23 @@ router = APIRouter(prefix=API_PREFIX, tags=["auth"], responses=PROBLEM_RESPONSES
 
 
 async def assignments_of(conn, user_id: UUID) -> list[AssignmentRef]:
+    """The user's assignments, then the maintainerships CODEOWNERS derives (`derived`)."""
     rows = await conn.execute(
         select(assignments.c.role, assignments.c.scope_kind, assignments.c.scope_value)
         .where(assignments.c.user_id == user_id)
         .order_by(assignments.c.scope_kind, assignments.c.scope_value, assignments.c.role)
     )
-    return [AssignmentRef(role=role, scope=kind, team=value or None) for role, kind, value in rows]
+    held = [AssignmentRef(role=role, scope=kind, team=value or None) for role, kind, value in rows]
+    derived = await conn.execute(
+        select(repo_maintainers.c.repo_key)
+        .where(repo_maintainers.c.user_id == user_id)
+        .order_by(repo_maintainers.c.repo_key)
+    )
+    held += [
+        AssignmentRef(role=REPO_MAINTAINER, scope="repo", repo=key, derived=True)
+        for (key,) in derived
+    ]
+    return held
 
 
 @router.get("/me")

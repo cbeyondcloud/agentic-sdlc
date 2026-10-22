@@ -20,15 +20,16 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from agentic.orgapi import SyncOutcome
 from agentic_cp.gitops import GitRunner
 from agentic_cp.policy_sync.service import sync_once
+from agentic_cp.rbac.repos import refresh_due
 from agentic_cp.settings import Settings
 from agentic_cp.tenancy.context import tenant_tx
 from agentic_cp.tenancy.tenants import current_tenant
 
 log = logging.getLogger("agentic_cp.worker")
 
-#: Extra per-tenant jobs run after the policy sync (Task 8 adds the CODEOWNERS refresh).
+#: Per-tenant jobs run after the policy sync: the CODEOWNERS refresh (M2-03).
 TenantJob = Callable[[AsyncEngine, GitRunner, UUID, Settings, Callable[[], datetime]], Awaitable]
-EXTRA_JOBS: list[TenantJob] = []
+EXTRA_JOBS: list[TenantJob] = [refresh_due]
 LEADER_KEY = "agentic.worker"
 
 

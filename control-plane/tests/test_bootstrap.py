@@ -56,7 +56,8 @@ async def test_tenant_create_bootstraps_tenant_and_first_admin(operator_env, cap
     me = (await client.get("/v1/me", token)).json()
     assert me["user"]["email"] == "root@acme.example.test"
     assert me["tenant"]["slug"] == "acme"
-    assert {"role": "org-admin", "scope": "org", "team": None} in me["assignments"]
+    admin = {"role": "org-admin", "scope": "org", "team": None, "repo": None, "derived": False}
+    assert admin in me["assignments"]
     async with db.owner.begin() as conn:
         tenant_id = (
             await conn.execute(select(tenants.c.id).where(tenants.c.slug == "acme"))
