@@ -29,8 +29,9 @@ from agentic.sandbox.process import SECRET_NAME, secret_value
 class ShellRules:
     """Our shell policy, provider-neutral: command prefixes allowed, needing a person's
     approval, and refused (deny wins), and the path globs never written. A rule's word
-    may list alternatives (`git rebase -x|--exec`). `sdlc_commons.guards.Guard` gives the
-    full set (framework floor included); `from_agent` is the agent's resolved lists."""
+    may list alternatives (`git rebase -x|--exec`). `sdlc_commons.guards.Guard.shell_rules`
+    gives the full set as plain data (framework floor included); `from_agent` is the
+    agent's resolved lists."""
 
     allow: tuple[str, ...] = ()
     ask: tuple[str, ...] = ()

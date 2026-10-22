@@ -352,6 +352,20 @@ class Guard:
             }
         }
 
+    def shell_rules(self) -> dict[str, tuple[str, ...]]:
+        """The shell policy as plain data, the fields of core's provider-neutral
+        `agentic.backends.acp.ShellRules` (M2-57), which an ACP profile compiles into its
+        agent's own format: the allow list with the always-allowed shell builtins (`*`
+        when there is no allow list), the ask list, the deny list with the framework
+        floor, and every write-deny pattern."""
+        allow = ("*",) if self.allow_shell is None else (*self.allow_shell, *ALWAYS_ALLOWED)
+        return {
+            "allow": tuple(dict.fromkeys(allow)),
+            "ask": tuple(self.ask_shell),
+            "deny": tuple(dict.fromkeys((*self.deny_shell, *FRAMEWORK_DENY_SHELL))),
+            "deny_paths": tuple(self._path_rules()),
+        }
+
     def _path_rules(self) -> list[str]:
         """Every write-deny pattern: Zyroflo's protected paths, the framework's, policy's."""
         sources = (self.policy["protected_paths"], FRAMEWORK_PROTECTED, self.deny_paths)

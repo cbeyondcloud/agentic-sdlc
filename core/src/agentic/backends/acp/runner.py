@@ -422,8 +422,8 @@ class AcpBackend:
         *,
         identity_for: Callable[["StepContext"], CallIdentity],
         prices: Pricer,
-        # our shell policy for the step: the CLI passes the guard's (framework floor
-        # included, `Guard.shell_rules`); default, the agent's resolved lists
+        # our shell policy for the step: the CLI passes the guard's, framework floor
+        # included (`ShellRules(**guard.shell_rules())`); default, the agent's lists
         rules_for: Callable[["StepContext"], ShellRules] | None = None,
         wrap_for: Callable[["StepContext"], Sequence[str] | None] = lambda step: None,
         fallback_estimate_usd: Decimal = Decimal("0.01"),  # per call of an unpriced model
