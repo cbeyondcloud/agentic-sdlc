@@ -84,19 +84,24 @@ def world(servers, tmp_path):
     return (*servers, make_repo(tmp_path / "tree"))
 
 
+#: Its own run id: the ledger keeps one identity per run id for the whole process, so
+#: reusing another test file's id ("r-1") would refuse that file's runs
+TREE_RUN = "r-codex-contract"
+
+
 def run_tree(repo):
     """A run's component tree as Zyroflo lays it out: `<repo>/.sdlc-worktrees/<run>/...`."""
     from sdlc_commons.ledger import RunIdentity, RunLedger
     from sdlc_commons.worktrees import RunWorktrees
 
-    RunLedger(repo, "r-1").open(
+    RunLedger(repo, TREE_RUN).open(
         identity=RunIdentity(team="payments", policy_version="git:" + "a" * 40),
         kind="feature",
         project="demo",
         owner="payments",
         criticality="low",
     )
-    (made,) = RunWorktrees(repo, "r-1").create().values()
+    (made,) = RunWorktrees(repo, TREE_RUN).create().values()
     return made.path
 
 
@@ -262,7 +267,7 @@ def test_the_hook_guard_refuses_a_patch_to_a_denied_path(resolved, servers, tmp_
     stub, proxy = servers
     repo = make_repo(tmp_path / "repo")
     tree = run_tree(repo)
-    guard = Guard(repo, "r-1", deny_paths=("infra/**",), allow_shell=("echo",))
+    guard = Guard(repo, TREE_RUN, deny_paths=("infra/**",), allow_shell=("echo",))
     spec = write_spec(tmp_path / "guard" / "guard.json", guard, tree)
     clean = "*** Begin Patch\n*** Add File: ok.txt\n+fine\n*** End Patch\n"
     hidden = (
