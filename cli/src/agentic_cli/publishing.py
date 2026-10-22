@@ -22,8 +22,9 @@ Nothing here merges: a person does. What was published is recorded in the run fo
 (`pr.json`), and the last CI verdict next to it (`ci.json`); neither holds the token.
 
 Links: with a control plane (`control_plane_url` in the user config, or
-`AGENTIC_CONTROL_PLANE_URL`), the body links the run and its handoffs there; without
-one it names their paths in the starter's run folder, as code (DF-166).
+`AGENTIC_CONTROL_PLANE_URL`), the body links the run to its summary there
+(`<cp>/v1/runs/<run_id>`, ND-11); handoffs and step logs are named by their paths in the
+starter's run folder either way, as code (DF-166), because their bodies are not uploaded.
 """
 
 import json
@@ -38,7 +39,9 @@ from agentic.engine.state import RunState
 from agentic.hosting import CheckRun, HostingError
 from agentic.hosting.git import push_branch
 from agentic.memory.agents_md import proposals
+from agentic.orgapi import API_PREFIX
 from agentic.telemetry.trailers import pr_body
+from agentic_cli import control_plane
 from agentic_cli.driving import spent
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
@@ -281,10 +284,7 @@ def watch_ci(
 
 
 def control_plane_url(ws: Workspace) -> str | None:
-    found = ws.env.get("AGENTIC_CONTROL_PLANE_URL", "").strip() or str(
-        ws.settings.get("control_plane_url") or ""
-    )
-    return found.strip().rstrip("/") or None
+    return control_plane.control_plane_url(ws.env, ws.settings)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -341,15 +341,14 @@ def _handoff_texts(folder: Path, state: RunState) -> dict[str, str]:
 def _body(ws: Workspace, state: RunState, found: list[tuple[str, str]]) -> str:
     folder = f"{RUNS.as_posix()}/{state.run_id}"
     base = control_plane_url(ws)
-    run_link = f"{base}/runs/{state.run_id}" if base else None
-    if run_link:
-        logs = f"[step logs]({run_link}/logs)"
-    else:  # the logs are in the starter's git-ignored run folder
-        logs = f"`agentic logs {state.run_id}` in the starter's checkout"
+    # ND-11: the control plane's run summary until a web UI exists; handoff bodies and
+    # step logs are not uploaded, so they stay named in the starter's run folder
+    run_link = f"{base}{API_PREFIX}/runs/{state.run_id}" if base else None
+    logs = f"`agentic logs {state.run_id}` in the starter's checkout"
     return pr_body(
         state,
         run_link=run_link,
-        handoff_link=(lambda rel: f"{run_link}/{rel}") if run_link else (lambda rel: None),
+        handoff_link=lambda rel: None,
         proposals=found,
         run_folder=folder,
         cost_usd=spent(state),

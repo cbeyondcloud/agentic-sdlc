@@ -3,24 +3,35 @@ owner, once) - spec §8.1, §24.
 
 Both run the eight repo-root and safety checks first (`agentic_cli.repo_guard`); a
 refusal is exit 2 with nothing written.
+
+Org mode with a control plane (SP15): the person's roles come from the control plane
+(`/v1/me`) and the user config's `roles` is ignored, with a warning (DF-203); check 7 of
+`init --repo` asks the control plane whether the person holds `agent.edit.repo` for the
+team and repo (DF-184), and the repo is registered with the control plane afterwards. In
+standalone mode `roles` still chooses which authoring skills are installed - it never
+authorises anything.
 """
 
+import os
 from pathlib import Path
 from typing import Annotated
 
 import typer
 from rich.markup import escape
 
+from agentic.hosting.base import scrub_url_credentials
 from agentic.hosting.git import push_branch
+from agentic.orgapi import Me
+from agentic.policy.repos import normalise_remote
 from agentic.repoconfig import RepoConfig
-from agentic_cli import dev_init, repo_setup
+from agentic_cli import control_plane, dev_init, repo_setup
 from agentic_cli.config import agentic_home, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.hosting import connect
 from agentic_cli.output import Output
 from agentic_cli.policy_source import LoadedPolicy, resolve_policy
-from agentic_cli.repo_guard import check_repo
+from agentic_cli.repo_guard import check_repo, origin_url
 from agentic_cli.workspace import recorded_policy, recorded_root
 
 
@@ -78,7 +89,8 @@ def register(app: typer.Typer) -> None:
         try:
             if repo:
                 settings = config if open_pr else None
-                _init_repo(out, loaded, classification, team, pipeline or [], settings)
+                client = _client(loaded, config, home)
+                _init_repo(out, loaded, classification, team, pipeline or [], settings, client)
             else:
                 _init_developer(out, loaded, home, config, install_missing, yes)
         finally:
@@ -97,7 +109,17 @@ def _init_developer(
     )
     deps = dev_init.default_deps()
     roles = config.get("roles") or []
-    deps.roles = tuple(str(role) for role in roles) if isinstance(roles, list) else ()
+    configured = tuple(str(role) for role in roles) if isinstance(roles, list) else ()
+    if loaded.mode == "org" and control_plane.control_plane_url(os.environ, config):
+        # org roles come from the control plane, never from the user config (DF-203)
+        deps.roles = _org_roles(loaded.me, _team(None, config)) if loaded.me else ()
+        if configured:
+            out.warn(
+                "roles in ~/.agentic/config.yaml are ignored: in org mode your roles come "
+                "from the control plane"
+            )
+    else:  # standalone: chooses authoring skills only, never authorises anything
+        deps.roles = configured
     console = out.err if out.json_mode else out.out
 
     def announce(plan: list[dict]) -> None:
@@ -127,14 +149,26 @@ def _init_repo(
     team: str | None,
     pipelines: list[str],
     settings: dict | None,
+    client: control_plane.ControlPlaneClient | None = None,
 ) -> None:
-    """`settings` (the user config) opens the pull request; None (`--no-pr`) does not."""
+    """`settings` (the user config) opens the pull request; None (`--no-pr`) does not.
+    `client` (org mode with a control plane) answers check 7 and registers the repo."""
+    remote = origin_url(Path.cwd())
+    owning_team = _team(team, settings or {})
+    permitted = None
+    if client is not None:
+        key = normalise_remote(remote) if remote else None
+
+        def permitted(permission: str) -> bool:
+            return client.check(permission, team=owning_team, repo=key).allowed
+
     root = check_repo(
         Path.cwd(),
         mode="repo",
         home=Path.home(),
         policy=loaded.policy,
         org_mode=loaded.mode == "org",
+        permitted=permitted,
     )
     chosen = classification or loaded.policy.default_classification
     if chosen not in loaded.policy.classifications:
@@ -163,6 +197,8 @@ def _init_repo(
         )
     data = {"branch": branch, "commit": commit, "files": sorted(files), "kept": kept}
     data["next"] = steps
+    if client is not None:
+        data["registered"] = _register(out, client, remote, owning_team)
     failure: CliError | None = None
     if settings is None:
         data["pull_request"] = {"opened": False, "why": "--no-pr"}
@@ -216,6 +252,39 @@ def _init_repo(
     out.result(data, show)
     if failure is not None:
         raise failure
+
+
+def _client(
+    loaded: LoadedPolicy, config: dict, home: Path
+) -> control_plane.ControlPlaneClient | None:
+    """The control-plane client in org mode, or None (standalone, or no control plane)."""
+    if loaded.mode != "org":
+        return None
+    return control_plane.client_for(os.environ, config, home)
+
+
+def _team(given: str | None, config: dict) -> str | None:
+    return given or os.environ.get("AGENTIC_TEAM", "").strip() or config.get("team") or None
+
+
+def _org_roles(me: Me, team: str | None) -> tuple[str, ...]:
+    """The roles `me` holds at org scope or in `team` (they choose the authoring skills)."""
+    held = {a.role for a in me.assignments if a.scope == "org" or (team and a.team == team)}
+    return tuple(sorted(held))
+
+
+def _register(
+    out: Output, client: control_plane.ControlPlaneClient, remote: str | None, team: str | None
+) -> str | None:
+    """Register the repo with the control plane (idempotent); a failure is a warning."""
+    if not remote or not team:
+        out.warn("the repo was not registered with the control plane: no origin or no team")
+        return None
+    try:
+        return client.register_repo(scrub_url_credentials(remote), team).repo_key
+    except control_plane.ControlPlaneError as error:
+        out.warn(f"the repo was not registered with the control plane: {error}")
+        return None
 
 
 class _NotOpened(Exception):

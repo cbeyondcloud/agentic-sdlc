@@ -91,8 +91,8 @@ def check_repo(
             hint="clone the repository into its own folder and run init there",
         )
     # 5
-    origin_url = _git(top, "remote", "get-url", "origin")
-    origin = normalise_remote(origin_url) if origin_url else None
+    remote_url = _git(top, "remote", "get-url", "origin")
+    origin = normalise_remote(remote_url) if remote_url else None
     if org_mode:
         _allowed_by_policy(origin, policy)
     # 6
@@ -119,6 +119,11 @@ def check_repo(
         config=config,
         empty=is_empty(top),
     )
+
+
+def origin_url(cwd: Path) -> str | None:
+    """The `origin` remote's URL as configured (credentials and all), or None."""
+    return _git(Path(cwd), "remote", "get-url", "origin") or None
 
 
 # --- the checks ---
