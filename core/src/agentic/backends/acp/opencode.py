@@ -6,10 +6,13 @@ plus what the 1.18.35 source shows, applied to every run:
   * routing: one custom provider, `tokenlean` (OpenAI-compatible, `{gateway}/v1`), with
     the user's key and our `X-Agentic-*` headers, is the only provider enabled; the
     resolved model is the model AND the small model (its first call is a title call);
+    the key is a file in the step home, deleted once the session is open (`secret_files`);
   * policy: every permission key is set, after a deny-all - a key no capability maps to
     is denied, which also hides its tool from the model; our shell policy becomes
     OpenCode's `bash` rules (last match wins: deny-all, allow, ask, deny); the same
-    object is passed again as `OPENCODE_PERMISSION`, which OpenCode merges last;
+    object is passed again as `OPENCODE_PERMISSION`, which OpenCode merges last; its
+    matcher is case-sensitive outside Windows, so on a case-blind host (macOS) denies and
+    asks are also written in other cases (`case_blind`);
   * nothing from the repository: `OPENCODE_DISABLE_PROJECT_CONFIG` skips the project's
     `opencode.json`, `.opencode/` folders (agents, commands, plugins) and instruction
     files - a planted file can add no MCP server, agent or instructions (DF-124) - and
@@ -30,12 +33,21 @@ OpenCode has no sandbox of its own: `srt` (D38) is the boundary, and the ACP per
 callback is a second gate.
 """
 
+import itertools
 import json
 import re
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from agentic.backends.acp.profile import AcpProfile, Launch, ShellRules, StepSetup, spelled_out
+from agentic.backends.acp.profile import (
+    AcpProfile,
+    Launch,
+    ShellRules,
+    StepSetup,
+    folds_case,
+    spelled_out,
+)
 from agentic.backends.capabilities import CAPABILITIES
 
 PROVIDER = "tokenlean"
@@ -135,8 +147,54 @@ def _paths(glob: str) -> list[str]:
     return [pattern.replace("**", "*") for pattern in found]
 
 
-def opencode_permissions(tools: Sequence[str], rules: ShellRules) -> dict:
-    """OpenCode's `permission` object for an agent with these capabilities and rules."""
+def case_blind(tree: Path) -> bool:
+    """Whether OpenCode's rules must also be written in other cases for `tree`: its
+    matcher is case-sensitive except on Windows (where it folds case itself), while a
+    case-insensitive file system (macOS by default) takes `Infra/x` for `infra/x` and
+    runs `GIT` as `git`."""
+    return sys.platform != "win32" and folds_case(tree)
+
+
+#: Case variants are combined for up to this many words or path segments of one rule;
+#: a longer rule gets each case for the whole rule only.
+_CASE_PARTS = 3
+
+
+def _capitalised(part: str) -> str:
+    lower = part.lower()
+    at = next((i for i, char in enumerate(lower) if char.isalpha()), None)
+    return lower if at is None else lower[:at] + lower[at].upper() + lower[at + 1 :]
+
+
+def _cased(text: str, sep: str, *, flags: bool = False) -> list[str]:
+    """`text` as written, then with each of its parts (split on `sep`) also lower-case,
+    upper-case and capitalised, in every combination. With `flags`, a part starting with
+    `-` keeps its case: `-x` and `-X` are different options. Not every spelling of a
+    long name (`gIt`): the matcher has no character classes, so this narrows the gap
+    on a case-blind host but is no boundary - srt is (M2-41)."""
+    parts = text.split(sep)
+    cases = (str.lower, str.upper, _capitalised)
+    forms = [
+        [part, *(() if flags and part.startswith("-") else (case(part) for case in cases))]
+        for part in parts
+    ]
+    if sum(len(set(form)) > 1 for form in forms) <= _CASE_PARTS:
+        combinations = list(itertools.product(*forms))
+    else:  # each case for the whole rule
+        combinations = [[form[min(i, len(form) - 1)] for form in forms] for i in range(4)]
+    return list(dict.fromkeys(sep.join(combination) for combination in combinations))
+
+
+def opencode_permissions(
+    tools: Sequence[str], rules: ShellRules, *, case_blind: bool = False
+) -> dict:
+    """OpenCode's `permission` object for an agent with these capabilities and rules.
+    `case_blind` (see `case_blind()`): every deny and ask is also written in other cases;
+    allows never are, so an unlisted spelling still falls to the deny-all."""
+
+    def paths(patterns) -> list[str]:
+        return [v for p in patterns for v in (_cased(p, "/") if case_blind else [p])]
+
     mapped = CAPABILITIES["opencode"].tools
     allowed = {key for capability in tools for key in mapped.get(capability, ())}
     perms: dict = {"*": "deny"}
@@ -144,30 +202,41 @@ def opencode_permissions(tools: Sequence[str], rules: ShellRules) -> dict:
         if key not in allowed:
             perms[key] = "deny"
         elif key == "read":
-            perms[key] = dict(_READ)
+            perms[key] = {
+                variant: action
+                for pattern, action in _READ.items()
+                for variant in (paths([pattern]) if action == "deny" else [pattern])
+            }
         elif key == "edit":
             perms[key] = {"*": "allow"}
             for glob in rules.deny_paths:
-                perms[key].update({pattern: "deny" for pattern in _paths(glob)})
-            perms[key].update({pattern: "deny" for pattern in _OWN_FILES})
+                perms[key].update({pattern: "deny" for pattern in paths(_paths(glob))})
+            perms[key].update({pattern: "deny" for pattern in paths(_OWN_FILES)})
         elif key == "bash":
-            perms[key] = _bash(rules)
+            perms[key] = _bash(rules, case_blind=case_blind)
         else:
             perms[key] = "allow"
     return perms
 
 
-def _bash(rules: ShellRules) -> dict:
+def _bash(rules: ShellRules, *, case_blind: bool = False) -> dict:
     """OpenCode's `bash` rules: the last match wins, so deny-all first, then allow, ask
     and deny, each moved to the end when written again - an ask or deny always lands
     after any broader allow it narrows. `x *` matches `x` and `x ...`; a deny-anywhere
     rule `p w` becomes `p *w*` (the words anywhere after the program)."""
+
+    def cased(rule: str) -> list[str]:
+        spelled = spelled_out(rule)
+        if not case_blind:
+            return spelled
+        return [v for s in spelled for v in _cased(s, " ", flags=True)]
+
     ordered = [("*", "deny")]
     ordered += [(f"{p} *", "allow") for rule in rules.allow for p in spelled_out(rule)]
-    ordered += [(f"{p} *", "ask") for rule in rules.ask for p in spelled_out(rule)]
-    ordered += [(f"{p} *", "deny") for rule in rules.deny for p in spelled_out(rule)]
+    ordered += [(f"{p} *", "ask") for rule in rules.ask for p in cased(rule)]
+    ordered += [(f"{p} *", "deny") for rule in rules.deny for p in cased(rule)]
     for rule in rules.deny_anywhere:
-        for spelled in spelled_out(rule):
+        for spelled in cased(rule):
             program, _, words = spelled.partition(" ")
             ordered.append((f"{program} *{words}*" if words else f"{program} *", "deny"))
     bash: dict = {}
@@ -212,8 +281,9 @@ def opencode_config(setup: StepSetup) -> dict:
                 "name": "TokenLean",
                 "options": {
                     "baseURL": setup.gateway_url.rstrip("/") + "/v1",
-                    # read from a file in the step home, so the agent's shell commands
-                    # (which inherit its environment) never see the key
+                    # read from a file in the step home while OpenCode loads its config,
+                    # never put in its environment (which its shell commands inherit);
+                    # the runner deletes the file once the session is open (secret_files)
                     "apiKey": f"{{file:{(setup.home / KEY_FILE).as_posix()}}}",
                     "headers": dict(setup.headers),
                 },
@@ -230,7 +300,9 @@ def opencode_config(setup: StepSetup) -> dict:
             "general": {"disable": True},
             "explore": {"disable": True},
         },
-        "permission": opencode_permissions(agent.tools, setup.rules),
+        "permission": opencode_permissions(
+            agent.tools, setup.rules, case_blind=case_blind(setup.tree)
+        ),
         "plugin": [],
         "instructions": [],
         "mcp": {},
@@ -281,4 +353,5 @@ OPENCODE = AcpProfile(
     ),
     session_cost=True,
     refuse_tree=code_in_tree,
+    secret_files=(KEY_FILE,),
 )

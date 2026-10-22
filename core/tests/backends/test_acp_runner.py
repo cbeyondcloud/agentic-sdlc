@@ -6,6 +6,7 @@ No agent binary is needed, so these run on Windows, macOS and Linux."""
 import asyncio
 import json
 import math
+import os
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -233,6 +234,21 @@ def test_the_step_home_is_thrown_away_with_the_step(world):
     assert not (world.home_root / "r-1" / "develop-1" / "developer").exists()
 
 
+def test_a_secret_file_is_gone_once_the_session_is_open(world):  # review F1
+    # the agent read it while it loaded its config; its shell commands must not find it
+    profile = fake_profile(
+        configure=lambda setup: Launch(files={"secret.key": setup.api_key}),
+        secret_files=("secret.key",),
+    )
+    turns = [[{"say": "prose"}], [{"say": "VALID"}]]
+    outcome = run(
+        world.runner(turns, profile=profile, contract=FakeContract(), watch=["secret.key"])
+    )
+    assert outcome.status == "completed"
+    assert world.events("new_session")[0]["watched"] == {"secret.key": True}
+    assert [e["watched"] for e in world.events("prompt")] == [{"secret.key": False}] * 2
+
+
 def test_the_client_offers_the_agent_no_file_or_terminal_access(world):
     run(world.runner([[{"say": "VALID"}]]))
     (init,) = world.events("initialize")
@@ -379,6 +395,48 @@ def test_a_missing_agent_command_is_a_clear_error():
 def test_an_npm_shim_is_refused_with_a_hint(shim):
     with pytest.raises(RuntimeError, match="executable"):
         resolve_command(("agent", "acp"), which=lambda name: shim)
+
+
+def executable(folder: Path, name: str) -> Path:
+    """A file the OS would run as `name` from `folder` (`name.exe` on Windows)."""
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / (f"{name}.exe" if sys.platform == "win32" else name)
+    path.write_bytes(b"#!/bin/sh\n")
+    path.chmod(0o755)
+    return path
+
+
+def test_a_program_in_the_current_folder_is_never_the_agent(tmp_path, monkeypatch):  # F3
+    # Windows' own lookup searches the current folder first: a checkout carrying
+    # `agent.exe` would run on the host, unsandboxed
+    executable(tmp_path / "checkout", "agent")
+    monkeypatch.chdir(tmp_path / "checkout")
+    monkeypatch.delenv("NoDefaultCurrentDirectoryInExePath", raising=False)
+    path = os.pathsep.join(["", ".", str(tmp_path / "empty")])
+    with pytest.raises(RuntimeError, match="not found"):
+        resolve_command(("agent", "acp"), path=path)
+
+
+def test_the_agent_is_found_on_path_as_an_absolute_path(tmp_path, monkeypatch):  # F3
+    installed = executable(tmp_path / "bin", "agent")
+    monkeypatch.chdir(tmp_path)
+    command = resolve_command(
+        ("agent", "acp"), path=os.pathsep.join([".", "bin", str(installed.parent)])
+    )
+    assert Path(command[0]).is_absolute()
+    assert Path(command[0]).resolve() == installed.resolve() and command[1:] == ["acp"]
+
+
+def test_a_program_inside_the_step_tree_is_never_the_agent(tmp_path):  # F3
+    tree = tmp_path / "tree"
+    executable(tree / "tools", "agent")
+    with pytest.raises(RuntimeError, match="inside the step's tree"):
+        resolve_command(("agent", "acp"), path=str(tree / "tools"), tree=tree)
+
+
+def test_a_relative_agent_path_is_refused(tmp_path):  # F3
+    with pytest.raises(RuntimeError, match="full path"):
+        resolve_command((str(Path("bin") / "agent"), "acp"), path=str(tmp_path))
 
 
 def test_the_agent_s_own_server_gets_a_free_port_called_directly(world, monkeypatch):

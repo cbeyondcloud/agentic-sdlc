@@ -100,6 +100,10 @@ class AcpProfile:
     # What in a tree the agent would run as code whatever its config says (one reason
     # per file): the agent is never started in such a tree - fail closed.
     refuse_tree: Callable[[Path], list[str]] | None = None
+    # Files of `configure`'s (home-relative) the agent reads once, while it loads its
+    # config (a key): deleted as soon as the session is open, so no command it runs
+    # later can read them. A file that cannot be deleted stops the step.
+    secret_files: tuple[str, ...] = ()
 
 
 #: The variables that name a home or config folder, on every OS.
@@ -112,6 +116,19 @@ _HOME_FOLDERS = {
     "XDG_STATE_HOME": ".local/state",
     "XDG_CACHE_HOME": ".cache",
 }
+
+
+def folds_case(path: Path) -> bool:
+    """Whether the file system holding `path` ignores case (macOS and Windows by
+    default): the same file answers to `path` with its case swapped."""
+    text = str(path)
+    swapped = text.swapcase()
+    if swapped == text:
+        return False
+    try:
+        return os.path.exists(swapped) and os.path.samefile(text, swapped)
+    except OSError:
+        return False
 
 
 def home_env(home: Path) -> dict[str, str]:

@@ -59,6 +59,13 @@
   - An experiment in the check image showed that Bun honours host:port `NO_PROXY` entries. A gateway on another loopback port therefore still goes through the sandbox proxy, so TokenLean LITE on a laptop keeps working.
   - The profile also pins `--hostname 127.0.0.1 --mdns=false`, so no config can bind the server to every interface.
 
+## Final review fixes (F1-F4)
+
+- **F1, the key file stayed readable.** Any allowed command that reads files (`cat $HOME/tokenlean.key`) returned the key. The new generic hook `AcpProfile.secret_files` fixes this: the runner deletes those files as soon as `session/new` returns, because OpenCode reads `{file:}` once, while it loads its config. A file that cannot be deleted stops the step, and the files are deleted again before the home is removed. Contract test: `cat` finds no file, and every model call still carries the key.
+- **F2, OpenCode matches case-sensitively except on Windows.** On a case-blind host (a non-Windows tree whose file system folds case, which is macOS by default), every edit/read deny and every bash ask/deny is also written lower-case, upper-case and capitalised, per path segment or word, in every combination for up to three parts. Flags keep their case. Allows are never widened. The matcher has no character classes, so spellings like `gIt` stay open. This narrows the gap but is not a boundary: on macOS srt is the boundary, and checking it is deferred to M2-41.
+- **F3, the agent could be launched from the current folder.** `resolve_command` now searches only the absolute PATH folders, skipping the current folder. It returns an absolute path, and refuses a relative path or a program inside the step tree.
+- **F4, writes by allowed commands.** The live srt test now shows that srt, given `deny_write` from `Guard.write_denials(tree)`, blocks `printf >> .git/x` while writes elsewhere in the tree still work. The M2-41 wiring must pass those denials.
+
 ## Global Constraints
 
 - **Provider-agnostic engine.** `runner.py` and `profile.py` carry no vendor names, flags or types. A new ACP agent is a new `AcpProfile` value plus its contract tests (E2-06).

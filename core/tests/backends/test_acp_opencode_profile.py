@@ -3,11 +3,13 @@ lock-down compiled into OpenCode 1.18.35's own config and permission format. Pur
 the contract tests run the real binary against what this produces."""
 
 import json
+import re
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
+from agentic.backends.acp import opencode
 from agentic.backends.acp.opencode import (
     OPENCODE,
     PERMISSION_KEYS,
@@ -141,6 +143,87 @@ def test_the_agent_can_never_edit_what_opencode_would_load_as_code():
     edit = opencode_permissions(CODING, ShellRules())["edit"]
     for pattern in (".opencode/*", "*/.opencode/*", "opencode.json", "*/opencode.jsonc"):
         assert edit[pattern] == "deny", pattern
+
+
+# ── case: OpenCode matches case-sensitively except on Windows (review F2) ───────
+
+
+def matches(text: str, pattern: str) -> bool:
+    """OpenCode 1.18.35's `Wildcard.match` (packages/core/src/util/wildcard.ts) with the
+    flags it uses outside Windows: case-sensitive."""
+    escaped = re.sub(r"[.+^${}()|\[\]\\]", lambda m: "\\" + m.group(0), pattern)
+    escaped = escaped.replace("*", ".*").replace("?", ".")
+    if escaped.endswith(" .*"):
+        escaped = escaped[:-3] + "( .*)?"
+    return re.fullmatch(escaped, text.replace("\\", "/"), re.S) is not None
+
+
+def decide(rules: dict, text: str) -> str:
+    """`Permission.evaluate`: the last matching rule wins."""
+    return next((a for p, a in reversed(list(rules.items())) if matches(text, p)), "ask")
+
+
+FLOOR = ShellRules(
+    allow=("*",),  # the guard's allow list when the agent has none
+    deny=("git push", "eval"),
+    deny_paths=("infra/**", "**/.git/**", "**/.github/workflows/**", "**/CLAUDE.md"),
+    deny_anywhere=("rm -r|-R",),
+)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "Infra/prod/main.tf",
+        "INFRA/prod/main.tf",
+        ".Git/hooks/pre-commit",
+        ".GIT/config",
+        ".Github/workflows/ci.yml",
+        "claude.md",
+        "Claude.md",
+        "svc/claude.md",
+    ],
+)
+def test_on_a_case_blind_host_case_variants_of_denied_paths_are_denied(path):
+    edit = opencode_permissions(CODING, FLOOR, case_blind=True)["edit"]
+    assert decide(edit, path) == "deny"
+    assert decide(edit, "src/app.py") == "allow"
+
+
+@pytest.mark.parametrize(
+    "command", ["GIT push origin main", "Git push", "git PUSH origin", "RM -rf x", "EVAL x"]
+)
+def test_on_a_case_blind_host_case_variants_of_denied_commands_are_denied(command):
+    bash = opencode_permissions(CODING, FLOOR, case_blind=True)["bash"]
+    assert decide(bash, command) == "deny"
+    assert decide(bash, "git status") == "allow"
+
+
+def test_a_case_sensitive_host_gets_the_rules_as_written():
+    # Linux: `Infra/` is another folder; Windows: OpenCode folds case itself
+    assert opencode_permissions(CODING, FLOOR) == opencode_permissions(
+        CODING, FLOOR, case_blind=False
+    )
+    edit = opencode_permissions(CODING, FLOOR)["edit"]
+    assert decide(edit, "Infra/prod/main.tf") == "allow"
+
+
+def test_configure_asks_the_tree_s_file_system(coder, monkeypatch):
+    seen = []
+    monkeypatch.setattr(opencode, "case_blind", lambda tree: seen.append(tree) or True)
+    config = json.loads(configure(setup_for(coder, rules=FLOOR)).env["OPENCODE_CONFIG_CONTENT"])
+    assert seen == [Path("/tree")]
+    assert decide(config["permission"]["edit"], "Infra/prod/main.tf") == "deny"
+
+
+def test_only_a_non_windows_host_whose_tree_folds_case_is_case_blind(tmp_path, monkeypatch):
+    monkeypatch.setattr(opencode.sys, "platform", "win32")
+    assert opencode.case_blind(tmp_path) is False  # OpenCode matches with "si" there
+    monkeypatch.setattr(opencode.sys, "platform", "darwin")
+    monkeypatch.setattr(opencode, "folds_case", lambda path: True)
+    assert opencode.case_blind(tmp_path) is True
+    monkeypatch.setattr(opencode, "folds_case", lambda path: False)
+    assert opencode.case_blind(tmp_path) is False
 
 
 # ── code a tree would make OpenCode load (1.18.35 ignores the flag for these) ──
@@ -317,3 +400,7 @@ def test_the_profile_is_pinned_and_quiet():
     assert OPENCODE.egress_hosts == ("registry.npmjs.org",)
     assert OPENCODE.session_cost is True
     assert OPENCODE.auth_method is None
+
+
+def test_the_key_file_is_deleted_once_the_session_is_open():  # review F1
+    assert OPENCODE.secret_files == ("tokenlean.key",)

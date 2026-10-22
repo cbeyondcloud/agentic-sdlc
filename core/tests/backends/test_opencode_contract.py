@@ -220,6 +220,20 @@ def test_ask_listed_commands_are_asked_and_refused(world, agent, command, trace)
     assert trace is None or not (world.tree / trace).exists()
 
 
+def test_no_command_the_agent_runs_can_read_the_key(world, agent):  # review F1
+    # OpenCode reads the key file while it loads its config; the runner deletes it once
+    # the session is open, so an allowed file-reading command finds nothing
+    world.stub.queue = [bash("cat $HOME/tokenlean.key"), Reply(text="VALID done")]
+    outcome = run(world.runner(agent, rules=ShellRules(allow=("cat",))))
+    assert outcome.status == "completed"
+    calls = world.stub.model_calls()
+    assert len(world.stub.model_calls(aux=False)) == 2
+    assert all(call["auth"] == "Bearer tl-test-key" for call in calls)  # still routed
+    result = world.stub.model_calls(aux=False)[1]["last_tool_result"] or ""
+    assert "No such file" in result, result  # the command ran: the file was gone
+    assert "tl-test-key" not in result
+
+
 def test_an_allowed_command_runs_and_a_denied_one_is_refused(world, agent):
     world.stub.queue = [
         bash("git push origin main"),

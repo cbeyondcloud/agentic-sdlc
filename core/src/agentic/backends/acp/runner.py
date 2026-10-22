@@ -25,7 +25,7 @@ import socket
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from pydantic_ai.usage import RunUsage
@@ -74,14 +74,48 @@ class AcpSettings:
     command: tuple[str, ...] | None = None  # the agent's command; None: the profile's
 
 
-def resolve_command(command: Sequence[str], which=shutil.which) -> list[str]:
-    """The agent command with its program found on PATH. A Windows script shim (npm's
-    `.cmd`) is refused: it would run through cmd.exe, which re-parses its arguments."""
-    found = which(command[0])
+def resolve_command(
+    command: Sequence[str],
+    which=shutil.which,
+    *,
+    path: str | None = None,
+    tree: Path | None = None,
+) -> list[str]:
+    """The agent command with its program as an absolute path: a full path as given, else
+    found in the absolute folders on PATH (`path`; default the environment's) - never in
+    the current folder, which Windows' own lookup searches first, nor in a relative PATH
+    entry, nor inside the step's tree: a checkout carrying the agent's name would run on
+    the host, unsandboxed. A Windows script shim (npm's `.cmd`) is refused: it would run
+    through cmd.exe, which re-parses its arguments."""
+    program = command[0]
+    if os.path.isabs(program):
+        found = which(program)  # a folder given: no search, so no current folder either
+    elif os.path.dirname(program):
+        raise RuntimeError(
+            f"the agent command {program!r} is a relative path: configure the full path "
+            "to its executable, or its name alone to find it on PATH"
+        )
+    else:
+        entries = (os.environ.get("PATH", "") if path is None else path).split(os.pathsep)
+        cwd = os.path.normcase(os.path.abspath(os.getcwd()))
+        found = None
+        for entry in entries:
+            if not entry or not os.path.isabs(entry):  # `.`, `bin`, `` mean the current folder
+                continue
+            if os.path.normcase(os.path.abspath(entry)) == cwd:
+                continue
+            found = which(os.path.join(entry, program))
+            if found is not None:
+                break
     if found is None:
         raise RuntimeError(
-            f"the agent command {command[0]!r} was not found on PATH: install the pinned "
-            "release, or configure the full path to its executable"
+            f"the agent command {program!r} was not found on PATH (its absolute folders "
+            "only): install the pinned release, or configure the full path to its executable"
+        )
+    if tree is not None and Path(found).resolve().is_relative_to(Path(tree).resolve()):
+        raise RuntimeError(
+            f"{found} is inside the step's tree: the agent's executable must be installed "
+            "outside the repository"
         )
     if Path(found).suffix.lower() in _SHIMS:
         raise RuntimeError(
@@ -264,7 +298,7 @@ class AcpRunner:
             raise RuntimeError(
                 "wrapping an agent CLI in a sandbox needs macOS, Linux or WSL2 (D38)"
             )
-        command, env = resolve_command(self.command), dict(self.env)
+        command, env = resolve_command(self.command, tree=self.cwd), dict(self.env)
         if self.profile.own_server is not None:
             flag, host = self.profile.own_server
             direct = f"{host}:{_free_port(host)}"
@@ -306,6 +340,10 @@ class AcpRunner:
                     finally:  # nothing it started outlives the step, however it ends
                         self._kill()
         finally:  # its state - the transcript included - goes with the step
+            try:
+                self._remove_secrets()  # first, so a locked transcript cannot keep them
+            except RuntimeError:
+                pass  # the step has ended already: what it raised stands
             shutil.rmtree(self.home, ignore_errors=True)
 
     async def _converse(self, conn, task: AgentTask, acp, schema) -> AgentOutcome:
@@ -347,9 +385,22 @@ class AcpRunner:
         if self.profile.auth_method:
             await conn.authenticate(method_id=self.profile.auth_method)
         session = await conn.new_session(cwd=str(self.cwd), mcp_servers=[])
+        self._remove_secrets()  # read while it loaded its config: its commands find nothing
         if self.profile.mode:
             await conn.set_session_mode(session_id=session.session_id, mode_id=self.profile.mode)
         return session.session_id
+
+    def _remove_secrets(self) -> None:
+        """Delete the profile's secret files from the step home. One that cannot be
+        deleted (a lock on Windows) stops the step: the agent's shell could read it."""
+        for name in self.profile.secret_files:
+            try:
+                self.home.joinpath(*PurePosixPath(name).parts).unlink(missing_ok=True)
+            except OSError as error:
+                raise RuntimeError(
+                    f"the {self.profile.name} agent's secret file {name!r} could not be "
+                    f"removed from its home ({error.strerror or error})"
+                ) from None
 
     def _stderr_tail(self, limit: int = 2000) -> str:
         try:

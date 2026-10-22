@@ -7,6 +7,7 @@ process handling are exercised on every OS without any agent binary.
 The script (JSON) holds:
   * "log": a JSONL file where every call the client made is recorded;
   * "auth_methods" / "modes": what initialize and session/new advertise;
+  * "watch": home-relative files whose existence session/new and every prompt log;
   * "turns": one list of actions per prompt (later prompts answer "VALID default"):
       {"say": text}                       an agent message chunk
       {"tool": title, "command": c}       a tool call; with "ask": true it first asks the
@@ -57,6 +58,10 @@ class FakeAgent:
         with self.log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps({"event": event, **data}) + "\n")
 
+    def watched(self) -> dict[str, bool]:
+        home = Path(os.environ["HOME"])
+        return {name: (home / name).exists() for name in self.script.get("watch", [])}
+
     def on_connect(self, conn) -> None:
         self.conn = conn
 
@@ -82,7 +87,7 @@ class FakeAgent:
         return schema.AuthenticateResponse()
 
     async def new_session(self, cwd, mcp_servers=None, **kw):
-        self.log("new_session", cwd=cwd, mcp_servers=len(mcp_servers or []))
+        self.log("new_session", cwd=cwd, mcp_servers=len(mcp_servers or []), watched=self.watched())
         modes = None
         if self.script.get("modes"):
             available = [schema.SessionMode(id=m, name=m) for m in self.script["modes"]]
@@ -97,7 +102,7 @@ class FakeAgent:
 
     async def prompt(self, session_id, prompt, **kw):
         text = "\n".join(getattr(block, "text", "") for block in prompt)
-        self.log("prompt", text=text, blocks=len(prompt))
+        self.log("prompt", text=text, blocks=len(prompt), watched=self.watched())
         turns = self.script.get("turns", [])
         actions = turns[self.turn] if self.turn < len(turns) else [{"say": "VALID default"}]
         self.turn += 1
