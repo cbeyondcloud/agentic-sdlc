@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 import pytest
+from _process_support import PARENT, alive, gone
 
 from agentic.backends.processes import (
     ProcessTree,
@@ -24,12 +25,6 @@ from agentic.backends.processes import (
 
 CORE_SRC = Path(__file__).resolve().parents[2] / "src" / "agentic"
 
-PARENT = """\
-import subprocess, sys, time
-child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-print(child.pid, flush=True)
-time.sleep(60)
-"""
 # the parent leaves at once: its child is an orphan (POSIX re-parents it; Windows keeps
 # no link at all, so `taskkill /T` cannot find it)
 ORPHANER = """\
@@ -50,42 +45,6 @@ child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], 
 print(child.pid, flush=True)
 time.sleep(60)
 """
-
-
-def alive(pid: int) -> bool:
-    if os.name == "nt":
-        import ctypes
-
-        kernel = ctypes.windll.kernel32
-        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        code = ctypes.c_ulong()
-        kernel.GetExitCodeProcess(handle, ctypes.byref(code))
-        kernel.CloseHandle(handle)
-        return code.value == 259  # STILL_ACTIVE
-    stat = Path(f"/proc/{pid}/stat")
-    if stat.exists():  # a zombie no one reaped (a container's init) is dead too
-        try:
-            return stat.read_text().rsplit(")", 1)[-1].split()[0] != "Z"
-        except OSError:
-            return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def gone(pid: int, within_s: float = 10.0) -> bool:
-    deadline = time.monotonic() + within_s
-    while time.monotonic() < deadline:
-        if not alive(pid):
-            return True
-        time.sleep(0.1)
-    return False
 
 
 def spawn(tmp_path: Path, source: str, name: str = "parent.py") -> subprocess.Popen:

@@ -23,6 +23,10 @@ the step that was in progress and its spend still counts. A limit, a timeout, an
 invalid answer, a stuck agent or a condition that cannot be evaluated pauses the
 run with the reason; nothing is decided silently.
 
+Every agent step runs inside a process scope (`agentic.backends.processes`, M2-22):
+whatever the backend started and left running - a background shell, a code-intelligence
+build in a tool thread - is killed when the step ends, however it ends.
+
 The engine imports neither `sdlc_commons` nor Zyroflo: the run ledger and the
 gate ledger are protocols, wired by the CLI (and the tests).
 """
@@ -47,6 +51,7 @@ from agentic.agents.runner import (
     ResumeError,
 )
 from agentic.agents.stuck import oscillation
+from agentic.backends.processes import process_scope
 from agentic.definitions import DefinitionSet
 from agentic.definitions.pipeline import (
     ActionStep,
@@ -1097,7 +1102,8 @@ class _Run:
             runner = self.e.runner_factory(
                 StepContext(self.state.run_id, step.id, iteration, agent, budget, contract)
             )
-            with step_span(self.state.run_id, step.id, iteration, agent) as span:
+            span_for = step_span(self.state.run_id, step.id, iteration, agent)
+            with span_for as span, process_scope():  # nothing it starts outlives it
                 if resume is None:
                     task = AgentTask(
                         instructions=agent.definition.instructions,
