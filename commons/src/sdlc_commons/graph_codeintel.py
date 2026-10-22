@@ -112,20 +112,18 @@ class DomainGraphCodeIntel:
                 best = (len(prefix), name, rel[len(prefix) :].lstrip("/"))
         return (best[1], best[2]) if best is not None else None
 
-    def _root_of(self, component: str) -> str:
-        root = self.graph.components().get(component, "")
-        return "" if root in ("", ".") else root
-
-    def _in_tree(self, component: str, path: str) -> str | None:
-        """The tree-relative path of a graph file, or None when it is not in the tree."""
+    def _in_tree(self, component: str, path: str, roots: dict[str, str]) -> str | None:
+        """The tree-relative path of a graph file, or None when it is not in the tree.
+        `roots` are the components' workspace paths (`DomainGraph.components`)."""
         rel = _clean(path)
         if rel is None:
             return None
         if self.component is not None:
             found = rel if component == self.component else None
-        elif component in self.graph.components():
-            root = self._root_of(component)
-            found = f"{_clean(root)}/{rel}" if root else rel
+        elif component in roots:
+            root = roots[component] if roots[component] not in ("", ".") else ""
+            prefix = _clean(root) if root else ""
+            found = None if prefix is None else (f"{prefix}/{rel}" if prefix else rel)
         else:
             found = None
         return found if found and (self.tree / found).is_file() else None
@@ -141,10 +139,11 @@ class DomainGraphCodeIntel:
             )
         files: list[str] = []
         elsewhere: list[str] = []
+        roots = self.graph.components() if self.component is None else {}
         for row in result.get("files", []):
             if _key(row) in exclude:
                 continue
-            here = self._in_tree(row["component"], row["path"])
+            here = self._in_tree(row["component"], row["path"], roots)
             if here is not None:
                 files.append(here)
             elif _clean(row["path"]) is not None and self._elsewhere(row["component"]):
