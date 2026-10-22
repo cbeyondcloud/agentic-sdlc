@@ -33,5 +33,20 @@ def test_repo_allowed_matches_cli_guard():
     assert not repo_allowed([], "git@github.com:acme/app.git")  # empty allows nothing
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://git.attacker.test#@git.example.test/acme/app.git",
+        "https://git.attacker.test?@git.example.test/acme/app.git",
+        "ssh://git.attacker.test#@git.example.test/acme/app.git",
+    ],
+)
+def test_the_key_names_the_host_git_would_fetch_from(url):
+    """Review F1: an '@' after '#' or '?' is not userinfo - git (like urlsplit) fetches from
+    the host before it, so the key and the allow-list must see that host too."""
+    assert normalise_remote(url).startswith("git.attacker.test")
+    assert not repo_allowed(["git.example.test/acme/*"], url)
+
+
 def test_repo_host_is_the_first_segment():
     assert repo_host("github.com/acme/app") == "github.com"

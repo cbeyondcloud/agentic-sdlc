@@ -53,6 +53,7 @@ from typing import Any, Literal
 
 from agentic.orgapi import Me
 from agentic.policy import OrgPolicy, PolicyError, load_policy, tree_digest
+from agentic.policy.portable import portable_path_problems
 from agentic_cli import control_plane
 from agentic_cli.config import local_policy_setting
 from agentic_cli.errors import CliError
@@ -280,14 +281,29 @@ def _extract(data: bytes, target: Path) -> None:
     """Unpack a policy bundle; an entry that would land outside `target`, a link or a
     device is refused (`filter="data"`)."""
     target.mkdir(parents=True)
+    hint = "tell your org admin: the control plane served a bundle laptops refuse"
+    member = None
     try:
         with tarfile.open(fileobj=io.BytesIO(gzip.decompress(data)), mode="r:") as tar:
-            tar.extractall(target, filter="data")
-    except (tarfile.TarError, OSError, EOFError) as error:
+            members = tar.getmembers()
+            names = [m.name.rstrip("/") for m in members if m.isfile() or m.isdir()]
+            problems = portable_path_problems(n for n in names if n not in ("", "."))
+            if problems:  # review F4: a name this or another laptop would mangle
+                raise CliError(
+                    f"the policy bundle holds a file laptops cannot extract as it is: "
+                    f"{problems[0]}",
+                    ExitCode.REFUSED,
+                    hint=hint,
+                )
+            for member in members:
+                tar.extract(member, target, filter="data")
+    except (tarfile.TarError, OSError, EOFError, ValueError) as error:
+        where = f" {member.name!r}" if member is not None else ""
         raise CliError(
-            f"the policy bundle holds an unsafe or unreadable entry ({type(error).__name__})",
+            f"the policy bundle holds an unsafe or unreadable entry{where} "
+            f"({type(error).__name__})",
             ExitCode.REFUSED,
-            hint="tell your org admin: the control plane served a bundle laptops refuse",
+            hint=hint,
         ) from None
 
 

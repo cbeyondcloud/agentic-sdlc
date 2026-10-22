@@ -2,6 +2,7 @@
 a fake TokenLean; nothing reaches a real provider."""
 
 import json
+import time
 
 import pytest
 from _cli_support import USER, FakeGateway, answer, git, write
@@ -194,6 +195,41 @@ def test_stop_ends_the_run_and_runs_hides_it(workspace, gateway, cli):
     assert cli("--json", "runs").json() == []
     assert [r["run_id"] for r in cli("--json", "runs", "--all").json()] == [run_id]
     assert cli("resume", run_id).code == ExitCode.STOPPED
+
+
+class SlowSink:
+    """A sink that takes a moment per delivery, like a control plane over a network."""
+
+    name = "slow"
+
+    def __init__(self, fail: bool = False) -> None:
+        self.events: list[str] = []
+        self.fail = fail
+
+    def deliver(self, run_id, entries):
+        time.sleep(0.3)
+        if self.fail:
+            raise ConnectionError("offline")
+        self.events += [entry["event"] for entry in entries]
+
+
+def test_stop_delivers_run_closed_before_it_exits(workspace, gateway, cli, monkeypatch):
+    """Review F5: `stop` records run_closed through the background sink thread; it waits
+    for that delivery (bounded) as run and resume do, instead of exiting at once."""
+    _, run_id = start(cli)
+    sink = SlowSink()
+    monkeypatch.setattr(runtime.Runtime, "sinks", lambda self: [sink])
+    stopped = cli("--json", "stop", run_id, "--reason", "not needed")
+    assert stopped.code == ExitCode.OK, stopped.err
+    assert "run_closed" in sink.events
+
+
+def test_stop_says_what_stays_queued_when_the_sink_is_down(workspace, gateway, cli, monkeypatch):
+    _, run_id = start(cli)
+    monkeypatch.setattr(runtime.Runtime, "sinks", lambda self: [SlowSink(fail=True)])
+    stopped = cli("stop", run_id, "--reason", "not needed")
+    assert stopped.code == ExitCode.OK
+    assert "queued" in stopped.err and "agentic sync" in stopped.err
 
 
 def test_logs_show_the_step_log(workspace, gateway, cli):

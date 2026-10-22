@@ -20,6 +20,7 @@ from agentic_cli.control_plane import (
     CONTROL_PLANE_TOKEN,
     ChainRejected,
     ControlPlaneClient,
+    ControlPlaneRefused,
     ControlPlaneSink,
     record_login,
 )
@@ -66,6 +67,41 @@ def test_sink_sends_in_batches(fake):
     _sink(fake, batch=2).deliver("r", chain(5))
     posts = [r for r in fake.requests if r.url.path == "/v1/runs/r/events"]
     assert [len(json.loads(r.content)["entries"]) for r in posts] == [2, 2, 1]
+
+
+def _bulky_chain(n: int, size: int) -> list[dict]:
+    """Entries of about `size` bytes each, like step_finished with artifacts and cost."""
+    return [entry | {"detail": "x" * size} for entry in chain(n)]
+
+
+def test_sink_batches_by_size_under_the_body_cap(fake):
+    """Review F6: a catch-up batch of large events never exceeds the server's body cap."""
+    fake.max_body = 20_000
+    sink = ControlPlaneSink(
+        ControlPlaneClient(CP_URL, TOKEN, transport=fake.transport), max_bytes=10_000
+    )
+    sink.deliver("r", _bulky_chain(12, 3_000))
+    assert [e["seq"] for e in fake.events["r"]] == list(range(1, 13))
+    posts = [r for r in fake.requests if r.url.path == "/v1/runs/r/events"]
+    assert all(len(r.content) <= 20_000 for r in posts) and len(posts) > 1
+
+
+def test_sink_halves_its_batch_when_the_body_is_too_large(fake):
+    fake.max_body = 8_000  # below what the sink assumes: it learns from the 413s
+    _sink(fake).deliver("r", _bulky_chain(10, 3_000))
+    assert [e["seq"] for e in fake.events["r"]] == list(range(1, 11))
+
+
+def test_sink_halves_its_batch_when_there_are_too_many_entries(fake):
+    fake.max_entries = 3  # an operator set max_ingest_entries below the sink's batch
+    _sink(fake).deliver("r", chain(10))
+    assert [e["seq"] for e in fake.events["r"]] == list(range(1, 11))
+
+
+def test_a_single_entry_over_the_cap_is_still_a_refusal(fake):
+    fake.max_body = 1_000
+    with pytest.raises(ControlPlaneRefused):
+        _sink(fake).deliver("r", _bulky_chain(1, 3_000))
 
 
 def test_sink_raises_on_chain_rejection_so_the_cursor_stays(fake, tmp_path):

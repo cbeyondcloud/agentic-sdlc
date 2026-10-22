@@ -49,6 +49,8 @@ class FakeControlPlane:
     events: dict[str, list[dict]] = field(default_factory=dict)
     registered: list[dict] = field(default_factory=list)
     refuse_ingest: dict | None = None
+    max_body: int | None = None  # bytes: a larger request body is answered 413 too_large
+    max_entries: int | None = None  # entries per ingest: more is 413 ingest.too_large
 
     @property
     def transport(self) -> httpx2.MockTransport:
@@ -107,6 +109,8 @@ class FakeControlPlane:
                 },
             )
         if path.startswith("/v1/runs/") and path.endswith("/events"):
+            if self.max_body is not None and len(request.content) > self.max_body:
+                return _problem(413, "too_large", f"the body is over {self.max_body} bytes")
             return self._ingest(path.split("/")[3], json.loads(request.content)["entries"])
         return _problem(404, "not_found", "no such route or object")
 
@@ -126,6 +130,8 @@ class FakeControlPlane:
                 json=self.refuse_ingest,
                 headers={"content-type": "application/problem+json"},
             )
+        if self.max_entries is not None and len(entries) > self.max_entries:
+            return _problem(413, "ingest.too_large", f"at most {self.max_entries} entries")
         stored = self.events.setdefault(run_id, [])
         head = len(stored)
         duplicates = [e for e in entries if e["seq"] <= head]

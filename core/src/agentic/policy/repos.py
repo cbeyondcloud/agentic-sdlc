@@ -7,19 +7,31 @@ from __future__ import annotations
 import fnmatch
 import re
 from collections.abc import Iterable
+from urllib.parse import urlsplit
 
 
 def normalise_remote(url: str) -> str:
     """`host/owner/repo`, lower case, from an https, ssh or scp-style git URL. Only a
     URL with a scheme can carry a port; in the scp form (`host:owner/repo`) the part
-    after the colon is always the path, even when the owner is a number (DF-199)."""
+    after the colon is always the path, even when the owner is a number (DF-199).
+
+    A URL with a scheme is split as git splits it (`urlsplit`): its host is the one git
+    connects to, so an '@' after a '#' or '?' never makes the text after it the host
+    (review F1). A pattern without a scheme or a colon (`github.com/acme/*`) is kept."""
     text = url.strip().lower()
-    scheme = re.match(r"^[a-z][a-z0-9+.-]*://", text)
-    text = re.sub(r"^[^@/]*@", "", text[scheme.end() :] if scheme else text)  # user@
-    if scheme:
-        text = re.sub(r"^([^/:]+):\d+(?=/)", r"\1", text)  # host:port
+    if re.match(r"^[a-z][a-z0-9+.-]*://", text):
+        parts = urlsplit(text)
+        try:
+            host = parts.hostname or ""
+        except ValueError:  # a malformed host or port: nothing a pattern can match
+            host = ""
+        text = host + parts.path
     else:
-        text = re.sub(r"^([^/:]+):", r"\1/", text, count=1)  # scp form host:owner/repo
+        head, colon, path = text.partition(":")
+        if colon and "/" not in head:  # scp form [user@]host:owner/repo
+            text = head.rpartition("@")[2] + "/" + path
+        else:
+            text = re.sub(r"^[^@/]*@", "", text)  # user@host/owner/repo
     return text.rstrip("/").removesuffix(".git")
 
 

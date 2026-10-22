@@ -113,6 +113,23 @@ def test_bundle_with_path_traversal_refused(plane, tmp_path, monkeypatch):
     assert list(scratch.iterdir()) == []  # the scratch folder is removed too
 
 
+@pytest.mark.parametrize("name", ["docs/a:b.txt", "docs/notes.", "docs/README.md"])
+def test_bundle_with_an_unportable_name_is_refused_naming_the_file(plane, name):
+    """Review F4: a name some laptop cannot extract as it is gives a CliError naming the
+    file - never a raw traceback, nor the misleading digest-mismatch message."""
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tar:
+        for entry in ("policy/org.yaml", "docs/Readme.md", name):
+            info = tarfile.TarInfo(entry)
+            info.size = 2
+            tar.addfile(info, io.BytesIO(b"{}"))
+    plane.bundle_override = gzip.compress(raw.getvalue(), mtime=0)
+    with pytest.raises(CliError) as caught:
+        _resolve()
+    assert caught.value.code == ExitCode.REFUSED
+    assert name in str(caught.value)
+
+
 def test_unreachable_control_plane_uses_unexpired_cache_with_warning(plane):
     _init_once()
     plane.down = True

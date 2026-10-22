@@ -120,7 +120,9 @@ async def refresh(
         raise GitError(str(error)) from None
     workdir = Path(settings.policy_workdir) / str(tenant.id) / "repos"
     found = await asyncio.to_thread(fetch_codeowners, git, workdir, remote, tenant.slug)
-    derived = maintainers(found.text, repo_host(repo_key)) if found else Maintainers()
+    derived = Maintainers()
+    if found:  # off the event loop: a large file is many matches (review F3)
+        derived = await asyncio.to_thread(maintainers, found.text, repo_host(repo_key))
     await conn.execute(
         update(repos)
         .where(repos.c.repo_key == repo_key)

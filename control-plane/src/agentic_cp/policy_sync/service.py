@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from agentic.orgapi import API_PREFIX, ActivePolicy, SyncOutcome
 from agentic.policy import tree_digest
+from agentic.policy.portable import portable_path_problems
 from agentic_cp.audit import AuditEvent, append
 from agentic_cp.gitops import GitError, GitRunner, RepoUrlError, check_repo_url
 from agentic_cp.policy_sync.validate import AUDITED, validate_policy_tree
@@ -281,26 +282,34 @@ def _fetch(git: GitRunner, workdir: Path, tenant: TenantRow) -> tuple[str, datet
     return sha, commit_at
 
 
-def _links(git: GitRunner, workdir: Path, tenant: TenantRow, commit: str) -> list[str]:
+def _tree_problems(git: GitRunner, workdir: Path, tenant: TenantRow, commit: str) -> list[str]:
+    """What laptops could not extract as it is: links and submodules (R13) and names
+    some laptop's file system refuses or folds together (review F4)."""
     listing = git.run(["ls-tree", "-r", "-z", commit], cwd=workdir, tenant_slug=tenant.slug)
-    problems = []
+    problems, names = [], []
     for item in listing.split(b"\0"):
         if not item:
             continue
         meta, _, path = item.partition(b"\t")
         mode = meta.split(b" ", 1)[0].decode("ascii")
-        if mode in _LINK_MODES:
+        try:
+            name = path.decode("utf-8")
+        except UnicodeDecodeError:
             name = path.decode("utf-8", errors="replace")
+            problems.append(f"{name}: the name is not UTF-8 (policy.path)")
+            continue
+        if mode in _LINK_MODES:
             problems.append(
                 f"{name}: {_LINK_MODES[mode]} is not allowed in a policy repo "
                 "(policy.symlink: laptops extract plain files only)"
             )
-    return problems
+        names.append(name)
+    return problems + portable_path_problems(names)
 
 
 def _build(git: GitRunner, workdir: Path, tenant: TenantRow, commit: str, version: str) -> Built:
     """Archive `commit`, then validate the extracted tree and bundle it."""
-    problems = _links(git, workdir, tenant, commit)
+    problems = _tree_problems(git, workdir, tenant, commit)
     archive = git.run(["archive", "--format=tar", commit], cwd=workdir, tenant_slug=tenant.slug)
     if len(archive) > MAX_BUNDLE_BYTES:
         problems.append(

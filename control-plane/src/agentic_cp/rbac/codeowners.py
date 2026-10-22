@@ -10,6 +10,7 @@ reported unresolved until host team sync (phase 3)."""
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +27,17 @@ PROBE_PATHS = (
     ".agentic/skills/x/SKILL.md",
     "AGENTS.md",
 )
+
+
+#: GitHub ignores a CODEOWNERS file larger than this; so does the control plane.
+MAX_CODEOWNERS_BYTES = 3 * 1024 * 1024
+#: The most '*' one pattern may hold once runs are collapsed (review F3): the library's
+#: regexes backtrack per wildcard, and real patterns use two or three.
+MAX_WILDCARDS = 8
+#: Three or more '*' in a row match what one '*' matches (two may be a `**` segment).
+_STAR_RUN = re.compile(r"(?<!\\)\*{3,}")
+#: A line's pattern (an escaped space belongs to it) and the rest of the line.
+_PATTERN = re.compile(r"((?:\\ |\S)*)(.*)", re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -50,8 +62,11 @@ class Maintainers:
 def maintainers(text: str, host: str) -> Maintainers:
     """The owners of the agentic paths in `text` (a CODEOWNERS file of a repo on `host`)."""
     found = Maintainers()
+    if len(text.encode("utf-8", errors="replace")) > MAX_CODEOWNERS_BYTES:
+        found.unresolved.add("CODEOWNERS: larger than 3 MiB, which hosts ignore")
+        return found
     try:
-        parsed = CodeOwners(text)
+        parsed = CodeOwners(_bounded(text))
     except ValueError as error:  # a malformed pattern: nobody is derived from this file
         found.unresolved.add(f"CODEOWNERS: {error}"[:200])
         return found
@@ -70,6 +85,23 @@ def maintainers(text: str, host: str) -> Maintainers:
                 found.emails.add(value)
             found.entries.setdefault(value, entry)
     return found
+
+
+def _bounded(text: str) -> str:
+    """`text` with each pattern's '*' runs collapsed (the same matches, without the
+    backtracking); `ValueError` naming the line when a pattern still holds more than
+    `MAX_WILDCARDS` - the file is then treated as malformed, as the library treats one."""
+    lines = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        pattern, rest = _PATTERN.match(line.strip()).groups()
+        if pattern and not pattern.startswith(("#", "[", "^[")):
+            pattern = _STAR_RUN.sub("*", pattern)
+            if pattern.count("*") > MAX_WILDCARDS:
+                raise ValueError(
+                    f"line {number}: more than {MAX_WILDCARDS} wildcards in one pattern"
+                )
+        lines.append(pattern + rest)
+    return "\n".join(lines)
 
 
 def fetch_codeowners(

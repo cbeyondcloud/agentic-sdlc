@@ -198,6 +198,34 @@ async def test_symlink_in_policy_tree_is_rejected(api, settings, tmp_path):
     assert any("policy/link.yaml" in problem for problem in outcome.problems)
 
 
+@pytest.mark.parametrize(
+    "names",
+    [
+        ("docs/a:b.txt",),
+        ("docs/notes.",),
+        ("docs/aux.md",),
+        ("docs/Readme.md", "docs/README.md"),
+        ("Docs/x.md", "docs/y.md"),
+    ],
+)
+async def test_a_name_some_laptop_cannot_extract_is_rejected(api, settings, tmp_path, names):
+    """Review F4: Windows and macOS laptops must extract the validated tree as it is; a
+    name they refuse, mangle or fold into another is rejected with the file named. The
+    entries are added with git plumbing: this file system may not hold them either."""
+    repo = make_policy_repo(tmp_path / "policy-a")
+    (repo / "blob.txt").write_bytes(b"x\n")
+    blob = git(repo, "hash-object", "-w", "blob.txt")
+    (repo / "blob.txt").unlink()
+    for name in names:  # protectNTFS off: Git for Windows refuses these names by default
+        entry = f"100644,{blob},{name}"
+        git(repo, "-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", entry)
+    git(repo, "commit", "-q", "-m", "an unportable name")
+    await _point(api.db, api.a.id, url(repo))
+    outcome = await _sync(api.db, settings, api.a.id)
+    assert outcome.kind == "rejected", outcome
+    assert any(names[-1] in p and "policy.path" in p for p in outcome.problems), outcome
+
+
 async def test_bundle_too_large_is_rejected(api, settings, tmp_path, monkeypatch):
     repo = make_policy_repo(tmp_path / "policy-a")
     monkeypatch.setattr(service, "MAX_BUNDLE_BYTES", 1024)

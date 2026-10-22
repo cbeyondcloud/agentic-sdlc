@@ -50,6 +50,9 @@ LOGIN_HINT = f"run `{LOGIN}`"
 LOGIN_RECORD = "control-plane.json"
 #: Seconds to connect, and to wait for an answer (a short default: the CLI waits on it).
 TIMEOUT = httpx2.Timeout(15.0, connect=5.0)
+#: Serialised entries per ingest request: about half the control plane's default body
+#: cap (`max_body_bytes`, 1 MiB), leaving room for the envelope (review F6).
+MAX_BATCH_BYTES = 512 * 1024
 
 
 class ControlPlaneError(CliError):
@@ -289,13 +292,20 @@ class ControlPlaneSink:
 
     name = "control-plane"
 
-    def __init__(self, client: ControlPlaneClient, batch: int = 200) -> None:
+    def __init__(
+        self, client: ControlPlaneClient, batch: int = 200, max_bytes: int = MAX_BATCH_BYTES
+    ) -> None:
         self.client = client
         self.batch = batch
+        self.max_bytes = max_bytes
 
     def deliver(self, run_id: str, entries: Sequence[Mapping[str, object]]) -> None:
-        for start in range(0, len(entries), self.batch):
-            chunk = entries[start : start + self.batch]
+        """Send `entries` in batches of at most `batch` entries and about `max_bytes`;
+        a 413 (the server's body or entry cap is lower) halves the batch and retries,
+        so a large offline backlog is never wedged (review F6)."""
+        start, limit = 0, self.batch
+        while start < len(entries):
+            chunk = self._chunk(entries, start, limit)
             try:
                 self.client.ingest(run_id, chunk)
             except ChainRejected as error:
@@ -309,6 +319,24 @@ class ControlPlaneSink:
                 ):
                     raise SinkBehind(*head) from None
                 raise
+            except ControlPlaneRefused as error:
+                if error.status == 413 and len(chunk) > 1:
+                    limit = len(chunk) // 2
+                    continue
+                raise
+            start += len(chunk)
+
+    def _chunk(
+        self, entries: Sequence[Mapping[str, object]], start: int, limit: int
+    ) -> Sequence[Mapping[str, object]]:
+        """Entries from `start`: at most `limit`, and at least one, within `max_bytes`."""
+        end, size = start, 0
+        while end < len(entries) and end - start < limit:
+            size += len(json.dumps(entries[end], separators=(",", ":"))) + 1
+            if end > start and size > self.max_bytes:
+                break
+            end += 1
+        return entries[start:end]
 
 
 # ── which client, from where ────────────────────────────────────────────────

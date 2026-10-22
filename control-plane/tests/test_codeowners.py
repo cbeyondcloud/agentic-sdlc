@@ -4,11 +4,17 @@ last match wins, `@org/team` reported unresolved; the file is fetched over git."
 from __future__ import annotations
 
 import os
+import time
 
 from policy_repos import commit, git, make_app_repo, url, write
 
 from agentic_cp.gitops import GitRunner
-from agentic_cp.rbac.codeowners import PROBE_PATHS, fetch_codeowners, maintainers
+from agentic_cp.rbac.codeowners import (
+    MAX_CODEOWNERS_BYTES,
+    PROBE_PATHS,
+    fetch_codeowners,
+    maintainers,
+)
 from agentic_cp.settings import Settings
 
 
@@ -35,6 +41,29 @@ def test_codeowners_without_agentic_owners_has_no_maintainers():
 def test_codeowners_entries_name_their_line():
     found = maintainers("* @carol\n/.agentic/ @alice\n", "github.com")
     assert found.entries["github.com:alice"] == "line 2: /.agentic/"
+
+
+def test_a_run_of_stars_is_matched_quickly_and_means_one_star():
+    """Review F3: stacked '*' made the library's regex backtrack for seconds per line on
+    the shared event loop; a run of them means what one '*' means, and is matched so."""
+    started = time.perf_counter()
+    found = maintainers("*" * 22 + ".md @alice\n" + "*" * 22 + "b @bob\n", "github.com")
+    assert time.perf_counter() - started < 1
+    assert found.handles == {"github.com:alice"}
+
+
+def test_a_pattern_with_too_many_wildcards_derives_nobody():
+    found = maintainers("* @carol\n/" + "*a" * 9 + " @alice\n", "github.com")
+    assert found.owners == set()
+    assert any("wildcards" in problem for problem in found.unresolved)
+
+
+def test_an_oversized_codeowners_derives_nobody():
+    """GitHub ignores a CODEOWNERS file over 3 MiB; so does the control plane."""
+    text = "/.agentic/ @alice\n" + "# padding\n" * (MAX_CODEOWNERS_BYTES // 10 + 1)
+    found = maintainers(text, "github.com")
+    assert found.owners == set()
+    assert any("3 MiB" in problem for problem in found.unresolved)
 
 
 def _settings(tmp_path) -> Settings:

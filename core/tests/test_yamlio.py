@@ -1,5 +1,6 @@
 """Tests for the one YAML reader every framework file goes through."""
 
+import time
 from pathlib import Path
 
 import pytest
@@ -97,3 +98,36 @@ def test_front_matter_missing_or_unclosed(text: str):
         split_front_matter(text)
 
     assert "front matter" in str(error.value)
+
+
+def _alias_ladder(levels: int, width: int = 9) -> str:
+    """A few hundred bytes whose aliases expand to width**levels values."""
+    lines = ["l0: &l0 [" + ", ".join(["x"] * width) + "]"]
+    for level in range(1, levels + 1):
+        refs = ", ".join([f"*l{level - 1}"] * width)
+        lines.append(f"l{level}: &l{level} [{refs}]")
+    return "\n".join(lines) + "\n"
+
+
+def test_an_alias_bomb_is_refused_quickly():
+    """Review F2: a policy repo is tenant input; aliases that expand a tiny file into
+    millions of values are refused before anything walks the expansion."""
+    started = time.perf_counter()
+    with pytest.raises(YamlFileError) as error:
+        load_yaml(_alias_ladder(7))
+    assert time.perf_counter() - started < 2
+    assert "alias" in str(error.value)
+
+
+def test_a_self_referencing_alias_is_refused():
+    with pytest.raises(YamlFileError):
+        load_yaml("a: &a [x, *a]\n")
+
+
+def test_ordinary_anchors_and_merge_keys_still_load():
+    data, lines = load_yaml(
+        "base: &base {model: m, budget: 1}\nstep: {<<: *base, budget: 2}\nalso: *base\n"
+    )
+    assert data["step"] == {"model": "m", "budget": 2}
+    assert data["also"] == {"model": "m", "budget": 1}
+    assert line_of(lines, ("step", "budget")) == 2

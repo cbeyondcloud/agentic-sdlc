@@ -28,7 +28,7 @@ from agentic.agents.models import GatewaySettings
 from agentic.engine.gates import Approve, Decision, Edit, Reject, StandaloneAuthorizer
 from agentic.engine.state import RunState, RunStateError
 from agentic.yamlio import YamlFileError, split_front_matter
-from agentic_cli.commands.runs import _all_runs, _load, report_sinks
+from agentic_cli.commands.runs import _all_runs, _load, sinks_reported
 from agentic_cli.driving import drive, exit_code_for, show_state, summary
 from agentic_cli.editor import edit_file
 from agentic_cli.errors import CliError
@@ -214,17 +214,17 @@ def _decide(
     gateway: GatewaySettings | None = None,
 ) -> None:
     engine = rt.engine(regime=state.regime)
-    result = drive(
-        rt.redact(gateway or rt.gateway()),
-        rt.store.path(state.run_id).parent,
-        lambda: engine.decide(
-            state.run_id,
-            decision,
-            authorizer=StandaloneAuthorizer(),
-            self_approval=self_approval_refusal,
-        ),
-    )
-    report_sinks(out, rt)
+    with sinks_reported(out, rt):
+        result = drive(
+            rt.redact(gateway or rt.gateway()),
+            rt.store.path(state.run_id).parent,
+            lambda: engine.decide(
+                state.run_id,
+                decision,
+                authorizer=StandaloneAuthorizer(),
+                self_approval=self_approval_refusal,
+            ),
+        )
     redact = rt.redact()
     out.result(summary(result, redact), show_state(result, redact))
     raise typer.Exit(exit_code_for(result))

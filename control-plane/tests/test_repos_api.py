@@ -92,6 +92,21 @@ async def test_repo_registration_refuses_local_urls(api, repos):
     await strict.http.aclose()
 
 
+async def test_a_remote_whose_host_hides_behind_a_fragment_is_refused(api, repos):
+    """Review F1: git fetches from the host before '#', so the key must not be the
+    allowed repo named after it - the registration is refused and nothing is stored."""
+    developer, _ = await member(api, api.a, "dev@a.example.test", "developer", "payments")
+    for remote in (
+        "https://git.attacker.test#@git.example.test/acme/app.git",
+        "https://git.attacker.test?@git.example.test/acme/app.git",
+    ):
+        reply = await _register(api, developer, remote)
+        assert reply.status_code == 422, reply.text
+        assert reply.json()["code"] == "repo.bad_url"
+    async with tenant_tx(api.db.owner, api.a.id) as conn:
+        assert (await conn.execute(select(repos_table))).first() is None
+
+
 async def test_handles_map_host_qualified(api, repos):
     alice, _ = await member(api, api.a, "alice@a.example.test", "developer", "payments")
     await member(api, api.a, "other@a.example.test", "developer", "payments")

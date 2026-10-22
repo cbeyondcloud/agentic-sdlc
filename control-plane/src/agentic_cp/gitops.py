@@ -9,7 +9,10 @@ is scrubbed of URL credentials before it is logged or returned.
 Repository URLs a tenant gives must be remote (R12): `https://`, `ssh://` or the scp form
 `user@host:path`. A `file://` URL or a path would let a tenant admin read the server's
 disk - another tenant's policy work folder included - so it is accepted only when the
-deployment sets `AGENTIC_CP_ALLOW_LOCAL_REPOS` (development and tests)."""
+deployment sets `AGENTIC_CP_ALLOW_LOCAL_REPOS` (development and tests). A remote URL must
+also be unambiguous: no '#', '?' or '\\', and at most one '@', in the authority - otherwise
+git fetches from one host while the repo key and `allowed_repo_patterns` see another
+(review F1)."""
 
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ from pathlib import Path, PureWindowsPath
 from urllib.parse import urlsplit
 
 from agentic.hosting.base import scrub_url_credentials
+from agentic.policy.repos import normalise_remote
 from agentic_cp.settings import Settings
 
 FLAGS = (
@@ -32,6 +36,12 @@ FLAGS = (
     "core.fsmonitor=false",
     "-c",
     "protocol.ext.allow=never",
+    # git never checks a work tree out here (bare repos, `archive` into memory), and every
+    # name is judged by `portable_path_problems` instead: off, a Windows-hosted server
+    # names an unportable file (policy.path) as a Linux one does, rather than failing to
+    # read the tree at all (review F4)
+    "-c",
+    "core.protectNTFS=false",
 )
 #: Inherited GIT_* variables that only shape the network: the deployment's CA bundle and
 #: proxy. Everything else - GIT_DIR, GIT_CONFIG_PARAMETERS, GIT_SSH_COMMAND (an ssh key) -
@@ -65,7 +75,12 @@ def check_repo_url(url: str, *, allow_local: bool) -> str:
     if not value or value.startswith("-") or _UNSAFE.search(value):
         raise RepoUrlError("a repository URL is one https://, ssh:// or user@host:path URL")
     if "://" in value:
-        parts = urlsplit(value)
+        try:
+            parts = urlsplit(value)
+            host = parts.hostname
+            _ = parts.port  # a malformed port raises here
+        except ValueError:
+            raise RepoUrlError("the repository URL does not parse as a URL") from None
         scheme = parts.scheme.lower()
         if parts.password or (scheme in ("https", "http") and parts.username):
             raise RepoUrlError(
@@ -73,18 +88,34 @@ def check_repo_url(url: str, *, allow_local: bool) -> str:
                 "credentials for the tenant instead",
                 credentials=True,
             )
-        if scheme in ("https", "ssh") and parts.hostname and not parts.hostname.startswith("-"):
+        if scheme in ("https", "ssh") and host and _same_host(value, parts.netloc, host):
             return value
         if scheme == "file" and allow_local:
             return value
         raise RepoUrlError("a repository URL must use https:// or ssh:// (or user@host:path)")
-    if _SCP.fullmatch(value) and not value.split("@", 1)[1].startswith("-"):
-        return value  # a host starting with '-' would be an ssh option
+    if _SCP.fullmatch(value) and _same_host(value, value.partition(":")[0], None):
+        return value
     if _is_path(value):
         if allow_local:
             return value
         raise RepoUrlError("a local path is not a repository URL this server may fetch")
     raise RepoUrlError("a repository URL must use https:// or ssh:// (or user@host:path)")
+
+
+def _same_host(value: str, authority: str, host: str | None) -> bool:
+    """Whether a remote URL is unambiguous (review F1): no '#', '?' or '\\' (a fragment,
+    a query or a Windows separator moves where git and a regex see the host), at most one
+    '@' and only in the authority, no user or host starting with '-' (an ssh option), and
+    the registration key's host is the host git connects to."""
+    if any(char in value for char in "#?\\") or value.count("@") > 1:
+        return False
+    if "@" in value and "@" not in authority:
+        return False  # an '@' in the path
+    user, _, name = authority.rpartition("@")
+    if user.startswith("-") or name.startswith("-"):
+        return False
+    expected = host if host is not None else name.lower()
+    return normalise_remote(value).split("/", 1)[0] == expected
 
 
 def _is_path(value: str) -> bool:
