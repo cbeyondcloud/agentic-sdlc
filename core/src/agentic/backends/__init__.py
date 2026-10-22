@@ -12,7 +12,7 @@ from agentic.backends.capabilities import (
 )
 
 #: Backend name -> the optional package it needs (an extra of agentic-core).
-OPTIONAL = {"claude-code": "claude_agent_sdk"}
+OPTIONAL = {"claude-code": "claude_agent_sdk", "opencode": "acp"}
 
 
 def available() -> frozenset[str]:

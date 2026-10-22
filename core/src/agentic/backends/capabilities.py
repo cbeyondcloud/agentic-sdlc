@@ -70,6 +70,24 @@ CAPABILITIES: dict[str, BackendCapabilities] = {
         secret_scan=False,
         notes=("spike S2",),
     ),
+    "opencode": BackendCapabilities(
+        name="opencode",
+        # OpenCode's own permission keys (1.18.35): the ACP profile sets every key and
+        # denies those no capability maps to, which also hides their tools (M2-57, S7)
+        tools={
+            "read_files": ("read", "list"),
+            "search": ("glob", "grep"),
+            "edit_files": ("edit",),
+            "run_shell": ("bash",),
+        },
+        temperature=True,  # set on OpenCode's agent; reasoning models still drop it
+        effort=False,
+        approvals=False,  # the ACP permission callback refuses; no pause yet
+        children=False,
+        stuck_check=False,
+        secret_scan=False,  # OpenCode calls TokenLean itself, past agentic.transport
+        notes=("spike S7", "ACP profile, OpenCode 1.18.35"),
+    ),
 }
 
 
