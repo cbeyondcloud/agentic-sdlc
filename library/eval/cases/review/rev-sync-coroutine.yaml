@@ -1,0 +1,47 @@
+id: rev-sync-coroutine
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the Android app's background contact sync."
+  diff: |
+    diff --git a/app/src/main/java/com/acme/sync/ContactSync.kt b/app/src/main/java/com/acme/sync/ContactSync.kt
+    --- a/app/src/main/java/com/acme/sync/ContactSync.kt
+    +++ b/app/src/main/java/com/acme/sync/ContactSync.kt
+    @@ -12,5 +12,17 @@ class ContactSync(private val api: ContactApi, private val store: ContactStore) {
+    -    suspend fun sync() {
+    -        val contacts = api.fetchAll()
+    -        store.replaceAll(contacts)
+    +    private val failed = mutableListOf<String>()
+    +
+    +    suspend fun sync() = coroutineScope {
+    +        val pages = (1..api.pageCount()).map { page ->
+    +            async(Dispatchers.IO) {
+    +                try {
+    +                    api.fetchPage(page)
+    +                } catch (e: IOException) {
+    +                    failed.add("page $page")
+    +                    Thread.sleep(1_000)
+    +                    emptyList()
+    +                }
+    +            }
+    +        }
+    +        store.replaceAll(pages.awaitAll().flatten())
+         }
+     }
+expected:
+  seeded_defects:
+    - file: app/src/main/java/com/acme/sync/ContactSync.kt
+      lines: [21, 21]
+      category: concurrency
+      note: "Thread.sleep blocks an IO dispatcher thread and ignores cancellation; use delay()"
+    - file: app/src/main/java/com/acme/sync/ContactSync.kt
+      lines: [12, 20]
+      category: concurrency
+      note: "a plain mutableList is written from parallel coroutines on Dispatchers.IO: lost updates or ConcurrentModificationException"
+    - file: app/src/main/java/com/acme/sync/ContactSync.kt
+      lines: [26, 26]
+      category: data
+      note: "a failed page becomes an empty list, and replaceAll then deletes those contacts from the local store"
+tags: [kotlin, concurrency, mobile]

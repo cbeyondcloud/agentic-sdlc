@@ -8,6 +8,7 @@
         "ci_low": 0.0021,
         "median": 0.0021,
         "n_scored": 4,
+        "sigma_case": 0.00105,
         "unscored": [],
         "value": 0.0026249999999999997
       },
@@ -16,6 +17,7 @@
         "ci_low": 7.5,
         "median": 8.5,
         "n_scored": 4,
+        "sigma_case": 1.2909944487358056,
         "unscored": [],
         "value": 8.5
       },
@@ -24,6 +26,7 @@
         "ci_low": 1.0,
         "median": 1.0,
         "n_scored": 4,
+        "sigma_case": 0.0,
         "unscored": [],
         "value": 1.0
       },
@@ -32,6 +35,7 @@
         "ci_low": 1400.0,
         "median": 1400.0,
         "n_scored": 4,
+        "sigma_case": 700.0,
         "unscored": [],
         "value": 1750.0
       }
@@ -45,7 +49,7 @@
     "ba-reset-limits",
     "ba-webhook-retries"
   ],
-  "corpus_manifest_sha": "sha256:e06ee048dc597ae36e27fb0b0b6cace0e34547bae33ca121cc524d5323ac9bc0",
+  "corpus_manifest_sha": "sha256:a85292ea39c86f6b665faeb28f963ad33d7ea56e3e090d7edc31e8515ad304d4",
   "cost_total_usd": 0.021,
   "cost_unmeasured_runs": 0,
   "judge": {
@@ -55,7 +59,8 @@
       "ba-requirements@1": "sha256:ad0e2f6d3db9c1a4509ab02327f687ab9b5c5aeafb0b1adedd95b1d64bcec10b"
     },
     "same_family": false,
-    "tier": "eval-judge"
+    "tier": "eval-judge",
+    "warnings": []
   },
   "judge_cost_usd": 0.0168,
   "k": 2,
@@ -382,9 +387,11 @@
   "seed": 0,
   "split": "all",
   "stale_cassettes": 0,
+  "tag": "fixture",
   "unscored_runs": [],
   "verbosity_r": {
     "X": 0.9113346345279643
   },
-  "verdict": "MEASURED"
+  "verdict": "MEASURED",
+  "warnings": []
 }

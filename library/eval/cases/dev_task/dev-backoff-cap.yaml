@@ -1,0 +1,18 @@
+id: dev-backoff-cap
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    retry_delays() doubles the delay for every attempt with no upper bound, so the
+    tenth webhook retry waits over eight minutes. Cap each delay at max_delay. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-backoff-cap
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_retry.py::test_delays_are_capped"
+    pass_to_pass:
+      - "tests/test_retry.py::test_doubling"
+  solution: solutions/dev-backoff-cap
+tags: [python, integrations]

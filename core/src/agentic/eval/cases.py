@@ -20,6 +20,7 @@ reference and key points for a rubric judge where it does not (BA, Design).
       key_points: [the export runs as a background job]
       seeded_defects: [{file: billing/export.py, lines: [40, 44], category: logic}]
       tests: {fail_to_pass: [tests/test_export.py::test_large], pass_to_pass: []}
+      solution: solutions/export-csv-01   # a dev task's reference change (over workspace)
       failing_criteria: [REQ-1.2]
     rubric: ba-requirements          # the rubric id, for rubric-judged agents
     tags: [billing]
@@ -89,6 +90,9 @@ class Expected(_Strict):
     key_points: list[str] = []
     seeded_defects: list[SeededDefect] = []
     tests: TestTruth | None = None
+    # a dev task's reference change: corpus-relative files laid over its workspace, with
+    # which every test passes (the validators check its fail-to-pass tests fail without it)
+    solution: str | None = None
     failing_criteria: list[str] = []  # acceptance criterion ids the work does NOT meet
 
 
@@ -151,5 +155,10 @@ class EvalCase(_Strict):
 
     def references(self) -> list[str]:
         """Corpus-relative paths this case points at."""
-        paths = [self.expected.golden, self.inputs.workspace, *self.inputs.handoff_files.values()]
+        paths = [
+            self.expected.golden,
+            self.expected.solution,
+            self.inputs.workspace,
+            *self.inputs.handoff_files.values(),
+        ]
         return [p for p in paths if p]

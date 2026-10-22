@@ -1,0 +1,37 @@
+id: design-clinic-reminders
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the appointment reminders described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Patients get reminders by SMS or email before appointments, in their language."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Each appointment gets reminders at the clinic's configured offsets."
+          acceptance_criteria:
+            - "WHEN an appointment is booked THE system SHALL schedule one reminder per configured offset in the clinic's time zone."
+            - "WHEN an appointment is moved or cancelled THE system SHALL reschedule or cancel its pending reminders."
+        - id: REQ-2
+          statement: "Patients choose SMS or email and can opt out."
+          acceptance_criteria:
+            - "WHEN a patient replies STOP or uses the opt-out link THE system SHALL send no further reminders to that patient."
+        - id: REQ-3
+          statement: "Messages carry no clinical information."
+          acceptance_criteria:
+            - "WHEN a reminder is composed THE system SHALL include only the date, time, clinic name and address."
+      ---
+      # Requirements: appointment reminders
+expected:
+  key_points:
+    - "reminders are scheduled jobs keyed by appointment so a change replaces them"
+    - "times are stored in UTC and computed from the clinic's IANA time zone"
+    - "SMS and email go through a provider-neutral sender interface with retries"
+    - "an opt-out is checked at send time, not only at scheduling time"
+rubric: design
+tags: [health, notifications]

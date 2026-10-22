@@ -1,0 +1,20 @@
+id: dev-dedupe-paths
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    The sync tool uploads 'Docs/a.txt' and 'docs/A.txt' as two files, but on
+    Windows and macOS they are the same file. dedupe_paths() takes a case_insensitive
+    flag that is ignored: honour it, keeping the first spelling seen. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-dedupe-paths
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_sync.py::test_case_insensitive_keeps_the_first_spelling"
+    pass_to_pass:
+      - "tests/test_sync.py::test_exact_duplicates_are_dropped"
+      - "tests/test_sync.py::test_case_sensitive_keeps_both_spellings"
+  solution: solutions/dev-dedupe-paths
+tags: [python, macos, windows, paths]

@@ -16,4 +16,4 @@ expected:
     - a month with no invoices still gives a file with the header row
     - the user is told when the file is ready, and the link expires
 rubric: ba-requirements
-tags: [billing]
+tags: [billing, fixture]

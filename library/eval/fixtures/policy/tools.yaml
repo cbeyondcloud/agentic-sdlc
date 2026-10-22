@@ -1,0 +1,3 @@
+# The tools fixture agents may be given: only the developer uses them, to edit its copy of
+# a dev task's workspace (recorded tool calls); no shell, so a replay is the same on every OS.
+catalog: [read_files, search, edit_files]

@@ -1,0 +1,40 @@
+id: rev-user-search
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the admin user search."
+  diff: |
+    diff --git a/admin/src/main/java/com/acme/admin/UserSearch.java b/admin/src/main/java/com/acme/admin/UserSearch.java
+    --- a/admin/src/main/java/com/acme/admin/UserSearch.java
+    +++ b/admin/src/main/java/com/acme/admin/UserSearch.java
+    @@ -22,7 +22,8 @@ public class UserSearch {
+         public List<User> byName(String name) throws SQLException {
+    -        try (PreparedStatement st = conn.prepareStatement(
+    -                "SELECT id, name, email FROM users WHERE name LIKE ?")) {
+    -            st.setString(1, name + "%");
+    -            return read(st.executeQuery());
+    -        }
+    +        Statement st = conn.createStatement();
+    +        ResultSet rs = st.executeQuery(
+    +            "SELECT id, name, email FROM users WHERE name LIKE '" + name + "%'");
+    +        List<User> users = read(rs);
+    +        log.info("admin search for {} returned {}", name, users);
+    +        return users;
+         }
+expected:
+  seeded_defects:
+    - file: admin/src/main/java/com/acme/admin/UserSearch.java
+      lines: [25, 25]
+      category: security
+      note: "the search text is concatenated into SQL: injection; keep the prepared statement with a bound parameter"
+    - file: admin/src/main/java/com/acme/admin/UserSearch.java
+      lines: [23, 23]
+      category: resource-leak
+      note: "the Statement and ResultSet are never closed (no try-with-resources): connections leak under load"
+    - file: admin/src/main/java/com/acme/admin/UserSearch.java
+      lines: [27, 27]
+      category: privacy
+      note: "the full user records, emails included, are written to the info log"
+tags: [java, security]

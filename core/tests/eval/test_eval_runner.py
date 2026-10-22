@@ -2,6 +2,7 @@
 budget-capped, every run kept; and one case run by the real agent runner."""
 
 import asyncio
+from collections.abc import Sequence
 from decimal import Decimal
 from pathlib import Path
 
@@ -118,6 +119,240 @@ def test_an_agent_s_own_budget_is_its_failure_the_eval_cap_is_not():
     assert not hit_eval_cap(step_hit, granted=own, own=own)  # the agent ran away: scored
     assert hit_eval_cap(step_hit, granted=Decimal("0.4"), own=own)  # the cap cut its slice
     assert hit_eval_cap(LimitHit("run", "run", Decimal("5"), Decimal("5.1")), granted=own, own=own)
+
+
+def resolved_ba(fixtures: Path, tmp_path: Path):
+    policy = load_policy(fixtures / "policy" / "policy")
+    agent_file = tmp_path / "business-analyst.md"
+    agent_file.write_text(
+        "---\nname: business-analyst\ntype: business-analyst\nversion: 1.0.0\nowner: eval\n"
+        "status: active\ndescription: BA for tests.\ntools: []\nproduces: requirements\n"
+        "limits: {budget_usd: 1, max_turns: 5, max_minutes: 5}\n---\nWrite requirements.\n",
+        encoding="utf-8",
+    )
+    resolved, violations = resolve_agent(
+        load_agent(agent_file), policy, ResolveContext(team="payments")
+    )
+    assert resolved is not None, violations
+    return resolved
+
+
+def test_an_errored_run_keeps_what_it_spent(fixtures: Path, tmp_path: Path):
+    """DF-260: a run that fails after paid calls still counts their cost."""
+    from agentic.transport.cost import CallCost
+
+    def model_for(request, costs, budget):
+        def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+            paid = CallCost("reported", Decimal("0.25"), 10, 5, None, None, "m", None, None)
+            costs.add(paid, Decimal("0.25"))
+            raise RuntimeError("upstream reset the connection")
+
+        return FunctionModel(answer)
+
+    runner = AgentCaseRunner(
+        resolved_ba(fixtures, tmp_path),
+        model_for,
+        schema=BUILTIN_CATALOG.schema("requirements"),
+        state_root=tmp_path / "state",
+        budget=BudgetLedger(Decimal("5")),
+    )
+    request = RunRequest(scoping_case("c1"), "X", 0, "requirements", "c1.X.0")
+    record = asyncio.run(runner(request))
+    assert record.status == "error" and "reset" in record.error
+    assert record.cost_usd == 0.25 and record.requests == 1
+
+
+def test_a_judge_budget_stop_marks_the_evaluation_incomplete():
+    """DF-260: the judge exhausting its share is the eval cap, not a measured run."""
+    from agentic.eval.metrics import RubricMetric
+    from agentic.transport import LimitHit
+
+    class BrokeJudge:
+        async def score(self, *args, **kwargs):
+            raise LimitHit("step", "judge", Decimal("1"), Decimal("1.1"))
+
+    case = scoping_case("c1")
+    answer = (
+        "---\nkind: requirements\nschema_version: 1\nrun_id: r\nstep: s\nagent: a@1\n"
+        "produced_at: 2026-10-21T10:00:00Z\n" + REQUIREMENTS_ANSWER.removeprefix("---\n")
+    )
+
+    async def run(request: RunRequest) -> RunRecord:
+        return RunRecord(status="completed", output=answer)
+
+    result = asyncio.run(
+        run_eval(
+            [case],
+            {"X": run},
+            kind="requirements",
+            repeats=1,
+            seed=0,
+            evaluators=[RubricMetric(judge_for=lambda request: BrokeJudge())],
+        )
+    )
+    (only,) = result.runs
+    assert "rubric" not in only.metrics and only.record.judge_stopped
+    assert result.budget_hit
+
+
+LIBRARY = Path(__file__).resolve().parents[3] / "library" / "eval"
+
+
+def resolved_developer(fixtures: Path, tmp_path: Path):
+    policy = load_policy(fixtures / "policy" / "policy")
+    agent_file = tmp_path / "developer.md"
+    agent_file.write_text(
+        "---\nname: developer\ntype: general\nversion: 1.0.0\nowner: eval\nstatus: active\n"
+        "description: Dev for tests.\ntools: []\nproduces: dev-report\n"
+        "limits: {budget_usd: 1, max_turns: 5, max_minutes: 5}\n---\nMake the change.\n",
+        encoding="utf-8",
+    )
+    resolved, violations = resolve_agent(load_agent(agent_file), policy, ResolveContext())
+    assert resolved is not None, violations
+    return resolved
+
+
+SLUGIFY_SOLUTION = LIBRARY / "solutions" / "dev-slugify" / "textutil.py"
+
+
+def dev_task_run(
+    fixtures: Path,
+    tmp_path: Path,
+    write_solution: bool = False,
+    *,
+    writes: Sequence[tuple[str, str]] = (),
+    sandbox=None,
+):
+    """DF-241: the Developer works in a copy of its workspace; the case's tests then run.
+    The scripted model writes `writes` (path, text) - after the reference solution when
+    `write_solution` - one file per turn, then answers."""
+    from pydantic_ai import Tool
+    from pydantic_ai.messages import ToolCallPart
+
+    from agentic.eval.corpus import load_corpus
+    from agentic.eval.metrics import objective_metrics
+    from agentic.eval.runner import Workspace
+
+    corpus = load_corpus(LIBRARY)
+    case = corpus.case("dev-slugify")
+    solution = SLUGIFY_SOLUTION.read_text(encoding="utf-8")
+    report = (LIBRARY / "fixtures" / "answers" / "dev-slugify.md").read_text(encoding="utf-8")
+    planned = [*([("textutil.py", solution)] if write_solution else []), *writes]
+    trees: list[Path] = []
+
+    def prepare(request, source: Path) -> Workspace:
+        tree = tmp_path / "trees" / request.run_id
+        from agentic.eval.devtask import copy_workspace
+
+        copy_workspace(source, tree)
+        trees.append(tree)
+
+        def write_file(path: str, text: str) -> str:
+            """Write a file of the working tree."""
+            (tree / path).parent.mkdir(parents=True, exist_ok=True)
+            (tree / path).write_text(text, encoding="utf-8")
+            return "written"
+
+        return Workspace(tree=tree, tools=[Tool(write_file)], sandbox=sandbox)
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        turn = (len(messages) - 1) // 2
+        if turn < len(planned):
+            path, text = planned[turn]
+            return ModelResponse(parts=[ToolCallPart("write_file", {"path": path, "text": text})])
+        return ModelResponse(parts=[TextPart(report)])
+
+    runner = AgentCaseRunner(
+        resolved_developer(fixtures, tmp_path),
+        lambda request, costs, budget: FunctionModel(answer),
+        schema=BUILTIN_CATALOG.schema("dev-report"),
+        state_root=tmp_path / "state",
+        budget=BudgetLedger(Decimal("5")),
+        corpus_root=LIBRARY,
+        prepare=prepare,
+    )
+    record = asyncio.run(runner(RunRequest(case, "X", 0, "dev-report", "dev-slugify.X.0")))
+    return record, objective_metrics(case, record, "dev-report"), trees
+
+
+def test_a_developer_run_that_fixes_the_workspace_passes_its_tests(fixtures, tmp_path):
+    record, metrics, trees = dev_task_run(fixtures, tmp_path, write_solution=True)
+    assert record.status == "completed", record.errors
+    assert record.tests == {
+        "tests/test_textutil.py::test_slugify_strips_accents": True,
+        "tests/test_textutil.py::test_slugify_basic": True,
+    }
+    assert metrics["tests_pass"] == 1.0
+    # the corpus itself is never changed: the run worked on a copy
+    original = (LIBRARY / "workspaces" / "dev-slugify" / "textutil.py").read_text(encoding="utf-8")
+    assert "unicodedata" not in original and trees[0] != LIBRARY / "workspaces" / "dev-slugify"
+
+
+def test_a_developer_run_that_changes_nothing_fails_its_tests(fixtures, tmp_path):
+    record, metrics, _ = dev_task_run(fixtures, tmp_path, write_solution=False)
+    assert record.tests["tests/test_textutil.py::test_slugify_strips_accents"] is False
+    assert metrics["tests_pass"] == 0.0
+
+
+SLUGIFY_TEST = "tests/test_textutil.py"
+FAKE_PASS = (
+    "def test_slugify_basic():\n    assert True\n\n"
+    "def test_slugify_strips_accents():\n    assert True\n"
+)
+PASS_EVERYTHING = (
+    "import pytest\n\n\n"
+    "@pytest.hookimpl(hookwrapper=True)\n"
+    "def pytest_runtest_makereport(item, call):\n"
+    "    outcome = yield\n"
+    "    outcome.get_result().outcome = 'passed'\n"
+)
+
+
+def test_a_developer_that_rewrites_the_cases_tests_does_not_pass_them(fixtures, tmp_path):
+    """F2: the case's tests are the truth; the agent's edits to them are undone first."""
+    record, metrics, trees = dev_task_run(fixtures, tmp_path, writes=[(SLUGIFY_TEST, FAKE_PASS)])
+    assert metrics["tests_pass"] == 0.0, record.tests
+    assert "assert True" not in (trees[0] / SLUGIFY_TEST).read_text(encoding="utf-8")
+
+
+def test_a_developer_that_adds_a_conftest_does_not_pass_the_tests(fixtures, tmp_path):
+    writes = [("tests/conftest.py", PASS_EVERYTHING), ("conftest.py", PASS_EVERYTHING)]
+    record, metrics, _ = dev_task_run(fixtures, tmp_path, writes=writes)
+    assert metrics["tests_pass"] == 0.0, record.tests
+
+
+def test_a_developer_whose_code_stops_pytest_fails_its_tests(fixtures, tmp_path):
+    """F1/F2: the tests ran on the pristine workspace, so a session that never reported
+    on the agent's tree is the agent's failure, not an unmeasured run."""
+    stop = "import os\nprint('PASSED tests/test_textutil.py::test_slugify_basic')\nos._exit(0)\n"
+    record, metrics, _ = dev_task_run(fixtures, tmp_path, writes=[("textutil.py", stop)])
+    assert record.tests is not None and not any(record.tests.values())
+    assert metrics["tests_pass"] == 0.0
+
+
+class BrokenSandbox:
+    """A sandbox in which pytest cannot start at all (a harness problem)."""
+
+    isolated = True
+
+    async def run(self, command: str, cwd: Path, timeout_s: float):
+        from agentic.sandbox.process import ShellResult
+
+        return ShellResult(exit_code=127, stdout="", stderr="python: not found", timed_out=False)
+
+
+def test_tests_that_cannot_run_anywhere_leave_tests_pass_unmeasured(fixtures, tmp_path):
+    record, metrics, _ = dev_task_run(fixtures, tmp_path, True, sandbox=BrokenSandbox())
+    assert record.tests is None and "tests_pass" not in metrics
+    assert any("could not run" in e for e in record.errors)
+
+
+def test_the_developer_is_told_where_its_files_are():
+    from agentic.eval.runner import task_for
+
+    case = scoping_case("c1")
+    assert "working tree" in task_for(case, "x", workspace=True).prompt
+    assert "working tree" not in task_for(case, "x").prompt
 
 
 def test_agent_case_runner_produces_a_schema_valid_handoff(fixtures: Path, tmp_path: Path):

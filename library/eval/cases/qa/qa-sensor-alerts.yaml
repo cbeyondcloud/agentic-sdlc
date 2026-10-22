@@ -1,0 +1,57 @@
+id: qa-sensor-alerts
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the temperature alert work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Cold rooms alert after a sustained breach; silent sensors alert too."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Rooms alert after a sustained breach."
+          acceptance_criteria:
+            - "WHEN readings stay above the threshold for the configured duration THE system SHALL raise one alert."
+            - "WHEN readings return below the threshold THE system SHALL close the alert."
+        - id: REQ-2
+          statement: "Silent sensors are detected."
+          acceptance_criteria:
+            - "WHEN a sensor sends no reading for 5 minutes THE system SHALL raise a sensor-offline alert."
+        - id: REQ-3
+          statement: "Alerts escalate."
+          acceptance_criteria:
+            - "WHEN an alert is not acknowledged within 15 minutes THE system SHALL notify the second contact."
+      ---
+      # Requirements: temperature alerts
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Breach detection, alert lifecycle and escalation."
+      files_changed: [alerts/rules.py, alerts/escalation.py, alerts/models.py]
+      tests_run: {passed: 88, failed: 0, skipped: 0}
+      deviations_from_design:
+        - "Offline detection is evaluated when the next reading arrives, instead of on a timer."
+      ---
+      # Development report: temperature alerts
+
+      ## What changed
+      Each room keeps a count of consecutive readings above its threshold; when the count
+      covers the configured duration one alert is raised. A reading below the threshold
+      closes the open alert.
+
+      ## Escalation
+      An unacknowledged alert notifies the second contact after 30 minutes, to avoid paging
+      two people for a short breach.
+
+      ## Offline sensors
+      A sensor whose new reading arrives more than 5 minutes after its previous one is marked
+      offline for that gap.
+expected:
+  failing_criteria: [REQ-2.1, REQ-3.1]
+tags: [iot, monitoring]

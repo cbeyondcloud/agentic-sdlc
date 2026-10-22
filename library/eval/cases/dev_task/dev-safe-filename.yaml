@@ -1,0 +1,20 @@
+id: dev-safe-filename
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Report exports are named after the report title. Titles like 'CON' or 'aux'
+    or ones ending in a dot cannot be created on Windows. Make safe_filename() produce a
+    name every OS accepts. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-safe-filename
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_naming.py::test_reserved_device_names_are_avoided"
+      - "tests/test_naming.py::test_trailing_dots_and_spaces_are_removed"
+    pass_to_pass:
+      - "tests/test_naming.py::test_forbidden_characters_are_replaced"
+  solution: solutions/dev-safe-filename
+tags: [python, windows, files]

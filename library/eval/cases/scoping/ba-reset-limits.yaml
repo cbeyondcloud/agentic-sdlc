@@ -16,4 +16,4 @@ expected:
     - responses must be identical whether or not the account exists, limited or not
     - refused requests are recorded for the security team
 rubric: ba-requirements
-tags: [auth, security]
+tags: [auth, security, fixture]

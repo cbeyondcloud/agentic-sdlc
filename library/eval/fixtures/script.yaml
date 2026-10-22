@@ -3,8 +3,10 @@
 # answers, so fixture mode tests the harness's plumbing and metric code, not quality.
 #
 # answers: case id -> the agent's answer per call, in order (a second entry is the answer
-#          to the contract's retry message); paths relative to library/eval/.
+#          to the contract's retry message, or to a tool call's result); paths relative
+#          to library/eval/. A mapping {tool: {args}} answers with that tool call.
 # judge:   case id -> rubric criterion scores (missing criteria score 2).
+# The judge's adjudication of unmatched review findings is scripted under adjudications.
 # cost_usd: what each recorded call reports in x-tokenlean-cost-usd.
 cost_usd: "0.0021"
 answers:
@@ -23,8 +25,17 @@ answers:
   qa-webhook-retries: [golden/test-report/03-webhook-retries.md]
   qa-invoice-export: [fixtures/answers/qa-invoice-export.md]
   qa-reset-limits: [fixtures/answers/qa-reset-limits.md]
-  dev-slugify: [fixtures/answers/dev-slugify.md]
-  dev-money-split: [fixtures/answers/dev-money-split.md]
+  # a mapping is a tool call: write_file with the text of a corpus file (the reference change)
+  dev-slugify:
+    - {write_file: {path: textutil.py, from: solutions/dev-slugify/textutil.py}}
+    - fixtures/answers/dev-slugify.md
+  dev-money-split:
+    - {write_file: {path: money.py, from: solutions/dev-money-split/money.py}}
+    - fixtures/answers/dev-money-split.md
+# adjudications: review case id -> the judge's verdict (real?) per unmatched finding, in
+#                order; findings not listed are real.
+adjudications:
+  rev-discount-rounding: [false]  # the invoices.py concern is outside the change
 judge:
   ba-invoice-export: {}
   ba-reset-limits: {scope: 1}

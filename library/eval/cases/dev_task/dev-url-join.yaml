@@ -1,0 +1,19 @@
+id: dev-url-join
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    join_url() builds API URLs from a base URL and a path. With a trailing slash on
+    the base or a leading slash on the path it produces '//' and some gateways reject
+    it. Exactly one slash must join them; the base's own path must be kept. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-url-join
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_urls.py::test_no_double_slashes"
+    pass_to_pass:
+      - "tests/test_urls.py::test_plain_join"
+  solution: solutions/dev-url-join
+tags: [python, api]

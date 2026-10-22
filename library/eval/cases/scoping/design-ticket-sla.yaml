@@ -1,0 +1,32 @@
+id: design-ticket-sla
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the support SLAs described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Tickets track first-response and resolution SLAs in business hours."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Timers count business hours."
+          acceptance_criteria:
+            - "WHEN a ticket is created outside business hours THE system SHALL start its timer at the next business hour."
+            - "WHEN a ticket waits for the customer THE system SHALL pause its timer."
+        - id: REQ-2
+          statement: "Breaches are seen before they happen."
+          acceptance_criteria:
+            - "WHEN 80 percent of an SLA has elapsed THE system SHALL warn the team lead."
+      ---
+      # Requirements: support SLAs
+expected:
+  key_points:
+    - "SLA state is derived from the ticket's event history (created, paused, replied)"
+    - "business-hours arithmetic lives in one calendar component with holidays"
+    - "warnings and breaches are scheduled checks, idempotent per ticket and threshold"
+rubric: design
+tags: [support]

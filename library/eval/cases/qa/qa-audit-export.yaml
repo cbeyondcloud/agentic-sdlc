@@ -1,0 +1,47 @@
+id: qa-audit-export
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the audit log export work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Auditors export the audit log as a CSV that Excel opens correctly."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "The file opens correctly in spreadsheet tools."
+          acceptance_criteria:
+            - "WHEN an export is generated THE system SHALL write UTF-8 with a byte order mark and CRLF line endings."
+            - "WHEN a cell value starts with =, +, - or @ THE system SHALL prefix it with an apostrophe."
+        - id: REQ-2
+          statement: "Exports are filtered and audited."
+          acceptance_criteria:
+            - "WHEN an auditor sets a date range, actor or action THE system SHALL export only matching events."
+            - "WHEN an export is downloaded THE system SHALL record it in the audit log."
+      ---
+      # Requirements: audit log export
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Streaming CSV export with filters."
+      files_changed: [audit/export.py, audit/views.py]
+      tests_run: {passed: 55, failed: 0, skipped: 0}
+      ---
+      # Development report: audit log export
+
+      ## What changed
+      The export streams rows from a database cursor through `csv.writer` with the default
+      dialect and encodes them as UTF-8. Filters for date range, actor and action are applied
+      in the query. Each download is written to the audit log as `audit.exported`.
+
+      ## Spreadsheet safety
+      Values are written as they are stored; quoting follows the csv module defaults.
+expected:
+  failing_criteria: [REQ-1.1, REQ-1.2]
+tags: [compliance, windows, encoding]

@@ -132,6 +132,99 @@ def pairwise_model(choose):
     return FunctionModel(answer)
 
 
+def test_long_outputs_are_cut_at_one_cap_for_every_variant():
+    """DF-261 (S10 verbosity check): length cannot buy score past the cap."""
+    from agentic.eval.judge import JUDGE_CHAR_CAP, cap_for_judge
+
+    long = "word " * JUDGE_CHAR_CAP
+    capped = cap_for_judge(long)
+    assert len(capped) < JUDGE_CHAR_CAP + 200 and "truncated" in capped
+    assert cap_for_judge("short") == "short"
+    seen: list[str] = []
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(last_user_text(messages))
+        return ModelResponse(
+            parts=[ToolCallPart(info.output_tools[0].name, {"winner": "tie", "reason": "r"})]
+        )
+
+    asyncio.run(PairwiseJudge(FunctionModel(answer), model_id="m/j").compare(long, long + "b"))
+    assert all(len(prompt) < 2 * JUDGE_CHAR_CAP + 1000 for prompt in seen)
+
+
+def test_the_rubric_evaluator_shows_the_judge_a_capped_output():
+    from _eval_support import REQUIREMENTS_ANSWER, scoping_case
+    from pydantic_evals.evaluators import EvaluatorContext
+
+    from agentic.eval.judge import JUDGE_CHAR_CAP
+    from agentic.eval.metrics import RubricMetric
+    from agentic.eval.records import RunRecord, RunRequest
+
+    class Judge:
+        async def score(self, output, **kwargs):
+            raise AssertionError(len(output))
+
+    case = scoping_case("c1")
+    answer = (
+        "---\nkind: requirements\nschema_version: 1\nrun_id: r\nstep: s\nagent: a@1\n"
+        "produced_at: 2026-10-21T10:00:00Z\n" + REQUIREMENTS_ANSWER.removeprefix("---\n")
+    )
+    record = RunRecord(status="completed", output=answer + "padding " * JUDGE_CHAR_CAP)
+    ctx = EvaluatorContext(
+        name="c1.X.0",
+        inputs=RunRequest(case, "X", 0, "requirements", "c1.X.0"),
+        metadata=None,
+        expected_output=None,
+        output=record,
+        duration=0.0,
+        _span_tree=None,
+        attributes={},
+        metrics={},
+    )
+    with pytest.raises(AssertionError) as raised:
+        asyncio.run(RubricMetric(judge_for=lambda request: Judge()).evaluate(ctx))
+    assert int(str(raised.value)) < JUDGE_CHAR_CAP + 200
+
+
+def finding_judge_model(verdicts: list[list[bool]], log: list):
+    """Answers each adjudication call with the next list of verdicts."""
+
+    def answer(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        log.append(last_user_text(messages))
+        real = verdicts[min(len(log) - 1, len(verdicts) - 1)]
+        args = {"verdicts": [{"real": r, "reason": "because"} for r in real]}
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, args)])
+
+    return FunctionModel(answer)
+
+
+FINDINGS = [
+    {"severity": "high", "file": "a.py", "line": 3, "issue": "the cap overflows"},
+    {"severity": "low", "file": "a.py", "line": 9, "issue": "a name is unclear"},
+]
+
+
+def test_the_finding_judge_says_which_unmatched_findings_are_real():
+    """DF-244: a false finding is unmatched AND judged not a real issue."""
+    from agentic.eval.judge import FindingJudge
+
+    log: list = []
+    judge = FindingJudge(finding_judge_model([[True, False]], log), model_id="family-b/j")
+    verdicts = asyncio.run(judge.adjudicate("--- a/a.py\n+++ b/a.py\n", FINDINGS))
+    assert [v.real for v in verdicts] == [True, False]
+    assert "1. [high] a.py:3" in log[0] and "2. [low] a.py:9" in log[0]
+    assert "<diff>" in log[0]
+
+
+def test_a_wrong_number_of_verdicts_is_re_asked_then_unmeasured():
+    from agentic.eval.judge import FindingJudge
+
+    log: list = []
+    judge = FindingJudge(finding_judge_model([[True]], log), model_id="m/j")
+    assert asyncio.run(judge.adjudicate("diff", FINDINGS)) is None
+    assert len(log) == 2 and "exactly 2" in log[1]
+
+
 def test_a_position_biased_judge_gives_a_tie():
     judge = PairwiseJudge(pairwise_model(lambda a, b: "1"), model_id="m/j")
     result = asyncio.run(judge.compare("answer A", "answer B"))
@@ -182,8 +275,87 @@ def policy(**tiers) -> OrgPolicy:
 
 def test_model_family_is_the_vendor_prefix_unless_overridden():
     assert model_family("Family-A/model-x") == "family-a"
-    assert model_family("bare-model") == "bare-model"
+    assert model_family("bare-model") is None  # DF-256: unknown, never the whole id
     assert model_family("gateway/model-x", override="family-c") == "family-c"
+
+
+def test_a_one_word_quote_is_not_evidence():
+    """DF-258: a quote of a word or two (found anywhere) proves nothing."""
+    log: list = []
+    scores = dict.fromkeys(("problem", "criteria", "testability", "scope", "consistency"), 2)
+    judge = RubricJudge(
+        rubric_judge(scores, "CSV", log), Rubric.model_validate(RUBRIC), model_id="m/j"
+    )
+    result = asyncio.run(judge.score(OUTPUT))
+    assert len(log) == 2 and "too short" in log[1]["prompt"]
+    assert result.total is None
+
+
+def test_the_judge_uses_its_tiers_temperature():
+    """DF-256: temperature 0 is the default, not a rule a backend must accept."""
+    org = policy(
+        balanced={"model": "family-a/m1"},
+        **{JUDGE_TIER: {"model": "family-b/judge", "temperature": 0.2}},
+    )
+    choice = resolve_judge(org, ["family-a/m1"])
+    assert choice.settings == {"temperature": 0.2}
+    plain = policy(balanced={"model": "family-a/m1"}, **{JUDGE_TIER: {"model": "family-b/j"}})
+    assert resolve_judge(plain, ["family-a/m1"]).settings == {"temperature": 0.0}
+    log: list = []
+    scores = dict.fromkeys(("problem", "criteria", "testability", "scope", "consistency"), 0)
+    judge = RubricJudge(
+        rubric_judge(scores, "", log),
+        Rubric.model_validate(RUBRIC),
+        model_id="family-b/judge",
+        settings=choice.settings,
+    )
+    asyncio.run(judge.score(OUTPUT))
+    assert log[0]["settings"]["temperature"] == 0.2
+
+
+def test_a_shared_gateway_prefix_without_family_is_warned():
+    """DF-302: 'gateway/a' and 'gateway/b' look like one family to the prefix rule."""
+    org = policy(balanced={"model": "gateway/m1"}, **{JUDGE_TIER: {"model": "gateway/judge"}})
+    choice = resolve_judge(org, ["gateway/m1"])
+    assert choice.same_family is True
+    assert any("'gateway/'" in w and "family:" in w for w in choice.warnings)
+
+
+def test_a_judge_behind_a_routing_prefix_is_warned():
+    """The reverse case: 'router/family-a/judge' looks like family 'router', unlike the
+    agents' 'family-a', although it is the same family."""
+    org = policy(
+        balanced={"model": "family-a/m1"}, **{JUDGE_TIER: {"model": "router/family-a/judge"}}
+    )
+    choice = resolve_judge(org, ["family-a/m1"])
+    assert any("router/family-a/judge" in w and "family:" in w for w in choice.warnings)
+
+
+def test_a_model_with_no_family_prefix_is_flagged_and_warned():
+    org = policy(balanced={"model": "local-model"}, **{JUDGE_TIER: {"model": "family-b/judge"}})
+    choice = resolve_judge(org, ["local-model"])
+    assert choice.same_family is True  # cannot tell: the calibration sample doubles
+    assert any("local-model" in w for w in choice.warnings)
+
+
+def test_families_set_by_admins_silence_the_warnings():
+    org = policy(
+        balanced={"model": "gateway/m1", "family": "family-a"},
+        **{JUDGE_TIER: {"model": "gateway/judge", "family": "family-b"}},
+    )
+    choice = resolve_judge(org, ["gateway/m1"])
+    assert choice.warnings == () and choice.same_family is False
+
+
+def test_a_same_family_judge_is_refused_when_policy_offers_another_family():
+    """DF-262: the judge is never the candidate's family when policy offers another."""
+    org = policy(
+        balanced={"model": "family-a/m1"},
+        strong={"model": "family-c/m2"},
+        **{JUDGE_TIER: {"model": "family-a/judge"}},
+    )
+    with pytest.raises(JudgeError, match="family-c"):
+        resolve_judge(org, ["family-a/m1"])
 
 
 def test_judge_from_a_different_family():

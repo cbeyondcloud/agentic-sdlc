@@ -29,4 +29,4 @@ expected:
     - the 500-product limit is enforced on the server
     - large actions run asynchronously or within a bounded request time
 rubric: design
-tags: [catalogue]
+tags: [catalogue, fixture]

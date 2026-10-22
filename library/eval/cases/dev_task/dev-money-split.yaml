@@ -9,7 +9,8 @@ inputs:
     total and differ by at most one cent. Make the failing test pass.
   workspace: workspaces/dev-money-split
 expected:
+  solution: solutions/dev-money-split
   tests:
     fail_to_pass: [tests/test_money.py::test_remainder_is_not_lost]
     pass_to_pass: [tests/test_money.py::test_even_split]
-tags: [python]
+tags: [python, fixture]

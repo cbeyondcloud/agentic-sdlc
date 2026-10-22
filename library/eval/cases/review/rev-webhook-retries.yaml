@@ -40,4 +40,4 @@ expected:
       lines: [16, 16]
       category: error-handling
       note: IndexError after the last scheduled attempt instead of stopping
-tags: [integrations]
+tags: [integrations, fixture]

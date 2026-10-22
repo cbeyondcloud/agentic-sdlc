@@ -30,4 +30,4 @@ inputs:
       object storage only.
 expected:
   failing_criteria: [REQ-3.1, REQ-3.2]
-tags: [billing]
+tags: [billing, fixture]

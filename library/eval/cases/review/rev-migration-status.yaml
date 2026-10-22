@@ -1,0 +1,31 @@
+id: rev-migration-status
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this database migration for the orders table (about 80 million rows)."
+  diff: |
+    diff --git a/db/migrations/0042_order_status.sql b/db/migrations/0042_order_status.sql
+    new file mode 100644
+    --- /dev/null
+    +++ b/db/migrations/0042_order_status.sql
+    @@ -0,0 +1,7 @@
+    +-- Track fulfilment status separately from payment status.
+    +ALTER TABLE orders ADD COLUMN fulfilment_status text NOT NULL;
+    +
+    +CREATE INDEX orders_fulfilment_status_idx ON orders (fulfilment_status);
+    +
+    +UPDATE orders SET fulfilment_status = 'delivered' WHERE delivered_at IS NOT NULL;
+    +UPDATE orders SET fulfilment_status = 'pending' WHERE delivered_at IS NULL;
+expected:
+  seeded_defects:
+    - file: db/migrations/0042_order_status.sql
+      lines: [2, 2]
+      category: data
+      note: "adding a NOT NULL column without a default fails on a table that has rows; add it nullable, backfill, then set NOT NULL"
+    - file: db/migrations/0042_order_status.sql
+      lines: [4, 4]
+      category: performance
+      note: "a plain CREATE INDEX locks writes to an 80M-row table for the whole build; use CREATE INDEX CONCURRENTLY outside a transaction"
+tags: [sql, postgres]

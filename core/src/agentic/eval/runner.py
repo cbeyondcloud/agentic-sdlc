@@ -13,6 +13,14 @@ report), never dropped. Once the spend reaches the budget cap, the remaining run
 `AgentCaseRunner` is how a real agent runs one case: the resolved agent on
 `PydanticAIRunner` with its kind's handoff contract, its model built per run (so the
 model's calls can be routed to the run's cassette and metered into the run's cost log).
+
+A case with a workspace (a dev task) runs in a fresh copy of it (DF-241): `prepare`
+copies the workspace and gives the agent its tools on that tree - the CLI builds them
+with the run's guard and sandbox - and once the agent has answered, the case's
+fail-to-pass and pass-to-pass tests run on the tree (through the workspace's sandbox),
+so `tests_pass` is measured. The test files and pytest configuration are restored from
+the workspace first, so the agent cannot pass by editing them. The corpus itself is
+never changed.
 """
 
 import random
@@ -21,15 +29,18 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
+from pydantic_ai import Tool
 from pydantic_ai.models import Model
 from pydantic_evals import Case, Dataset
 from pydantic_evals.evaluators import Evaluator
 
 from agentic.agents.metering import CostLog
 from agentic.agents.runner import AgentTask, PydanticAIRunner
+from agentic.agents.tools.context import Sandbox
 from agentic.eval.cases import EvalCase
+from agentic.eval.devtask import CouldNotRunTests, copy_workspace, run_case_tests
 from agentic.eval.records import RunRecord, RunRequest
 from agentic.handoffs import HandoffContract, HandoffSchema
 from agentic.policy import ResolvedAgent
@@ -38,6 +49,20 @@ from agentic.transport import BudgetLedger, BudgetSlice, LimitHit
 
 RunCase = Callable[[RunRequest], Awaitable[RunRecord]]
 ModelFor = Callable[[RunRequest, CostLog, BudgetSlice], Model]
+
+
+@dataclass(frozen=True)
+class Workspace:
+    """Where one dev-task run works: a fresh tree, the agent's tools on it, and the
+    sandbox its tests run in (None: a plain process with the safe environment)."""
+
+    tree: Path
+    tools: Sequence[Tool] = ()
+    sandbox: Sandbox | None = None
+
+
+PrepareWorkspace = Callable[[RunRequest, Path], Workspace]  # (request, workspace source)
+SCORED = ("completed", "invalid", "stopped")  # the agent answered or failed on its own
 
 
 @dataclass
@@ -122,7 +147,10 @@ async def run_eval(
         metrics = {k: float(v.value) for k, v in done.scores.items()}
         errors = [f"{f.name}: {f.error_message}" for f in done.evaluator_failures]
         runs.append(EvalRunResult(request, done.output, metrics, errors))
-    return RunSet(runs, repeats, seed, budget_usd, bool(spent["hit"]), spent["usd"])
+    judge_stopped = any(r.record.judge_stopped for r in runs)
+    return RunSet(
+        runs, repeats, seed, budget_usd, bool(spent["hit"]) or judge_stopped, spent["usd"]
+    )
 
 
 BUDGET_STOP = "stopped: the evaluation's budget cap was reached"
@@ -141,10 +169,17 @@ class AgentCaseRunner:
         budget: BudgetLedger,
         step: str = "eval",
         clock: Callable[[], datetime] | None = None,  # replay: a fixed time, so output is stable
+        corpus_root: Path | None = None,  # where cases' workspaces are (dev tasks)
+        prepare: PrepareWorkspace | None = None,  # None: a copy with no tools
     ) -> None:
         self.resolved, self.model_for, self.schema = resolved, model_for, schema
         self.state_root, self.budget, self.step = Path(state_root), budget, step
         self.clock = clock
+        self.corpus_root = None if corpus_root is None else Path(corpus_root)
+        self.prepare = prepare or self._copy_only
+
+    def _copy_only(self, request: RunRequest, source: Path) -> Workspace:
+        return Workspace(copy_workspace(source, self.state_root / request.run_id / "tree"))
 
     async def __call__(self, request: RunRequest) -> RunRecord:
         definition = self.resolved.definition
@@ -158,27 +193,58 @@ class AgentCaseRunner:
         granted = slice_.limit_usd
         costs = CostLog()
         started = time.perf_counter()
+        workspace = None
         try:
+            if request.case.inputs.workspace is not None and self.corpus_root is not None:
+                source = self.corpus_root / PurePosixPath(request.case.inputs.workspace)
+                workspace = self.prepare(request, source)
             runner = PydanticAIRunner(
                 self.resolved,
                 self.model_for(request, costs, slice_),
                 budget=slice_,
                 state_dir=self.state_root / request.run_id,
+                tools=workspace.tools if workspace is not None else (),
                 costs=costs,
                 run_id=request.run_id,
                 contract=self._contract(request.run_id, agent),
             )
-            outcome = await runner.run(task_for(request.case, definition.instructions))
+            task = task_for(request.case, definition.instructions, workspace=workspace is not None)
+            outcome = await runner.run(task)
         except LimitHit as hit:
             if hit_eval_cap(hit, granted=granted, own=limit):
                 record = RunRecord(status="stopped", error=BUDGET_STOP)
             else:  # the agent spent its own per-run budget: its failure, and scored
                 record = RunRecord(status="stopped", errors=[str(hit)])
+            return await self._tested(_record(record, costs, started), request, workspace)
+        except Exception as error:  # noqa: BLE001 - an infrastructure failure, its spend kept
+            record = RunRecord(status="error", error=f"{type(error).__name__}: {error}")
             return _record(record, costs, started)
         finally:
             slice_.close()
         record = RunRecord(status=outcome.status, output=outcome.output, errors=outcome.errors)
-        return _record(record, costs, started)
+        return await self._tested(_record(record, costs, started), request, workspace)
+
+    async def _tested(
+        self, record: RunRecord, request: RunRequest, workspace: Workspace | None
+    ) -> RunRecord:
+        """The record with the case's tests run on the agent's tree (a dev task the agent
+        answered or failed on its own). A test that cannot run leaves tests_pass
+        unmeasured, never failed by the harness."""
+        tests = request.case.expected.tests
+        unscored = record.status not in SCORED or record.error is not None  # e.g. the cap
+        if workspace is None or tests is None or unscored or self.corpus_root is None:
+            return record
+        source = self.corpus_root / PurePosixPath(request.case.inputs.workspace or "")
+        try:
+            record.tests = await run_case_tests(
+                source,
+                workspace.tree,
+                [*tests.fail_to_pass, *tests.pass_to_pass],
+                sandbox=workspace.sandbox,
+            )
+        except (OSError, ValueError, CouldNotRunTests) as error:
+            record.errors.append(f"the case's tests could not run: {error}")
+        return record
 
     def _contract(self, run_id: str, agent: str) -> HandoffContract:
         if self.clock is None:
@@ -195,14 +261,21 @@ def hit_eval_cap(hit: LimitHit, *, granted: Decimal | None, own: Decimal | None)
     return granted is not None and (own is None or granted < own)
 
 
-def task_for(case: EvalCase, instructions: str) -> AgentTask:
+WORKSPACE_NOTE = (
+    "The files of this task are in your working tree. Read, change and test them with "
+    "your tools, then report what you did."
+)
+
+
+def task_for(case: EvalCase, instructions: str, *, workspace: bool = False) -> AgentTask:
     """What the agent is given: its instructions, the case's handoffs (fenced as data by
-    the runner), and the prompt with any diff fenced as untrusted data. A dev_task's
-    workspace is not given yet: running agents in a worktree of it, inside the sandbox,
-    and executing its tests is deferred, so `tests_pass` stays unmeasured."""
+    the runner), and the prompt with any diff fenced as untrusted data; for a dev task
+    run in its workspace, where its files are."""
     prompt = case.inputs.prompt.strip()
     if case.inputs.diff:
         prompt += "\n\n" + untrusted(case.inputs.diff, source="diff")
+    if workspace:
+        prompt += "\n\n" + WORKSPACE_NOTE
     return AgentTask(instructions=instructions, inputs=dict(case.inputs.handoffs), prompt=prompt)
 
 

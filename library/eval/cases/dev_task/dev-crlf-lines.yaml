@@ -1,0 +1,19 @@
+id: dev-crlf-lines
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    The hosts-file parser returns entries with a trailing '\r' when the file was
+    saved on Windows, so lookups fail. Make it handle CRLF and LF files alike. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-crlf-lines
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_hosts.py::test_crlf_file"
+      - "tests/test_hosts.py::test_tabs_separate_fields"
+    pass_to_pass:
+      - "tests/test_hosts.py::test_lf_file"
+  solution: solutions/dev-crlf-lines
+tags: [python, crlf]

@@ -1,0 +1,32 @@
+id: design-expense-receipts
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the expense receipts described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Employees attach receipt images to expense claims; finance reviews them."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Receipts are required by policy."
+          acceptance_criteria:
+            - "WHEN a claim line is above the receipt threshold and has no receipt THE system SHALL refuse to submit the claim."
+            - "WHEN the same receipt is attached to two claims THE system SHALL flag both for finance."
+        - id: REQ-2
+          statement: "Uploads are bounded."
+          acceptance_criteria:
+            - "WHEN a file is larger than 10 MB or not an image or PDF THE system SHALL refuse it with the reason."
+      ---
+      # Requirements: expense receipts
+expected:
+  key_points:
+    - "receipts are stored in object storage with a content hash for duplicate detection"
+    - "extraction runs asynchronously and only suggests values"
+    - "retention is a lifecycle rule on the storage bucket, by legal entity"
+rubric: design
+tags: [finance]

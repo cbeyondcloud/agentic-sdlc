@@ -1,0 +1,36 @@
+id: rev-orders-cursor
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change, which adds cursor pagination to the orders API."
+  diff: |
+    diff --git a/src/api/orders.ts b/src/api/orders.ts
+    --- a/src/api/orders.ts
+    +++ b/src/api/orders.ts
+    @@ -10,4 +10,11 @@ export async function listOrders(req: Request, res: Response) {
+       const limit = Math.min(Number(req.query.limit ?? 50), 200);
+    -  const rows = await db.orders.findMany({ take: limit, orderBy: { id: "asc" } });
+    -  res.json({ rows });
+    +  const cursor = decodeCursor(String(req.query.cursor ?? ""));
+    +  const rows = await db.orders.findMany({
+    +    where: cursor ? { id: { gt: cursor.id } } : undefined,
+    +    orderBy: { createdAt: "desc" },
+    +    take: limit,
+    +  });
+    +  const last = rows[rows.length - 1];
+    +  const next = rows.length === limit ? encodeCursor({ id: last.id }) : null;
+    +  res.json({ rows, next });
+     }
+expected:
+  seeded_defects:
+    - file: src/api/orders.ts
+      lines: [14, 14]
+      category: logic
+      note: "rows are ordered by createdAt but the cursor compares ids: pages skip or repeat orders"
+    - file: src/api/orders.ts
+      lines: [11, 11]
+      category: error-handling
+      note: "a malformed cursor from the client makes decodeCursor throw: a 500 instead of a 400"
+tags: [typescript, api]

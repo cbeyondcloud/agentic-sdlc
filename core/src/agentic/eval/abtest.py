@@ -29,7 +29,7 @@ the mapping and decides.
 import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
-from statistics import fmean, median
+from statistics import fmean, median, stdev
 from typing import Literal, Protocol, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -142,6 +142,7 @@ class ABResult(BaseModel):
     n_scored: int
     unscored: list[str]
     per_case_diffs: dict[str, float]
+    sigma_d: float | None = None  # SD of the per-case B-A differences (S10 power tables)
     signflip: dict | None = None
     bootstrap: dict | None = None
     sign_test: dict | None = None
@@ -226,6 +227,7 @@ def decide(
         "n_scored": len(diffs),
         "unscored": unscored,
         "per_case_diffs": dict(zip(ids, diffs, strict=True)),
+        "sigma_d": stdev(diffs) if len(diffs) > 1 else None,
         "mapping": dict(mapping or {}),
     }
     if leaks:

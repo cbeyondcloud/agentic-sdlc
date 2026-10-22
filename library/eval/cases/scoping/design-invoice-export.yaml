@@ -15,4 +15,4 @@ expected:
     - the download link expires and is enforced without new services
     - the role check sits in the API layer
 rubric: design
-tags: [billing]
+tags: [billing, fixture]

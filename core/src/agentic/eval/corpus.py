@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from agentic.definitions import DefinitionError
 from agentic.eval.cases import CaseClass, EvalCase, Split
+from agentic.eval.validate import case_problems
 from agentic.yamlio import YamlFileError, load_yaml, read_text
 
 MANIFEST = "manifest.json"
@@ -74,13 +75,21 @@ class Corpus:
     manifest: CorpusManifest
     _by_id: dict[str, EvalCase] = field(default_factory=dict, repr=False)
 
-    def select(self, agent: str | None = None, split: Split | None = None) -> list[EvalCase]:
-        """The cases for one agent and/or split, in id order."""
+    def select(
+        self, agent: str | None = None, split: Split | None = None, tag: str | None = None
+    ) -> list[EvalCase]:
+        """The cases for one agent, split and/or tag, in id order."""
         return [
             case
             for case in self.cases
-            if (agent is None or case.agent == agent) and (split is None or case.split == split)
+            if (agent is None or case.agent == agent)
+            and (split is None or case.split == split)
+            and (tag is None or tag in case.tags)
         ]
+
+    def tags(self) -> list[str]:
+        """Every tag some case carries, sorted."""
+        return sorted({tag for case in self.cases for tag in case.tags})
 
     def case(self, case_id: str) -> EvalCase:
         return self._by_id[case_id]
@@ -107,8 +116,11 @@ def load_corpus(root: Path, *, public: bool = False) -> Corpus:
     root = Path(root)
     problems: list[str] = []
     cases: dict[str, EvalCase] = {}
-    # a case saved as .yml (or anything else) must be an error, never silently skipped
-    stray = (p for p in (root / "cases").rglob("*") if p.is_file() and p.suffix != ".yaml")
+    # a case saved as .yml (or anything else) must be an error, never silently skipped;
+    # Markdown notes (a README) are documentation, not cases
+    stray = (
+        p for p in (root / "cases").rglob("*") if p.is_file() and p.suffix not in (".yaml", ".md")
+    )
     for path in sorted(p for p in stray if not any(_scratch(part) for part in p.parts)):
         problems.append(f"{path.relative_to(root).as_posix()}: a case file ends in .yaml")
     for path in sorted((root / "cases").rglob("*.yaml")):
@@ -137,6 +149,8 @@ def load_corpus(root: Path, *, public: bool = False) -> Corpus:
                 problems.append(f"{where}: handoff {both[0]} given both inline and as a file")
             else:
                 case = _with_handoff_files(root, case)
+        if not reference_problems:
+            problems += [f"{where}: {p}" for p in case_problems(root, case)]
         if public and not _public(case):
             problems.append(
                 f"{where}: a public corpus holds only synthetic or permissively licensed "

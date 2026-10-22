@@ -41,8 +41,31 @@ def test_seed_corpus_is_public_current_and_covers_every_class():
             assert parse_handoff(corpus.path(case.expected.golden).read_text(encoding="utf-8"))
 
 
-def test_the_remaining_decision_18_counts_are_known():
-    """The seed corpus is a start, not the gate corpus: what is left is deferred explicitly
-    (pilot-repo harvest and seeded-defect tooling)."""
-    shortfalls = floor_shortfalls(load_corpus(LIBRARY, public=True))
-    assert {s.split(":")[0] for s in shortfalls} <= {"scoping", "review", "dev_task", "qa"}
+def test_the_corpus_meets_the_decision_18_floors():
+    """M1-59: the public corpus alone is enough for the M1-64 gate, and the BA and Design
+    medians are each taken over 20 holdout cases."""
+    corpus = load_corpus(LIBRARY, public=True)
+    assert floor_shortfalls(corpus) == []
+    for agent in ("business-analyst", "design"):
+        assert len(corpus.select(agent=agent, split="holdout")) >= 20, agent
+        assert corpus.select(agent=agent, split="dev"), agent
+
+
+def test_the_corpus_is_varied():
+    """Several languages in the review diffs, Windows and POSIX concerns, many domains."""
+    corpus = load_corpus(LIBRARY, public=True)
+    review_tags = {t for c in corpus.cases if c.case_class == "review" for t in c.tags}
+    languages = {"python", "typescript", "go", "java", "csharp", "rust", "sql", "powershell"}
+    assert languages | {"bash", "yaml", "kotlin"} <= review_tags
+    all_tags = {t for c in corpus.cases for t in c.tags}
+    assert {"windows", "macos", "posix", "crlf", "file-locking", "encoding"} <= all_tags
+    domains = {t for c in corpus.cases if c.case_class in ("scoping", "qa") for t in c.tags}
+    assert len(domains) >= 15
+
+
+def test_ci_replays_only_the_recorded_fixture_subset():
+    """Fixture mode stays fast: cassettes exist for the `fixture` cases and no others."""
+    corpus = load_corpus(LIBRARY, public=True)
+    recorded = {p.name for p in (LIBRARY / "fixtures" / "cassettes").iterdir()}
+    assert recorded == {c.id for c in corpus.select(tag="fixture")}
+    assert len(recorded) < len(corpus.cases) / 4

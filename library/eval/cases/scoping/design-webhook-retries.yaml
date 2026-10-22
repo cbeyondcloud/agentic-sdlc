@@ -15,4 +15,4 @@ expected:
     - jitter or another guard against retry bursts
     - one record of attempts serves the list and replay
 rubric: design
-tags: [integrations]
+tags: [integrations, fixture]

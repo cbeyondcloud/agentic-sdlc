@@ -30,7 +30,7 @@ import random
 import secrets
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -38,31 +38,53 @@ from statistics import fmean
 
 from agentic.agents.metering import CostLog, MeteringTransport
 from agentic.agents.models import GatewaySettings, build_model_for, metered_model
+from agentic.agents.tools import LocalProcessSandbox, ToolContext, build_tools
 from agentic.auth.credentials import TOKENLEAN_KEY, CredentialError, Credentials
 from agentic.definitions import DefinitionError, load_agent
 from agentic.eval import stats
 from agentic.eval.blind import LeakCheck, Scrubber, assign_labels
 from agentic.eval.cases import EvalCase
 from agentic.eval.corpus import CorpusError, load_corpus, rubric_path
+from agentic.eval.devtask import copy_workspace
+from agentic.eval.gate import GATE_AGENTS, GateReport, evaluate_gate, render_gate
 from agentic.eval.judge import (
     JUDGE_TIER,
+    FindingJudge,
     JudgeError,
     RubricError,
     RubricJudge,
     load_rubric,
     resolve_judge,
 )
-from agentic.eval.metrics import ObjectiveMetrics, RubricMetric
+from agentic.eval.metrics import FalseFindingMetric, ObjectiveMetrics, RubricMetric
 from agentic.eval.records import RunRequest
 from agentic.eval.replay import CassetteServer, Upstream, http_upstream
 from agentic.eval.report import EvalReport, JudgeInfo, build_report, write_report
-from agentic.eval.runner import AgentCaseRunner, run_eval
+from agentic.eval.runner import (
+    BUDGET_STOP,
+    AgentCaseRunner,
+    PrepareWorkspace,
+    Workspace,
+    run_eval,
+)
 from agentic.handoffs import BUILTIN_CATALOG
-from agentic.policy import OrgPolicy, PolicyError, ResolveContext, load_policy, resolve_agent
+from agentic.policy import (
+    OrgPolicy,
+    PolicyError,
+    ResolveContext,
+    ResolvedAgent,
+    load_policy,
+    resolve_agent,
+)
+from agentic.sandbox import SandboxRules, SrtSandbox, expand_home
+from agentic.sandbox.readiness import decide_sandbox
 from agentic.transport import BudgetLedger, CallIdentity, NetworkSettings, make_network_transport
 from agentic.yamlio import YamlFileError, dump_yaml, load_yaml, read_text
+from agentic_cli.config import agentic_home, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.runtime import machine_readiness
+from sdlc_commons.guards import Guard
 from sdlc_commons.ledger import LedgerError, RunIdentity, RunLedger
 
 MODES = ("live", "record", "replay")
@@ -77,6 +99,7 @@ CALIBRATION_MINIMUM = 10  # ... at least 10, doubled when the judge shares the a
 KAPPA_FLOOR = 0.6
 WITHIN_ONE_FLOOR = 0.8
 HALF_POINTS = [i / 2 for i in range(21)]  # 0, 0.5, ..., 10: a mean of two raters
+CALIBRATION_KEY = "calibration-key.json"  # beside the report, never in calibration/
 
 
 @dataclass(frozen=True)
@@ -95,6 +118,7 @@ class RunOptions:
     seed: int = 0
     max_concurrency: int = 1
     classification: str | None = None  # for cases that name none (default: the org's)
+    tag: str | None = None  # only cases carrying this tag (CI: `fixture`, the cassette subset)
 
 
 @dataclass(frozen=True)
@@ -102,17 +126,11 @@ class RunResult:
     report: EvalReport
     folder: Path
     paths: dict[str, Path]
-    warnings: tuple[str, ...] = ()
+    replay_problems: list[str] = field(default_factory=list)  # the cassette server's
 
 
-def execute_run(
-    options: RunOptions,
-    *,
-    upstream: Upstream | None = None,
-    warn: Callable[[str], None] = lambda message: None,
-) -> RunResult:
-    """Evaluate one agent; `upstream` replaces the gateway in record mode (scripts);
-    `warn` hears what a person should know before anything is spent."""
+def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> RunResult:
+    """Evaluate one agent; `upstream` replaces the gateway in record mode (scripts)."""
     if options.mode not in MODES:
         raise CliError(f"--mode must be one of {', '.join(MODES)}", ExitCode.USAGE)
     if options.split not in SPLITS:
@@ -127,15 +145,22 @@ def execute_run(
     root = _corpus_root(options.corpus)
     corpus = _load(lambda: load_corpus(root))
     fixtures = root / "fixtures"
-    policy_dir = _folder(options.policy, fixtures / "policy", "--policy", "org policy")
-    agents_dir = _folder(options.agents, fixtures / "agents", "--agents", "agent definitions")
+    policy_dir = _folder(options.policy, fixtures / "policy", "--policy", "policy folder")
+    agents_dir = _folder(options.agents, fixtures / "agents", "--agents", "agents folder")
     policy = _load(lambda: load_policy(policy_dir))
     definition = _agent(agents_dir, options.agent)
     split = None if options.split == "all" else options.split
-    cases = corpus.select(agent=options.agent, split=split)  # type: ignore[arg-type]
+    cases = corpus.select(options.agent, split, options.tag)  # type: ignore[arg-type]
     if not cases:
+        if options.tag is not None and options.tag not in corpus.tags():
+            raise CliError(
+                f"no case in the corpus carries the tag {options.tag!r}",
+                ExitCode.INVALID,
+                hint=f"known tags: {', '.join(corpus.tags()) or 'none'}",
+            )
+        tagged = f" {options.tag!r}" if options.tag is not None else ""
         raise CliError(
-            f"the corpus has no {options.split} cases for agent {options.agent}",
+            f"the corpus has no {options.split}{tagged} cases for agent {options.agent}",
             ExitCode.INVALID,
             hint=f"cases name their agent in 'agent:'; corpus: {root}",
         )
@@ -160,17 +185,17 @@ def execute_run(
     rubric_ids = sorted({c.rubric for c in cases if c.rubric})
     rubrics = {r: _load(lambda r=r: load_rubric(corpus.path(rubric_path(r)))) for r in rubric_ids}
     choice = None
-    warnings: list[str] = []
-    if rubrics:
+    notes: list[str] = []
+    adjudicate = any(c.expected.seeded_defects for c in cases)  # review: false findings
+    if rubrics or adjudicate:
         try:  # the cases' class must allow the judge's tier: restricted data stays put
             choice = resolve_judge(policy, [resolved.model], classification=classification)
         except JudgeError as error:
-            raise CliError(
-                str(error), ExitCode.REFUSED, hint="ask an admin for an eval-judge tier"
-            ) from error
-        if (warning := judge_family_warning(policy, resolved.model)) is not None:
-            warnings.append(warning)
-            warn(warning)  # before anything is spent
+            if rubrics:  # the primary metric needs the judge
+                raise CliError(
+                    str(error), ExitCode.REFUSED, hint="ask an admin for an eval-judge tier"
+                ) from error
+            notes.append(f"false findings are unmeasured: {error}")
 
     created = datetime.now(UTC)
     report_id = f"eval-{options.agent}-{created:%Y%m%dT%H%M%S}-{secrets.token_hex(3)}"
@@ -191,11 +216,14 @@ def execute_run(
         base = server.base_url(key) if server is not None else (options.gateway or "")
         return GatewaySettings(base_url=base, api_key=api_key, network=network)
 
+    # replay: fixed values, so a replay is the same everywhere; otherwise the person and
+    # their team, so TokenLean attributes the spend to them (DF-248)
     user = TEAM if options.mode == "replay" else getpass.getuser()
+    team = TEAM if options.mode == "replay" else _team()
 
     def identity(request: RunRequest, agent: str, tier: str) -> CallIdentity:
         return CallIdentity(
-            team=TEAM,
+            team=team,
             user=user,
             repo=f"eval:{root.name}",
             pipeline="eval",
@@ -228,9 +256,9 @@ def execute_run(
     judge_share = Decimal(str(budget)) * JUDGE_SHARE
     judge_slice = money.run.open("judge", "step", judge_share) if choice else None
 
-    def judge_for(request: RunRequest) -> RubricJudge | None:
-        if choice is None or judge_slice is None or request.case.rubric not in rubrics:
-            return None
+    def judge_model(request: RunRequest):
+        """The judge's model for one run: its calls keyed to the run, charged to the
+        judge's share of the budget."""
         gateway = gateway_for(f"{request.cassette_key}/judge")
         meter = MeteringTransport(
             make_network_transport(gateway.network),
@@ -240,14 +268,35 @@ def execute_run(
             log=judge_costs,
         )
         who = identity(request, f"{JUDGE_TIER}@1", JUDGE_TIER)
-        model = build_model_for(choice.model, who, gateway, meter)
-        return RubricJudge(model, rubrics[request.case.rubric], model_id=choice.model, leaks=leaks)
+        return build_model_for(choice.model, who, gateway, meter)  # type: ignore[union-attr]
+
+    def judge_for(request: RunRequest) -> RubricJudge | None:
+        if choice is None or judge_slice is None or request.case.rubric not in rubrics:
+            return None
+        return RubricJudge(
+            judge_model(request),
+            rubrics[request.case.rubric],
+            model_id=choice.model,
+            leaks=leaks,
+            settings=choice.settings,
+        )
+
+    def finding_judge_for(request: RunRequest) -> FindingJudge | None:
+        if choice is None or judge_slice is None or not request.case.expected.seeded_defects:
+            return None
+        return FindingJudge(
+            judge_model(request), model_id=choice.model, leaks=leaks, settings=choice.settings
+        )
 
     def reference(case) -> str | None:
         if not case.expected.golden:
             return None
         return read_text(corpus.path(case.expected.golden)).replace("\r\n", "\n")
 
+    prepare = None
+    if any(c.inputs.workspace for c in cases):  # dev tasks: tools on a copy, tests after
+        prepare, resolved, workspace_notes = _workspaces(resolved, folder, options.mode, policy)
+        notes += workspace_notes
     runner = AgentCaseRunner(
         resolved,
         model_for,
@@ -255,40 +304,47 @@ def execute_run(
         state_root=folder / "state",
         budget=money,
         clock=None if options.mode == "live" else (lambda: FIXTURE_TIME),
+        corpus_root=root,
+        prepare=prepare,
     )
     evaluators = [
         ObjectiveMetrics(),
         RubricMetric(judge_for=judge_for, scrubber=scrubber, reference=reference),
+        FalseFindingMetric(judge_for=finding_judge_for, scrubber=scrubber),
     ]
     ledger = EvalLedger(Path.cwd(), report_id, policy.version, options.agent)
     ledger("eval.run_started")
-    try:
-        if server is not None:
-            server.start()
-            server.expect(f"{c.id}/X/{r}/agent" for c in cases for r in range(repeats))
-        runset = asyncio.run(
-            run_eval(
-                cases,
-                {"X": runner},
-                kind=kind,
-                repeats=repeats,
-                seed=options.seed,
-                evaluators=evaluators,
-                budget_usd=budget,
-                max_concurrency=options.max_concurrency,
-                name=f"eval-{options.agent}",
+    try:  # whatever raises from here on, the ledger run is closed, never left open (DF-260)
+        try:
+            if server is not None:
+                server.start()
+                server.expect(f"{c.id}/X/{r}/agent" for c in cases for r in range(repeats))
+            runset = asyncio.run(
+                run_eval(
+                    cases,
+                    {"X": runner},
+                    kind=kind,
+                    repeats=repeats,
+                    seed=options.seed,
+                    evaluators=evaluators,
+                    budget_usd=budget,
+                    max_concurrency=options.max_concurrency,
+                    name=f"eval-{options.agent}",
+                )
             )
-        )
-    except BaseException:
-        ledger("eval.failed")  # the run is closed in the ledger, never left open
-        raise
-    finally:
-        if server is not None:
-            server.close()
-        if judge_slice is not None and not judge_slice.closed:
-            judge_slice.close()
-    try:  # the report step can fail too (a full disk): the ledger run is closed (DF-260)
-        problems = server.finish() if server is not None else []
+        finally:
+            if server is not None:
+                server.close()
+            if judge_slice is not None and not judge_slice.closed:
+                judge_slice.close()
+        # runs the budget cap skipped or stopped made fewer calls than recorded: that is
+        # INCOMPLETE, not a replay to re-record (DF-254)
+        capped = [
+            f"{r.request.cassette_key}/agent"
+            for r in runset.runs
+            if r.record.status == "skipped" or r.record.error == BUDGET_STOP
+        ]
+        problems = server.finish(capped=capped) if server is not None else []
         labels = assign_labels([agent_id], seed=options.seed)
         labels.seal_scores()
         judge_info = None
@@ -299,6 +355,7 @@ def execute_run(
                 family=choice.family,
                 same_family=choice.same_family,
                 rubrics={r.key: r.sha for r in rubrics.values()},
+                warnings=list(choice.warnings),
             )
         report = build_report(
             runset,
@@ -310,12 +367,14 @@ def execute_run(
             kind=kind,
             corpus_manifest_sha=corpus.manifest.sha,
             split=options.split,
+            tag=options.tag,
             labels=labels.reveal(),
             judge=judge_info,
             leaks=leaks.leaks,
             stale_cassettes=server.stale if server is not None else 0,
             problems=problems,
             judge_cost_usd=_reported_total(judge_costs),
+            warnings=notes,
         )
         paths = write_report(report, folder, runset.runs)
         for rubric_id in rubric_ids:  # calibration shows people the rubric the judge used
@@ -327,7 +386,7 @@ def execute_run(
         ledger("eval.failed")
         raise
     ledger("eval.report_written", report=digest, verdict=report.verdict)
-    return RunResult(report, folder, paths, tuple(warnings))
+    return RunResult(report, folder, paths, replay_problems=problems)
 
 
 def summary(result: RunResult) -> dict:
@@ -346,57 +405,39 @@ def summary(result: RunResult) -> dict:
         "stale_cassettes": report.stale_cassettes,
         "problems": report.problems,
         "leaks": report.leaks,
-        "warnings": list(result.warnings),
+        "warnings": [
+            *(report.judge.warnings if report.judge is not None else []),
+            *report.warnings,
+        ],
     }
-
-
-def judge_family_warning(policy: OrgPolicy, agent_model: str) -> str | None:
-    """Why the judge's family check may be blind, or None (DF-302). The family is a model
-    id's first segment unless a tier sets `family:`, so behind one gateway prefix
-    (`gw/vendor-a/model`, `gw/vendor-b/model`) every model counts as family `gw`: a judge
-    from the agent's own family would only show as `same_family`, never be told apart."""
-    spec = policy.tiers.get(JUDGE_TIER)
-    if spec is None:
-        return None
-    named = {tier.model for tier in policy.tiers.values() if tier.family}
-    judge, agent = spec.model.split("/"), agent_model.split("/")
-    if spec.family and agent_model in named:
-        return None
-    if len(judge) < 3 or len(agent) < 3 or judge[0].lower() != agent[0].lower():
-        return None
-    return (
-        f"the judge ({spec.model}) and the agent ({agent_model}) share the prefix "
-        f"'{judge[0]}/', so both count as family '{judge[0]}': set `family:` on each tier "
-        "in tiers.yaml (the model maker, for example), so a judge of the agent's own "
-        "family is told apart"
-    )
 
 
 def failure(result: RunResult) -> CliError | None:
     """The error to exit with, when the report says the evaluation did not measure."""
     report = result.report
-    if report.leaks:  # first: the run is void whatever else happened
+    # first: in replay the cap leaves later calls unasked, which is INCOMPLETE (exit 5),
+    # not a broken cassette (DF-254)
+    if report.budget_hit or report.verdict == "INCOMPLETE":
+        return CliError(
+            "the budget cap stopped the evaluation", ExitCode.STOPPED, hint="raise --budget-usd"
+        )
+    if result.replay_problems:
+        verb = "recording" if report.mode == "record" else "replay"
+        return CliError(
+            f"the {verb} failed: {result.replay_problems[0]}",
+            ExitCode.ERROR,
+            hint="re-record the cassettes with --mode record (see library/eval/README.md)",
+        )
+    if report.leaks:
         return CliError(
             f"blinding leak: {', '.join(report.leaks)} reached the judge; the run is void",
             ExitCode.ERROR,
         )
-    if report.budget_hit or report.verdict == "INCOMPLETE":  # before the calls it left unmade
+    if report.problems:  # e.g. the judge failed on every run (live, or a recording)
         return CliError(
-            "the budget cap stopped the evaluation", ExitCode.STOPPED, hint="raise --budget-usd"
-        )
-    if report.problems:  # what went wrong depends on the mode (DF-254)
-        if report.mode == "replay":
-            return CliError(
-                f"the replay failed: {report.problems[0]}",
-                ExitCode.ERROR,
-                hint="re-record the cassettes with --mode record (see library/eval/README.md)",
-            )
-        doing = "recording" if report.mode == "record" else "evaluation"
-        return CliError(
-            f"the {doing} did not complete: {report.problems[0]}",
+            f"the evaluation measured nothing: {report.problems[0]}",
             ExitCode.ERROR,
-            hint=f"see {result.paths['markdown']}; check the gateway and the models, then "
-            "run it again",
+            hint=f"see the evaluator errors in {result.paths['markdown']}",
         )
     if report.verdict == "UNMEASURABLE":
         return CliError(
@@ -468,6 +509,51 @@ class EvalLedger:
             raise CliError(f"the eval ledger refused {event}: {error}", ExitCode.ERROR) from error
 
 
+# ── the quality gate (M1-64) ──────────────────────────────────────────────────
+
+
+def run_gate(
+    report_dirs: list[Path],
+    *,
+    policy: Path | None = None,
+    agents: list[str] | None = None,
+    out: Path | None = None,
+) -> tuple[GateReport, Path]:
+    """Compare `eval run` reports with policy `eval.targets` (or the M1-64 defaults) and
+    write gate.json and gate.md."""
+    reports = [_report(folder) for folder in report_dirs]
+    targets = _load(lambda: load_policy(policy)).eval.targets if policy is not None else {}
+    gate = evaluate_gate(reports, targets=targets, agents=agents or list(GATE_AGENTS))
+    folder = out or Path(".agentic") / "local" / "eval" / f"gate-{datetime.now(UTC):%Y%m%dT%H%M%S}"
+    _write(folder / "gate.json", json.dumps(gate.model_dump(mode="json"), indent=2) + "\n")
+    _write(folder / "gate.md", render_gate(gate))
+    return gate, folder
+
+
+def gate_failure(gate: GateReport, folder: Path) -> CliError | None:
+    if gate.verdict == "NOT_A_GATE":
+        return CliError(
+            f"these reports cannot decide the gate: {gate.problems[0]}",
+            ExitCode.INVALID,
+            hint="gate on live `eval run` reports of the whole holdout split, one per agent",
+        )
+    if gate.verdict == "FAIL":
+        missed = [f"{r.agent} {r.metric}" for r in gate.rows if r.verdict == "FAIL"]
+        return CliError(
+            f"the gate failed: {', '.join(missed)} missed their targets",
+            ExitCode.ERROR,
+            hint=f"see {folder / 'gate.md'}",
+        )
+    if gate.verdict == "INCOMPLETE":
+        unmeasured = [f"{r.agent} {r.metric}" for r in gate.rows if r.verdict == "NOT_MEASURED"]
+        return CliError(
+            f"the gate is incomplete: {', '.join(unmeasured)} not measured",
+            ExitCode.ERROR,
+            hint=f"see {folder / 'gate.md'}",
+        )
+    return None
+
+
 # ── human calibration ─────────────────────────────────────────────────────────
 
 
@@ -496,7 +582,12 @@ def export_calibration(report_dir: Path, out: Path | None = None, *, seed: int =
             "item-" + hashlib.sha256(f"{report.report_id}/{run.run_id}".encode()).hexdigest()[:10]
         )
         text = read_text(report_dir / "judged" / f"{run.run_id}.md")
-        items.append({"id": opaque, "rubric": run.judge.rubric_key, "text": text})  # type: ignore[union-attr]
+        item = {"id": opaque, "rubric": run.judge.rubric_key, "text": text}  # type: ignore[union-attr]
+        context_path = report_dir / "judged" / f"{run.run_id}.context.json"
+        if context_path.is_file():  # what the judge graded against, so raters do too
+            context = json.loads(context_path.read_bytes())
+            item |= {"reference": context.get("reference"), "key_points": context["key_points"]}
+        items.append(item)
         key[opaque] = {
             "run_id": run.run_id,
             "judge_total": run.metrics.get("rubric"),
@@ -516,7 +607,8 @@ def export_calibration(report_dir: Path, out: Path | None = None, *, seed: int =
     pack = {
         "instructions": (
             "Score each item 0-10 with the rubric: sum the criteria, each 0, 1 or 2 by its "
-            "anchors. Score on your own; do not discuss items with the other rater. Copy "
+            "anchors, judging the text against the item's reference and key points where "
+            "given. Score on your own; do not discuss items with the other rater. Copy "
             "scores-template.yaml, fill in your name and a score per item, and return it."
         ),
         "rubrics": rubrics,
@@ -527,8 +619,12 @@ def export_calibration(report_dir: Path, out: Path | None = None, *, seed: int =
         folder / "scores-template.yaml",
         dump_yaml({"rater": "", "scores": {i["id"]: None for i in items}}),
     )
+    # the answer key (the judge's totals) stays beside the report, outside the folder that
+    # is handed to raters (DF-257)
+    old_key = folder / "key.json"
+    old_key.unlink(missing_ok=True)
     _write(
-        folder / "key.json",
+        report_dir / CALIBRATION_KEY,
         json.dumps({"report_id": report.report_id, "items": key}, indent=2) + "\n",
     )
     return {
@@ -544,7 +640,7 @@ def score_calibration(report_dir: Path, score_files: list[Path]) -> dict:
     and the raters' mean is >= 0.6 and they are within 1 point on >= 80 % of items. If
     the raters disagree with each other (kappa < 0.6) the rubric is ambiguous: fix it
     first."""
-    key_path = report_dir / "calibration" / "key.json"
+    key_path = report_dir / CALIBRATION_KEY
     if not key_path.is_file():
         raise CliError(
             "no calibration export for this report",
@@ -657,18 +753,18 @@ def _classification(cases: list[EvalCase], given: str | None, default: str) -> s
 
 
 def _folder(given: Path | None, default: Path, flag: str, what: str) -> Path:
-    """`given`, or the corpus's own `default`; a folder that is not there is a usage error
-    naming it, never a policy or definition error from reading nothing (DF-259)."""
     if given is not None:
         if not given.is_dir():
-            raise CliError(f"{flag} {given}: no such folder", ExitCode.USAGE)
+            raise CliError(  # a wrong argument, not a broken policy (DF-259)
+                f"{flag} {given} is not a folder", ExitCode.USAGE, hint=f"pass the {what}"
+            )
         return given
     if default.is_dir():
         return default
     raise CliError(
-        f"no {what}: the corpus has no {default.name}/ folder and {flag} was not given",
+        f"no {what} given",
         ExitCode.USAGE,
-        hint=f"pass {flag} <folder>",
+        hint=f"pass {flag} <folder> (the corpus has no {default.parent.name}/{default.name})",
     )
 
 
@@ -689,6 +785,66 @@ def _agent(folder: Path, name: str):
             hint=f"known agents: {known}",
         )
     return _load(lambda: load_agent(path))
+
+
+#: The tools an eval can give an agent on a dev task's tree; the others (code
+#: intelligence, skills) need a run's repository and installed skills.
+EVAL_TOOLS = ("read_files", "search", "edit_files", "run_shell")
+
+
+def _workspaces(
+    resolved: ResolvedAgent, folder: Path, mode: str, policy: OrgPolicy
+) -> tuple[PrepareWorkspace, ResolvedAgent, list[str]]:
+    """How each dev-task run gets its tree (DF-241): a copy of the workspace under a
+    guard confined to it, and the agent's file and shell tools on it, sandboxed as a
+    solo run would be - srt when this machine has it ready, else a plain process on
+    the guards (org policy decides whether that is allowed). A replay always uses a
+    plain process: its tool calls are recorded, and the result must not depend on
+    the machine. Returns the agent with the tools the eval can give it, and notes."""
+    notes = []
+    usable = [t for t in resolved.tools if t in EVAL_TOOLS]
+    if dropped := [t for t in resolved.tools if t not in EVAL_TOOLS]:
+        notes.append(
+            f"dev tasks run {resolved.definition.name} without {', '.join(dropped)}: those "
+            "tools need a run's repository; the tests measure the change without them"
+        )
+    agent = resolved.model_copy(update={"tools": usable})
+    use_srt = False
+    if mode != "replay":
+        decision = decide_sandbox(machine_readiness(), "solo", policy.sandbox)
+        if decision.refusal:
+            raise CliError(decision.refusal, ExitCode.REFUSED)
+        if decision.warning:  # the first line; `agentic doctor` shows the remedy in full
+            notes.append(
+                f"dev tasks: {decision.warning.splitlines()[0]} (the agent's commands and "
+                "the case's tests run as plain processes)"
+            )
+        use_srt = decision.use_srt
+
+    def prepare(request: RunRequest, source: Path) -> Workspace:
+        target = folder / "workspaces" / request.run_id
+        target.mkdir(parents=True, exist_ok=True)
+        guard = Guard.for_agent(target, request.run_id, agent)
+        tree = copy_workspace(source, guard.trees_root / "tree")
+        sandbox = LocalProcessSandbox()
+        if use_srt:
+            rules = SandboxRules(
+                write=(tree,),
+                deny_read=expand_home(policy.sandbox.effective_deny_read, Path.home()),
+                allowed_domains=tuple(policy.sandbox.allowed_domains),
+            )
+            sandbox = SrtSandbox(rules, folder / "sandbox" / request.run_id)
+        context = ToolContext(tree=tree, guard=guard, sandbox=sandbox, allow_unisolated=not use_srt)
+        return Workspace(tree, build_tools(agent, context), sandbox if use_srt else None)
+
+    return prepare, agent, notes
+
+
+def _team() -> str:
+    """The person's team as other commands see it: AGENTIC_TEAM, else the user config's
+    `team`, else 'eval'."""
+    named = os.environ.get("AGENTIC_TEAM", "").strip()
+    return named or str(user_config(agentic_home()).get("team") or "").strip() or TEAM
 
 
 def _api_key(options: RunOptions, upstream: Upstream | None) -> str:

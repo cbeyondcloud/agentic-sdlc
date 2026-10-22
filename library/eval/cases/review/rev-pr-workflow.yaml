@@ -1,0 +1,41 @@
+id: rev-pr-workflow
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the CI workflow that labels and tests pull requests."
+  diff: |
+    diff --git a/.github/workflows/pr.yml b/.github/workflows/pr.yml
+    --- a/.github/workflows/pr.yml
+    +++ b/.github/workflows/pr.yml
+    @@ -1,9 +1,13 @@
+     name: pr
+     on:
+    -  pull_request:
+    +  pull_request_target:
+     jobs:
+       test:
+         runs-on: ubuntu-latest
+         steps:
+           - uses: actions/checkout@v4
+    +        with:
+    +          ref: ${{ github.event.pull_request.head.sha }}
+           - run: npm ci && npm test
+    +      - run: echo "Deploy token is ${{ secrets.DEPLOY_TOKEN }}"
+    +      - run: echo "Title: ${{ github.event.pull_request.title }}"
+expected:
+  seeded_defects:
+    - file: .github/workflows/pr.yml
+      lines: [3, 10]
+      category: security
+      note: "pull_request_target with a checkout of the PR head runs untrusted code with the base repository's secrets and a write token"
+    - file: .github/workflows/pr.yml
+      lines: [12, 12]
+      category: security
+      note: "a secret is echoed into the job log"
+    - file: .github/workflows/pr.yml
+      lines: [13, 13]
+      category: security
+      note: "the PR title is interpolated into the shell script: a title with $(...) or backticks injects commands; pass it through env"
+tags: [yaml, ci, security]

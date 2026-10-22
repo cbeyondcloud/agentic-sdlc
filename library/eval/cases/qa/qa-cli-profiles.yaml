@@ -1,0 +1,51 @@
+id: qa-cli-profiles
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the CLI profiles work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "The CLI supports named profiles on Windows, macOS and Linux."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "A profile is chosen with a known precedence."
+          acceptance_criteria:
+            - "WHEN both --profile and AGENTIC_PROFILE are set THE system SHALL use --profile."
+            - "WHEN the named profile does not exist THE system SHALL fail and list the known profiles."
+        - id: REQ-2
+          statement: "The profiles file is safe on every OS."
+          acceptance_criteria:
+            - "WHEN the profiles file is saved THE system SHALL write it atomically."
+            - "WHEN the CLI runs on Windows THE system SHALL keep the profiles file under %APPDATA%."
+      ---
+      # Requirements: CLI profiles
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Named profiles with flag and environment selection."
+      files_changed: [cli/profiles.py, cli/main.py, tests/test_profiles.py]
+      tests_run: {passed: 73, failed: 0, skipped: 0}
+      ---
+      # Development report: CLI profiles
+
+      ## What changed
+      `--profile NAME` selects a profile; when the flag is absent, `AGENTIC_PROFILE` is used.
+      An unknown name exits with an error that lists the known profiles.
+
+      ## Storage
+      Profiles live in `~/.agentic/profiles.toml` on every OS (`Path.home()`), so the same
+      instructions work for everyone. Saving writes the new content with
+      `path.write_text(...)`.
+
+      ## Tests
+      Precedence, unknown names and round-tripping are covered; CI runs on Linux.
+expected:
+  failing_criteria: [REQ-2.1, REQ-2.2]
+tags: [developer-tools, windows, macos]

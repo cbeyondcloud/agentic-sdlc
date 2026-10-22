@@ -1,0 +1,49 @@
+id: qa-lab-results
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the lab results portal work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Patients see lab results after a clinician review window."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Results are released by rule."
+          acceptance_criteria:
+            - "WHEN a normal result is filed THE system SHALL release it after 72 hours unless a clinician releases it sooner."
+            - "WHEN a result is flagged critical THE system SHALL hold it until a clinician releases it."
+        - id: REQ-2
+          statement: "Access is transparent."
+          acceptance_criteria:
+            - "WHEN anyone opens a result THE system SHALL log who opened it and when."
+            - "WHEN a patient opens their access history THE system SHALL show every logged access."
+      ---
+      # Requirements: lab results portal
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Release rules, access log and patient view."
+      files_changed: [results/release.py, results/access_log.py, portal/results.py]
+      tests_run: {passed: 110, failed: 0, skipped: 0}
+      deviations_from_design:
+        - "Critical results follow the same 72-hour release as normal results, with an extra notification to the ordering clinician."
+      ---
+      # Development report: lab results portal
+
+      ## What changed
+      Normal results are released 72 hours after filing, or immediately when a clinician
+      presses "release now". Opening a result from the portal writes an access log entry.
+
+      ## Access history
+      Patients see the access history of the portal itself; opens from the clinician
+      workstation are logged in the hospital system and are not shown.
+expected:
+  failing_criteria: [REQ-1.2, REQ-2.2]
+tags: [health, privacy]

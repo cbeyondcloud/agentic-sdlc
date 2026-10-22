@@ -1,0 +1,19 @@
+id: dev-posix-paths
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    to_posix() is used to store paths in the project manifest, but Windows paths
+    keep their backslashes, so a manifest written on Windows breaks on macOS and Linux.
+    Make it convert Windows separators too, keeping drive letters. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-posix-paths
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_manifest.py::test_windows_separators_become_slashes"
+    pass_to_pass:
+      - "tests/test_manifest.py::test_posix_paths_are_kept"
+  solution: solutions/dev-posix-paths
+tags: [python, windows, paths]

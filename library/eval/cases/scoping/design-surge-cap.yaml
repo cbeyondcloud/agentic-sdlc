@@ -1,0 +1,32 @@
+id: design-surge-cap
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the surge cap described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Ride fares are capped at twice the base fare in declared emergency areas."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "Fares in emergency areas are capped."
+          acceptance_criteria:
+            - "WHEN a trip starts in an area with an active emergency THE system SHALL quote at most twice the base fare."
+            - "WHEN an emergency ends THE system SHALL stop capping new quotes."
+        - id: REQ-2
+          statement: "Capped quotes are reportable."
+          acceptance_criteria:
+            - "WHEN a quote is capped THE system SHALL record the uncapped and capped amounts."
+      ---
+      # Requirements: surge cap
+expected:
+  key_points:
+    - "the cap is applied as a final step after all pricing components"
+    - "emergency areas are polygons with start and end times, cached by the pricing service"
+    - "a regulator report is produced from the capped-quote log"
+rubric: design
+tags: [mobility, pricing]

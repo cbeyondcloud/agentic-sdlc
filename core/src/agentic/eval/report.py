@@ -11,7 +11,7 @@ are averaged within a case first, then
 Every case a metric could not score is named beside its denominator. The verdict:
 
   * UNMEASURABLE - a blinding leak, a replay failure, or nothing scored at all;
-  * INCOMPLETE   - the budget cap stopped the evaluation;
+  * INCOMPLETE   - the budget cap stopped the evaluation (even before any run scored);
   * MEASURED     - otherwise. Whether the numbers meet a target is the gate's call (M1-64).
 
 `comparable` is the view CI compares with a committed expected report: everything but
@@ -22,7 +22,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from pathlib import Path
-from statistics import fmean, median
+from statistics import fmean, median, stdev
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
@@ -36,9 +36,12 @@ Verdict = Literal["MEASURED", "UNMEASURABLE", "INCOMPLETE"]
 RATIO_METRICS = {
     "defect_recall": ("defects_caught", "defects_total"),
     "qa_catch": ("criteria_caught", "criteria_total"),
+    "qa_false_alarm": ("criteria_false_alarms", "criteria_passing"),
+    "false_finding_rate": ("false_findings", "findings_total"),
 }
 PARTS = {part for pair in RATIO_METRICS.values() for part in pair}
-ORDER = ["schema_valid", "rubric", "defect_recall", "unmatched_blocking", "qa_catch"]
+ORDER = ["schema_valid", "rubric", "defect_recall", "false_finding_rate", "unmatched_blocking"]
+ORDER += ["qa_catch", "qa_false_alarm"]
 ORDER += ["tests_pass", "cost_usd", "tokens", "duration_s"]
 VOLATILE = ("duration_s",)
 #: The metric each case class exists to measure: always listed, so a metric nobody
@@ -94,6 +97,8 @@ class MetricAggregate(_Model):
     ci_high: float | None = None
     n_scored: int
     unscored: list[str]  # case ids this metric could not score
+    # SD across cases of the per-case value (mean, or rate): S10's sigma for the power tables
+    sigma_case: float | None = None
 
 
 class JudgeInfo(_Model):
@@ -102,6 +107,7 @@ class JudgeInfo(_Model):
     family: str
     same_family: bool
     rubrics: dict[str, str]  # rubric key -> sha256
+    warnings: list[str] = []  # family guesses an admin should confirm (`family:`)
 
 
 class EvalReport(_Model):
@@ -114,6 +120,7 @@ class EvalReport(_Model):
     kind: str
     corpus_manifest_sha: str
     split: str
+    tag: str | None = None  # only cases carrying this tag were run
     cases: list[str]
     k: int
     seed: int
@@ -134,6 +141,7 @@ class EvalReport(_Model):
     verbosity_r: dict[str, float | None]  # label -> Pearson r(rubric, output length)
     verdict: Verdict
     problems: list[str]
+    warnings: list[str] = []  # how the harness ran that a reader should know (tools, sandbox)
 
     @property
     def n(self) -> int:
@@ -152,11 +160,13 @@ def build_report(
     corpus_manifest_sha: str,
     split: str,
     labels: dict[str, str],
+    tag: str | None = None,
     judge: JudgeInfo | None = None,
     leaks: Sequence[str] = (),
     stale_cassettes: int = 0,
     problems: Sequence[str] = (),
     judge_cost_usd: float | None = None,
+    warnings: Sequence[str] = (),
 ) -> EvalReport:
     runs = [_eval_run(r) for r in runset.runs]
     cases = sorted({r.case_id for r in runs})
@@ -180,10 +190,12 @@ def build_report(
     spent = [r for r in runs if r.requests or r.cost_usd is not None]
     measured = [r.cost_usd for r in spent if r.cost_usd is not None]
     model_ids = sorted({m for r in runs for m in r.model_ids})
-    if leaks or problems or not any(scored_run(r) for r in runs):
+    if leaks or problems:
         verdict: Verdict = "UNMEASURABLE"
-    elif runset.budget_hit:
+    elif runset.budget_hit:  # even if it stopped every run: the remedy is a larger budget
         verdict = "INCOMPLETE"
+    elif not any(scored_run(r) for r in runs):
+        verdict = "UNMEASURABLE"
     else:
         verdict = "MEASURED"
     return EvalReport(
@@ -195,6 +207,7 @@ def build_report(
         kind=kind,
         corpus_manifest_sha=corpus_manifest_sha,
         split=split,
+        tag=tag,
         cases=cases,
         k=runset.repeats,
         seed=runset.seed,
@@ -219,6 +232,7 @@ def build_report(
         verbosity_r={label: _verbosity(items, runset) for label, items in sorted(by_label.items())},
         verdict=verdict,
         problems=problems,
+        warnings=list(warnings),
     )
 
 
@@ -231,7 +245,9 @@ def render_markdown(report: EvalReport) -> str:
         f"# Eval report: {report.agent} ({report.kind})",
         "",
         f"- **Verdict:** {report.verdict}",
-        f"- **Mode:** {report.mode} | **split:** {report.split} | "
+        f"- **Mode:** {report.mode} | **split:** {report.split}"
+        + (f" | **tag:** {report.tag}" if report.tag else "")
+        + " | "
         f"**cases:** {report.n} x {report.k} repeats | **seed:** {report.seed}",
         f"- **Corpus:** `{report.corpus_manifest_sha}`",
         f"- **Agent:** {report.agent}@{report.agent_version or '?'} | "
@@ -246,14 +262,16 @@ def render_markdown(report: EvalReport) -> str:
         )
         rubrics = ", ".join(f"{k} `{v[:19]}`" for k, v in judge.rubrics.items())
         lines.append(f"- **Judge:** tier `{judge.tier}`, family {judge.family}{same}; {rubrics}")
+        lines += [f"- **Judge warning:** {w}" for w in judge.warnings]
     cost = "unmeasured" if report.cost_total_usd is None else f"${report.cost_total_usd:.4f}"
     lines.append(
         f"- **Cost:** {cost} ({report.cost_unmeasured_runs} runs unmeasured)"
         + (f" | budget ${report.budget_usd:.2f}" if report.budget_usd is not None else "")
     )
+    single = len(report.aggregates) == 1  # a label means something only in an A/B
     for label, metrics in report.aggregates.items():
         variant = report.labels.get(label, label)
-        lines += ["", f"## Metrics: {label} ({variant})", ""]
+        lines += ["", "## Metrics" if single else f"## Metrics: {label} ({variant})", ""]
         lines += ["| metric | value | median | 95% CI | cases scored | unscored |"]
         lines += ["|---|---|---|---|---|---|"]
         for name, agg in metrics.items():
@@ -274,6 +292,7 @@ def render_markdown(report: EvalReport) -> str:
         notes.append(f"Blinding leak (the evaluation is void): {', '.join(report.leaks)}.")
     if report.problems:
         notes += [f"Problem: {p}" for p in report.problems]
+    notes += [f"Warning: {w}" for w in report.warnings]
     if report.stale_cassettes:
         notes.append(
             f"{report.stale_cassettes} stale cassettes: prompts changed since recording; "
@@ -297,16 +316,28 @@ def render_markdown(report: EvalReport) -> str:
 def write_report(
     report: EvalReport, folder: Path, runs: Sequence[EvalRunResult] = ()
 ) -> dict[str, Path]:
-    """report.json, report.md, and judged/<run>.md (exactly what the judge saw: the
-    calibration export shows people the same text). LF line endings throughout."""
+    """report.json, report.md, and per judged run judged/<run>.md and
+    judged/<run>.context.json - exactly the output, reference and key points the judge
+    saw: the calibration export shows people the same. LF line endings throughout."""
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     paths = {"json": folder / "report.json", "markdown": folder / "report.md"}
     _write(paths["json"], json.dumps(report.model_dump(mode="json"), indent=2) + "\n")
     _write(paths["markdown"], render_markdown(report))
     for item in runs:
-        if item.record.judged is not None:
-            _write(folder / "judged" / f"{item.request.run_id}.md", item.record.judged)
+        record = item.record
+        if record.judged is not None:
+            _write(folder / "judged" / f"{item.request.run_id}.md", record.judged)
+            context = {"reference": record.judge_reference, "key_points": record.judge_key_points}
+            _write(
+                folder / "judged" / f"{item.request.run_id}.context.json",
+                json.dumps(context, indent=2, ensure_ascii=False) + "\n",
+            )
+        if record.adjudications is not None:  # for a person to sample the judge's rulings
+            _write(
+                folder / "judged" / f"{item.request.run_id}.findings.json",
+                json.dumps(record.adjudications, indent=2, ensure_ascii=False) + "\n",
+            )
     return paths
 
 
@@ -392,6 +423,7 @@ def _mean(runs: list[EvalRun], cases: list[str], name: str, seed: int) -> Metric
         ci_high=boot.ci_high,
         n_scored=len(values),
         unscored=unscored,
+        sigma_case=stdev(values) if len(values) > 1 else None,
     )
 
 
@@ -415,12 +447,14 @@ def _ratio(
         boot = stats.cluster_bootstrap_ratio(pairs, seed=seed)
     except stats.Unmeasurable:
         return MetricAggregate(value=None, n_scored=0, unscored=unscored)
+    rates = [n / d for n, d in pairs if d]
     return MetricAggregate(
         value=boot.mean,
         ci_low=boot.ci_low,
         ci_high=boot.ci_high,
         n_scored=len(pairs),
         unscored=unscored,
+        sigma_case=stdev(rates) if len(rates) > 1 else None,
     )
 
 

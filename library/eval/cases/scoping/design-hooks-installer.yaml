@@ -1,0 +1,32 @@
+id: design-hooks-installer
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the hooks installer described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "One git hooks installer that works from PowerShell, bash and zsh."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "The installer works in every shell."
+          acceptance_criteria:
+            - "WHEN the installer runs from PowerShell, bash or zsh THE system SHALL install the same hooks."
+            - "WHEN a hook already exists THE system SHALL chain it rather than replace it."
+        - id: REQ-2
+          statement: "Hooks survive line-ending conversion."
+          acceptance_criteria:
+            - "WHEN a repository uses core.autocrlf=true THE system SHALL still run the hooks (scripts stored with LF via .gitattributes)."
+      ---
+      # Requirements: hooks installer
+expected:
+  key_points:
+    - "hooks are thin launchers that call one cross-platform implementation"
+    - "a .gitattributes rule pins hook scripts to LF"
+    - "the installer records what it replaced so uninstall can restore it"
+rubric: design
+tags: [developer-tools, windows, shell]

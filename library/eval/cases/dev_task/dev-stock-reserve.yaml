@@ -1,0 +1,20 @@
+id: dev-stock-reserve
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    reserve() lets stock go negative when two orders take the last items, and a
+    failed reservation of several lines leaves the earlier lines reserved. Refuse what
+    is not available and reserve all lines or none. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-stock-reserve
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_stock.py::test_stock_never_goes_negative"
+      - "tests/test_stock.py::test_all_lines_or_none"
+    pass_to_pass:
+      - "tests/test_stock.py::test_reserving_reduces_stock"
+  solution: solutions/dev-stock-reserve
+tags: [python, retail]

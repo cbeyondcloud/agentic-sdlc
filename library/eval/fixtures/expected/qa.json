@@ -8,6 +8,7 @@
         "ci_low": 0.0021,
         "median": 0.0021,
         "n_scored": 3,
+        "sigma_case": 0.0,
         "unscored": [],
         "value": 0.0021
       },
@@ -16,14 +17,25 @@
         "ci_low": 0.5,
         "median": null,
         "n_scored": 3,
+        "sigma_case": 0.28867513459481287,
         "unscored": [],
         "value": 0.8
+      },
+      "qa_false_alarm": {
+        "ci_high": 0.0,
+        "ci_low": 0.0,
+        "median": null,
+        "n_scored": 3,
+        "sigma_case": 0.0,
+        "unscored": [],
+        "value": 0.0
       },
       "schema_valid": {
         "ci_high": 1.0,
         "ci_low": 1.0,
         "median": 1.0,
         "n_scored": 3,
+        "sigma_case": 0.0,
         "unscored": [],
         "value": 1.0
       },
@@ -32,6 +44,7 @@
         "ci_low": 1400.0,
         "median": 1400.0,
         "n_scored": 3,
+        "sigma_case": 0.0,
         "unscored": [],
         "value": 1400.0
       }
@@ -44,7 +57,7 @@
     "qa-reset-limits",
     "qa-webhook-retries"
   ],
-  "corpus_manifest_sha": "sha256:e06ee048dc597ae36e27fb0b0b6cace0e34547bae33ca121cc524d5323ac9bc0",
+  "corpus_manifest_sha": "sha256:a85292ea39c86f6b665faeb28f963ad33d7ea56e3e090d7edc31e8515ad304d4",
   "cost_total_usd": 0.0126,
   "cost_unmeasured_runs": 0,
   "judge": null,
@@ -74,8 +87,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 1.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 4.0,
         "criteria_total": 2.0,
         "qa_catch": 0.5,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },
@@ -102,8 +118,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 1.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 4.0,
         "criteria_total": 2.0,
         "qa_catch": 0.5,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },
@@ -130,8 +149,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 2.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 2.0,
         "criteria_total": 2.0,
         "qa_catch": 1.0,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },
@@ -158,8 +180,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 2.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 2.0,
         "criteria_total": 2.0,
         "qa_catch": 1.0,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },
@@ -186,8 +211,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 1.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 3.0,
         "criteria_total": 1.0,
         "qa_catch": 1.0,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },
@@ -214,8 +242,11 @@
       "metrics": {
         "cost_usd": 0.0021,
         "criteria_caught": 1.0,
+        "criteria_false_alarms": 0.0,
+        "criteria_passing": 3.0,
         "criteria_total": 1.0,
         "qa_catch": 1.0,
+        "qa_false_alarm": 0.0,
         "schema_valid": 1.0,
         "tokens": 1400.0
       },
@@ -235,9 +266,11 @@
   "seed": 0,
   "split": "all",
   "stale_cassettes": 0,
+  "tag": "fixture",
   "unscored_runs": [],
   "verbosity_r": {
     "X": null
   },
-  "verdict": "MEASURED"
+  "verdict": "MEASURED",
+  "warnings": []
 }

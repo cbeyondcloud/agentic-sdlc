@@ -1,0 +1,19 @@
+id: dev-business-days
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    add_business_days() is used for SLA due dates. It skips Saturdays but counts
+    Sundays and ignores the holiday list it is given. Fix both. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-business-days
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_calendar_days.py::test_weekends_are_skipped"
+      - "tests/test_calendar_days.py::test_holidays_are_skipped"
+    pass_to_pass:
+      - "tests/test_calendar_days.py::test_within_a_week"
+  solution: solutions/dev-business-days
+tags: [python, support]
