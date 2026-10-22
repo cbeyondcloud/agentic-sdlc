@@ -48,6 +48,8 @@ from agentic.skills.select import pipeline_skills
 from agentic.telemetry.logs import StepLogs
 from agentic.telemetry.sinks import ForwardingRecorder
 from agentic.transport import CallIdentity
+from agentic_cli.codeintel import codeintel_for as codeintel_factory
+from agentic_cli.codeintel import codeintel_settings, codeintel_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.standalone import PLACEHOLDER
@@ -214,6 +216,7 @@ class Runtime:
         ):
             report.problems.append(Problem(None, "identity", UNVERIFIED, severity="warning"))
         tiers = (self.ws.policy_repo or Path("<policy repo>")) / "policy" / "tiers.yaml"
+        missing = self._codeintel_missing()  # an invalid codeintel section is refused here
         for agent_name, agent in sorted(report.resolved.items()):
             if PLACEHOLDER in agent.model:  # the gateway would refuse it on the first call
                 detail = (
@@ -221,12 +224,9 @@ class Runtime:
                     f"template's placeholder: set a model your gateway serves in {tiers}"
                 )
                 report.problems.append(Problem(None, "model", detail))  # DF-225
-            if "codeintel" in agent.tools and self._codeintel_missing():
-                detail = (
-                    f"agent {agent_name} may use codeintel, but the code intelligence extra "
-                    "is not installed (agentic-core[codeintel]): it runs without it and uses "
-                    "search instead"
-                )  # DF-226: an optional extra must not refuse the run
+            if "codeintel" in agent.tools and missing:
+                # DF-226: a missing optional extra (or domain graph) must not refuse the run
+                detail = f"agent {agent_name} may use codeintel, but {missing}"
                 report.problems.append(Problem(None, "codeintel", detail, severity="warning"))
         for skill in self._restored:  # DF-186: a local edit was put back before the run
             detail = f"skill {skill} had been changed locally; it was restored as pinned"
@@ -234,14 +234,12 @@ class Runtime:
         report.problems += self._publish_problems(pipeline)
         return report
 
-    def _codeintel_off(self) -> bool:
-        """The repo turned code intelligence off (`codeintel.adapter: none`)."""
-        settings = self.ws.config.get("codeintel")
-        return isinstance(settings, dict) and settings.get("adapter") == "none"
-
-    def _codeintel_missing(self) -> bool:
-        """Wanted by the repo, but the extra is not installed on this machine."""
-        return not self._codeintel_off() and not codeintel_index.available()
+    def _codeintel_missing(self) -> str | None:
+        """What the repo's code intelligence lacks on this machine (the extra, or a built
+        domain graph), or None (`codeintel.adapter: none` lacks nothing)."""
+        settings = codeintel_settings(self.ws.config)
+        available = codeintel_index.available()
+        return codeintel_warning(self.ws.repo, settings, crg_available=available)
 
     def _publish_problems(self, pipeline: PipelineDefinition) -> list[Problem]:
         """A publishing step whose host or token is missing fails here, before any spend
@@ -474,14 +472,13 @@ class Runtime:
     # ── helpers ──────────────────────────────────────────────────────────────
 
     def _wiring(self, decision: SandboxDecision) -> StepWiring:
-        codeintel_for = None  # agents then get no codeintel tools (wiring.NO_CODEINTEL)
-        if codeintel_index.available() and not self._codeintel_off():
-            from agentic.codeintel.crg import CodeReviewGraph
-
-            def codeintel_for(tree: Path, data: Path):
-                index = codeintel_index.LocalIndex(tree, data, home_dir=data / "home")
-                return CodeReviewGraph(index)
-
+        # code-review-graph and/or the domain graph, as the repo chose (M2-43); None: agents
+        # get no codeintel tools (wiring.NO_CODEINTEL)
+        codeintel_for = codeintel_factory(
+            self.ws.repo,
+            codeintel_settings(self.ws.config),
+            crg_available=codeintel_index.available(),
+        )
         library = self._installed()
         return StepWiring(
             self.ws.repo,
