@@ -24,6 +24,17 @@ def diff_of(*paths: str) -> str:
     return "".join(f"diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n+x\n" for p in paths)
 
 
+def test_the_policy_models_ceiling_is_zyroflos_budget():  # F4
+    """Core cannot import Zyroflo, so its policy model names the ceiling an org's
+    review_batch may not exceed; it must stay the guard's own budget."""
+    from agentic.policy.model import REVIEW_BATCH_CEILING
+
+    assert REVIEW_BATCH_CEILING == {
+        "max_files": zyroflo.DEFAULTS["max_files_per_batch"],
+        "max_lines": zyroflo.DEFAULTS["max_lines_per_batch"],
+    }
+
+
 def test_zyroflos_exemptions_apply_by_default(repo):
     guard = Guard(repo, RUN, max_files=2)
     assert guard.policy["budget_exempt"] == zyroflo.DEFAULTS["budget_exempt"]

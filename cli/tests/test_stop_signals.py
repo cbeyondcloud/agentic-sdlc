@@ -92,8 +92,11 @@ def all_gone(pids: list[int], within_s: float = 15.0) -> bool:
 
 
 @pytest.fixture
-def cli(tmp_path):
-    """Start the program; yields (process, [pid of its agent process, of that one's child])."""
+def cli(request, tmp_path):
+    """Start the program; yields (process, [pid of its agent process, of that one's child]).
+    Parametrized indirectly with a signal name, the program starts with it ignored, as
+    `nohup` starts its command."""
+    ignored = getattr(request, "param", None)
     script = tmp_path / "agentic_like.py"
     script.write_text(PROGRAM, encoding="utf-8")
     group = (
@@ -101,6 +104,8 @@ def cli(tmp_path):
         if os.name == "nt"
         else {"start_new_session": True}  # its own foreground group, as in a terminal
     )
+    if ignored:
+        group["preexec_fn"] = lambda: signal.signal(getattr(signal, ignored), signal.SIG_IGN)
     process = subprocess.Popen(
         [sys.executable, str(script), str(tmp_path / "run")],
         stdout=subprocess.PIPE,
@@ -140,6 +145,31 @@ def test_a_terminated_cli_leaves_no_orphan(cli, name):
     os.kill(process.pid, getattr(signal, name))  # `kill <pid>`, a closed terminal
     assert process.wait(timeout=30) == 130
     assert all_gone(pids)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+@pytest.mark.parametrize("cli", ["SIGHUP"], indirect=True)
+def test_a_cli_started_under_nohup_survives_a_hang_up(cli):  # F2
+    process, pids = cli
+    os.kill(process.pid, signal.SIGHUP)  # the SSH session closed
+    time.sleep(1.0)
+    assert process.poll() is None and all(alive(pid) for pid in pids)
+    os.kill(process.pid, signal.SIGTERM)  # still stoppable the usual way
+    assert process.wait(timeout=30) == 130
+    assert all_gone(pids)
+
+
+def test_a_signal_the_parent_ignored_stays_ignored():  # F2: `nohup`, a wrapper's SIG_IGN
+    from agentic_cli.main import stop_signals_as_interrupts
+
+    number = signal.SIGTERM
+    before = signal.signal(number, signal.SIG_IGN)
+    try:
+        with stop_signals_as_interrupts():
+            assert signal.getsignal(number) == signal.SIG_IGN
+        assert signal.getsignal(number) == signal.SIG_IGN
+    finally:
+        signal.signal(number, before)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows console events")

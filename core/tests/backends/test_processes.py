@@ -112,8 +112,11 @@ def test_a_grandchild_in_a_group_of_its_own_dies_with_the_tree(tmp_path):
         cleanup(parent, grandchild)
 
 
-def test_a_finished_root_is_not_signalled_by_pid():  # Review Focus 4
-    bystander = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+def test_a_finished_root_is_not_signalled_by_pid(tmp_path):  # Review Focus 4, F3
+    # the reused pid leads a process group (POSIX: a session) with a member: neither the
+    # pid, nor the group, nor the session of that id is the finished root's any more
+    bystander = spawn(tmp_path, PARENT)
+    member = grandchild_of(bystander)
     try:
 
         class Exited:  # a root that exited; its pid now belongs to someone else
@@ -124,10 +127,9 @@ def test_a_finished_root_is_not_signalled_by_pid():  # Review Focus 4
         tree.kill()
         tree.close()
         time.sleep(0.5)
-        assert alive(bystander.pid)
+        assert alive(bystander.pid) and alive(member)
     finally:
-        bystander.kill()
-        bystander.wait(timeout=10)
+        cleanup(bystander, member)
 
 
 def test_kill_of_an_unknown_tree_is_harmless():

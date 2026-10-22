@@ -23,7 +23,11 @@ running after a time limit, a stopped run or a Ctrl-C. So:
 
 A process that has exited is never signalled by its pid, which the OS may have given to
 someone else; only its group, session or job is - and on POSIX not even those once
-`settle` found nothing left in them. What POSIX cannot reach: a grandchild
+`settle` found nothing left in them, or once its pid runs another process (a pid is not
+reused while a group or session of that id has members, so the group or session is then
+the newcomer's). Left open: a newcomer that leads a group, starts a child and exits, all
+before the step ends, leaves a group of that id with no process of that pid. What POSIX
+cannot reach: a grandchild
 that starts a session of its own AND outlives its parent is re-parented to init and
 leaves no trace; on Linux the sandbox's PID namespace (`srt`, bubblewrap) ends it.
 """
@@ -117,6 +121,9 @@ class ProcessTree:
                 return False
             if os.name == "nt" or self._settled:
                 return self._settled
+            if _reused(pid):
+                self._settled = True
+                return True
             try:
                 os.killpg(pid, 0)
                 return False  # its group still has members, which hold the id
@@ -138,6 +145,9 @@ class ProcessTree:
             if not self._exited():  # its pid is still its own
                 kill_tree(pid)
             elif os.name != "nt":
+                if _reused(pid):  # nothing of it is left: the group and session are another's
+                    self._settled = True
+                    return
                 _kill_group(pid)  # what it left behind in its group and session
             if os.name != "nt":
                 _kill_session(pid)
@@ -257,6 +267,20 @@ def _signal(pid: int) -> None:
         os.kill(pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
+
+
+def _reused(pid: int) -> bool:
+    """Whether a process runs as `pid`, which belonged to a child that has exited (and
+    was reaped): then the OS gave the pid to someone else. POSIX systems do not reuse a
+    pid while a process group or session of that id has members, so the child left
+    nothing in them, and a group or session of that id now is the newcomer's."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True  # it exists, owned by someone else
+    return True
 
 
 def _kill_group(pgid: int) -> None:

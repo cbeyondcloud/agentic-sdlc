@@ -188,16 +188,33 @@ class EvalPolicy(_Strict):
         return self.budget_usd_by_agent.get(agent, self.budget_usd)
 
 
+#: The guard's own review batch budget (Zyroflo's policy defaults, which core cannot
+#: import; a commons test keeps the two equal): an org's limits may only tighten it.
+REVIEW_BATCH_CEILING = {"max_files": 40, "max_lines": 1500}
+
+
 class ReviewBatchPolicy(_Strict):
     """The diff-size budget per review batch (M2-24, spec §6.1): one agent step's change
     must fit in one readable review. A limit may only tighten the guard's own (Zyroflo's
-    40 files and 1500 changed lines); None keeps it. `exempt` lists the paths not counted
-    (lock files nobody reads); None keeps Zyroflo's list, and a repository's own policy
-    may drop entries from it, never add (DF-13)."""
+    40 files and 1500 changed lines) - a looser one is an error, since it would have no
+    effect; None keeps it. `exempt` lists the paths not counted (lock files nobody
+    reads); None keeps Zyroflo's list, and a repository's own policy may drop entries
+    from it, never add (DF-13)."""
 
     max_files: int | None = Field(default=None, ge=1)
     max_lines: int | None = Field(default=None, ge=1)
     exempt: list[Annotated[str, StringConstraints(min_length=1)]] | None = None
+
+    @model_validator(mode="after")
+    def limits_only_tighten(self) -> Self:
+        for name, ceiling in REVIEW_BATCH_CEILING.items():
+            value = getattr(self, name)
+            if value is not None and value > ceiling:
+                raise ValueError(
+                    f"{name} may be at most {ceiling}: the guard's own budget is a ceiling "
+                    f"that org policy may only tighten, so {value} would have no effect"
+                )
+        return self
 
 
 class SecretScanPolicy(_Strict):

@@ -9,7 +9,7 @@ import asyncio
 
 from _engine_support import FakeTrees, answer, review
 
-from agentic.engine.gates import Approve, Reject, StandaloneAuthorizer
+from agentic.engine.gates import Approve, Edit, Reject, StandaloneAuthorizer
 
 STARTER, LEAD = "dev@acme.example", "lead@acme.example"
 DEV_REVIEW = """\
@@ -182,6 +182,42 @@ def test_an_invalid_oversized_answer_tells_the_person_deciding(make_harness):
     state = start(h)
     assert state.pending.id == "invalid-output"
     assert "larger than one review batch" in state.pending.reason
+
+
+def test_a_blocked_and_oversized_answer_waits_at_the_diff_budget_gate(make_harness):
+    """Approving a blocked handoff must not hand the reviewer an oversized batch (F1)."""
+    h, trees, _ = setup(make_harness, 5, 5)
+
+    def blocked_and_big(ctx):
+        trees.pending_size = 5
+        return answer("dev-report", status="blocked", open_questions=[])
+
+    h.runners.script["dev"] = [blocked_and_big, blocked_and_big]
+    state = start(h)
+
+    assert (state.status, state.pending.id) == ("awaiting_gate", "diff-budget")
+    assert "blocked" in state.pending.reason and "5 files" in state.pending.reason
+    assert "reviewer" not in h.runners.calls
+
+
+def test_an_edited_invalid_oversized_answer_still_waits_at_the_diff_budget_gate(make_harness):
+    """Editing an invalid answer into a valid one does not wave its oversized change
+    through to the reviewer: a person still decides at the diff-budget gate (F1)."""
+    h, trees, _ = setup(make_harness, 5)
+    h.runners.script["dev"] = [lambda ctx: setattr(trees, "pending_size", 5) or "not a handoff"]
+    state = start(h)
+    rel = next(iter(state.pending.artefacts))
+    edit = Edit("invalid-output", LEAD, rel, answer("dev-report", open_questions=[]))
+
+    state = decide(h, edit)
+    assert (state.status, state.pending.id) == ("awaiting_gate", "diff-budget")
+    assert "5 files" in state.pending.reason
+    assert "reviewer" not in h.runners.calls
+    assert list(state.pending.artefacts) == [f"{rel}.edited-1.md"]
+
+    state = decide(h, Approve("diff-budget", LEAD))
+    assert state.status == "completed", state.pending
+    assert h.runners.calls["reviewer"] == 1
 
 
 def test_the_run_time_limit_comes_before_the_split_attempt(make_harness):

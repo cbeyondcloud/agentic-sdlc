@@ -111,13 +111,17 @@ def stop_signals_as_interrupts() -> Iterator[None]:
     runner's SIGINT handler cancels the running step cleanly (its spend is recorded, its
     process scope closes and kills everything it started, M2-22); elsewhere it raises
     KeyboardInterrupt - instead of the CLI dying with its agent processes left running.
-    The previous handlers come back afterwards; outside the main thread nothing changes."""
+    The previous handlers come back afterwards; outside the main thread nothing changes.
+    A signal the parent ignored stays ignored: `nohup agentic run ...` must survive the
+    hang-up it was started to survive."""
     previous = {}
     for name in STOP_SIGNALS:
         number = getattr(signal, name, None)
         if number is None:
             continue
         try:
+            if signal.getsignal(number) == signal.SIG_IGN:
+                continue
             previous[number] = signal.signal(number, _interrupt)
         except (ValueError, OSError):  # not the main thread, or not catchable here
             pass

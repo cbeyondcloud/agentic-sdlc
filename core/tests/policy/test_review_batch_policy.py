@@ -41,3 +41,24 @@ def test_the_budget_loads_from_org_yaml(fixtures, tmp_path):
 def test_a_budget_that_would_mean_no_budget_is_an_error(fixtures, tmp_path, extra):
     with pytest.raises(PolicyError, match="review_batch"):
         load_policy(policy_copy(fixtures, tmp_path, extra))
+
+
+@pytest.mark.parametrize(
+    ("extra", "named"),
+    [
+        ("review_batch:\n  max_files: 100\n", "max_files may be at most 40"),
+        ("review_batch:\n  max_lines: 5000\n", "max_lines may be at most 1500"),
+    ],
+)
+def test_a_looser_budget_than_the_ceiling_is_an_error(fixtures, tmp_path, extra, named):
+    """It would have no effect - the guard's own budget is a ceiling - so the admin is
+    told at load instead of agents splitting work at 40 files under an org file that
+    says 100 (F4)."""
+    with pytest.raises(PolicyError, match=named):
+        load_policy(policy_copy(fixtures, tmp_path, extra))
+
+
+def test_the_ceiling_itself_is_allowed(fixtures, tmp_path):
+    extra = "review_batch:\n  max_files: 40\n  max_lines: 1500\n"
+    batch = load_policy(policy_copy(fixtures, tmp_path, extra)).review_batch
+    assert (batch.max_files, batch.max_lines) == (40, 1500)

@@ -742,7 +742,8 @@ class _Run:
                 "step_finished", step, outcome="completed", artifacts={rel: digest}
             )
             state.feedback.pop(step, None)
-            self._after_step()
+            if not self._edited_over_batch(step, iteration, rel, digest):
+                self._after_step()
         elif pending.id.endswith("-exhausted") and self._gate_step(pending.id) is None:
             self._next()  # a person's edit made the loop's `until` hold
         else:
@@ -1247,6 +1248,30 @@ class _Run:
                     return True
         return False
 
+    def _edited_over_batch(self, step: str, iteration: int, rel: str, digest: str) -> bool:
+        """Whether a person's edit of an invalid answer leaves a change larger than one
+        review batch: then it waits at the diff-budget gate instead of reaching the
+        reviewer (a pause when the change cannot be measured). False: move on."""
+        record = next(
+            (
+                r
+                for r in reversed(self.state.history)
+                if (r.step, r.iteration, r.outcome) == (step, iteration, "invalid")
+            ),
+            None,
+        )
+        if record is None:
+            return False
+        try:
+            over = self._over_batch(record.base, record.commit)
+        except Exception as error:  # an unreadable repo policy, a failed git diff
+            self._pause("worktree", f"{type(error).__name__}: {error}", step=step)
+            return True
+        if not over:
+            return False
+        self._wait(BATCH_GATE, _batch_reason(over), step, {rel: digest})
+        return True
+
     async def _ask_split(
         self,
         step: AgentStep,
@@ -1322,22 +1347,18 @@ class _Run:
             self.recorder.record(
                 "step_finished", step, outcome="completed", artifacts={rel: digest}, cost=usd
             )
-            if blocked := self._blocked(rel):
+            blocked = self._blocked(rel)
+            if over:  # split once already: a person decides (M2-24), blocked or not -
+                # approving a blocked-output gate would hand the reviewer this batch
+                self._wait(BATCH_GATE, _batch_reason(over, blocked), step, {rel: digest})
+                return False
+            if blocked:
                 self._wait(
                     "blocked-output",
                     f"the agent reports it is blocked: {blocked}",
                     step,
                     {rel: digest},
                 )
-                return False
-            if over:  # split once already: a person decides (M2-24)
-                reason = (
-                    "the change is still larger than one review batch: "
-                    + "; ".join(over)
-                    + " - approve to accept it as one batch, reject with feedback to have "
-                    "it split, or stop the run"
-                )
-                self._wait(BATCH_GATE, reason, step, {rel: digest})
                 return False
             return True  # saved with the cursor move
         if outcome.status == "invalid":
@@ -1347,7 +1368,7 @@ class _Run:
             reason = "the answer is not a valid handoff after one retry: " + "; ".join(
                 outcome.errors
             )
-            if over:  # an edit-and-approve would hand the reviewer an oversized batch
+            if over:  # an edit that fixes the answer then waits at the diff-budget gate
                 reason += "; the change is also larger than one review batch: " + "; ".join(over)
             self._history(
                 step,
@@ -1683,6 +1704,18 @@ def _budget_pause(
     if capped and (own is None or budget.limit_usd < own):
         return "budget"
     return "step-budget"
+
+
+def _batch_reason(over: list[str], blocked: str | None = None) -> str:
+    """What the diff-budget gate tells the person deciding; a blocked agent's report is
+    named too, since approving accepts both."""
+    reason = "the change is still larger than one review batch: " + "; ".join(over)
+    if blocked:
+        reason = f"the agent reports it is blocked: {blocked}; " + reason
+    return reason + (
+        " - approve to accept it as one batch, reject with feedback to have it split, "
+        "or stop the run"
+    )
 
 
 def _children(budget: BudgetSlice) -> dict[str, Decimal]:
