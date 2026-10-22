@@ -366,3 +366,91 @@ def test_raters_who_disagree_mean_the_rubric_is_ambiguous(tmp_path: Path, capsys
     capsys.readouterr()
     assert calibrate("score", "--report", str(out), *files) == ExitCode.REFUSED
     assert json.loads(capsys.readouterr().out)["verdict"] == "RUBRIC_AMBIGUOUS"
+
+
+# --- M1 close-out (DF-254, DF-259, DF-260, DF-302) ---
+
+
+def test_a_failure_while_writing_the_report_closes_the_ledger_run(
+    tmp_path: Path, monkeypatch, capsys
+):
+    """DF-260: the report step can fail too (a full disk); the ledger run never stays open."""
+    from agentic_cli import evaluation
+
+    def full_disk(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(evaluation, "write_report", full_disk)
+    code, _ = run(tmp_path, "qa")
+    assert code == ExitCode.ERROR
+    [log] = (tmp_path / ".agentic" / "local" / "runs").glob("eval-qa-*/events.jsonl")
+    events = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert events[-1]["event"] == "run_closed"
+
+
+def test_a_missing_policy_folder_is_a_usage_error(tmp_path: Path, capsys):
+    """DF-259: not 'tiers: Field required' from loading a folder that is not there."""
+    code, _ = run(tmp_path, "qa", "--policy", str(tmp_path / "no-such-policy"))
+    assert code == ExitCode.USAGE
+    error = json.loads(capsys.readouterr().err)
+    assert "--policy" in error["error"] and "no-such-policy" in error["error"]
+
+
+def test_no_policy_folder_reads_as_a_sentence(tmp_path: Path, capsys):
+    """DF-259: the message once said 'no the policy folder given'."""
+    corpus = corpus_copy(tmp_path)
+    shutil.rmtree(corpus / "fixtures" / "policy")
+    assert run_corpus(corpus, tmp_path / "out", "qa") == ExitCode.USAGE
+    error = json.loads(capsys.readouterr().err)
+    assert "no the" not in error["error"] and "--policy" in error["hint"]
+
+
+def test_a_shared_gateway_prefix_is_flagged_for_the_judge():
+    """DF-302: behind one gateway prefix every model looks like one family, so a judge of
+    the agents' own family would pass unnoticed: the admin is told to set `family:`."""
+    from agentic.policy import load_policy
+    from agentic_cli.evaluation import judge_family_warning
+
+    policy = load_policy(LIBRARY / "fixtures" / "policy")
+    behind = {"agent-model": "gw/family-a/agent-model", "judge-model": "gw/family-b/judge-model"}
+    tiers = {
+        name: tier.model_copy(update={"model": behind[tier.model.split("/")[-1]]})
+        for name, tier in policy.tiers.items()
+    }
+    gated = policy.model_copy(update={"tiers": tiers})
+    warning = judge_family_warning(gated, "gw/family-a/agent-model")
+    assert warning and "gw" in warning and "family:" in warning
+    assert judge_family_warning(policy, "family-a/agent-model") is None  # no shared prefix
+    named = {name: tier.model_copy(update={"family": name}) for name, tier in gated.tiers.items()}
+    assert (
+        judge_family_warning(gated.model_copy(update={"tiers": named}), behind["agent-model"])
+        is None
+    )
+
+
+def failed(**report) -> object:
+    from types import SimpleNamespace
+
+    fields = {"problems": [], "leaks": [], "verdict": "MEASURED", "mode": "replay"}
+    fields["budget_hit"] = False
+    return SimpleNamespace(
+        report=SimpleNamespace(**{**fields, **report}), paths={"markdown": Path("report.md")}
+    )
+
+
+def test_a_live_problem_is_not_called_a_replay_failure():
+    """DF-254: 'the replay failed ... re-record' was said for every problem, live too."""
+    from agentic_cli.evaluation import failure
+
+    error = failure(failed(mode="live", problems=["the judge failed on every run"]))
+    assert error is not None and "replay" not in str(error)
+    assert "record" not in (error.hint or "")
+
+
+def test_a_budget_stop_is_exit_5_even_with_missing_calls():
+    """DF-254: in replay, the cap leaves later calls unasked; that is INCOMPLETE (exit 5),
+    not a broken cassette (exit 1)."""
+    from agentic_cli.evaluation import failure
+
+    error = failure(failed(budget_hit=True, verdict="INCOMPLETE", problems=["1 call never made"]))
+    assert error is not None and error.code == ExitCode.STOPPED

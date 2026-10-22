@@ -88,7 +88,8 @@ def register(app: typer.Typer) -> None:
                 seed=seed,
                 max_concurrency=concurrency,
                 classification=classification,
-            )
+            ),
+            warn=output.warn,  # before anything is spent (a judge family it cannot tell)
         )
         data = evaluation.summary(result)
         output.result(data, lambda console: _show_run(console, data))

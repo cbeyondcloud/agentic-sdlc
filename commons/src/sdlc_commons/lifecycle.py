@@ -10,6 +10,8 @@ module reads them from the installed package, through Zyroflo's own accessor
                      an SOP that disagrees with Zyroflo's catalog is refused;
   * review_rubric() - the review categories and weights; refused unless the
                      weights sum to 10, as the rubric itself promises;
+  * review_deductions() - points off per finding by severity, and the cap a
+                     critical finding puts on the final score;
   * RUNS_ROOT      - where the framework keeps run folders (git-ignored); set for
                      Zyroflo when `sdlc_commons` is imported (Z3).
 """

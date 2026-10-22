@@ -85,6 +85,11 @@ class Connection:
                 raise
             status = getattr(error, "status", None)
             hint = self.token_hint if status in (401, 403) else None
+            if status in (301, 308):  # renamed or transferred (DF-299)
+                hint = (
+                    f"the repository was renamed or moved: point {self.remote} at its new "
+                    f"address (git remote set-url {self.remote} <new url>) and try again"
+                )
             raise CliError(str(error), ExitCode.ERROR, hint=hint) from error
 
     def close(self) -> None:
@@ -151,13 +156,13 @@ def connect(
             ExitCode.REFUSED,
             hint=f"the pull request needs a {remote} remote on a hosting service",
         ) from error
-    config = host_configs(settings).get(repo.host)
+    configs = host_configs(settings)
+    config = configs.get(repo.host)
     if config is None:
         raise CliError(
             f"{repo.host} is not a known git host, so no token is sent to it",
             ExitCode.REFUSED,
-            hint="declare it under git_hosts in ~/.agentic/config.yaml "
-            "(kind: github for GitHub Enterprise), or open the pull request by hand",
+            hint=_unknown_host_hint(repo.host, configs),
         )
     found = _token(config, credentials or default_credentials())
     try:
@@ -175,6 +180,24 @@ def login_names(settings: Mapping[str, Any]) -> dict[str, str]:
     names = {kind: entry.credential for kind, entry in HOST_KINDS.items()}
     names.update({host: config.credential for host, config in host_configs(settings).items()})
     return names
+
+
+def _unknown_host_hint(host: str, known: Mapping[str, HostConfig]) -> str:
+    """What to do about a remote on a host nobody declared. A name built on a known host
+    (`github.com-work`, `ssh.github.com`) is usually an SSH alias from ~/.ssh/config, for
+    a second account: it needs that host's API URL, which its own name does not give."""
+    alias_of = next((k for k in sorted(known) if k in host and k != host), None)
+    if alias_of is not None:
+        entry = known[alias_of]
+        return (
+            f"if {host} is an SSH alias for {alias_of}, declare it under git_hosts in "
+            f"~/.agentic/config.yaml with kind: {entry.kind} and api_url: {entry.api_url} "
+            "(and credential: <name> for a second account's token)"
+        )
+    return (
+        "declare it under git_hosts in ~/.agentic/config.yaml (kind: github for GitHub "
+        "Enterprise), or open the pull request by hand"
+    )
 
 
 def _token(config: HostConfig, found_in: Credentials):

@@ -62,12 +62,20 @@ def main(argv: Sequence[str] | None = None, app: typer.Typer | None = None) -> i
         return done.exit_code
     except typer.TyperException as error:
         # Typer vendors Click; its usage errors (unknown command, bad flag, missing
-        # argument) are the Click exceptions whose exit code is 2.
+        # argument) are the Click exceptions whose exit code is 2. Any other Click error
+        # (a file parameter that cannot be opened) is exit 1, never a traceback (DF-252).
+        message = error.format_message()
         if getattr(error, "exit_code", 1) != 2:
-            raise
-        out.err.print(error.format_message(), markup=False)
-        if getattr(error, "ctx", None) is not None:
-            out.err.print(error.ctx.get_usage(), markup=False)
+            out.error(CliError(message, ExitCode.ERROR))
+            return ExitCode.ERROR
+        ctx = getattr(error, "ctx", None)
+        if out.json_mode:  # scripts parse stderr as JSON, usage errors included (DF-252)
+            hint = ctx.get_usage() if ctx is not None else "see agentic --help"
+            out.error(CliError(message, ExitCode.USAGE, hint=hint))
+            return ExitCode.USAGE
+        out.err.print(message, markup=False)
+        if ctx is not None:
+            out.err.print(ctx.get_usage(), markup=False)
         return ExitCode.USAGE
     except (KeyboardInterrupt, typer.Abort):
         out.err.print("interrupted", markup=False)

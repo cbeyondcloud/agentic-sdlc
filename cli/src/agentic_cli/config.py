@@ -47,6 +47,12 @@ def user_config(home: Path) -> dict[str, Any]:
         raise CliError(
             f"{path}: {error}", ExitCode.INVALID, hint="fix the file or remove it"
         ) from error
+    except OSError as error:  # permission denied, or held by another program (DF-252)
+        raise CliError(
+            f"{path} cannot be read: {error.strerror or error}",
+            ExitCode.INVALID,
+            hint="check the file's permissions (it must be readable by you), or remove it",
+        ) from error
     if data is None:
         return {}
     if not isinstance(data, dict):

@@ -130,7 +130,9 @@ def merge_gitattributes(existing: str) -> str:
 
 def agents_md(repo: Path) -> str:
     """A first AGENTS.md from the committed files: top-level folders and main languages."""
-    tracked = _git_out(repo, "ls-tree", "-r", "--name-only", "HEAD").splitlines()
+    # -z: names exactly as committed, never C-quoted (a non-ASCII folder, DF-195)
+    listed = _git_out(repo, "ls-tree", "-r", "-z", "--name-only", "HEAD").split("\0")
+    tracked = [path for path in listed if path]
     folders = sorted({path.split("/", 1)[0] for path in tracked if "/" in path})
     counts = Counter(LANGUAGES.get(Path(path).suffix.lower()) for path in tracked)
     counts.pop(None, None)
@@ -162,12 +164,14 @@ def commit_on_branch(repo: Path, files: dict[str, str], message: str) -> tuple[s
             blob = _git_run(repo, env, "hash-object", "-w", "--stdin", data=data)
             _git_run(repo, env, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}")
         tree = _git_run(repo, env, "write-tree")
-        commit = _git_run(repo, env, "commit-tree", tree, *parent, "-m", message)
+        # plumbing ignores commit.gpgSign: sign as `git commit` would (DF-210)
+        sign = ["-S"] if _signs_commits(repo) else []
+        commit = _git_run(repo, env, "commit-tree", tree, *parent, *sign, "-m", message)
     for n in range(1, 100):
         branch = BRANCH if n == 1 else f"{BRANCH}-{n}"
         if not _git_out(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
-            # the zero old value: create only, never move an existing branch
-            _git_run(repo, None, "update-ref", f"refs/heads/{branch}", commit, "0" * 40)
+            # an empty old value: create only, never move an existing branch (any hash)
+            _git_run(repo, None, "update-ref", f"refs/heads/{branch}", commit, "")
             return branch, commit
     raise CliError(f"too many {BRANCH}-<n> branches already exist", ExitCode.ERROR)
 
@@ -227,6 +231,11 @@ def next_steps(
     return steps
 
 
+def _signs_commits(repo: Path) -> bool:
+    """Whether the person's git signs commits (`commit.gpgSign`, any config level)."""
+    return _git_out(repo, "config", "--type=bool", "commit.gpgsign").strip() == "true"
+
+
 def _git_out(repo: Path, *args: str) -> str:
     done = subprocess.run([*_GIT, "-C", str(repo), *args], capture_output=True)
     return done.stdout.decode("utf-8", "replace") if done.returncode == 0 else ""
@@ -249,6 +258,10 @@ def _git_run(repo: Path, env: dict | None, *args: str, data: bytes | None = None
     done = subprocess.run([*_GIT, "-C", str(repo), *args], input=data, capture_output=True, env=env)
     if done.returncode != 0:
         error = done.stderr.decode("utf-8", "replace").strip().splitlines()
-        hint = "set git config user.name and user.email" if args[0] == "commit-tree" else None
+        hint = None
+        if args[0] == "commit-tree":
+            hint = "set git config user.name and user.email"
+            if "-S" in args:  # commit.gpgSign is on: the person's signing setup failed
+                hint = "check your commit signing (gpg or ssh agent, user.signingKey)"
         raise CliError(f"git {args[0]} failed: {error[-1] if error else '?'}", hint=hint)
     return done.stdout.decode("utf-8").strip()

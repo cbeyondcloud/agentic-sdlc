@@ -58,7 +58,7 @@ from agentic.eval.replay import CassetteServer, Upstream, http_upstream
 from agentic.eval.report import EvalReport, JudgeInfo, build_report, write_report
 from agentic.eval.runner import AgentCaseRunner, run_eval
 from agentic.handoffs import BUILTIN_CATALOG
-from agentic.policy import PolicyError, ResolveContext, load_policy, resolve_agent
+from agentic.policy import OrgPolicy, PolicyError, ResolveContext, load_policy, resolve_agent
 from agentic.transport import BudgetLedger, CallIdentity, NetworkSettings, make_network_transport
 from agentic.yamlio import YamlFileError, dump_yaml, load_yaml, read_text
 from agentic_cli.errors import CliError
@@ -102,10 +102,17 @@ class RunResult:
     report: EvalReport
     folder: Path
     paths: dict[str, Path]
+    warnings: tuple[str, ...] = ()
 
 
-def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> RunResult:
-    """Evaluate one agent; `upstream` replaces the gateway in record mode (scripts)."""
+def execute_run(
+    options: RunOptions,
+    *,
+    upstream: Upstream | None = None,
+    warn: Callable[[str], None] = lambda message: None,
+) -> RunResult:
+    """Evaluate one agent; `upstream` replaces the gateway in record mode (scripts);
+    `warn` hears what a person should know before anything is spent."""
     if options.mode not in MODES:
         raise CliError(f"--mode must be one of {', '.join(MODES)}", ExitCode.USAGE)
     if options.split not in SPLITS:
@@ -120,7 +127,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     root = _corpus_root(options.corpus)
     corpus = _load(lambda: load_corpus(root))
     fixtures = root / "fixtures"
-    policy_dir = _folder(options.policy, fixtures / "policy", "--policy", "the policy folder")
+    policy_dir = _folder(options.policy, fixtures / "policy", "--policy", "org policy")
     agents_dir = _folder(options.agents, fixtures / "agents", "--agents", "agent definitions")
     policy = _load(lambda: load_policy(policy_dir))
     definition = _agent(agents_dir, options.agent)
@@ -153,6 +160,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     rubric_ids = sorted({c.rubric for c in cases if c.rubric})
     rubrics = {r: _load(lambda r=r: load_rubric(corpus.path(rubric_path(r)))) for r in rubric_ids}
     choice = None
+    warnings: list[str] = []
     if rubrics:
         try:  # the cases' class must allow the judge's tier: restricted data stays put
             choice = resolve_judge(policy, [resolved.model], classification=classification)
@@ -160,6 +168,9 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             raise CliError(
                 str(error), ExitCode.REFUSED, hint="ask an admin for an eval-judge tier"
             ) from error
+        if (warning := judge_family_warning(policy, resolved.model)) is not None:
+            warnings.append(warning)
+            warn(warning)  # before anything is spent
 
     created = datetime.now(UTC)
     report_id = f"eval-{options.agent}-{created:%Y%m%dT%H%M%S}-{secrets.token_hex(3)}"
@@ -276,43 +287,47 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             server.close()
         if judge_slice is not None and not judge_slice.closed:
             judge_slice.close()
-    problems = server.finish() if server is not None else []
-    labels = assign_labels([agent_id], seed=options.seed)
-    labels.seal_scores()
-    judge_info = None
-    if choice is not None:
-        judge_info = JudgeInfo(
-            tier=choice.tier,
-            model=choice.model,
-            family=choice.family,
-            same_family=choice.same_family,
-            rubrics={r.key: r.sha for r in rubrics.values()},
+    try:  # the report step can fail too (a full disk): the ledger run is closed (DF-260)
+        problems = server.finish() if server is not None else []
+        labels = assign_labels([agent_id], seed=options.seed)
+        labels.seal_scores()
+        judge_info = None
+        if choice is not None:
+            judge_info = JudgeInfo(
+                tier=choice.tier,
+                model=choice.model,
+                family=choice.family,
+                same_family=choice.same_family,
+                rubrics={r.key: r.sha for r in rubrics.values()},
+            )
+        report = build_report(
+            runset,
+            report_id=report_id,
+            created_at=created.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            mode=options.mode,  # type: ignore[arg-type]
+            agent=options.agent,
+            agent_version=definition.version,
+            kind=kind,
+            corpus_manifest_sha=corpus.manifest.sha,
+            split=options.split,
+            labels=labels.reveal(),
+            judge=judge_info,
+            leaks=leaks.leaks,
+            stale_cassettes=server.stale if server is not None else 0,
+            problems=problems,
+            judge_cost_usd=_reported_total(judge_costs),
         )
-    report = build_report(
-        runset,
-        report_id=report_id,
-        created_at=created.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        mode=options.mode,  # type: ignore[arg-type]
-        agent=options.agent,
-        agent_version=definition.version,
-        kind=kind,
-        corpus_manifest_sha=corpus.manifest.sha,
-        split=options.split,
-        labels=labels.reveal(),
-        judge=judge_info,
-        leaks=leaks.leaks,
-        stale_cassettes=server.stale if server is not None else 0,
-        problems=problems,
-        judge_cost_usd=_reported_total(judge_costs),
-    )
-    paths = write_report(report, folder, runset.runs)
-    for rubric_id in rubric_ids:  # calibration shows people the rubric the judge used
-        target = folder / PurePosixPath(rubric_path(rubric_id))
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(corpus.path(rubric_path(rubric_id)), target)
-    digest = "sha256:" + hashlib.sha256(paths["json"].read_bytes()).hexdigest()
+        paths = write_report(report, folder, runset.runs)
+        for rubric_id in rubric_ids:  # calibration shows people the rubric the judge used
+            target = folder / PurePosixPath(rubric_path(rubric_id))
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(corpus.path(rubric_path(rubric_id)), target)
+        digest = "sha256:" + hashlib.sha256(paths["json"].read_bytes()).hexdigest()
+    except BaseException:
+        ledger("eval.failed")
+        raise
     ledger("eval.report_written", report=digest, verdict=report.verdict)
-    return RunResult(report, folder, paths)
+    return RunResult(report, folder, paths, tuple(warnings))
 
 
 def summary(result: RunResult) -> dict:
@@ -331,30 +346,61 @@ def summary(result: RunResult) -> dict:
         "stale_cassettes": report.stale_cassettes,
         "problems": report.problems,
         "leaks": report.leaks,
+        "warnings": list(result.warnings),
     }
+
+
+def judge_family_warning(policy: OrgPolicy, agent_model: str) -> str | None:
+    """Why the judge's family check may be blind, or None (DF-302). The family is a model
+    id's first segment unless a tier sets `family:`, so behind one gateway prefix
+    (`gw/vendor-a/model`, `gw/vendor-b/model`) every model counts as family `gw`: a judge
+    from the agent's own family would only show as `same_family`, never be told apart."""
+    spec = policy.tiers.get(JUDGE_TIER)
+    if spec is None:
+        return None
+    named = {tier.model for tier in policy.tiers.values() if tier.family}
+    judge, agent = spec.model.split("/"), agent_model.split("/")
+    if spec.family and agent_model in named:
+        return None
+    if len(judge) < 3 or len(agent) < 3 or judge[0].lower() != agent[0].lower():
+        return None
+    return (
+        f"the judge ({spec.model}) and the agent ({agent_model}) share the prefix "
+        f"'{judge[0]}/', so both count as family '{judge[0]}': set `family:` on each tier "
+        "in tiers.yaml (the model maker, for example), so a judge of the agent's own "
+        "family is told apart"
+    )
 
 
 def failure(result: RunResult) -> CliError | None:
     """The error to exit with, when the report says the evaluation did not measure."""
     report = result.report
-    if report.problems:
-        return CliError(
-            f"the replay failed: {report.problems[0]}",
-            ExitCode.ERROR,
-            hint="re-record the cassettes with --mode record (see library/eval/README.md)",
-        )
-    if report.leaks:
+    if report.leaks:  # first: the run is void whatever else happened
         return CliError(
             f"blinding leak: {', '.join(report.leaks)} reached the judge; the run is void",
             ExitCode.ERROR,
         )
+    if report.budget_hit or report.verdict == "INCOMPLETE":  # before the calls it left unmade
+        return CliError(
+            "the budget cap stopped the evaluation", ExitCode.STOPPED, hint="raise --budget-usd"
+        )
+    if report.problems:  # what went wrong depends on the mode (DF-254)
+        if report.mode == "replay":
+            return CliError(
+                f"the replay failed: {report.problems[0]}",
+                ExitCode.ERROR,
+                hint="re-record the cassettes with --mode record (see library/eval/README.md)",
+            )
+        doing = "recording" if report.mode == "record" else "evaluation"
+        return CliError(
+            f"the {doing} did not complete: {report.problems[0]}",
+            ExitCode.ERROR,
+            hint=f"see {result.paths['markdown']}; check the gateway and the models, then "
+            "run it again",
+        )
     if report.verdict == "UNMEASURABLE":
         return CliError(
             "no run could be scored", ExitCode.ERROR, hint=f"see {result.paths['markdown']}"
-        )
-    if report.verdict == "INCOMPLETE":
-        return CliError(
-            "the budget cap stopped the evaluation", ExitCode.STOPPED, hint="raise --budget-usd"
         )
     return None
 
@@ -611,11 +657,19 @@ def _classification(cases: list[EvalCase], given: str | None, default: str) -> s
 
 
 def _folder(given: Path | None, default: Path, flag: str, what: str) -> Path:
+    """`given`, or the corpus's own `default`; a folder that is not there is a usage error
+    naming it, never a policy or definition error from reading nothing (DF-259)."""
     if given is not None:
+        if not given.is_dir():
+            raise CliError(f"{flag} {given}: no such folder", ExitCode.USAGE)
         return given
     if default.is_dir():
         return default
-    raise CliError(f"no {what} given", ExitCode.USAGE, hint=f"pass {flag} <folder>")
+    raise CliError(
+        f"no {what}: the corpus has no {default.name}/ folder and {flag} was not given",
+        ExitCode.USAGE,
+        hint=f"pass {flag} <folder>",
+    )
 
 
 def _load[T](load: Callable[[], T]) -> T:

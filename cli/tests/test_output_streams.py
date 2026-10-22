@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 from agentic_cli import output
 from agentic_cli.output import Output, safe_streams
@@ -71,6 +72,43 @@ def test_json_through_a_utf8_pipe_keeps_the_text_readable(tmp_path):
     assert done.returncode == 2, done.stderr
     assert "Jösé Ünïcode 日本" in done.stderr.decode("utf-8")
     assert str(folder) in json.loads(done.stderr.decode("utf-8"))["error"]
+
+
+def test_result_json_on_stdout_through_a_cp1252_pipe_is_exact(tmp_path):
+    """DF-354: the same for a result on stdout (not only an error on stderr): a created
+    file's path under a non-ASCII folder comes back exactly through a Windows pipe."""
+    import shutil
+
+    from cli_helpers import FIXTURES, GIT
+
+    entry = tmp_path / "entry.py"
+    entry.write_text(ENTRY, encoding="utf-8")
+    repo = tmp_path / "Jösé Ünïcode 日本"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-qm", "base"]):
+        subprocess.run(["git", "-C", str(repo), *GIT, *args], check=True, capture_output=True)
+    policy = tmp_path / "policy-repo"
+    shutil.copytree(FIXTURES / "policy", policy)
+    env = {
+        **os.environ,
+        "PYTHONIOENCODING": "cp1252",
+        "PYTHONUTF8": "0",
+        "AGENTIC_HOME": str(tmp_path / "home"),
+        "AGENTIC_POLICY_REPO": str(policy),
+        "AGENTIC_USER": "dev@example.invalid",
+    }
+    done = subprocess.run(
+        [sys.executable, str(entry), "--json", "pipelines", "new", "docs-only"],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        timeout=120,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.isascii(), done.stdout
+    created = Path(json.loads(done.stdout.decode("ascii"))["path"])
+    assert created.is_file() and "Jösé Ünïcode 日本" in str(created)
 
 
 def _status_from_a_non_ascii_folder(tmp_path, encoding: str):

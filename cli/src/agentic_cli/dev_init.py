@@ -51,6 +51,7 @@ from agentic_cli.exit_codes import ExitCode
 from agentic_cli.policy_source import LoadedPolicy
 from agentic_cli.readiness import Item, Report
 from agentic_cli.repo_guard import RepoRoot
+from agentic_cli.standalone import PLACEHOLDER
 from agentic_cli.workspace import Workspace
 from sdlc_commons.tool_fetch import FetchResult, ToolFetcher, ToolFetchError
 
@@ -61,8 +62,6 @@ LOCAL_WRITES = tuple(
     Path(rel) for rel in ("audit", AUDIT_REL, "skills", "index", "init.json", ".gitignore")
 )
 BUNDLED_SKILLS = Path(__file__).resolve().parents[3] / "library" / "skills"  # dev checkout
-#: The model name the standalone template uses until the person picks real models.
-PLACEHOLDER = "change-me"
 
 
 class IndexSkipped(Exception):
@@ -289,16 +288,21 @@ def _skills(
     policy = loaded.policy
     items: list[Item] = []
     team_root = loaded.root / "teams" / config.team if config.team else None
+    team = team_root if team_root is not None and team_root.is_dir() else None
+    # as later runs see them (the policy's allow_repo_pipelines in every mode, DF-204)
+    allow = policy.allow_repo_pipelines
     try:
         definitions = DefinitionSet.discover(
-            loaded.root,
-            team_root if team_root is not None and team_root.is_dir() else None,
-            repo / ".agentic",
-            allow_repo_pipelines=policy.allow_repo_pipelines or loaded.mode == "standalone",
+            loaded.root, team, repo / ".agentic", allow_repo_pipelines=allow
         )
     except DefinitionError as error:
         items.append(Item("skills: definitions", "warn", str(error), "fix the definition file"))
-        definitions = DefinitionSet()
+        try:  # a broken repo file must not leave the org's pipelines without skills
+            definitions = DefinitionSet.discover(
+                loaded.root, team, None, allow_repo_pipelines=False
+            )
+        except DefinitionError:
+            definitions = DefinitionSet()
     wanted_pipelines = config.pipelines or definitions.pipeline_names()
     unknown = [name for name in wanted_pipelines if name not in definitions.pipelines]
     if unknown:
@@ -362,10 +366,24 @@ class _Tools:
                     policy.tool_mirror_url or "",
                     download=deps.download,
                     platform=deps.platform,
-                    record=audit.record,
+                    record=self._attested(audit.record),
                 )
             except ToolFetchError as error:
                 self.problem = str(error)
+
+    def _attested(self, record: Callable[[str, dict], None]) -> Callable[[str, dict], None]:
+        """`record`, with each `init.tool_fetched` event saying whether the org manifest
+        marks the artefact signed (DF-208): on Windows that mark is the trust, no local
+        signature check is made, and the audit must show it."""
+
+        def attested(event: str, fields: dict) -> None:
+            if event == "init.tool_fetched":
+                pin = self.policy.tool_pins.get(str(fields.get("tool")))
+                asset = pin.assets.get(fields.get("platform")) if pin is not None else None
+                fields = {**fields, "signed_per_org_manifest": bool(asset and asset.signed)}
+            record(event, fields)
+
+        return attested
 
     def required(self) -> list[Item]:
         if not self.policy.tool_pins:

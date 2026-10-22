@@ -23,6 +23,7 @@ the run (four-eyes).
 """
 
 import asyncio
+import os
 import time
 from collections.abc import Callable
 from decimal import Decimal, InvalidOperation
@@ -93,8 +94,11 @@ def register(app: typer.Typer) -> None:
             )
         engine = rt.engine(run_budget_usd=limit, regime=rt.pipeline(pipeline).regime)
         run_id = run_id or new_run_id(pipeline)
-        # a live run prints nothing until it stops: name it now, for a Ctrl-C (DF-221)
-        out.progress(f"started run {run_id} (if interrupted: agentic resume {run_id})")
+        # a live run prints nothing until it stops: name it now, for a Ctrl-C (DF-221); a
+        # script gets one JSON line on stderr, stdout keeps its one result (DF-352)
+        out.notice(
+            {"started": run_id}, f"started run {run_id} (if interrupted: agentic resume {run_id})"
+        )
         state = drive(
             rt.redact(gateway),
             rt.store.path(run_id).parent,
@@ -319,6 +323,7 @@ def _list(out: Output, rt: Runtime, *, show_all: bool, limit: int | None = None)
 
 
 WIDE_COLUMNS = 100  # below this the runs table drops pipeline and updated (DF-222 b)
+PIPED_WIDTH = 160  # the table's width on a pipe or redirect, which has none (DF-351)
 NARROW = ("run", "status", "waiting on", "cost USD")
 
 
@@ -328,8 +333,12 @@ def _show_runs(rows: list[dict]):
             console.print("no runs", markup=False)
             return
         # an 80-column terminal (macOS Terminal's default) cannot fit six columns beside
-        # a whole run id; the pipeline is in the run id already
-        wide = console.width >= WIDE_COLUMNS
+        # a whole run id; the pipeline is in the run id already. A pipe or redirect has no
+        # width (Rich says 80): it gets every column, at a width that keeps them whole
+        # (DF-351), unless COLUMNS says otherwise.
+        piped = not console.is_terminal and "COLUMNS" not in os.environ
+        width = max(console.width, PIPED_WIDTH) if piped else console.width
+        wide = width >= WIDE_COLUMNS
         columns = ["run", "pipeline", "status", "waiting on", "updated", "cost USD"]
         table = output_table(*(columns if wide else [c for c in columns if c in NARROW]))
         if not wide:  # no borders, one space between columns: whole words in each
@@ -338,7 +347,15 @@ def _show_runs(rows: list[dict]):
             cells = [r["run_id"], r["pipeline"], r["status"], r["waiting_on"] or ""]
             cells += [r["updated_at"][:19], r["cost_usd"]]
             table.add_row(*(cells if wide else [cells[0], cells[2], cells[3], cells[5]]))
-        console.print(table)
+        if not piped:
+            console.print(table)
+            return
+        before = console.width  # Rich caps print(width=) at the console's own width
+        console.width = width
+        try:
+            console.print(table)
+        finally:
+            console.width = before
 
     return show
 

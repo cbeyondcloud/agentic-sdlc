@@ -42,6 +42,26 @@ def test_a_failing_handoff_pause_offers_show_and_stop_and_exits_4():
     assert not any(step.startswith("agentic resume") for step in steps)  # it would pause again
 
 
+def at_gate(gate: str, step: str) -> RunState:
+    state = paused("unused")
+    pending = Pending(kind="gate", id=gate, reason="waiting", since=NOW, step=step)
+    return state.model_copy(update={"status": "awaiting_gate", "pending": pending})
+
+
+def test_an_exhausted_loop_gate_suggests_edit_and_reject_before_approve():
+    """DF-321 (DF-266): a bare approval of an exhausted loop is refused, so it is not the
+    first thing to suggest."""
+    steps = next_steps(at_gate("build-review-exhausted", "build-review"))
+    decide = next(step for step in steps if "approve" in step or "edit" in step)
+    assert decide.index("agentic edit") < decide.index("reject") < decide.index("approve")
+
+
+def test_a_pipeline_gate_still_suggests_approve_first():
+    steps = next_steps(at_gate("review-approval", "review-approval"))
+    decide = next(step for step in steps if "approve" in step)
+    assert decide.startswith("agentic approve r-1")
+
+
 def test_refusing_a_bare_approval_of_an_exhausted_loop_hints_at_edit_reject_and_stop():
     message = (
         "build-review: its exit condition 'review.open_blocking == 0' still does not hold - "

@@ -232,6 +232,52 @@ def test_tools_are_fetched_and_audited(setup_repo, policy_repo, deps, monkeypatc
     assert b"\r\n" not in audit.read_bytes()
 
 
+def test_the_tool_audit_records_the_org_signed_attestation(
+    setup_repo, policy_repo, deps, monkeypatch, capsys
+):  # DF-208: Windows trust comes from the org manifest, not a local signature check
+    init(setup_repo, policy_repo, monkeypatch)
+    audit = setup_repo / ".agentic" / "local" / "audit" / "init-events.jsonl"
+    events = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+    fetched = next(e for e in events if e["event"] == "init.tool_fetched")
+    assert fetched["fields"]["signed_per_org_manifest"] is False  # the linux pin is unmarked
+
+
+def test_standalone_skills_honour_allow_repo_pipelines(
+    setup_repo, policy_repo, deps, monkeypatch, capsys
+):  # DF-204: the run side honours it, so init must choose skills the same way
+    seen: list[bool] = []
+    real = dev_init.DefinitionSet.discover
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs["allow_repo_pipelines"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(dev_init.DefinitionSet, "discover", spy)
+    init(setup_repo, policy_repo, monkeypatch)  # the fixture policy: allow_repo_pipelines false
+    assert seen == [False]
+
+
+def test_a_broken_repo_pipeline_leaves_the_org_pipelines_their_skills(
+    setup_repo, policy_repo, deps, monkeypatch, capsys
+):  # DF-204: one bad repo file must not leave every agent without skills
+    org = policy_repo / "policy" / "org.yaml"
+    org.write_text(
+        org.read_text(encoding="utf-8").replace(
+            "allow_repo_pipelines: false", "allow_repo_pipelines: true"
+        ),
+        encoding="utf-8",
+    )
+    broken = setup_repo / ".agentic" / "pipelines" / "broken.yaml"
+    broken.parent.mkdir(parents=True)
+    broken.write_text("name: broken\nsteps: [\n", encoding="utf-8")
+    init(setup_repo, policy_repo, monkeypatch)
+    report = report_of(capsys)
+    assert item(report, "skills: definitions")["status"] == "warn"
+    skills = setup_repo / ".agentic" / "local" / "skills"
+    installed = {f"{s.parent.name}/{s.name}" for s in skills.glob("*/*") if s.is_dir()}
+    assert DEV_SKILLS <= installed
+
+
 def test_a_second_init_uses_the_cache_offline(setup_repo, policy_repo, deps, monkeypatch, capsys):
     init(setup_repo, policy_repo, monkeypatch)
     capsys.readouterr()
@@ -410,6 +456,65 @@ def test_org_init_offline_uses_an_unexpired_cache(
     shutil.move(str(org_config), str(tmp_path / "moved-away"))  # the policy repo is gone
     assert org_init(setup_repo, monkeypatch) == ExitCode.OK
     assert item(report_of(capsys), "policy: cache")["status"] == "warn"
+
+
+def test_a_second_org_init_replaces_the_cache_whole(
+    setup_repo, org_config, deps, monkeypatch, capsys
+):
+    """DF-201: the old cache is swapped out by rename, never moved into (repo/repo)."""
+    assert org_init(setup_repo, monkeypatch) == ExitCode.OK
+    assert org_init(setup_repo, monkeypatch) == ExitCode.OK
+    cache = agentic_home() / "policy" / "acme"
+    assert (cache / "repo" / "policy").is_dir() and not (cache / "repo" / "repo").exists()
+    assert sorted(p.name for p in cache.iterdir()) == ["fetched.json", "repo"]
+
+
+def test_org_init_leaves_no_scratch_folder(
+    setup_repo, org_config, deps, monkeypatch, capsys, tmp_path
+):
+    """DF-201: agentic-policy-* folders must not pile up in the temp folder."""
+    import tempfile
+
+    scratch = tmp_path / "temp"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    assert org_init(setup_repo, monkeypatch) == ExitCode.OK
+    assert [p.name for p in scratch.iterdir() if p.name.startswith("agentic-policy-")] == []
+
+
+def test_a_failed_cache_swap_keeps_the_old_cache(setup_repo, org_config, deps, monkeypatch, capsys):
+    """DF-201: a failure mid-swap (an antivirus handle) leaves the previous cache and its
+    stamp as they were, never a stamp over a missing folder."""
+    from agentic_cli import policy_source
+
+    assert org_init(setup_repo, monkeypatch) == ExitCode.OK
+    cache = agentic_home() / "policy" / "acme"
+    stamp = (cache / "fetched.json").read_text(encoding="utf-8")
+    real = policy_source._replace_retrying
+
+    def blocked(staged: Path, target: Path) -> None:
+        if ".new-" in staged.name:
+            raise PermissionError(13, "held by another program", str(staged))
+        real(staged, target)
+
+    monkeypatch.setattr(policy_source, "_replace_retrying", blocked)
+    assert org_init(setup_repo, monkeypatch) == ExitCode.ERROR
+    assert (cache / "repo" / "policy").is_dir()
+    assert (cache / "fetched.json").read_text(encoding="utf-8") == stamp
+    assert sorted(p.name for p in cache.iterdir()) == ["fetched.json", "repo"]
+
+
+@pytest.mark.parametrize("value", ["soon", "true", "-1"])
+def test_a_bad_cache_lifetime_is_an_invalid_setting(
+    setup_repo, org_config, deps, monkeypatch, capsys, value
+):
+    """DF-201: a typo in policy_cache_hours is exit 3 naming the setting, not a ValueError."""
+    config = agentic_home() / "config.yaml"
+    config.write_text(
+        config.read_text(encoding="utf-8") + f"policy_cache_hours: {value}\n", encoding="utf-8"
+    )
+    assert org_init(setup_repo, monkeypatch) == ExitCode.INVALID
+    assert "policy_cache_hours" in json.loads(capsys.readouterr().err)["error"]
 
 
 def test_org_init_offline_with_an_expired_cache_refuses(

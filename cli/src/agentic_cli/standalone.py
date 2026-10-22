@@ -35,6 +35,8 @@ STANDALONE_DIR = Path("policy") / "standalone"  # under the agentic home
 TEMPLATE = Path("templates") / "standalone"
 LIBRARY = Path("library")
 _CHECKOUT = Path(__file__).resolve().parents[3]  # cli/src/agentic_cli -> the repo root
+#: In the template's tier models until the person picks real ones (init and preflight say so).
+PLACEHOLDER = "change-me"
 
 
 def framework_root(env: Mapping[str, str] = os.environ) -> Path:

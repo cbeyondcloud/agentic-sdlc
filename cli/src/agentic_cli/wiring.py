@@ -11,7 +11,8 @@ and the guard are Zyroflo-backed (commons). This is the one place that joins the
                           the regime allows it, a plain process (D38); plus the
                           repo's installed skills (M1-38) and, for an agent with the
                           `codeintel` tool, a code-review-graph index of the run's
-                          tree kept in run state (DF-87);
+                          tree kept in run state (DF-87) - or, without one on this
+                          machine, `NO_CODEINTEL`: no codeintel tools (DF-226);
   * `scanner_for(step)` - the secret scanner from org policy (`production_scanner`,
                           DF-148), for the backends' `scanner_for` and on every
                           step's `ToolContext.secret_scanner`; without one, the
@@ -23,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from agentic.agents.tools import LocalProcessSandbox, SkillCatalog, ToolContext
-from agentic.codeintel import CodeIntel
+from agentic.codeintel import Candidates, CodeIntel, CodeIntelError
 from agentic.engine.engine import StepContext
 from agentic.policy import OrgPolicy, ResolvedAgent, SandboxPolicy
 from agentic.sandbox import SandboxRules, SrtSandbox, expand_home
@@ -31,6 +32,26 @@ from agentic.sandbox.readiness import SandboxDecision
 from agentic.security.secret_scan import SecretScanEvent, SecretScanner
 from sdlc_commons.guards import Guard
 from sdlc_commons.worktrees import RunWorktrees, StepCheckpoints
+
+
+class NoCodeIntel:
+    """No code intelligence for this run (the codeintel extra is not installed, or the
+    repo sets `codeintel.adapter: none`): an adapter that supports no operation, so an
+    agent allowed `codeintel` gets no codeintel tools and uses search instead (DF-226)."""
+
+    name = "none"
+    supports: frozenset[str] = frozenset()
+
+    def _none(self, *args: object) -> Candidates:
+        raise CodeIntelError("no code intelligence on this machine")
+
+    dependents = impact = tests_for = _none
+
+    def overview(self) -> str:
+        raise CodeIntelError("no code intelligence on this machine")
+
+
+NO_CODEINTEL = NoCodeIntel()
 
 
 def production_scanner(
@@ -66,9 +87,12 @@ class StepWiring:
 
     def _services(self, context: ToolContext, step: StepContext) -> ToolContext:
         codeintel = None
-        if self.codeintel_for is not None and "codeintel" in step.agent.tools:
-            data = self.state_root / step.run_id / "codeintel"
-            codeintel = self.codeintel_for(context.tree, data)
+        if "codeintel" in step.agent.tools:
+            if self.codeintel_for is None:  # no index on this machine: search instead
+                codeintel = NO_CODEINTEL
+            else:
+                data = self.state_root / step.run_id / "codeintel"
+                codeintel = self.codeintel_for(context.tree, data)
         return replace(context, skills=self.skills, codeintel=codeintel)
 
     def _tools(self, step: StepContext) -> ToolContext:

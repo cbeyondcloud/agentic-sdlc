@@ -101,6 +101,42 @@ def test_git_bash_is_checked_on_windows(policy, monkeypatch, tmp_path):  # DF-73
     assert "git bash" not in checks(policy)  # Linux and macOS have a POSIX shell
 
 
+def windows_bash(policy, monkeypatch, tmp_path, *, bash: str | None, git_bash: bool):
+    """The Git Bash check on Windows with `bash` first on PATH and Git for Windows
+    installed (its bin\\bash.exe next to cmd\\git.exe) or not."""
+    git_home = tmp_path / "Git"
+    (git_home / "cmd").mkdir(parents=True)
+    (git_home / "cmd" / "git.exe").write_bytes(b"")
+    if git_bash:
+        (git_home / "bin").mkdir()
+        (git_home / "bin" / "bash.exe").write_bytes(b"")
+    monkeypatch.setattr("agentic_cli.readiness.GIT_BASH_DEFAULT", tmp_path / "no-bash.exe")
+    found = {"git": str(git_home / "cmd" / "git.exe"), "bash": bash}
+    items = prerequisites(
+        policy=policy,
+        which=found.get,
+        run=lambda argv: (0, "git version 2.47.1"),
+        system="Windows",
+        kernel_release="10.0",
+        credentials=Credentials(environ={KEY: "k"}, keyring=NoRing()),
+    )
+    return {item.name: item for item in items}["git bash"]
+
+
+WSL_LAUNCHER = "C:\\Windows\\System32\\bash.exe"
+
+
+def test_the_wsl_launcher_alone_is_not_git_bash(policy, monkeypatch, tmp_path):  # DF-209
+    item = windows_bash(policy, monkeypatch, tmp_path, bash=WSL_LAUNCHER, git_bash=False)
+    assert item.status == "warn" and "WSL" in item.detail and "Git for Windows" in item.fix
+
+
+def test_git_for_windows_bash_is_preferred_over_the_wsl_launcher(policy, monkeypatch, tmp_path):
+    item = windows_bash(policy, monkeypatch, tmp_path, bash=WSL_LAUNCHER, git_bash=True)
+    assert item.status == "ok" and item.detail.endswith("bash.exe")
+    assert "System32" not in item.detail
+
+
 def test_docker_desktop_gets_a_licence_note_that_never_blocks(policy):  # DF-105
     answers = {**LINUX_OK, "docker version": (0, "Docker Desktop 4.37.1 (178610)")}
     present = {"git", "node", "srt", "rg", "bwrap", "socat", "docker"}

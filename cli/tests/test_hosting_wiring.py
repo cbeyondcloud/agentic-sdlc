@@ -133,6 +133,16 @@ def test_a_bad_git_hosts_entry_is_invalid(hosts):
     assert raised.value.code == ExitCode.INVALID
 
 
+def test_a_moved_repository_says_to_update_origin(repo):
+    """DF-299: the API answers 301 for a renamed or transferred repository."""
+    from agentic.hosting.github import HostingApiError
+
+    with connect(repo, {}, credentials=creds({"AGENTIC_GITHUB_TOKEN": TOKEN})) as found:
+        with pytest.raises(CliError) as raised, found.errors():
+            raise HostingApiError("GitHub API: 301 Moved Permanently", 301)
+    assert "git remote set-url origin" in (raised.value.hint or "")
+
+
 def test_the_push_url_does_not_change_which_repository_is_meant(repo, tmp_path):
     git(repo, "remote", "set-url", "--push", "origin", str(tmp_path / "bare.git"))
     with connect(repo, {}, credentials=creds({"AGENTIC_GITHUB_TOKEN": TOKEN})) as found:

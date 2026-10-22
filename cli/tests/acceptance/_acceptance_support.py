@@ -20,6 +20,7 @@ repository, with:
 Nothing here reads the developer's real home, keyring or network settings.
 """
 
+import hashlib
 import json
 import os
 import platform
@@ -27,6 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
+import warnings
 from collections import defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -45,6 +47,46 @@ SAMPLE_REPO = HERE / "sample-repo"
 CASSETTES = HERE / "cassettes"
 #: `scripts/record_acceptance.py` sets this: answer from the scripted upstream and record
 RECORD = os.environ.get("AGENTIC_ACCEPTANCE_RECORD", "").strip() == "1"
+RERECORD = "uv run python scripts/record_acceptance.py"
+ROOT = HERE.parents[2]
+#: What the scenarios' prompts are made of: a change here makes a cassette stale (DF-316).
+PROMPT_SOURCES = (
+    ROOT / "library" / "agents",
+    ROOT / "library" / "pipelines",
+    ROOT / "templates" / "standalone" / "policy",
+    ROOT / "core" / "src" / "agentic" / "handoffs" / "templates",
+)
+FINGERPRINT = "prompts.sha256"  # beside each scenario's cassette
+
+
+def prompt_fingerprint(sources=PROMPT_SOURCES, root: Path = ROOT) -> str:
+    """sha256 over every file of `sources` (path, then bytes with CRLF as LF), so a
+    Windows and a Linux checkout agree."""
+    digest = hashlib.sha256()
+    for folder in sources:
+        files = sorted(p for p in Path(folder).rglob("*") if p.is_file())
+        for path in (p for p in files if "__pycache__" not in p.parts):
+            digest.update(path.relative_to(root).as_posix().encode("utf-8") + b"\0")
+            digest.update(path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    return "sha256:" + digest.hexdigest()
+
+
+def prompt_drift(recorded: str | None, current: str) -> list[str]:
+    """A cassette recorded from other prompts: a warning, or a problem with
+    AGENTIC_ACCEPTANCE_STRICT=1, so the drift shows before the live run does (DF-316).
+    (The cassette server's own `stale` count cannot tell: the requests carry per-run
+    values, run ids and temporary paths, so their hashes differ on every run.)"""
+    if recorded == current:
+        return []
+    message = (
+        "the cassette was recorded from other agent instructions, pipelines, policy "
+        f"template or handoff templates: re-record with `{RERECORD}`"
+    )
+    if os.environ.get("AGENTIC_ACCEPTANCE_STRICT", "").strip() == "1":
+        return [message]
+    warnings.warn(message, UserWarning, stacklevel=2)
+    return []
+
 
 HOST = "github.example.test"
 USER = "dev@example.invalid"
@@ -355,12 +397,20 @@ class Scenario:
         self.monkeypatch.setenv("AGENTIC_GATEWAY_URL", self.server.base_url(key))
 
     def finish_models(self) -> list[str]:
-        """The cassette's verdict: written (record) or fully used (replay); [] = faithful."""
+        """The cassette's verdict: written (record) or fully used (replay); [] = faithful.
+        A cassette recorded from other prompts warns, or fails when strict (DF-316)."""
         assert self.server is not None
         problems = self.server.finish()
         if self.upstream is not None and self.upstream.leftovers():
             problems.append(f"scripted turns never asked for: {self.upstream.leftovers()}")
-        return problems
+        stamp = CASSETTES / self.name / "acceptance" / FINGERPRINT
+        current = prompt_fingerprint()
+        if RECORD:
+            if not problems:  # written with the cassette, only when it was written
+                stamp.write_text(current + "\n", encoding="utf-8", newline="\n")
+            return problems
+        recorded = stamp.read_text(encoding="utf-8").strip() if stamp.is_file() else None
+        return problems + prompt_drift(recorded, current)
 
     # the CLI
 

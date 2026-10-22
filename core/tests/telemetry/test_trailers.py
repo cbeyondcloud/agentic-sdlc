@@ -141,6 +141,14 @@ def test_pr_body_shows_the_cost_and_where_the_logs_are():  # M1-68 acceptance
     assert body.index("- Status:") < body.index("- Cost so far:") < body.index("### Handoffs")
 
 
+@pytest.mark.parametrize(
+    ("cost", "shown"), [("1E-7", "0.0000001"), ("0E-7", "0.0000000"), ("1E+2", "100")]
+)
+def test_pr_body_never_shows_the_cost_in_scientific_notation(cost: str, shown: str):  # DF-318
+    body = pr_body(state(), run_link=None, cost_usd=Decimal(cost))
+    assert f"- Cost so far: ${shown}\n" in body
+
+
 def test_pr_body_without_cost_or_logs_leaves_their_lines_out():
     body = pr_body(state(), run_link=None)
     assert "Cost so far:" not in body and "Logs:" not in body

@@ -72,8 +72,10 @@ def table(*columns: str) -> Table:
 class Output:
     def __init__(self, json_mode: bool = False, color: bool = True) -> None:
         self.json_mode = json_mode
-        self.out = _Console(no_color=not color, highlight=False, soft_wrap=True)
-        self.err = _Console(stderr=True, no_color=not color, highlight=False, soft_wrap=True)
+        # None lets Rich read NO_COLOR; an explicit False would override it (DF-252)
+        no_color = None if color else True
+        self.out = _Console(no_color=no_color, highlight=False, soft_wrap=True)
+        self.err = _Console(stderr=True, no_color=no_color, highlight=False, soft_wrap=True)
 
     def result(self, data: Any, human: Callable[[Console], None] | None = None) -> None:
         """Show a command's result: `data` as JSON, or `human(console)` (default: str)."""
@@ -96,6 +98,15 @@ class Output:
     def progress(self, message: str) -> None:
         """A note on stderr while a command works (not with --json: the result says it)."""
         if not self.json_mode:
+            self.err.print(message, markup=False)
+
+    def notice(self, data: dict, message: str) -> None:
+        """Something a script may need before the result (a run's id when it starts): on
+        stderr, as one compact JSON line with `--json`, else as `message`."""
+        if self.json_mode:
+            text = json.dumps(data, ensure_ascii=not _exact("stderr"))
+            self.err.print(text, markup=False, highlight=False, soft_wrap=True)
+        else:
             self.err.print(message, markup=False)
 
     def warn(self, message: str) -> None:

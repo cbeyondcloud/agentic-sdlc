@@ -220,16 +220,17 @@ agentic-sdlc/
 
 ```
 <target-repo>/
-├── AGENTS.md                         # committed — repo knowledge (human-reviewed)
+├── AGENTS.md                         # committed — repo knowledge (human-reviewed); init drafts it only when none exists
 ├── .agentic/
-│   ├── config.yaml                   # committed — repo settings, classification, codeintel config
-│   ├── agents/                       # committed — repo-level agents
-│   ├── pipelines/                    # committed — repo-level pipelines
-│   ├── index/                        # committed — dependency graph (nightly bot only, §10.3)
-│   └── local/                        # git-ignored — runs/, skills/, index-overlay/, cache/
-├── .gitattributes                    # marks index files binary, merge strategy "ours"
-└── .github/workflows/agentic-index-nightly.yml
+│   ├── config.yaml                   # committed — repo settings, classification, team, pipelines, codeintel config
+│   ├── agents/                       # committed — repo-level agents (added later, e.g. `agentic agents new`)
+│   ├── pipelines/                    # committed — repo-level pipelines, run only when org policy sets allow_repo_pipelines (D33)
+│   └── local/                        # git-ignored (its own .gitignore) — runs/, state/, skills/, index/, audit/, init.json
+├── .gitattributes                    # the repo's own file plus an agentic block: LF for definitions, the index marked generated
+└── .github/workflows/agentic-index-export.yml   # only when org policy sets index_export_workflow (D39)
 ```
+
+`agentic init --repo` proposes exactly `.agentic/config.yaml`, `AGENTS.md` (when the repo has none, in any letter case), `.gitattributes` and, when org policy asks for it, the index export workflow - on a new `agentic/init` branch and pull request. It never adds `.agentic/pipelines/`, and nothing under `.agentic/local/` or any index is committed (D39: the index is built locally; the opt-in export is published outside `main`, §10.3).
 
 ### 4.3 Org policy repo `agentic-org-policy` (one per org)
 
@@ -240,7 +241,11 @@ agentic-org-policy/
 │   ├── agent-types.yaml      # agent types: caps, ceilings, defaults (D35)
 │   ├── tools.yaml            # tool catalog, forbidden tools, org deny list (D31)
 │   ├── limits.yaml           # concurrency limits
-│   ├── org.yaml              # allowed repo patterns, tool mirror, allow_repo_pipelines (D33)
+│   ├── org.yaml              # allowed repo patterns, tool mirror, allow_repo_pipelines (D33),
+│   │                         #   index_export_workflow (D39), sandbox, secret scan
+│   ├── tool-pins.yaml        # hash-pinned tools init fetches from the org mirror (M1-51)
+│   ├── prices.yaml           # model prices for calls the gateway does not price
+│   ├── eval.yaml             # agent evaluation defaults (repeats, budgets, targets; M1-63)
 │   ├── classifications.yaml  # repo sensitivity classes and what each allows
 │   ├── retention.yaml        # retention per data type, trace capture policy per team
 │   ├── licences.yaml         # blocked licences for dependency scanning

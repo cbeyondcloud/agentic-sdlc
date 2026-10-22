@@ -42,7 +42,8 @@ from agentic_cli.exit_codes import ExitCode
 Mode = Literal["developer", "repo"]
 PERMISSION = "agent.edit.repo"
 RUN_TREE_DIRS = ((".agentic", "local", "worktrees"), (".sdlc-worktrees",))
-_GIT = ["git", "-c", "core.fsmonitor=false"]
+#: no fsmonitor command from the repo's config; paths as they are, never C-quoted (DF-195)
+_GIT = ["git", "-c", "core.fsmonitor=false", "-c", "core.quotePath=false"]
 
 
 class GuardRefusal(CliError):
@@ -96,10 +97,12 @@ def check_repo(
     if org_mode:
         _allowed_by_policy(origin, policy)
     # 6
+    default_branch = _default_branch(top)
     committed = _git(top, "cat-file", "-p", f"HEAD:{CONFIG_REL}")
+    if not committed and mode == "developer":
+        _set_up_elsewhere(top, default_branch)
     config = _check_config(mode, committed, policy, org_mode)
     # 7
-    default_branch = _default_branch(top)
     if mode == "repo":
         _ready_for_shared_files(top, default_branch, org_mode, permitted)
     # 8
@@ -120,16 +123,17 @@ def check_repo(
 
 
 def normalise_remote(url: str) -> str:
-    """`host/owner/repo`, lower case, from an https, ssh or scp-style git URL."""
-    text = url.strip()
-    text = re.sub(r"^[a-z][a-z0-9+.-]*://", "", text, flags=re.IGNORECASE)  # scheme
-    text = re.sub(r"^[^@/]*@", "", text)  # user@
-    if re.match(r"^[^/:]+:(?!\d+/)", text):  # scp form host:owner/repo
-        text = text.replace(":", "/", 1)
-    text = re.sub(r":\d+/", "/", text, count=1)  # host:port/
-    text = text.rstrip("/")
-    text = text.removesuffix(".git")
-    return text.lower()
+    """`host/owner/repo`, lower case, from an https, ssh or scp-style git URL. Only a
+    URL with a scheme can carry a port; in the scp form (`host:owner/repo`) the part
+    after the colon is always the path, even when the owner is a number (DF-199)."""
+    text = url.strip().lower()
+    scheme = re.match(r"^[a-z][a-z0-9+.-]*://", text)
+    text = re.sub(r"^[^@/]*@", "", text[scheme.end() :] if scheme else text)  # user@
+    if scheme:
+        text = re.sub(r"^([^/:]+):\d+(?=/)", r"\1", text)  # host:port
+    else:
+        text = re.sub(r"^([^/:]+):", r"\1/", text, count=1)  # scp form host:owner/repo
+    return text.rstrip("/").removesuffix(".git")
 
 
 # --- the checks ---
@@ -145,6 +149,13 @@ def _not_a_run_tree_or_submodule(cwd: Path, top: Path) -> None:
                     "This is a run worktree - run init in the main repo",
                     hint="cd to the repository the run belongs to",
                 )
+    main_tree = _main_tree(top)
+    if main_tree is not None and _inside(top, main_tree):
+        raise GuardRefusal(
+            3,
+            f"This worktree is inside its main checkout ({main_tree}) - run init there",
+            hint="keep linked worktrees outside the main checkout (git worktree add ../<name>)",
+        )
     superproject = _git(top, "rev-parse", "--show-superproject-working-tree")
     if superproject and not _listed_component(Path(superproject), top):
         raise GuardRefusal(
@@ -168,9 +179,11 @@ def _listed_component(superproject: Path, top: Path) -> bool:
 def _allowed_by_policy(origin: str | None, policy: OrgPolicy | None) -> None:
     patterns = list(policy.allowed_repo_patterns) if policy is not None else []
     hint = "ask your team lead"
-    if not patterns:
+    if not patterns:  # nothing a team lead can change: the org admin's setting (DF-211)
         raise GuardRefusal(
-            5, "Repo not approved for agentic use: org policy allows no repos", hint=hint
+            5,
+            "Repo not approved for agentic use: org policy allows no repos",
+            hint="ask an org admin to set allowed_repo_patterns in the org policy (org.yaml)",
         )
     if origin is None:
         raise GuardRefusal(5, "Repo not approved for agentic use: it has no origin remote", hint)
@@ -230,13 +243,57 @@ def _ready_for_shared_files(
             7, "The working tree has uncommitted changes", hint="commit or stash them first"
         )
     current = _git(top, "symbolic-ref", "--short", "-q", "HEAD")
-    if default_branch is None or current != default_branch:
+    if default_branch is None:  # DF-197: `git switch main` would be wrong advice
         raise GuardRefusal(
             7,
-            f"init --repo runs on the default branch ({default_branch or 'main or master'}), "
-            f"not {current or 'a detached HEAD'}",
-            hint=f"git switch {default_branch or 'main'}",
+            "init --repo runs on the default branch, and it cannot be found: origin has no "
+            "HEAD and there is no main or master branch",
+            hint="run `git fetch origin` then `git remote set-head origin --auto`, switch to "
+            "the default branch and run init again",
         )
+    if current != default_branch:
+        raise GuardRefusal(
+            7,
+            f"init --repo runs on the default branch ({default_branch}), "
+            f"not {current or 'a detached HEAD'}",
+            hint=f"git switch {default_branch}",
+        )
+
+
+def _set_up_elsewhere(top: Path, default_branch: str | None) -> None:
+    """Developer init on a branch without the config, when the default branch has it:
+    the repo is set up, this branch is just older (DF-198)."""
+    if not default_branch:
+        return
+    current = _git(top, "symbolic-ref", "--short", "-q", "HEAD") or "a detached HEAD"
+    for ref in (f"refs/remotes/origin/{default_branch}", f"refs/heads/{default_branch}"):
+        if current != default_branch and _git(top, "cat-file", "-t", f"{ref}:{CONFIG_REL}"):
+            raise GuardRefusal(
+                6,
+                f"{current} has no {CONFIG_REL}, but {default_branch} has: the repo is set up "
+                "and this branch predates it",
+                hint=f"git switch {default_branch} (or merge it into {current}), then run "
+                "`agentic init` again",
+            )
+
+
+def _main_tree(top: Path) -> Path | None:
+    """The main checkout of a linked worktree (its common git dir's folder); None for a
+    main checkout, or when git cannot say."""
+    found = _git(top, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
+    parts = found.splitlines()
+    if len(parts) != 2 or _same(Path(parts[0]), Path(parts[1])):
+        return None
+    common = Path(parts[1])
+    return common.parent if common.name == ".git" else None
+
+
+def _inside(path: Path, folder: Path) -> bool:
+    try:
+        Path(os.path.realpath(path)).relative_to(os.path.realpath(folder))
+    except ValueError:
+        return False
+    return True
 
 
 def _default_branch(top: Path) -> str | None:

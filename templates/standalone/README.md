@@ -97,3 +97,12 @@ allows every subcommand.
 Every agent is denied the prefixes in `policy/tools.yaml` (`deny.shell`), whatever its
 type allows: publishing, rewriting history, and the forms of the dependency audits that
 change dependencies or write files (`npm audit fix`, `pip-audit --fix`, `pip-audit -o`).
+
+## A repository whose tests already fail
+
+The pipelines take a test baseline before any code changes, and QA then asks for no
+*new* failures, not for zero. Tests that error in setup and test files that fail to
+collect count as failed and are named like any other failure. If the baseline's report
+is refused as invalid (a miscount on a large red suite), the run pauses at that step:
+`agentic show <run>` shows the report, `agentic edit <run>` lets you correct the counts
+or names, and `agentic reject <run> --feedback "..."` asks the agent to measure again.

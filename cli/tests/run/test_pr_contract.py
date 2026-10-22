@@ -107,6 +107,57 @@ def test_publishing_again_updates_the_same_pull_request(workspace, github, cli):
     assert "PATCH /repos/acme/app/pulls/1" in github.paths()
 
 
+def test_republishing_keeps_a_persons_edits_to_the_description(workspace, github, cli):
+    """DF-296: the generated part sits between markers; a re-publish (`pr open`, or a
+    resumed publish step) replaces only that part, never what a person wrote around it."""
+    _, run_id = ship(cli)
+    pull = github.pulls[0]
+    assert pull["body"].startswith("<!-- agentic:run -->\n")
+    assert pull["body"].rstrip().endswith("<!-- /agentic:run -->")
+    pull["body"] = "Reviewer notes: check the CSV header.\n\n" + pull["body"] + "\nThanks!\n"
+    assert cli("--json", "pr", "open", run_id).code == ExitCode.OK
+    body = github.pulls[0]["body"]
+    assert body.startswith("Reviewer notes: check the CSV header.\n\n<!-- agentic:run -->")
+    assert body.endswith("<!-- /agentic:run -->\n\nThanks!\n")
+    assert body.count("## Agentic run") == 1 and "Status: completed" in body
+
+
+def test_the_pull_request_title_goes_through_the_redactor(workspace, github, monkeypatch, cli):
+    """DF-295: a secret pasted into the run's request must not reach the host in the
+    title (the body is redacted already)."""
+    secret = "correct-horse-" + "battery-staple-42"  # gitleaks:allow (not a real secret)
+    monkeypatch.setenv("ACME_DEPLOY_PASSWORD", secret)
+    result = cli("--json", "run", "ship", "--input", f"request=CSV export {secret}")
+    assert result.code == ExitCode.OK, result.err
+    title = github.pulls[0]["title"]
+    assert secret not in title and title.startswith("ship: CSV export")
+
+
+def test_a_secret_across_the_title_length_limit_is_redacted_before_the_cut(
+    workspace, github, monkeypatch, cli
+):
+    """Review F1: the title is cut to 100 characters; redacting after the cut would leave
+    the head of a secret that straddles the limit (no longer a whole value to match)."""
+    secret = "correct-horse-" + "battery-staple-42"  # gitleaks:allow (not a real secret)
+    monkeypatch.setenv("ACME_DEPLOY_PASSWORD", secret)
+    request = "x" * 78 + " " + secret  # the secret starts at title position 85
+    result = cli("--json", "run", "ship", "--input", f"request={request}")
+    assert result.code == ExitCode.OK, result.err
+    title = github.pulls[0]["title"]
+    assert secret[:8] not in title, title
+    assert len(title) <= publishing.TITLE_LIMIT and title.startswith("ship: xxx")
+
+
+def test_an_ssh_alias_remote_is_told_how_to_declare_it(workspace, github, monkeypatch, cli):
+    """DF-299: `git@github.com-work:` (an alias for a second account in ~/.ssh/config) is
+    not a host anyone named; the hint says how to declare it with kind and api_url."""
+    git(workspace, "remote", "set-url", "origin", "git@github.com-work:acme/app.git")
+    result = cli("--json", "run", "ship", "--input", "request=CSV export")
+    assert result.code == ExitCode.INVALID
+    assert "github.com-work" in result.out and "alias" in result.out
+    assert "api_url" in result.out
+
+
 def test_the_control_plane_link_is_used_when_one_is_configured(workspace, github, monkeypatch, cli):
     monkeypatch.setenv("AGENTIC_CONTROL_PLANE_URL", "https://agentic.acme.example/")
     _, run_id = ship(cli)

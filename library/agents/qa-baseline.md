@@ -30,8 +30,12 @@ can run the same ones later.
 
 ## 3. Record the baseline
 
-- `tests`: the counts.
-- `failures`: every failing test, by name, exactly as the runner names it.
+- `tests`: the counts. Errors count as failed: a test that errors in setup or
+  teardown, and a test file that fails at collection or import, goes in
+  `tests.failed` (there is no separate count for errors).
+- `failures`: every failing test, by name, exactly as the runner names it - an
+  erroring test too, and a file that does not collect by its path. `tests.failed`
+  is the number of names here.
 - `baseline_failures`: the same list - these are the failures that existed at
   intake.
 - `dependency_scan`: vulnerabilities and blocked licences already present, when

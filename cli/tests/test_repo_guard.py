@@ -231,3 +231,85 @@ def test_8_an_untracked_nested_config_is_found_too(repo: Path):
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "nested")
     refused(8, repo)
+
+
+# --- M1 close-out (DF-195, DF-197..DF-200, DF-205, DF-211) ---
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("git@github.com:123/app.git", "github.com/123/app"),  # numeric owner, not a port
+        ("https://github.com/Acme/App.GIT", "github.com/acme/app"),
+        ("https://ghe.acme.test:8443/acme/app.git", "ghe.acme.test/acme/app"),
+        ("ssh://git@ghe.acme.test:2222/acme/app.git", "ghe.acme.test/acme/app"),
+    ],
+)
+def test_remote_url_edge_cases_normalise_correctly(url: str, expected: str):
+    """DF-199: the scp form has no port; `.GIT` is stripped whatever its case."""
+    assert normalise_remote(url) == expected
+
+
+def test_5_an_empty_allow_list_names_the_setting_an_admin_sets(repo: Path, policy: OrgPolicy):
+    """DF-211: a team lead cannot fix an empty allow-list; the org admin's setting is named."""
+    empty = policy.model_copy(update={"allowed_repo_patterns": []})
+    error = refused(5, repo, org_mode=True, policy=empty)
+    assert "allowed_repo_patterns" in (error.hint or "")
+
+
+def test_3_a_linked_worktree_nested_in_its_main_tree_is_refused(repo: Path):
+    """DF-200: a hand-made worktree inside the main checkout would put a second .agentic
+    inside the first."""
+    nested = repo / "wt"
+    git(repo, "worktree", "add", "-q", "-b", "side", str(nested))
+    assert "inside" in str(refused(3, nested))
+
+
+def test_3_a_linked_worktree_beside_the_main_tree_is_accepted(repo: Path, tmp_path: Path):
+    """Developers keep worktrees next to the main checkout: that stays allowed."""
+    beside = tmp_path / "work" / "app-side"
+    git(repo, "worktree", "add", "-q", "-b", "side", str(beside))
+    git(beside, "switch", "-q", "main", "--ignore-other-worktrees")
+    assert ok(beside).path.samefile(beside)
+
+
+def test_6_a_feature_branch_is_told_the_default_branch_is_set_up(repo: Path, policy: OrgPolicy):
+    """DF-198: the config is on main, not on this old branch: say so, never `init --repo`."""
+    git(repo, "branch", "old-feature")
+    commit_file(repo, ".agentic/config.yaml", CONFIG)
+    git(repo, "switch", "-q", "old-feature")
+    error = refused(6, repo, mode="developer", policy=policy)
+    assert "main" in f"{error} {error.hint}"
+    assert "init --repo" not in str(error)
+
+
+def test_7_an_unknown_default_branch_says_how_to_find_it(tmp_path: Path):
+    """DF-197: no origin/HEAD and no main or master: the hint must not be `git switch main`."""
+    repo = tmp_path / "trunk"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    git(repo, "init", "-q", "-b", "trunk")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base")
+    git(repo, "remote", "add", "origin", "https://github.com/acme/trunk.git")
+    error = refused(7, repo)
+    assert "git switch main" not in (error.hint or "")
+    assert "set-head" in (error.hint or "")
+
+
+def test_8_an_untracked_nested_config_refuses_developer_init(repo: Path, policy: OrgPolicy):
+    """DF-205: the --others branch of the nested-config search (never committed)."""
+    commit_file(repo, ".agentic/config.yaml", CONFIG)
+    nested = repo / "pkg" / ".agentic"
+    nested.mkdir(parents=True)
+    (nested / "config.yaml").write_text(CONFIG, encoding="utf-8")
+    error = refused(8, repo, mode="developer", policy=policy)
+    assert "pkg/.agentic" in str(error)
+
+
+def test_8_a_non_ascii_folder_is_named_as_it_is(repo: Path, policy: OrgPolicy):
+    """DF-195: git quotes non-ASCII paths unless core.quotePath is off."""
+    commit_file(repo, ".agentic/config.yaml", CONFIG)
+    commit_file(repo, "café/.agentic/config.yaml", CONFIG)
+    error = refused(8, repo, mode="developer", policy=policy)
+    assert "café/.agentic" in str(error)
