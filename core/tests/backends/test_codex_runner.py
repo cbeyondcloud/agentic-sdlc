@@ -201,6 +201,19 @@ def test_developer_instructions_reach_the_config(resolved, fake, tmp_path):
     assert "You are the Developer." in config and "document" in config
 
 
+def test_a_transient_error_in_a_completed_turn_is_not_a_failure(resolved, fake, tmp_path):
+    fake.set([{"text": "VALID", "warn": "stream disconnected; reconnecting"}])
+    assert run(runner_for(agent_for(resolved), tmp_path)).status == "completed"
+
+
+def test_codex_home_is_rewritten_before_the_retry_exec(resolved, fake, tmp_path):
+    fake.set([{"text": "prose", "tamper": True}, {"text": "VALID second"}])
+    outcome = run(runner_for(agent_for(resolved), tmp_path, contract=FakeContract()))
+    assert outcome.status == "completed"
+    first, second = fake.starts()
+    assert first["rules"] == second["rules"] and '"allow"' not in second["rules"]
+
+
 def test_turn_failed_raises_with_the_reason(resolved, fake, tmp_path):
     fake.set([{"fail": "stream closed before response.completed"}])
     with pytest.raises(RuntimeError, match="stream closed"):

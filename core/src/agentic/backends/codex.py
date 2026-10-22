@@ -302,14 +302,22 @@ MAX_STDERR = 20_000
 
 class EventReader:
     """What one `codex exec --json` turn said, from its JSONL events (S3 Q7/Q11): the
-    last agent message, the turn's usage, how many tool calls ran, and any error."""
+    last agent message, the turn's usage, how many tool calls ran, whether the turn
+    completed or failed, and the last error (an `error` event alone may be transient:
+    Codex reports a dropped stream it then retries)."""
 
     def __init__(self) -> None:
         self.text = ""
         self.usage: dict | None = None
         self.tool_calls = 0
+        self.completed = False
+        self.failed = False
         self.error: str | None = None
         self._tools: set[str] = set()
+
+    @property
+    def ended_badly(self) -> bool:
+        return self.failed or (self.error is not None and not self.completed)
 
     def feed(self, line: str) -> None:
         try:
@@ -327,9 +335,12 @@ class EventReader:
             if key not in self._tools:
                 self._tools.add(key)
                 self.tool_calls += 1
-        elif kind == "turn.completed" and isinstance(event.get("usage"), dict):
-            self.usage = event["usage"]
+        elif kind == "turn.completed":
+            self.completed = True
+            if isinstance(event.get("usage"), dict):
+                self.usage = event["usage"]
         elif kind == "turn.failed":
+            self.failed = True
             error = event.get("error")
             self.error = str(error.get("message") if isinstance(error, dict) else error)
         elif kind == "error":
@@ -433,19 +444,21 @@ class CodexRunner:
         instructions = _instructions(task, self.contract)
         if self.launch.schema is not None:
             instructions += "\n\n" + DOCUMENT_NOTICE
-        self.launch.write(instructions)
-        text = await self._exec(task.prompt)
+        text = await self._exec(task.prompt, instructions)
         if self.contract is None:
             return self._outcome("completed", text)
         accepted, errors = self.contract.check(text)
         if errors:  # one retry (OUTPUT_RETRIES = 1), in a new exec carrying the answer
-            text = await self._exec(_retry_prompt(task.prompt, text, errors))
+            text = await self._exec(_retry_prompt(task.prompt, text, errors), instructions)
             accepted, errors = self.contract.check(text)
         if errors:
             return self._outcome("invalid", text, errors=errors)
         return self._outcome("completed", accepted if accepted is not None else text)
 
-    async def _exec(self, prompt: str) -> str:
+    async def _exec(self, prompt: str, instructions: str) -> str:
+        """One `codex exec`. CODEX_HOME's files are written first, every time: a shell
+        command in an earlier exec may have changed them (they sit in a writable place)."""
+        self.launch.write(instructions)
         argv = [*(self.wrap or []), *self.launch.argv]
         group = (
             {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -466,28 +479,36 @@ class CodexRunner:
         except OSError as error:
             raise CodexError(f"the Codex CLI did not start: {error}") from error
         self._process = process
-        process.stdin.write(prompt.encode("utf-8"))
-        await process.stdin.drain()
-        process.stdin.close()
         stderr = asyncio.ensure_future(_tail(process.stderr))
         reader = EventReader()
-        while line := await process.stdout.readline():
-            reader.feed(line.decode("utf-8", errors="replace"))
-            if reader.text:
-                self._last_text = unwrap_document(reader.text)
-            max_turns = self.agent.limits.max_turns
-            if max_turns is not None and self._turns + reader.tool_calls >= max_turns:
+        try:
+            try:
+                process.stdin.write(prompt.encode("utf-8"))
+                await process.stdin.drain()
+                process.stdin.close()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # Codex exited before reading: its exit code and stderr say why
+            while line := await process.stdout.readline():
+                reader.feed(line.decode("utf-8", errors="replace"))
+                if reader.text:
+                    self._last_text = unwrap_document(reader.text)
+                max_turns = self.agent.limits.max_turns
+                if max_turns is not None and self._turns + reader.tool_calls >= max_turns:
+                    self._kill_tree()
+                    await process.wait()
+                    self._account(reader)
+                    raise _Stopped("turns", "the agent's turn limit was reached")
+            code = await process.wait()
+        finally:  # whatever went wrong while reading, nothing is left running
+            if process.returncode is None:
                 self._kill_tree()
-                await process.wait()
-                self._account(reader)
-                raise _Stopped("turns", "the agent's turn limit was reached")
-        code = await process.wait()
+                await self._reap()
         errors = await stderr
         self._account(reader)
         text = reader.text or _read(self.launch.last_message)
-        if code != 0 or reader.error:
-            why = reader.error or errors.strip().splitlines()[-1:] or [f"exit code {code}"]
-            detail = why if isinstance(why, str) else why[0]
+        if code != 0 or reader.ended_badly:
+            last = errors.strip().splitlines()[-1:]
+            detail = reader.error or (last[0] if last else f"exit code {code}")
             raise RuntimeError(f"Codex ended the step with an error: {detail}")
         self._last_text = unwrap_document(text)
         return self._last_text

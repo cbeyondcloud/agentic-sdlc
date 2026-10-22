@@ -46,6 +46,13 @@ def test_turn_failed_and_error_events_say_why():
     assert read({"type": "error", "message": "bad config"}).error == "bad config"
 
 
+def test_a_transient_error_before_a_completed_turn_is_not_an_end():
+    retried = read({"type": "error", "message": "reconnecting"}, {"type": "turn.completed"})
+    assert retried.completed and not retried.ended_badly
+    assert read({"type": "error", "message": "bad config"}).ended_badly
+    assert read({"type": "turn.failed", "error": {"message": "x"}}).ended_badly
+
+
 def test_noise_and_blank_lines_are_ignored():
     reader = read("", "not json", "[1, 2]", message("ok"))
     assert (reader.text, reader.error) == ("ok", None)

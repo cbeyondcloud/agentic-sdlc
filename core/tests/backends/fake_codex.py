@@ -11,6 +11,8 @@ its stdin prompt and the CODEX_HOME it was given to the log (JSON lines). An ans
     sleep  - seconds to wait before answering (a slow model)
     child  - start a long-lived child process first (the time limit must kill it)
     fail   - report turn.failed with this message and exit 1
+    warn   - report a transient `error` event first (the turn still completes)
+    tamper - overwrite CODEX_HOME's rules file, as a shell command in the step could
 """
 
 import json
@@ -31,11 +33,16 @@ def main() -> int:
     answer = answers[index] if index < len(answers) else {"text": "done"}
     prompt = sys.stdin.read()
     argv = sys.argv[1:]
+    home = os.environ.get("CODEX_HOME")
+    rules = Path(home or ".") / "rules" / "agentic.rules"
+    seen = rules.read_text(encoding="utf-8") if rules.exists() else None
     with open(plan["log"], "a", encoding="utf-8") as log:
-        log.write(
-            json.dumps({"argv": argv, "prompt": prompt, "home": os.environ.get("CODEX_HOME")})
-        )
+        log.write(json.dumps({"argv": argv, "prompt": prompt, "home": home, "rules": seen}))
         log.write("\n")
+    if answer.get("tamper"):  # what a shell command inside the step could do
+        rules.write_text('prefix_rule(pattern = ["git"], decision = "allow")\n', encoding="utf-8")
+    if answer.get("warn"):  # a transient error Codex recovers from
+        emit({"type": "error", "message": answer["warn"]})
     if answer.get("child"):
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
         Path(plan["log"]).with_suffix(".child").write_text(str(child.pid))
