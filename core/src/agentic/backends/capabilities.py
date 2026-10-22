@@ -43,6 +43,9 @@ class BackendCapabilities:
     stuck_check: bool
     # its model calls go through agentic.transport, so the secret scan (M1-41) sees them
     secret_scan: bool = True
+    # an unlisted shell command is refused (our guard's allow-list; Claude Code's
+    # don't-ask mode). False: it runs, and prefix rules miss a command behind a redirect
+    shell_default_deny: bool = True
     notes: tuple[str, ...] = field(default=())
 
 
@@ -70,12 +73,31 @@ CAPABILITIES: dict[str, BackendCapabilities] = {
         secret_scan=False,
         notes=("spike S2",),
     ),
+    "codex": BackendCapabilities(
+        name="codex",
+        # Codex reads, searches and runs commands through one shell tool; it edits with
+        # apply_patch when its model catalog offers it (every model, DF-115), else by shell
+        tools={
+            "read_files": ("exec_command",),
+            "search": ("exec_command",),
+            "run_shell": ("exec_command",),
+            "edit_files": ("apply_patch", "exec_command"),
+        },
+        temperature=False,  # Codex never sends one (S3 Q10)
+        effort=True,  # model_reasoning_effort -> reasoning.effort
+        approvals=False,  # approval_policy = never: a prompt rule is refused
+        children=False,  # multi_agent is off
+        stuck_check=False,
+        secret_scan=False,  # Codex calls the model itself
+        shell_default_deny=False,  # execpolicy has no default-deny (S3 Q6, decision 22)
+        notes=("spike S3",),
+    ),
 }
 
 
 @dataclass(frozen=True)
 class Issue:
-    setting: str  # backend | tools | ask | temperature | effort | secret_scan
+    setting: str  # backend | tools | ask | temperature | effort | secret_scan | shell_default_deny
     action: Action
     detail: str
 
@@ -107,6 +129,14 @@ def backend_issues(
     if not caps.secret_scan:
         found += _unhonoured(
             policy, "secret_scan", f"{agent.backend} (it sends model calls itself, unscanned)"
+        )
+    shell = {name for cap in agent.tools for name in caps.tools.get(cap, ())}
+    if not caps.shell_default_deny and shell & set(caps.tools.get("run_shell", ())):
+        found += _unhonoured(
+            policy,
+            "shell_default_deny",
+            f"{agent.backend} (an unlisted command runs, and a command behind a redirect "
+            "escapes its prefix rules: the sandbox is the boundary)",
         )
     return found
 
