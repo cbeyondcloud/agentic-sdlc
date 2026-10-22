@@ -31,6 +31,7 @@ from sdlc_commons.guards import Guard
 
 MODULE = "sdlc_commons.codex_hook"
 _PATCH_HEADERS = ("*** Add File: ", "*** Update File: ", "*** Delete File: ", "*** Move to: ")
+_PATCH_MARKERS = frozenset({"*** Begin Patch", "*** End Patch", "*** End of File"})
 
 
 def hook_argv(spec: Path) -> tuple[str, ...]:
@@ -72,12 +73,21 @@ def load_guard(path: Path) -> tuple[Guard, Path]:
 
 
 def patch_paths(patch: str) -> list[str]:
-    """Every path an apply_patch text adds, updates, deletes or moves to."""
+    """Every path an apply_patch text adds, updates, deletes or moves to.
+
+    Codex trims each hunk header before matching it, so an indented header still writes
+    (review I1): lines are read trimmed here too. That also reads an update hunk's
+    context line that looks like a header as one - more paths checked, never fewer. A
+    `*** ` line that is no marker this reader knows raises ValueError (the hook then
+    refuses the patch): it may be one a later Codex writes through."""
     found = []
-    for line in patch.splitlines():
-        for header in _PATCH_HEADERS:
-            if line.startswith(header):
-                found.append(line[len(header) :].strip())
+    for raw in patch.splitlines():
+        line = raw.strip()
+        header = next((h for h in _PATCH_HEADERS if line.startswith(h)), None)
+        if header is not None:
+            found.append(line[len(header) :].strip())
+        elif line.startswith("*** ") and line not in _PATCH_MARKERS:
+            raise ValueError("the patch has a marker the guard does not know")
     return found
 
 

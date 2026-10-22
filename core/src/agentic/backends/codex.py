@@ -13,7 +13,8 @@ What S3 proved, applied to every run:
     down keys are passed again as `-c` overrides (session flags beat a project layer),
     and the worktree is marked `trust_level = "untrusted"` - the only switch that kept a
     hostile repo's `.codex/` (instructions, MCP servers, rules) out; `AGENTS.md` is off
-    (`project_doc_max_bytes = 0`);
+    (`project_doc_max_bytes = 0`), and so are repo and user skills
+    (`skills.include_instructions = false`);
   * Codex's own sandbox is off (`danger-full-access`): srt wraps the whole process and
     is the boundary (no nested sandboxes; Codex's bwrap breaks in CI containers). A run
     without a sandbox wrap is refused unless the settings explicitly allow it (tests);
@@ -172,6 +173,9 @@ def lock_down(
         "web_search": "disabled",
         "model_catalog_json": (home / "models.json").as_posix(),
         "history": {"persistence": "none"},
+        # repo (.agents/, .codex/) and user skills would be listed to the model as
+        # instructions, untrusted worktree or not (review I2); org skills come with M2-47
+        "skills": {"include_instructions": False},
         "features": {
             "plugins": False,
             "apps": False,
@@ -222,26 +226,45 @@ def lock_down(
 
 
 def overrides(config: Mapping[str, object]) -> list[str]:
-    """`config` as `-c key=value` session overrides: tables become dotted keys (a key
-    with other characters is quoted), header tables stay inline tables."""
-    import tomli_w
-
+    """`config` as `-c key=value` session overrides. A table of bare keys becomes dotted
+    keys; a table with any other key (a path: `projects`) becomes one inline table, as do
+    header tables. Codex splits a `-c` key on every dot, even inside quotes, so a path in
+    a dotted key (`projects."/x/.sdlc-worktrees/..."`) stops it starting (review C1)."""
     out: list[str] = []
 
     def emit(prefix: str, value: object) -> None:
-        if isinstance(value, Mapping) and not prefix.endswith("env_http_headers"):
+        if (
+            isinstance(value, Mapping)
+            and all(_BARE_KEY.fullmatch(key) for key in value)
+            and not prefix.endswith("env_http_headers")
+        ):
             for key, inner in value.items():
-                part = key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key)
-                emit(f"{prefix}.{part}" if prefix else part, inner)
+                emit(f"{prefix}.{key}" if prefix else key, inner)
             return
-        text = tomli_w.dumps({"v": value}).strip()
-        if isinstance(value, Mapping):  # an inline table: TOML's `{ k = v, ... }`
-            pairs = ", ".join(f"{json.dumps(k)} = {json.dumps(v)}" for k, v in value.items())
-            text = f"v = {{ {pairs} }}"
-        out.extend(["-c", f"{prefix}={text.removeprefix('v = ')}"])
+        out.extend(["-c", f"{prefix}={_toml_value(value)}"])
 
     emit("", config)
     return out
+
+
+_BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _toml_value(value: object) -> str:
+    """One TOML value, tables written inline (`{ "k" = v, ... }`)."""
+    import tomli_w
+
+    if isinstance(value, Mapping):
+        pairs = (f"{_toml_key(key)} = {_toml_value(inner)}" for key, inner in value.items())
+        return "{ " + ", ".join(pairs) + " }"
+    return tomli_w.dumps({"v": value}).strip().removeprefix("v = ")
+
+
+def _toml_key(key: object) -> str:
+    """One TOML key, quoted and escaped as TOML needs (`tomli_w` writes it)."""
+    import tomli_w
+
+    return tomli_w.dumps({str(key): 0}).strip().removesuffix(" = 0")
 
 
 def check_version(cli: Sequence[str], *, run: Callable[[list[str]], str] | None = None) -> str:
@@ -303,13 +326,14 @@ MAX_STDERR = 20_000
 class EventReader:
     """What one `codex exec --json` turn said, from its JSONL events (S3 Q7/Q11): the
     last agent message, the turn's usage, how many tool calls ran, whether the turn
-    completed or failed, and the last error (an `error` event alone may be transient:
-    Codex reports a dropped stream it then retries)."""
+    started (model calls were made), completed or failed, and the last error (an `error`
+    event alone may be transient: Codex reports a dropped stream it then retries)."""
 
     def __init__(self) -> None:
         self.text = ""
         self.usage: dict | None = None
         self.tool_calls = 0
+        self.started = False
         self.completed = False
         self.failed = False
         self.error: str | None = None
@@ -335,6 +359,8 @@ class EventReader:
             if key not in self._tools:
                 self._tools.add(key)
                 self.tool_calls += 1
+        elif kind == "turn.started":
+            self.started = True
         elif kind == "turn.completed":
             self.completed = True
             if isinstance(event.get("usage"), dict):
@@ -370,8 +396,9 @@ class CodexRunner:
     `invalid`, as on the other backends. (`--ephemeral` keeps no session, so there is
     nothing to resume.) After each exec the step is charged from Codex's
     `turn.completed.usage` at policy's prices (`estimated`), never from TokenLean's
-    header, which Codex ignores anyway (S3 Q11). A charge past the slice raises
-    `LimitHit` for the engine.
+    header, which Codex ignores anyway (S3 Q11); an exec killed or failed before that
+    event is charged the fallback estimate per model call. A charge past the slice
+    raises `LimitHit` for the engine.
 
     Limits:
       * time  - the step's limit, around both execs; the whole process tree is killed;
@@ -407,6 +434,7 @@ class CodexRunner:
         self.usage = RunUsage()
         self._last_text = ""
         self._process: asyncio.subprocess.Process | None = None
+        self._pending: EventReader | None = None  # the running exec's, until charged
         self._turns = 0
 
     async def run(self, task: AgentTask) -> AgentOutcome:
@@ -421,6 +449,10 @@ class CodexRunner:
         except asyncio.CancelledError:  # the run was stopped: so is everything it started
             self._kill_tree()
             session.cancel()
+            try:  # the spend is recorded; the stop wins over a limit it crossed
+                self._account_cut("codex was stopped before turn.completed")
+            except LimitHit:
+                pass
             raise
         if not done:
             self._kill_tree()
@@ -430,6 +462,7 @@ class CodexRunner:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001 - it is being stopped
                 pass
             await self._reap()
+            self._account_cut("codex was killed at the time limit before turn.completed")
             detail = f"the step's time limit ({self.time_limit_s}s) was reached"
             return self._outcome("stopped", self._last_text, stopped="time", detail=detail)
         try:
@@ -480,7 +513,7 @@ class CodexRunner:
             raise CodexError(f"the Codex CLI did not start: {error}") from error
         self._process = process
         stderr = asyncio.ensure_future(_tail(process.stderr))
-        reader = EventReader()
+        reader = self._pending = EventReader()
         try:
             try:
                 process.stdin.write(prompt.encode("utf-8"))
@@ -496,7 +529,7 @@ class CodexRunner:
                 if max_turns is not None and self._turns + reader.tool_calls >= max_turns:
                     self._kill_tree()
                     await process.wait()
-                    self._account(reader)
+                    self._account_cut("codex was killed at the turn limit before turn.completed")
                     raise _Stopped("turns", "the agent's turn limit was reached")
             code = await process.wait()
         finally:  # whatever went wrong while reading, nothing is left running
@@ -504,20 +537,44 @@ class CodexRunner:
                 self._kill_tree()
                 await self._reap()
         errors = await stderr
-        self._account(reader)
+        failed = code != 0 or reader.ended_badly
+        if failed:
+            self._account_cut("codex ended with an error before turn.completed")
+        else:
+            self._account(reader)
         text = reader.text or _read(self.launch.last_message)
-        if code != 0 or reader.ended_badly:
+        if failed:
             last = errors.strip().splitlines()[-1:]
             detail = reader.error or (last[0] if last else f"exit code {code}")
             raise RuntimeError(f"Codex ended the step with an error: {detail}")
         self._last_text = unwrap_document(text)
         return self._last_text
 
-    def _account(self, reader: EventReader) -> None:
-        """Count this exec's tool calls and charge its usage, once."""
+    def _account(self, reader: EventReader, *, cut: str | None = None) -> None:
+        """Count this exec's tool calls and charge its model calls, once. Codex reports
+        usage only in `turn.completed`: an exec cut short after its turn started (`cut`
+        says how) is charged `fallback_estimate_usd` per model call - the calls
+        happened, and a step that always hits a limit must not cost nothing (review I3)."""
+        if self._pending is reader:
+            self._pending = None
         self._turns += reader.tool_calls
+        calls = reader.tool_calls + 1
         if reader.usage is not None:
-            self._charge(reader.usage, calls=reader.tool_calls + 1)
+            self._charge(reader.usage, calls=calls)
+        elif cut is not None and reader.started:
+            self._charge_unreported(calls, cut)
+
+    def _account_cut(self, why: str) -> None:
+        """Charge the running exec, if it is not charged yet, as cut short (`why`)."""
+        if self._pending is not None:
+            self._account(self._pending, cut=why)
+
+    def _charge_unreported(self, calls: int, why: str) -> None:
+        """Charge model calls whose usage Codex never reported: the fallback per call."""
+        model = self.agent.model
+        cost = CallCost("unavailable", None, None, None, None, None, model, None, None, reason=why)
+        self.usage.requests += calls
+        self._book(cost, self.fallback_estimate_usd * calls)
 
     def _charge(self, usage: dict, calls: int) -> None:
         """Charge one turn's usage at policy's price (LimitHit past the slice). Responses
@@ -562,6 +619,10 @@ class CodexRunner:
                 None,
                 reason="codex turn usage priced by policy",
             )
+        self._book(cost, estimate)
+
+    def _book(self, cost: CallCost, estimate: Decimal) -> None:
+        """Charge the budget and log the call (LimitHit past the slice, after both)."""
         if estimate <= 0:
             return
         try:  # the calls already happened: record them, then stop past the slice

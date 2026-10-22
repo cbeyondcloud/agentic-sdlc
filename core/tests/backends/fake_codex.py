@@ -11,6 +11,7 @@ its stdin prompt and the CODEX_HOME it was given to the log (JSON lines). An ans
     sleep  - seconds to wait before answering (a slow model)
     child  - start a long-lived child process first (the time limit must kill it)
     fail   - report turn.failed with this message and exit 1
+    early  - report an `error` with this message and exit 1 before any turn starts
     warn   - report a transient `error` event first (the turn still completes)
     tamper - overwrite CODEX_HOME's rules file, as a shell command in the step could
 """
@@ -43,6 +44,9 @@ def main() -> int:
         rules.write_text('prefix_rule(pattern = ["git"], decision = "allow")\n', encoding="utf-8")
     if answer.get("warn"):  # a transient error Codex recovers from
         emit({"type": "error", "message": answer["warn"]})
+    if answer.get("early"):  # Codex refusing to start (a config error): no turn began
+        emit({"type": "error", "message": answer["early"]})
+        return 1
     if answer.get("child"):
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
         Path(plan["log"]).with_suffix(".child").write_text(str(child.pid))

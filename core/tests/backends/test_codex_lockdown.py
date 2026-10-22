@@ -4,6 +4,7 @@ overrides, the untrusted worktree, the environment and the command line. Pure: n
 binary is run, so these run on every OS."""
 
 import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -45,12 +46,14 @@ def settings_for(tmp_path, **changes) -> CodexSettings:
     )
 
 
-def launch_for(resolved, tmp_path, *, contract=None, srt=True, environ=None, **agent_changes):
+def launch_for(
+    resolved, tmp_path, *, contract=None, srt=True, environ=None, tree=None, **agent_changes
+):
     agent = resolved.model_copy(
         update={"backend": "codex", "temperature": 0.2, "effort": None, **agent_changes}
     )
-    tree = tmp_path / "tree"
-    tree.mkdir(exist_ok=True)
+    tree = tree or tmp_path / "tree"
+    tree.mkdir(parents=True, exist_ok=True)
     step = StepContext("r-1", "develop", 2, agent, slice_(), contract)
     return lock_down(
         step,
@@ -77,12 +80,44 @@ def overrides(launch) -> dict[str, str]:
     return found
 
 
+def as_config(launch) -> dict:
+    """The `-c` overrides read back as one TOML document (dotted keys become tables)."""
+    return tomllib.loads("\n".join(f"{key} = {value}" for key, value in overrides(launch).items()))
+
+
 def test_untrusted_project_entry_is_always_written(resolved, tmp_path):  # Review Focus 1
     launch = launch_for(resolved, tmp_path)
     config = written(launch)
     tree = (tmp_path / "tree").resolve().as_posix()
     assert config["projects"] == {tree: {"trust_level": "untrusted"}}
-    assert overrides(launch)[f"projects.{json.dumps(tree)}.trust_level"] == '"untrusted"'
+    assert as_config(launch)["projects"] == {tree: {"trust_level": "untrusted"}}
+
+
+@pytest.mark.parametrize(
+    "where", ["my.repo/.sdlc-worktrees/run.1/app", "john.smith/v1.2/tree", "with space/t"]
+)
+def test_a_path_never_becomes_a_dotted_override_key(resolved, tmp_path, where):
+    # Codex splits a `-c` key on every dot, even inside quotes (review C1): the
+    # default worktree root `.sdlc-worktrees` made every run refuse to start
+    tree = tmp_path / where
+    launch = launch_for(resolved, tmp_path, tree=tree)
+    for key in overrides(launch):
+        assert re.fullmatch(r"[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*", key), key
+    expected = {tree.resolve().as_posix(): {"trust_level": "untrusted"}}
+    assert as_config(launch)["projects"] == expected
+
+
+def test_the_overrides_say_what_the_config_file_says(resolved, tmp_path):
+    launch = launch_for(resolved, tmp_path / "a.b")
+    config = written(launch)
+    del config["developer_instructions"]  # in the file only (argv size)
+    assert as_config(launch) == config
+
+
+def test_repo_and_user_skills_never_reach_the_model(resolved, tmp_path):  # review I2
+    launch = launch_for(resolved, tmp_path)
+    assert written(launch)["skills"] == {"include_instructions": False}
+    assert overrides(launch)["skills.include_instructions"] == "false"
 
 
 def test_lockdown_keys_are_written_and_also_passed_as_overrides(resolved, tmp_path):

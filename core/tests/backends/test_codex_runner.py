@@ -163,6 +163,58 @@ def test_a_turn_without_usage_charges_nothing_but_completes(resolved, fake, tmp_
     assert outcome.status == "completed" and budget.spent() == 0
 
 
+def test_an_exec_killed_at_the_time_limit_is_still_charged(resolved, fake, tmp_path):
+    # review I3: its model calls happened, but Codex reports usage only at turn end
+    fake.set([{"text": "VALID late", "tools": 3, "sleep": 30}])
+    budget = slice_()
+    outcome = run(runner_for(agent_for(resolved), tmp_path, budget=budget, time_limit_s=3))
+    assert (outcome.status, outcome.stopped) == ("stopped", "time")
+    [(cost, charged)] = outcome.costs.calls
+    assert (cost.source, charged) == ("unavailable", Decimal("0.04"))  # 3 tool results + 1
+    assert "before turn.completed" in cost.reason
+    assert budget.spent() == Decimal("0.04") and outcome.usage.requests == 4
+
+
+def test_an_exec_killed_at_the_turn_limit_is_still_charged(resolved, fake, tmp_path):
+    agent = agent_for(resolved)
+    agent = agent.model_copy(update={"limits": agent.limits.model_copy(update={"max_turns": 2})})
+    fake.set([{"text": "VALID", "tools": 5, "tool_sleep": 0.2}])
+    budget = slice_()
+    outcome = run(runner_for(agent, tmp_path, budget=budget))
+    assert (outcome.status, outcome.stopped) == ("stopped", "turns")
+    [(cost, charged)] = outcome.costs.calls
+    assert (cost.source, charged) == ("unavailable", Decimal("0.03"))  # 2 tool results + 1
+    assert budget.spent() == Decimal("0.03") and outcome.usage.requests == 3
+
+
+def test_a_failed_turn_is_still_charged(resolved, fake, tmp_path):
+    fake.set([{"fail": "stream closed before response.completed", "tools": 1}])
+    budget = slice_()
+    runner = runner_for(agent_for(resolved), tmp_path, budget=budget)
+    with pytest.raises(RuntimeError, match="stream closed"):
+        run(runner)
+    [(cost, charged)] = runner.costs.calls
+    assert (cost.source, charged) == ("unavailable", Decimal("0.02"))
+    assert budget.spent() == Decimal("0.02") and runner.usage.requests == 2
+
+
+def test_codex_refusing_to_start_charges_nothing(resolved, fake, tmp_path):
+    fake.set([{"early": "Error loading config.toml: unknown configuration field"}])
+    budget = slice_()
+    runner = runner_for(agent_for(resolved), tmp_path, budget=budget)
+    with pytest.raises(RuntimeError, match="unknown configuration field"):
+        run(runner)
+    assert runner.costs.calls == [] and budget.spent() == 0
+
+
+def test_a_charge_killed_past_the_slice_raises_limit_hit(resolved, fake, tmp_path):
+    fake.set([{"text": "VALID late", "tools": 3, "sleep": 30}])
+    runner = runner_for(agent_for(resolved), tmp_path, budget=slice_("0.01"), time_limit_s=3)
+    with pytest.raises(LimitHit):
+        run(runner)
+    assert runner.costs.calls  # the calls happened: they are recorded
+
+
 def test_usage_past_the_slice_raises_limit_hit_after_recording(resolved, fake, tmp_path):
     usage = {"input_tokens": 10_000_000, "cached_input_tokens": 0, "output_tokens": 0}
     fake.set([{"text": "VALID", "usage": usage}])

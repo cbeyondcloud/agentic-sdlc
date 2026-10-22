@@ -53,6 +53,11 @@ def test_a_transient_error_before_a_completed_turn_is_not_an_end():
     assert read({"type": "turn.failed", "error": {"message": "x"}}).ended_badly
 
 
+def test_a_started_turn_is_noted():  # a killed exec's model calls are then charged
+    assert read({"type": "turn.started"}).started
+    assert not read({"type": "thread.started"}, {"type": "error", "message": "x"}).started
+
+
 def test_noise_and_blank_lines_are_ignored():
     reader = read("", "not json", "[1, 2]", message("ok"))
     assert (reader.text, reader.error) == ("ok", None)

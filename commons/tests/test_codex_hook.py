@@ -119,6 +119,45 @@ def test_patch_paths_reads_every_header():
     assert patch_paths(text) == ["a.py", "b.py", "c.py", "d/e.py"]
 
 
+INDENTED = (
+    "*** Begin Patch\n*** Add File: ok.txt\n+a\n{indent}*** Add File: {path}\n+x\n*** End Patch\n"
+)
+
+
+@pytest.mark.parametrize("indent", [" ", "\t", "  "])
+def test_an_indented_header_is_read_as_codex_reads_it(indent):  # review I1
+    # Codex trims each hunk header before matching it: an indented one still writes
+    text = INDENTED.format(indent=indent, path="infra/evil.tf")
+    assert patch_paths(text) == ["ok.txt", "infra/evil.tf"]
+
+
+def test_an_indented_header_to_a_denied_path_is_refused(guard, tree):  # review I1
+    text = INDENTED.format(indent=" ", path="infra/evil.tf")
+    reason = decide(call("apply_patch", {"command": text}, tree), guard, tree)
+    assert reason and "infra" in reason
+
+
+@pytest.mark.parametrize(
+    "header", ["*** Copy File: infra/evil.tf", "*** Add File:infra/evil.tf", " *** Rename: x"]
+)
+def test_an_unknown_marker_refuses_the_whole_patch(guard, tree, tmp_path, header):
+    # a marker this reader does not know may be one a later Codex writes through
+    text = f"*** Begin Patch\n*** Add File: ok.txt\n+a\n{header}\n+x\n*** End Patch\n"
+    with pytest.raises(ValueError, match="marker"):
+        patch_paths(text)
+    spec = write_spec(tmp_path / "guard.json", guard, tree)
+    code, err = run_main(spec, json.dumps(call("apply_patch", {"command": text}, tree)))
+    assert code == 2 and "refused" in err
+
+
+def test_patch_content_lines_are_not_markers():
+    text = (
+        "*** Begin Patch\n*** Add File: notes.md\n+*** not a header\n+text\n"
+        "*** Update File: a.md\n@@\n-*** old\n+*** new\n*** End of File\n*** End Patch\n"
+    )
+    assert patch_paths(text) == ["notes.md", "a.md"]
+
+
 def test_spec_round_trip(guard, tree, tmp_path):
     spec = write_spec(tmp_path / "guard.json", guard, tree)
     loaded, loaded_tree = load_guard(spec)
