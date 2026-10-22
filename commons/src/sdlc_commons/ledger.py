@@ -12,13 +12,16 @@ This module only adds what the framework needs around it:
                   preserved file so the chain verifies again (Review Focus 2);
   * the framework's ids (M1-07) - team, policy version, agent@version, parent, tier
                   and skills ride each event in Zyroflo's declared `ext` block (Z1),
-                  inside the hash chain.
+                  inside the hash chain;
+  * entry_hash  - Zyroflo's entry formula, for chains kept outside a run folder (the
+                  control plane's per-tenant audit table, SP15).
 """
 
 import json
 import os
 import re
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -474,3 +477,10 @@ def write_artifact(path: Path, text: str) -> str:
 def digest(path: Path) -> str:
     """Zyroflo's digest of one file (sha256 of its bytes)."""
     return state.sha256_of(path)
+
+
+def entry_hash(entry: Mapping[str, object]) -> str:
+    """Zyroflo's hash of one chain entry: sha256 of the canonical JSON of every field but
+    `hash` (and `signature`). Chains kept outside a run folder (the control plane's audit
+    table) use it, so one verifier checks the run ledger and the audit chain alike."""
+    return approve.entry_hash(dict(entry))

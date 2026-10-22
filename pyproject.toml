@@ -153,3 +153,32 @@ source_modules = [
 forbidden_modules = ["agentic.hosting.github"]
 allow_indirect_imports = true
 ignore_imports = ["agentic_cli.hosting -> agentic.hosting.github"]
+
+[[tool.importlinter.contracts]]
+name = "The CLI never imports the control plane (SP15: the wire contract is agentic.orgapi)"
+type = "forbidden"
+source_modules = ["agentic_cli"]
+forbidden_modules = ["agentic_cp"]
+
+[[tool.importlinter.contracts]]
+name = "Server libraries only in the control plane (SP15: they never reach developer laptops)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli"]
+forbidden_modules = [
+    "fastapi",
+    "starlette",
+    "uvicorn",
+    "sqlalchemy",
+    "alembic",
+    "asyncpg",
+    "casbin",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "casbin only behind authorize (SP15 DR-1: agentic_cp.rbac.authz is its one importer)"
+type = "forbidden"
+source_modules = ["agentic_cp"]
+forbidden_modules = ["casbin"]
+allow_indirect_imports = true
+ignore_imports = ["agentic_cp.rbac.authz -> casbin"]
