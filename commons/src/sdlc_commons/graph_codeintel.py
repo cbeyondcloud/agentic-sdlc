@@ -18,9 +18,10 @@ How a run's tree meets the graph:
 Files inside the tree, that exist there, are the answer's `files` (tree-relative
 POSIX paths, best first). Files in other repositories and the services reached go in
 `note`, so a cross-repo answer reaches the agent without a path outside the tree. A
-graph path that is absolute, climbs out with `..` or names `.git` is never joined to
-the tree. When the graph cites nothing in the asked file, Zyroflo's directory-scope
-guess is not passed on as an impact answer: the answer is empty and says why.
+graph path that is absolute, climbs out with `..` or can open `.git` (in any spelling
+Windows reads as `.git`) is never joined to the tree. When the graph cites nothing in
+the asked file, Zyroflo's directory-scope guess is not passed on as an impact answer:
+the answer is empty and says why.
 """
 
 import posixpath
@@ -35,6 +36,7 @@ MAX_NOTED_FILES = 20
 MAX_NOTED_SERVICES = 10
 
 _DRIVE = re.compile(r"^[A-Za-z]:")
+_SHORT_GIT = re.compile(r"git~\d+")
 _Located = tuple[str, str]  # (component, component-relative path)
 
 
@@ -184,21 +186,25 @@ def _service(row: dict) -> str:
 
 
 def _merged(results: list[dict]) -> dict:
-    """Several components' impact answers as one: best score per file and per service."""
+    """Several components' impact answers as one: best score per file and per service.
+    A component whose seed fell back to a directory guess adds nothing when another
+    component seeded properly (final review F2); when none did, the first guess is
+    returned, marked, so `_answer` refuses it as for one component."""
+    seeded = [r for r in results if not r.get("seed", {}).get("fallback")]
+    if not seeded:
+        return results[0]
     files: dict[_Located, dict] = {}
     services: dict[str, dict] = {}
-    for result in results:
+    for result in seeded:
         for row in result.get("files", []):
             if _key(row) not in files or row["score"] > files[_key(row)]["score"]:
                 files[_key(row)] = row
         for row in result.get("services", []):
             if row["id"] not in services or row["score"] > services[row["id"]]["score"]:
                 services[row["id"]] = row
-    seeded = [r for r in results if not r.get("seed", {}).get("fallback")]
     best = sorted(files.values(), key=lambda r: (-r["score"], _key(r)))
     order = sorted(services.values(), key=lambda r: (-r["score"], r["id"]))
-    seed = {} if seeded else results[0].get("seed", {})
-    return {"seed": seed, "files": best, "services": order}
+    return {"seed": {}, "files": best, "services": order}
 
 
 def _clean(path: str) -> str | None:
@@ -208,6 +214,14 @@ def _clean(path: str) -> str | None:
         return None
     rel = posixpath.normpath(text)
     parts = rel.split("/")
-    if rel == "." or ".." in parts or any(p.rstrip(". ").lower() == ".git" for p in parts):
+    if rel == "." or ".." in parts or any(_names_git(p) for p in parts):
         return None
     return rel
+
+
+def _names_git(part: str) -> bool:
+    """Whether a path component can open `.git`: in any case, with the trailing dots and
+    spaces or the `:stream` Windows ignores, or as an 8.3 short name (`GIT~1`) - refused
+    on every OS, as core's `agentic.codeintel.tools.names_git` (final review F8)."""
+    name = part.split(":", 1)[0].rstrip(". ").lower()
+    return name == ".git" or _SHORT_GIT.fullmatch(name) is not None

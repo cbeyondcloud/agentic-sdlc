@@ -118,6 +118,29 @@ def test_an_unknown_source_is_refused_naming_where_mappings_live(tmp_path):
         connectors.mapping_for(tmp_path, "servicedesk")
 
 
+@pytest.mark.parametrize(
+    "source", ["../../../secret", "..", "sub/jira", "sub\\jira", "JIRA", "", " jira", "-x"]
+)
+def test_a_source_that_is_not_a_plain_name_is_refused(tmp_path, source):
+    """Final review F3: the source names a file in `.sdlc/connectors/` and nothing else -
+    no climbing out, no folders, no absolute path, one spelling on every OS."""
+    (tmp_path / "repo" / ".sdlc" / "connectors" / "sub").mkdir(parents=True)
+    (tmp_path / "secret.json").write_text('{"title": "x.y", "body": "a"}', encoding="utf-8")
+    nested = tmp_path / "repo" / ".sdlc" / "connectors" / "sub" / "jira.json"
+    nested.write_text('{"title": "t"}', encoding="utf-8")  # a file each spelling could reach
+
+    with pytest.raises(ConnectorError, match="not a connector name"):
+        connectors.mapping_for(tmp_path / "repo", source)
+
+
+def test_an_absolute_source_is_refused(tmp_path):
+    (tmp_path / "repo" / ".sdlc" / "connectors").mkdir(parents=True)
+    (tmp_path / "secret.json").write_text('{"title": "x.y", "body": "a"}', encoding="utf-8")
+
+    with pytest.raises(ConnectorError, match="not a connector name"):
+        connectors.mapping_for(tmp_path / "repo", str(tmp_path / "secret"))
+
+
 def test_a_mapping_without_a_title_is_refused(tmp_path):
     declare(tmp_path, "jira", {"body": "fields.description"})
 

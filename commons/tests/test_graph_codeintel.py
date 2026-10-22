@@ -138,6 +138,72 @@ def test_graph_paths_outside_the_tree_are_never_listed(pantry, tmp_path):
     assert not any(".." in f or f.startswith("/") or ".git" in f or ":" in f for f in found.files)
 
 
+@pytest.mark.parametrize(
+    "alias", ["GIT~1/config", "git~2/x.py", ".git::$INDEX_ALLOCATION/config", ".GIT. /config"]
+)
+def test_graph_paths_that_can_open_git_are_never_listed(pantry, tmp_path, alias):
+    """Windows opens `GIT~1` (8.3 name), `.git::$INDEX_ALLOCATION` and `.git. ` as `.git`
+    (final review F8): such a graph row is no candidate, as core's `names_git` refuses."""
+    estate, graph = pantry
+    forged = tmp_path / "graph"
+    shutil.copytree(graph, forged)
+    rows = (forged / "graph.jsonl").read_text(encoding="utf-8").splitlines()
+    planted = []
+    for raw in rows:
+        row = json.loads(raw)
+        if row.get("source_file") == "src/pantry_api/routes.py":
+            planted.append(json.dumps({**row, "source_file": alias, "line": row["line"] + 1}))
+    (forged / "graph.jsonl").write_text("\n".join(rows + planted) + "\n", encoding="utf-8")
+    tree = tmp_path / "tree"
+    shutil.copytree(estate / "pantry-api", tree)
+    if ":" not in alias and "." not in alias.split("/")[0]:  # a name every OS can create
+        (tree / alias).parent.mkdir(parents=True, exist_ok=True)
+        (tree / alias).write_text("x = 1\n", encoding="utf-8")
+
+    found = DomainGraphCodeIntel(DomainGraph(forged), tree, "pantry-api").dependents(PUBLISHER)
+
+    assert "src/pantry_api/routes.py" in found.files
+    assert not any("git" in f.lower() for f in found.files)
+    assert alias not in found.note
+
+
+class TwoComponentGraph:
+    """Workspace components `a` and `b`: a's changed file cites no fact, so Zyroflo falls
+    back to a directory-scope guess for it; b's changed file seeds a real impact."""
+
+    def components(self):
+        return {"a": "a", "b": "b"}
+
+    @staticmethod
+    def parse_diff(text):
+        return {"a/src/settings.py": None, "b/src/routes.py": None}
+
+    def impact_of_targets(self, component, targets):
+        if component == "a":
+            return {
+                "seed": {"fallback": {"basis": "uncited", "path": "src/settings.py"}},
+                "files": [{"component": "a", "path": "src/guess.py", "score": 0.8}],
+                "services": [],
+            }
+        return {
+            "seed": {"nodes": ["ep:b"]},
+            "files": [{"component": "b", "path": "src/client.py", "score": 0.5}],
+            "services": [],
+        }
+
+
+def test_a_directory_guess_never_joins_a_multi_component_diff(tmp_path):
+    """Final review F2: the guess files of a component whose seed fell back are not
+    passed on as impact because another component of the same diff seeded properly."""
+    for path in ("a/src/guess.py", "b/src/client.py"):
+        (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / path).write_text("x = 1\n", encoding="utf-8")
+
+    found = DomainGraphCodeIntel(TwoComponentGraph(), tmp_path).impact("(diff)")
+
+    assert found.files == ("b/src/client.py",)
+
+
 class RecordingGraph:
     """A graph whose impact records which (component, path) it was asked about."""
 

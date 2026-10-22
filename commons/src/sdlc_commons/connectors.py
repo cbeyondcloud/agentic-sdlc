@@ -23,6 +23,7 @@ Zyroflo's `ConnectError` becomes `ConnectorError`, with Zyroflo's own words.
 """
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,7 @@ dig = connect.dig
 #: The sources Zyroflo ships a mapping for.
 SHIPPED = ("alert", "github-issue", "jira")
 _SHIPPED_DIR = Path("sdlc_templates") / "connectors"
+_SOURCE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 
 
 class ConnectorError(Exception):
@@ -60,7 +62,16 @@ def shipped_mappings() -> dict[str, dict]:
 
 
 def mapping_for(repo: Path | None, source: str) -> dict:
-    """The repo's mapping for `source`, else Zyroflo's shipped one. Raises ConnectorError."""
+    """The repo's mapping for `source`, else Zyroflo's shipped one. Raises ConnectorError.
+
+    `source` names one file in the connectors folder: a lower-case name of letters,
+    digits, `-` and `_` - never a path, so no spelling reaches a file outside it and a
+    name means the same file on every OS (final review F3)."""
+    if not isinstance(source, str) or not _SOURCE.fullmatch(source):
+        raise ConnectorError(
+            f"{source!r} is not a connector name: use lower-case letters, digits, '-' and "
+            "'_', starting with a letter or digit (e.g. 'jira', 'github-issue')"
+        )
     declared = Path(repo) / connect.CONNECTORS / f"{source}.json" if repo is not None else None
     if declared is not None and declared.exists():
         try:

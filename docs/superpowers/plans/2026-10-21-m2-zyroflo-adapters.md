@@ -23,7 +23,7 @@
 | Jira / GitHub-issue / alert mappings | Zyroflo's shipped `sdlc_templates/connectors/*.json` via `content.root()` | - |
 | Graph build, impact, rules, MCP | Zyroflo `tools.graph` (`build`, `impact`, `impact_diff`, `parse_diff`, `discover_rules`, `GraphService`, `build_server`) | - |
 | Store (neo4j optional) | Zyroflo `load_into` (`sqlite` / `neo4j`) | - |
-| Fallback where code-review-graph answers nothing (DF-85) | the domain graph through `Combined` | Graphify 0.9.79 (Apache-2.0): pulls ~25 native tree-sitter grammar wheels, numpy and rapidfuzz, and caps tree-sitter below 0.26 (Zyroflo's lock has 0.26.0) - **needs decision** |
+| Fallback where code-review-graph answers nothing (DF-85) | none yet: the domain graph through `Combined` adds cross-repo candidates only for files that cite an integration fact, so DF-85 stays open (final review F1) | Graphify 0.9.79 (Apache-2.0): pulls ~25 native tree-sitter grammar wheels, numpy and rapidfuzz, and caps tree-sitter below 0.26 (Zyroflo's lock has 0.26.0) - **needs decision** |
 
 ## Zyroflo gaps found (owner-merged Zyroflo PRs, never commits here)
 

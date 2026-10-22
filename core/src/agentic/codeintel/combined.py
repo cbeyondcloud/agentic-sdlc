@@ -4,8 +4,10 @@ Agents can use both graph levels: the symbol graph (which functions and tests) a
 the domain graph (which services, topics and tables, across repositories). `Combined`
 asks every adapter that supports an operation, in order, and merges the answers:
 files best first without repeats, notes joined, the source naming the adapters that
-answered. Where the first adapter answers nothing the next one still does (DF-85). An
-adapter that fails is named in the note and the others answer; only when every one
+answered. Where the first adapter answers nothing the next one still does. (The domain
+graph answers only for files that cite an integration fact - endpoints, topics, tables,
+config, deploys - so it is not the file-level fallback DF-85 asks for.) An adapter
+that fails is named in the note and the others answer; only when every one
 fails does the operation fail.
 """
 
