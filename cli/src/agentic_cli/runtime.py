@@ -3,7 +3,9 @@ drive, wired from core and commons.
 
   * run state     - `RunStore` under `.agentic/local/runs`, next to Zyroflo's ledger;
   * run ledger    - `RunLedger`, opened for a new run and resumed for an existing one,
-                    behind a `ForwardingRecorder` (no sinks in M1; M1-44, DF-165);
+                    behind a `ForwardingRecorder`; in org mode with a control plane its
+                    events are also delivered there by `ControlPlaneSink`, on a background
+                    thread (M2-20, DF-304), the ledger itself being the offline queue;
   * gates         - `ZyrofloGates`, blocking severities by regime (`regime_block_on`);
   * steps         - `StepRunners` over the native backend: every model call through the
                     configured gateway (TokenLean), metered against the step's budget,
@@ -46,8 +48,9 @@ from agentic.skills.install import log_record, sync_skills
 from agentic.skills.loader import InstalledSkills
 from agentic.skills.select import pipeline_skills
 from agentic.telemetry.logs import StepLogs
-from agentic.telemetry.sinks import ForwardingRecorder
+from agentic.telemetry.sinks import EventSink, ForwardingRecorder
 from agentic.transport import CallIdentity
+from agentic_cli import control_plane
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.standalone import PLACEHOLDER
@@ -56,6 +59,10 @@ from agentic_cli.workspace import RUNS, Workspace
 from sdlc_commons.gates import ZyrofloGates, regime_block_on
 from sdlc_commons.ledger import RunIdentity, RunLedger
 from sdlc_commons.redaction import redactor
+
+#: Seconds a command waits, after the engine stops, for run events still being delivered to
+#: the control plane; what is left stays queued in the ledger for `agentic sync` (R20).
+SINK_GRACE_S = 5.0
 
 #: The backends this CLI builds. The claude-code backend is not wired yet (DF-74), so
 #: preflight refuses a step that names it instead of failing mid-run.
@@ -154,6 +161,9 @@ class Runtime:
         self._library: InstalledSkills | None | bool = False  # False: not looked up yet
         self._gateway_key: str | None = None  # the key `redact` masks once it is known
         self._restored: list[str] = []  # skills the last sync restored (a local edit)
+        self._recorders: dict[str, ForwardingRecorder] = {}
+        self._sinks: list[EventSink] | None = None
+        self.sink_problem: str | None = None  # why runs are not reported (a warning)
 
     @property
     def user(self) -> str:
@@ -178,6 +188,42 @@ class Runtime:
                 )
             self._ledgers[run_id] = ledger
         return self._ledgers[run_id]
+
+    def sinks(self) -> list[EventSink]:
+        """Where runs are reported besides the run folder: the control plane, in org mode
+        with one configured and the user signed in (M2-20). Not signed in, runs still run
+        (the events stay queued in the ledger) and `sink_problem` says why."""
+        if self._sinks is None:
+            self._sinks = []
+            if self.ws.settings.get("org"):
+                try:
+                    client = control_plane.client_for(self.ws.env, self.ws.settings, self.ws.home)
+                except control_plane.ControlPlaneError as error:
+                    client = None
+                    hint = f" ({error.hint})" if error.hint else ""
+                    self.sink_problem = f"runs are not reported to the control plane: {error}{hint}"
+                if client is not None:
+                    self._sinks = [control_plane.ControlPlaneSink(client)]
+        return self._sinks
+
+    def forwarding(self, run_id: str) -> ForwardingRecorder:
+        """The run's recorder: the ledger first, then the sinks on a background thread, so
+        a slow control plane never holds up the run (DF-304)."""
+        if run_id not in self._recorders:
+            self._recorders[run_id] = ForwardingRecorder(
+                self.recorder(run_id), self.sinks(), background=True
+            )
+        return self._recorders[run_id]
+
+    def close_sinks(self, timeout: float = SINK_GRACE_S) -> dict[str, int]:
+        """Wait (bounded) for the runs' pending deliveries; returns run -> events still
+        queued (`agentic sync` sends them later)."""
+        queued = {}
+        for run_id, recorder in self._recorders.items():
+            left = sum(recorder.close(timeout).values())
+            if left:
+                queued[run_id] = left
+        return queued
 
     def gates(self, run_id: str) -> ZyrofloGates:
         if run_id not in self._gates:
@@ -441,7 +487,7 @@ class Runtime:
             policy=policy,
             context=self.ws.context(),
             store=self.store,
-            recorder_for=lambda run_id: ForwardingRecorder(self.recorder(run_id), []),
+            recorder_for=self.forwarding,
             gates_for=self.gates,
             runner_factory=runners,
             block_on_for=regime_block_on,

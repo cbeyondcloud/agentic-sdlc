@@ -287,9 +287,22 @@ def _load(rt: Runtime, run_id: str) -> RunState:
 
 
 def _finish(out: Output, state: RunState, rt: Runtime) -> None:
+    report_sinks(out, rt)
     redact = rt.redact()  # the gateway key is known: the command asked for it
     out.result(summary(state, redact), show_state(state, redact))
     raise typer.Exit(exit_code_for(state))
+
+
+def report_sinks(out: Output, rt: Runtime) -> None:
+    """After the engine stops: wait briefly for run events still on their way to the
+    control plane, and say what stays queued (or why nothing is reported)."""
+    if rt.sink_problem:
+        out.warn(rt.sink_problem)
+    for run_id, left in rt.close_sinks().items():
+        out.warn(
+            f"{left} event(s) of run {run_id} are queued for the control plane; "
+            "`agentic sync` sends them"
+        )
 
 
 def _all_runs(rt: Runtime) -> list[RunState]:
