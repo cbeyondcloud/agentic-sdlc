@@ -93,7 +93,12 @@ def test_unhonoured_policy_loads_from_org_yaml(fixtures, tmp_path: Path):
     org = root / "org.yaml"
     org.write_text(org.read_text(encoding="utf-8") + "unhonoured: {effort: ignore}\n", "utf-8")
     policy = load_policy(root)
-    assert policy.unhonoured == {"temperature": "warn", "effort": "ignore", "secret_scan": "warn"}
+    assert policy.unhonoured == {
+        "temperature": "warn",
+        "effort": "ignore",
+        "secret_scan": "warn",
+        "shell_default_deny": "warn",
+    }
 
 
 def test_claude_code_egress_is_not_secret_scanned_and_warns_by_default(resolved, policy):
@@ -122,3 +127,60 @@ def test_claude_code_maps_only_the_tools_it_really_offers():  # review I5 (--bar
         "edit_files": ("Edit",),
         "run_shell": ("Bash",),
     }
+
+
+# ── codex (M2-40, spike S3, DF-119) ───────────────────────────────────────────
+
+ALL = {"native", "claude-code", "codex"}
+
+
+def on_codex(agent, **changes):
+    update = {"backend": "codex", "tools": ["read_files"], "ask_shell": [], "temperature": None}
+    return agent.model_copy(update={**update, "effort": None, **changes})
+
+
+def test_codex_row_matches_spike_s3():
+    codex = CAPABILITIES["codex"]
+    assert codex.tools == {
+        "read_files": ("exec_command",),
+        "search": ("exec_command",),
+        "run_shell": ("exec_command",),
+        "edit_files": ("apply_patch", "exec_command"),
+    }
+    assert (codex.temperature, codex.effort) == (False, True)
+    assert not (codex.approvals or codex.children or codex.stuck_check or codex.secret_scan)
+    assert codex.shell_default_deny is False
+    assert all(c.shell_default_deny for name, c in CAPABILITIES.items() if name != "codex")
+
+
+def test_codex_shell_default_deny_warns_by_default(resolved, policy):
+    found = backend_issues(on_codex(resolved), policy, available=ALL)
+    shell = [i for i in found if i.setting == "shell_default_deny"]
+    assert [(i.setting, i.action) for i in shell] == [("shell_default_deny", "warn")]
+    assert "codex" in shell[0].detail and "unlisted" in shell[0].detail
+
+
+def test_an_org_can_block_backends_without_shell_default_deny(resolved, policy):
+    policy.unhonoured["shell_default_deny"] = "block"
+    found = issues(on_codex(resolved, tools=["run_shell"]), policy, available=ALL)
+    assert found == [("shell_default_deny", "block")]
+
+
+def test_ignore_hides_the_shell_gap(resolved, policy):
+    policy.unhonoured["shell_default_deny"] = "ignore"
+    assert issues(on_codex(resolved, tools=["edit_files"]), policy, available=ALL) == []
+
+
+def test_an_agent_without_shell_tools_has_no_shell_issue(resolved, policy):
+    assert issues(on_codex(resolved, tools=[]), policy, available=ALL) == []
+
+
+def test_codex_temperature_is_unhonoured_and_effort_honoured(resolved, policy):
+    agent = on_codex(resolved, temperature=0.3, effort="high")
+    found = issues(agent, policy, available=ALL, skip=("secret_scan", "shell_default_deny"))
+    assert found == [("temperature", "warn")]
+
+
+def test_codex_spawn_agent_blocks(resolved, policy):
+    found = issues(on_codex(resolved, tools=["spawn_agent"]), policy, available=ALL)
+    assert found == [("tools", "block")]

@@ -20,6 +20,10 @@ dependencies = [
 # The claude-code backend (M1-29, spike S2). Optional: its use is under Anthropic's
 # Commercial Terms and the wheel bundles the (Anthropic-signed) Claude Code binary.
 claude-code = ["claude-agent-sdk==0.2.164"]
+# The codex backend (M2-40, spike S3): the per-step Codex config is TOML. Pure Python, MIT.
+# The Codex CLI itself is an external, pinned binary found on PATH (macOS, Linux, or Linux
+# inside WSL2 on Windows - never the npm win32 package, which bundles an unsigned rg.exe).
+codex = ["tomli-w==1.2.0"]
 # Code intelligence (M1-35, spike S5): the default symbol-level index. Pure Python, MIT.
 codeintel = ["code-review-graph==2.3.9"]
 # Skill admission checks (M1-39): the Agent Skills reference validator. Pure Python,

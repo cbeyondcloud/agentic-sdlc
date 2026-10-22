@@ -101,6 +101,9 @@ claude-code = [
 codeintel = [
     { name = "code-review-graph" },
 ]
+codex = [
+    { name = "tomli-w" },
+]
 eval = [
     { name = "pydantic-evals" },
 ]
@@ -127,9 +130,10 @@ requires-dist = [
     { name = "regex", specifier = "==2026.9.29" },
     { name = "ruamel-yaml", specifier = ">=0.18" },
     { name = "skills-ref", marker = "extra == 'skills'", specifier = "==0.1.1" },
+    { name = "tomli-w", marker = "extra == 'codex'", specifier = "==1.2.0" },
     { name = "truststore", specifier = ">=0.10,<0.11" },
 ]
-provides-extras = ["claude-code", "codeintel", "skills", "telemetry", "eval"]
+provides-extras = ["claude-code", "codex", "codeintel", "skills", "telemetry", "eval"]
 
 [[package]]
 name = "agentic-sdlc-workspace"
@@ -140,7 +144,7 @@ source = { virtual = "." }
 dev = [
     { name = "agentic-cli" },
     { name = "agentic-control-plane" },
-    { name = "agentic-core", extra = ["claude-code", "codeintel", "eval", "skills", "telemetry"] },
+    { name = "agentic-core", extra = ["claude-code", "codeintel", "codex", "eval", "skills", "telemetry"] },
     { name = "import-linter" },
     { name = "pip-audit" },
     { name = "pre-commit" },
@@ -156,7 +160,7 @@ dev = [
 dev = [
     { name = "agentic-cli", editable = "cli" },
     { name = "agentic-control-plane", editable = "control-plane" },
-    { name = "agentic-core", extras = ["claude-code", "codeintel", "eval", "skills", "telemetry"], editable = "core" },
+    { name = "agentic-core", extras = ["claude-code", "codeintel", "codex", "eval", "skills", "telemetry"], editable = "core" },
     { name = "import-linter", specifier = "==2.15" },
     { name = "pip-audit", specifier = "==2.10.1" },
     { name = "pre-commit", specifier = ">=4.0" },

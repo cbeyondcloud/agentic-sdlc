@@ -323,10 +323,18 @@ class OrgPolicy(_Strict):
     secret_scan: SecretScanPolicy = SecretScanPolicy()  # M1-41
     eval: EvalPolicy = EvalPolicy()  # M1-63
     # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
-    # (`secret_scan`: the backend calls the model itself, past the framework's scanner)
+    # (`secret_scan`: the backend calls the model itself, past the framework's scanner;
+    # `shell_default_deny`: its shell runs unlisted commands, and its prefix rules miss
+    # a command hidden behind a redirect - spike S3, decision 22)
     unhonoured: dict[
-        Literal["temperature", "effort", "secret_scan"], Literal["ignore", "warn", "block"]
-    ] = {"temperature": "warn", "effort": "warn", "secret_scan": "warn"}
+        Literal["temperature", "effort", "secret_scan", "shell_default_deny"],
+        Literal["ignore", "warn", "block"],
+    ] = {
+        "temperature": "warn",
+        "effort": "warn",
+        "secret_scan": "warn",
+        "shell_default_deny": "warn",
+    }
 
     # --- model prices, for estimating costs TokenLean does not report ---
     prices: dict[str, ModelPrice] = {}
@@ -354,6 +362,7 @@ class OrgPolicy(_Strict):
                     "temperature": "warn",
                     "effort": "warn",
                     "secret_scan": "warn",
+                    "shell_default_deny": "warn",
                     **data["unhonoured"],
                 },
             }
