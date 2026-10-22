@@ -79,6 +79,8 @@ def mapping_for(repo: Path | None, source: str) -> dict:
 
 def item_for(source: str, mapping: dict, payload: dict) -> ExternalItem:
     """The external item `payload` describes, read through `mapping`. Raises ConnectorError."""
+    if missing := [key for key in connect.REQUIRED if not str(mapping.get(key) or "").strip()]:
+        raise ConnectorError(f"the {source!r} mapping declares no {', '.join(missing)}")
     try:
         title, spec = connect.spec_for(source, mapping, payload)
     except (connect.ConnectError, KeyError, TypeError) as error:

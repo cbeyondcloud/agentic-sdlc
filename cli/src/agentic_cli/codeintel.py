@@ -21,8 +21,6 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from pydantic import ValidationError
-
 from agentic.codeintel import Candidates, CodeIntel, CodeIntelError, Combined
 from agentic.repoconfig import CodeIntelConfig
 from agentic_cli.errors import CliError
@@ -39,8 +37,8 @@ def codeintel_settings(config: Mapping[str, Any]) -> CodeIntelConfig:
     section = config.get("codeintel")
     try:
         return CodeIntelConfig.model_validate({} if section is None else section)
-    except ValidationError as error:
-        problem = error.errors()[0]
+    except ValueError as error:  # pydantic's ValidationError (core's model, core's dependency)
+        problem = error.errors()[0] if hasattr(error, "errors") else {"loc": (), "msg": str(error)}
         where = ".".join(str(part) for part in ("codeintel", *problem["loc"]))
         raise CliError(
             f"{REPO_CONFIG}: {where}: {problem['msg']}",

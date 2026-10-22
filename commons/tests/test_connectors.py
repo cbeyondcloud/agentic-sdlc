@@ -148,6 +148,11 @@ def test_a_null_title_is_refused_differently_from_an_absent_one():
     assert str(null.value) != str(absent.value)
 
 
+def test_a_hand_built_mapping_without_a_title_is_refused_by_name():
+    with pytest.raises(ConnectorError, match="declares no title"):
+        connectors.item_for("jira", {"body": "fields.description"}, JIRA_ISSUE)
+
+
 def test_dig_tells_an_absent_path_from_a_null_value():
     payload = {"fields": {"summary": None, "labels": ["a", "b"]}}
 
