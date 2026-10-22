@@ -6,6 +6,10 @@ RUN apt-get update -qq \
         git bubblewrap socat ripgrep nodejs npm curl ca-certificates >/dev/null \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install -g --silent @anthropic-ai/sandbox-runtime@0.0.78
+# The opencode ACP profile's pinned agent (M2-57, spike S7): its contract tests run the real
+# binary here only - developer laptops run no unsigned native binaries.
+RUN npm install -g --silent opencode-ai@1.18.35
+ENV AGENTIC_CHECK_IMAGE=1
 # gitleaks for the repo secret scan (P0-03), pinned by version and sha256 for both
 # architectures (amd64 on Windows/Intel hosts, arm64 on Apple Silicon Macs).
 ARG GITLEAKS_VERSION=8.30.1

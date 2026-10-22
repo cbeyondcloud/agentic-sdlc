@@ -36,6 +36,10 @@ telemetry = ["opentelemetry-sdk==1.45.1"]
 # under our own blinding, judging and statistics (agentic.eval). Pure Python, MIT; the same
 # release as pydantic-ai, and its other dependencies are already locked.
 eval = ["pydantic-evals==2.54.0"]
+# The shared ACP backend (M2-57, spike S7): the Agent Client Protocol Python SDK drives
+# third-party agent CLIs (OpenCode first) over stdio. Pure Python, Apache-2.0 (LICENSE in
+# the wheel; the PyPI licence field is empty); its only dependency is pydantic.
+acp = ["agent-client-protocol==0.12.1"]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]

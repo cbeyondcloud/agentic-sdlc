@@ -32,7 +32,7 @@ agentic-control-plane = { workspace = true }
 # Tools used only while developing (never shipped to users).
 [dependency-groups]
 dev = [
-    "agentic-core[claude-code,codeintel,codex,eval,skills,telemetry]",
+    "agentic-core[acp,claude-code,codeintel,codex,eval,skills,telemetry]",
     "sdlc-commons",
     "agentic-cli",
     "agentic-control-plane",
@@ -114,6 +114,14 @@ source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
 forbidden_modules = ["tomli_w"]
 allow_indirect_imports = true
 ignore_imports = ["agentic.backends.codex -> tomli_w"]
+
+[[tool.importlinter.contracts]]
+name = "The ACP SDK only in the ACP backend runner (optional extra)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["acp"]
+allow_indirect_imports = true
+ignore_imports = ["agentic.backends.acp.runner -> acp"]
 
 [[tool.importlinter.contracts]]
 name = "code-review-graph only in its query subprocess (optional extra)"

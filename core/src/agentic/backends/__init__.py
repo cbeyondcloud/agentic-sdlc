@@ -14,7 +14,7 @@ from agentic.backends.capabilities import (
 )
 
 #: Backend name -> the optional package it needs (an extra of agentic-core).
-OPTIONAL = {"claude-code": "claude_agent_sdk", "codex": "tomli_w"}
+OPTIONAL = {"claude-code": "claude_agent_sdk", "codex": "tomli_w", "opencode": "acp"}
 #: Backend name -> the external CLI it drives, found on PATH; POSIX only (on Windows,
 #: inside WSL2 - D38). Its pinned version is checked when a step starts.
 EXTERNAL = {"codex": "codex"}
