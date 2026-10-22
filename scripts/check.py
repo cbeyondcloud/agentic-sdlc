@@ -22,6 +22,7 @@ import io
 import os
 import platform
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -74,6 +75,15 @@ SANDBOX_OPTS = ["--security-opt", "seccomp=unconfined", "--security-opt", "syste
 
 
 ENGINES = ("docker", "podman")
+
+# The control plane's database tests (SP15) run against this Postgres, started as a
+# sidecar on a private network for the Linux stage and by the test fixtures natively.
+# Pinned by digest to a release at least two weeks old (17.10, pushed 2026-07-08).
+POSTGRES_IMAGE = (
+    "postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193"
+)
+# A label on the check container, so the sidecar test can tell the two containers apart.
+CHECK_CONTAINER_MARK = "agentic.check=linux"
 
 
 def container_engine(env=os.environ, which=shutil.which) -> str | None:
@@ -213,11 +223,13 @@ def tracked_files_tar() -> bytes:
     return buffer.getvalue()
 
 
-def run_linux() -> bool:
+def run_linux(run=subprocess.run) -> bool:
     """Run every check inside a clean Linux container.
 
     The files are streamed into the container (never mounted), so the Windows
-    virtualenv and scratch folders on the host are never seen or touched.
+    virtualenv and scratch folders on the host are never seen or touched. A Postgres
+    sidecar on a private network serves the control plane's database tests, which must
+    run here (AGENTIC_CP_REQUIRE_PG=1 turns a missing database into a failure).
     """
     engine = container_engine()
     if engine is None:
@@ -246,22 +258,70 @@ def run_linux() -> bool:
             "dependency. Set GH_TOKEN, or log in with `gh auth login`."
         )
         return False
-    env = dict(os.environ, GH_TOKEN=token)
-    cmd = [
-        engine,
-        "run",
-        "--rm",
-        "-i",
-        "-e",
-        "GH_TOKEN",
-        *SANDBOX_OPTS,
-        image,
-        "sh",
-        "-c",
-        script,
-    ]
-    print(f"[linux] running checks in {image}", flush=True)
-    ok = subprocess.run(cmd, input=tracked_files_tar(), env=env).returncode == 0
+    # The database password and DSN reach the containers by variable name only, never on
+    # a command line (a process listing would show it).
+    password = secrets.token_hex(16)
+    env = dict(
+        os.environ,
+        GH_TOKEN=token,
+        POSTGRES_PASSWORD=password,
+        AGENTIC_CP_TEST_DSN=f"postgresql://postgres:{password}@pg:5432/postgres",
+        AGENTIC_CP_REQUIRE_PG="1",
+    )
+    network = f"agentic-check-{os.getpid()}"
+    sidecar = f"agentic-check-pg-{os.getpid()}"
+    try:
+        if run([engine, "network", "create", network], capture_output=True).returncode != 0:
+            print(f"[linux] FAILED: could not create the container network {network}")
+            return False
+        postgres = [
+            engine,
+            "run",
+            "-d",
+            "--rm",
+            "--name",
+            sidecar,
+            "--network",
+            network,
+            "--network-alias",
+            "pg",
+            "-e",
+            "POSTGRES_PASSWORD",
+            POSTGRES_IMAGE,
+            "-c",
+            "fsync=off",
+            "-c",
+            "max_connections=300",
+        ]
+        if run(postgres, env=env, capture_output=True).returncode != 0:
+            print(f"[linux] FAILED: could not start the Postgres sidecar ({POSTGRES_IMAGE})")
+            return False
+        cmd = [
+            engine,
+            "run",
+            "--rm",
+            "-i",
+            "--label",
+            CHECK_CONTAINER_MARK,
+            "--network",
+            network,
+            "-e",
+            "GH_TOKEN",
+            "-e",
+            "AGENTIC_CP_TEST_DSN",
+            "-e",
+            "AGENTIC_CP_REQUIRE_PG",
+            *SANDBOX_OPTS,
+            image,
+            "sh",
+            "-c",
+            script,
+        ]
+        print(f"[linux] running checks in {image}", flush=True)
+        ok = run(cmd, input=tracked_files_tar(), env=env).returncode == 0
+    finally:
+        run([engine, "rm", "-f", sidecar], capture_output=True)
+        run([engine, "network", "rm", network], capture_output=True)
     print("[linux] all checks passed" if ok else "[linux] FAILED")
     return ok
 

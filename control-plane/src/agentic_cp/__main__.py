@@ -1,6 +1,7 @@
 """`python -m agentic_cp <command>`: the server's operator entry point.
 
     serve                 run the API (uvicorn)
+    migrate               upgrade the database (owner role, AGENTIC_CP_OWNER_DATABASE_URL)
     openapi [--write | --check]
                           write or compare control-plane/openapi.json
 
@@ -65,6 +66,21 @@ def _serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def _owner_dsn(settings: Settings) -> str:
+    if settings.owner_database_url is None:
+        raise SettingsError("AGENTIC_CP_OWNER_DATABASE_URL is required for this command")
+    return settings.owner_database_url.get_secret_value()
+
+
+def _migrate(args: argparse.Namespace) -> int:
+    from agentic_cp.db import migrate
+
+    settings = _settings()
+    head = migrate(_owner_dsn(settings), settings.db_schema)
+    print(f"database at revision {head}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m agentic_cp", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -73,6 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="0.0.0.0")
     serve.add_argument("--port", type=int, default=8080)
     serve.set_defaults(run=_serve)
+
+    migrate = commands.add_parser("migrate", help="upgrade the database to this release")
+    migrate.set_defaults(run=_migrate)
 
     openapi = commands.add_parser("openapi", help="write or check openapi.json")
     mode = openapi.add_mutually_exclusive_group()
