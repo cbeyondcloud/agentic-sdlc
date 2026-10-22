@@ -1,6 +1,50 @@
 {
   "components": {
     "schemas": {
+      "Assignment": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "org",
+              "team"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "scope"
+        ],
+        "title": "Assignment",
+        "type": "object"
+      },
       "AssignmentRef": {
         "description": "A role held at org scope or within one team.",
         "properties": {
@@ -35,6 +79,311 @@
         "title": "AssignmentRef",
         "type": "object"
       },
+      "AssignmentRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/rbac/assignments`: give `email` (created in the caller's tenant if new)\n`role` at org scope, or within `team`.",
+        "properties": {
+          "email": {
+            "maxLength": 254,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          },
+          "role": {
+            "pattern": "^[a-z][a-z0-9-]{1,62}$",
+            "title": "Role",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "required": [
+          "email",
+          "role"
+        ],
+        "title": "AssignmentRequest",
+        "type": "object"
+      },
+      "AuditEntry": {
+        "description": "One audit record exactly as hashed (spec §14.5).",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "actor_kind": {
+            "enum": [
+              "human",
+              "service",
+              "system"
+            ],
+            "title": "Actor Kind",
+            "type": "string"
+          },
+          "after": {
+            "title": "After"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "before": {
+            "title": "Before"
+          },
+          "event": {
+            "title": "Event",
+            "type": "string"
+          },
+          "hash": {
+            "title": "Hash",
+            "type": "string"
+          },
+          "policy_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Version"
+          },
+          "prev": {
+            "title": "Prev",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          },
+          "tenant": {
+            "title": "Tenant",
+            "type": "string"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "seq",
+          "tenant",
+          "team",
+          "actor",
+          "actor_kind",
+          "event",
+          "target",
+          "reason",
+          "run_id",
+          "trace_id",
+          "policy_version",
+          "at",
+          "prev",
+          "hash"
+        ],
+        "title": "AuditEntry",
+        "type": "object"
+      },
+      "AuditVerification": {
+        "properties": {
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Problems",
+            "type": "array"
+          }
+        },
+        "required": [
+          "problems"
+        ],
+        "title": "AuditVerification",
+        "type": "object"
+      },
+      "CheckRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/rbac/check`: may the caller (or `user`, needing `rbac.assign`) do\n`permission` for the org, a team or a repo?",
+        "properties": {
+          "permission": {
+            "title": "Permission",
+            "type": "string"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "maxLength": 254,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          }
+        },
+        "required": [
+          "permission"
+        ],
+        "title": "CheckRequest",
+        "type": "object"
+      },
+      "CheckResult": {
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          }
+        },
+        "required": [
+          "allowed",
+          "reason"
+        ],
+        "title": "CheckResult",
+        "type": "object"
+      },
+      "EffectivePermissions": {
+        "description": "What the caller may do, as the server computed it: permissions granted at org scope,\nper team, and per repo (derived maintainerships), plus each known repo's team. For\ndisplay and CLI hints only; authoritative answers come from `POST /v1/rbac/check`.",
+        "properties": {
+          "org": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Org",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "repo_teams": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Repo Teams",
+            "type": "object"
+          },
+          "repos": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "title": "Repos",
+            "type": "object"
+          },
+          "teams": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "title": "Teams",
+            "type": "object"
+          }
+        },
+        "title": "EffectivePermissions",
+        "type": "object"
+      },
       "Me": {
         "description": "`GET /v1/me`: who the token belongs to, in which tenant, and what they hold.",
         "properties": {
@@ -52,6 +401,9 @@
             ],
             "title": "Kind",
             "type": "string"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/EffectivePermissions"
           },
           "tenant": {
             "$ref": "#/components/schemas/TenantRef"
@@ -135,6 +487,60 @@
           "db_enforced"
         ],
         "title": "Readiness",
+        "type": "object"
+      },
+      "RoleInfo": {
+        "properties": {
+          "builtin": {
+            "title": "Builtin",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          },
+          "team_assignable": {
+            "title": "Team Assignable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "permissions",
+          "builtin",
+          "team_assignable"
+        ],
+        "title": "RoleInfo",
+        "type": "object"
+      },
+      "RoleUpdate": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/rbac/roles/{name}`: create or replace a role's permissions.",
+        "properties": {
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          },
+          "team_assignable": {
+            "default": false,
+            "title": "Team Assignable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "permissions"
+        ],
+        "title": "RoleUpdate",
         "type": "object"
       },
       "TenantRef": {
@@ -380,6 +786,128 @@
         ]
       }
     },
+    "/v1/audit": {
+      "get": {
+        "description": "Records after `after_seq`, oldest first. With `team`, only that team's records.",
+        "operationId": "list_audit_v1_audit_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after_seq",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After Seq",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 63,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AuditEntry"
+                  },
+                  "title": "Response List Audit V1 Audit Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Audit",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/v1/audit/verify": {
+      "get": {
+        "description": "Recompute every hash and link of the tenant's chain; [] means intact.",
+        "operationId": "verify_audit_v1_audit_verify_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditVerification"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Verify Audit",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/v1/me": {
       "get": {
         "description": "Who the token belongs to, in which tenant, and the roles they hold.",
@@ -415,6 +943,418 @@
         "summary": "Me",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/v1/rbac/assignments": {
+      "get": {
+        "description": "Assignments in the tenant (org `rbac.assign`), or in one team (`rbac.assign.team`).",
+        "operationId": "list_assignments_v1_rbac_assignments_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 63,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          },
+          {
+            "in": "query",
+            "name": "user",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 254,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Assignment"
+                  },
+                  "title": "Response List Assignments V1 Rbac Assignments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Assignments",
+        "tags": [
+          "rbac"
+        ]
+      },
+      "post": {
+        "description": "Give a person a role at org scope or in a team; the person is created in the\ncaller's tenant when new. Team leads assign only team-assignable roles in their team.",
+        "operationId": "create_assignment_v1_rbac_assignments_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assignment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Assignment",
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/v1/rbac/assignments/{id}": {
+      "delete": {
+        "description": "Revoke an assignment. The tenant's last org admin cannot be removed.",
+        "operationId": "delete_assignment_v1_rbac_assignments__id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Assignment",
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/v1/rbac/check": {
+      "post": {
+        "description": "May the caller - or `user`, which needs org `rbac.assign` - do `permission` for the\norg, a team or a repo? The authoritative answer the CLI relies on.",
+        "operationId": "check_v1_rbac_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Check",
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/v1/rbac/roles": {
+      "get": {
+        "description": "The tenant's roles (builtin and custom).",
+        "operationId": "list_roles_v1_rbac_roles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RoleInfo"
+                  },
+                  "title": "Response List Roles V1 Rbac Roles Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Roles",
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/v1/rbac/roles/{name}": {
+      "delete": {
+        "description": "Delete a custom role that nobody holds (org `rbac.assign`).",
+        "operationId": "delete_role_v1_rbac_roles__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Role",
+        "tags": [
+          "rbac"
+        ]
+      },
+      "get": {
+        "operationId": "get_role_v1_rbac_roles__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Role",
+        "tags": [
+          "rbac"
+        ]
+      },
+      "put": {
+        "description": "Create or replace a role (org `rbac.assign`). Org admins always keep `rbac.assign`.",
+        "operationId": "put_role_v1_rbac_roles__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleInfo"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Role",
+        "tags": [
+          "rbac"
         ]
       }
     },

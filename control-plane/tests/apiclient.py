@@ -123,3 +123,27 @@ async def bootstrap(db, clock: FakeClock, slug: str, name: str) -> TenantHandle:
         admin_token=result.token,
         admin_token_id=result.token_id,
     )
+
+
+# -- RBAC helpers (tests of the RBAC and audit APIs) --
+
+
+async def assign(api, token, email, role, team=None):
+    body = {"email": email, "role": role}
+    if team is not None:
+        body["team"] = team
+    return await api.post("/v1/rbac/assignments", token, body)
+
+
+async def member(api, tenant, email, role, team=None):
+    """A user of `tenant` holding `role` (assigned by its org admin), with a token."""
+    _, token = await api.add_user(tenant, email)
+    reply = await assign(api, tenant.admin_token, email, role, team)
+    assert reply.status_code == 201, reply.text
+    return token, reply.json()["id"]
+
+
+async def check(api, token, permission, **where):
+    reply = await api.post("/v1/rbac/check", token, {"permission": permission, **where})
+    assert reply.status_code == 200, reply.text
+    return reply.json()

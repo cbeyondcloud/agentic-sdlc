@@ -30,6 +30,7 @@ from agentic_cp.auth.tokens import (
 )
 from agentic_cp.auth.users import user_by_id
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
+from agentic_cp.rbac.authz import effective_permissions
 from agentic_cp.tables import assignments
 from agentic_cp.tenancy.context import tenant_tx
 from agentic_cp.tenancy.tenants import current_tenant
@@ -53,6 +54,7 @@ async def me(request: Request, ctx: Caller) -> Me:
         tenant = await current_tenant(conn)
         user = await user_by_id(conn, ctx.user_id)
         held = await assignments_of(conn, ctx.user_id)
+        permissions = await effective_permissions(ctx, conn=conn, cache=request.app.state.enforcers)
     if user is None:  # deleted between resolution and now
         raise not_found("user")
     return Me(
@@ -61,6 +63,7 @@ async def me(request: Request, ctx: Caller) -> Me:
         tenant=TenantRef(slug=tenant.slug, name=tenant.name),
         token_expires_at=ctx.expires_at,
         assignments=held,
+        permissions=permissions,
     )
 
 

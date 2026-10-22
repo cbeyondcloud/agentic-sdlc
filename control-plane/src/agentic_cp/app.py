@@ -15,10 +15,13 @@ from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from agentic_cp.audit.api import router as audit_router
 from agentic_cp.auth.api import router as auth_router
 from agentic_cp.db import current_revision, head_revision, make_engine
 from agentic_cp.db_roles import AUDIT, TENANCY, enforcement_status
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, install_problem_handlers, log
+from agentic_cp.rbac.api import router as rbac_router
+from agentic_cp.rbac.authz import EnforcerCache
 from agentic_cp.settings import Settings
 
 Clock = Callable[[], datetime]
@@ -62,8 +65,11 @@ def create_app(
     app.state.clock = clock or utc_now
     app.state.git = git
     app.state.rate_limiter = rate_limiter
+    app.state.enforcers = EnforcerCache(settings.enforcer_cache_tenants)
     install_problem_handlers(app)
     app.include_router(auth_router)
+    app.include_router(rbac_router)
+    app.include_router(audit_router)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:

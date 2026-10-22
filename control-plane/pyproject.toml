@@ -17,6 +17,12 @@ dependencies = [
     "asyncpg==0.31.0",
     "greenlet==3.5.6",
     "alembic==1.20.0",
+    # RBAC engine (owner decision row 77), imported only by agentic_cp.rbac.authz. Its
+    # dependencies are pinned because their newest releases are younger than two weeks.
+    "pycasbin==2.8.0",
+    "simpleeval==1.0.8",
+    "wcmatch==11.0.1",
+    "bracex==3.0.1",
 ]
 
 [build-system]

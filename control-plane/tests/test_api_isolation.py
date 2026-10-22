@@ -24,13 +24,13 @@ def _fill(path: str, values: dict[str, str]) -> str:
 @pytest.mark.parametrize("case", OBJECT_ROUTES, ids=[c.id for c in OBJECT_ROUTES])
 async def test_api_isolation(api, case):
     values = await case.make_object_in_b(api)
-    missing = {
-        key: str(uuid.uuid4()) if _looks_like_id(value) else f"missing-{key}"
-        for key, value in values.items()
-    }
-    other = await api.call(case.method, _fill(case.path, values), api.a.admin_token, case.body)
-    absent = await api.call(case.method, _fill(case.path, missing), api.a.admin_token, case.body)
-    assert other.status_code == absent.status_code == 404, (other.text, absent.text)
+    missing = {key: _missing(key, value) for key, value in values.items()}
+    token = api.a.admin_token
+    other = await api.call(case.method, _fill(case.path, values), token, case.filled_body(values))
+    absent = await api.call(
+        case.method, _fill(case.path, missing), token, case.filled_body(missing)
+    )
+    assert other.status_code == absent.status_code == case.expect_status, (other.text, absent.text)
     assert _normalised(other.json(), values) == _normalised(absent.json(), missing)
 
 
@@ -55,6 +55,15 @@ def test_every_object_route_has_an_isolation_case():
             routes.add(f"{method.upper()} {path}")
     covered = {f"{c.method} {c.path}" for c in OBJECT_ROUTES}
     assert routes <= covered, sorted(routes - covered)
+
+
+def _missing(key: str, value: str) -> str:
+    """A value of the same shape that names nothing."""
+    if _looks_like_id(value):
+        return str(uuid.uuid4())
+    if key == "email":
+        return f"missing-{uuid.uuid4().hex[:8]}@absent.example.test"
+    return f"missing-{uuid.uuid4().hex[:8]}"
 
 
 def _looks_like_id(value: str) -> bool:

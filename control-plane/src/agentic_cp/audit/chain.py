@@ -145,10 +145,17 @@ async def append(
 
 
 async def read_records(
-    conn: AsyncConnection, *, after_seq: int = 0, limit: int | None = None
+    conn: AsyncConnection,
+    *,
+    after_seq: int = 0,
+    team: str | None = None,
+    limit: int | None = None,
 ) -> list[AuditRecord]:
-    """The transaction's tenant's records after `after_seq`, in order."""
+    """The transaction's tenant's records after `after_seq` (of one team, with `team`), in
+    order."""
     query = select(audit_log).where(audit_log.c.seq > after_seq).order_by(audit_log.c.seq)
+    if team is not None:
+        query = query.where(audit_log.c.team == team)
     if limit is not None:
         query = query.limit(limit)
     return [_record(row) for row in await conn.execute(query)]

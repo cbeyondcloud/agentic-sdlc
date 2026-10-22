@@ -86,10 +86,11 @@ def register(table: str) -> Callable[[RowFactory], RowFactory]:
 class EndpointCase:
     """One `/v1` route checked against another tenant's object.
 
-    `make_object_in_b(app_ctx)` creates an object in tenant b and returns the values for
-    the path template (e.g. `{"id": ...}`); the route, called with tenant a's token, must
-    answer exactly like a missing object (DR-5). `must_not_list` routes are list routes:
-    the object's id must not appear in their body."""
+    `make_object_in_b(api)` creates an object in tenant b and returns the values for the
+    path and body templates (e.g. `{"id": ...}`); the route, called with tenant a's token,
+    must answer exactly like it does for a missing object (DR-5) - `expect_status` (404,
+    or 201 for a create-or-replace route, which must then create a's own object).
+    `must_not_list` routes are list routes: the values must not appear in their body."""
 
     family: str
     method: str
@@ -97,11 +98,20 @@ class EndpointCase:
     make_object_in_b: Callable[[Any], Awaitable[dict[str, str]]]
     body: dict[str, Any] | None = None
     must_not_list: bool = False
+    expect_status: int = 404
     tags: tuple[str, ...] = field(default_factory=tuple)
 
     @property
     def id(self) -> str:
         return f"{self.family}-{self.method} {self.path}"
+
+    def filled_body(self, values: dict[str, str]) -> dict[str, Any] | None:
+        if self.body is None:
+            return None
+        return {
+            key: value.format(**values) if isinstance(value, str) else value
+            for key, value in self.body.items()
+        }
 
 
 #: filled by the tasks that add object routes
@@ -194,7 +204,58 @@ async def _token_in_b(api) -> dict[str, str]:
     return {"id": issued.json()["id"]}
 
 
+async def _role_in_b(api) -> dict[str, str]:
+    name = f"b-only-{next(_sequence)}"
+    made = await api.put(
+        f"/v1/rbac/roles/{name}", api.b.admin_token, {"permissions": ["run.trigger"]}
+    )
+    assert made.status_code == 201, made.text
+    return {"name": name}
+
+
+async def _assignment_in_b(api) -> dict[str, str]:
+    email = f"b-only-{next(_sequence)}@b.example.test"
+    made = await api.post(
+        "/v1/rbac/assignments",
+        api.b.admin_token,
+        {"email": email, "role": "developer", "team": "payments"},
+    )
+    assert made.status_code == 201, made.text
+    return {"id": made.json()["id"], "email": email}
+
+
+async def _user_in_b(api) -> dict[str, str]:
+    values = await _assignment_in_b(api)
+    return {"email": values["email"]}
+
+
+async def _audit_record_in_b(api) -> dict[str, str]:
+    values = await _role_in_b(api)  # writes role.updated into b's chain
+    return values
+
+
 ENDPOINT_CASES += [
     EndpointCase("tokens", "DELETE", "/v1/tokens/{id}", _token_in_b),
     EndpointCase("tokens", "GET", "/v1/tokens", _token_in_b, must_not_list=True),
+    EndpointCase("rbac", "GET", "/v1/rbac/roles/{name}", _role_in_b),
+    EndpointCase("rbac", "DELETE", "/v1/rbac/roles/{name}", _role_in_b),
+    EndpointCase(
+        "rbac",
+        "PUT",
+        "/v1/rbac/roles/{name}",
+        _role_in_b,
+        body={"permissions": ["dashboard.view.own"]},
+        expect_status=201,
+    ),
+    EndpointCase("rbac", "DELETE", "/v1/rbac/assignments/{id}", _assignment_in_b),
+    EndpointCase(
+        "rbac",
+        "POST",
+        "/v1/rbac/check",
+        _user_in_b,
+        body={"permission": "run.trigger", "team": "payments", "user": "{email}"},
+    ),
+    EndpointCase("rbac", "GET", "/v1/rbac/assignments", _assignment_in_b, must_not_list=True),
+    EndpointCase("rbac", "GET", "/v1/rbac/roles", _role_in_b, must_not_list=True),
+    EndpointCase("audit", "GET", "/v1/audit", _audit_record_in_b, must_not_list=True),
 ]
