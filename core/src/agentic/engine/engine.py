@@ -23,6 +23,12 @@ the step that was in progress and its spend still counts. A limit, a timeout, an
 invalid answer, a stuck agent or a condition that cannot be evaluated pauses the
 run with the reason; nothing is decided silently.
 
+A step that changed more than one review batch (spec §6.1, M2-24: the diff-size
+budget, `batch_budget_for`) never reaches the next step as it is: the oversized change
+is rolled back and the step runs again at once, asked to split its work; a second
+oversized change waits at the `diff-budget` gate, where a person accepts it, sends it
+back with feedback, or stops the run.
+
 Every agent step runs inside a process scope (`agentic.backends.processes`, M2-22):
 whatever the backend started and left running - a background shell, a code-intelligence
 build in a tool thread - is killed when the step ends, however it ends.
@@ -84,6 +90,20 @@ _LOG = logging.getLogger("agentic.engine")
 PROMPT_HEAD = "Pipeline: {pipeline} · step: {step} · iteration: {iteration}"
 #: The pause of a run that reached its end while a newest handoff reports a failure.
 FAILING_PAUSE = "failing-handoff"
+#: The gate of a step whose change is still larger than one review batch (M2-24).
+BATCH_GATE = "diff-budget"
+#: The capability that lets an agent change the tree: its steps are told the budget.
+WRITING_TOOL = "edit_files"
+BATCH_NOTICE = (
+    "Review batch budget: keep this step's change within {limits}, so one person can "
+    "review it. If the work is larger, deliver a first self-contained part within the "
+    "budget now and list what remains in your report; it comes in a later pass."
+)
+SPLIT_REQUEST = (
+    "Your change was not accepted: it is larger than one review batch ({reasons}). It "
+    "has been undone. Split the work: deliver a first self-contained part within "
+    "{limits}, and list what remains in your report for a later pass."
+)
 
 
 class EngineError(Exception):
@@ -155,6 +175,15 @@ class StepTrees(Protocol):
     def rollback(self, to: dict[str, str]) -> None: ...
 
 
+class ReviewBatch(Protocol):
+    """The diff-size budget per review batch over a run's trees (spec §6.1;
+    `sdlc_commons.review_batches.ReviewBatchBudget`)."""
+
+    def limits(self) -> str: ...  # the budget in words, for the agent's prompt
+
+    def over(self, base: Mapping[str, str], head: Mapping[str, str]) -> list[str]: ...
+
+
 class Engine:
     def __init__(
         self,
@@ -175,6 +204,7 @@ class Engine:
         step_logs: StepLogs | None = None,
         redact: Callable[[str], str] | None = None,
         handoff_prefix: str = "",
+        batch_budget_for: Callable[[str], ReviewBatch] | None = None,
     ) -> None:
         self.definitions, self.policy, self.context = definitions, policy, context
         self.store, self.recorder_for, self.gates_for = store, recorder_for, gates_for
@@ -191,6 +221,8 @@ class Engine:
         # then name handoffs by their repo-relative path (spec 14.5, DF-174); "" keeps
         # them relative to the run folder
         self.handoff_prefix = handoff_prefix.strip().strip("/")
+        # the diff-size budget per review batch (M2-24); None: steps are not measured
+        self.batch_budget_for = batch_budget_for
 
     async def start(
         self, pipeline: str, inputs: dict[str, str], starter: str, run_id: str
@@ -356,6 +388,7 @@ class _Run:
         )
         self.budget.on_change = self._save_budget
         self._tree_handle: StepTrees | None = None
+        self._batch_handle: ReviewBatch | None = None
         self._work: Path | None = None  # where the run's agents work (from prepare)
         self._marks: tuple | None = None  # (step, iteration, base, commit) of the attempt
         self._children: dict[str, Decimal] = {}  # the settled step's spend per child
@@ -691,8 +724,8 @@ class _Run:
         if self._gate_step(pending.id) is not None:
             state.approved[pending.id] = dict(pending.artefacts)
         self._clear_pending()
-        if pending.id == "blocked-output":
-            self._after_step()  # the person accepted (or edited) the blocked handoff
+        if pending.id in ("blocked-output", BATCH_GATE):
+            self._after_step()  # the person accepted (or edited) the handoff as it is
         elif pending.id == "invalid-output" and edited is not None:
             rel, digest, _ = edited
             step, iteration = pending.step, state.cursor.loop_iteration or 1
@@ -748,7 +781,7 @@ class _Run:
 
     async def _reject(self, decision: Reject, gate: GateStep | None) -> RunState:
         state, pending = self.state, self.state.pending
-        if pending.id in ("invalid-output", "blocked-output"):
+        if pending.id in ("invalid-output", "blocked-output", BATCH_GATE):
             target, cursor = pending.step, state.cursor
         elif gate is None:  # an exhausted loop: run it again from its first step
             loop = self.pipeline.steps[state.cursor.index].loop
@@ -1108,7 +1141,7 @@ class _Run:
                     task = AgentTask(
                         instructions=agent.definition.instructions,
                         inputs=self._inputs(agent.consumes),
-                        prompt=self._prompt(step.id, iteration),
+                        prompt=self._prompt(step.id, iteration, agent),
                         knowledge=self._knowledge(),
                     )
                     outcome = await runner.run(task)
@@ -1173,7 +1206,76 @@ class _Run:
                 self._pause("worktree", f"{type(error).__name__}: {error}", step=step.id)
                 return False
             self._marks = (step.id, iteration, base, commit)
-        return self._outcome(step.id, iteration, attempt, outcome, started, cost, closing, agent)
+        over = self._over_batch(base, commit) if outcome.status == "completed" else []
+        if over and not self._split_asked(step.id, iteration):
+            return await self._ask_split(step, iteration, attempt, started, cost, base, over)
+        return self._outcome(
+            step.id, iteration, attempt, outcome, started, cost, closing, agent, over=over
+        )
+
+    # ── the review batch budget (M2-24) ──────────────────────────────────────
+
+    def _batch(self) -> ReviewBatch | None:
+        """The run's review batch budget, when there is one and the run has trees."""
+        if self.e.batch_budget_for is None or self.e.trees_for is None:
+            return None
+        if self._batch_handle is None:
+            self._batch_handle = self.e.batch_budget_for(self.state.run_id)
+        return self._batch_handle
+
+    def _over_batch(self, base: dict | None, commit: dict | None) -> list[str]:
+        """Why this checkpoint is larger than one review batch; empty when it fits or
+        nothing changed."""
+        if not base or not commit or base == commit:
+            return []
+        batch = self._batch()
+        return batch.over(base, commit) if batch is not None else []
+
+    def _split_asked(self, step: str, iteration: int) -> bool:
+        """Whether this attempt follows an automatic split request: one per step and
+        iteration, until a batch of it is handed on (or to a person)."""
+        for record in reversed(self.state.history):
+            if record.step == step and record.iteration == iteration:
+                if record.outcome == "completed":
+                    return False
+                if record.outcome == "over-budget":
+                    return True
+        return False
+
+    async def _ask_split(
+        self,
+        step: AgentStep,
+        iteration: int,
+        attempt: int,
+        started: datetime,
+        cost: Decimal,
+        base: dict,
+        over: list[str],
+    ) -> bool:
+        """Refuse an oversized change: record it, undo it, and run the step again at
+        once, asked to split its work."""
+        reasons = "; ".join(over)
+        detail = f"larger than one review batch: {reasons}"
+        self._history(
+            step.id,
+            iteration,
+            "over-budget",
+            started=started,
+            cost=cost,
+            children=self._children,
+            detail=detail,
+        )
+        self.recorder.record("step_finished", step.id, outcome="over-budget", cost=self._usd(cost))
+        try:
+            self._trees().rollback(base)
+        except Exception as error:
+            self._pause("worktree", f"{type(error).__name__}: {error}", step=step.id)
+            return False
+        request = SPLIT_REQUEST.format(reasons=reasons, limits=self._batch().limits())
+        earlier = self.state.feedback.get(step.id)
+        self.state.feedback[step.id] = f"{earlier}\n\n{request}" if earlier else request
+        self.save()
+        return await self._agent(step, iteration, None)
 
     def _outcome(
         self,
@@ -1185,6 +1287,8 @@ class _Run:
         cost: Decimal,
         closing: str,
         agent: ResolvedAgent,
+        *,
+        over: list[str] | None = None,
     ) -> bool:
         base = f"handoffs/{step}-{iteration}" + (f"-attempt{attempt}" if attempt > 1 else "")
         usd = self._usd(cost)
@@ -1217,6 +1321,15 @@ class _Run:
                     step,
                     {rel: digest},
                 )
+                return False
+            if over:  # split once already: a person decides (M2-24)
+                reason = (
+                    "the change is still larger than one review batch: "
+                    + "; ".join(over)
+                    + " - approve to accept it as one batch, reject with feedback to have "
+                    "it split, or stop the run"
+                )
+                self._wait(BATCH_GATE, reason, step, {rel: digest})
                 return False
             return True  # saved with the cursor move
         if outcome.status == "invalid":
@@ -1363,8 +1476,11 @@ class _Run:
                 inputs[kind] = (self.recorder.run_dir / rel).read_text(encoding="utf-8")
         return inputs
 
-    def _prompt(self, step: str, iteration: int) -> str:
+    def _prompt(self, step: str, iteration: int, agent: ResolvedAgent | None = None) -> str:
         parts = [PROMPT_HEAD.format(pipeline=self.state.pipeline, step=step, iteration=iteration)]
+        batch = self._batch() if agent is not None and WRITING_TOOL in agent.tools else None
+        if batch is not None:
+            parts.append(BATCH_NOTICE.format(limits=batch.limits()))
         if self.state.inputs:
             lines = "\n".join(f"{key}: {value}" for key, value in self.state.inputs.items())
             parts.append(f"Request:\n{lines}")
