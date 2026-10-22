@@ -23,6 +23,7 @@ import json
 import os
 import shlex
 import stat
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -262,7 +263,11 @@ class ClaudeCodeRunner:
         watcher = asyncio.ensure_future(self._adopt_when_started())
         try:
             async with client:
-                return await self._converse(client, task)
+                try:
+                    return await self._converse(client, task)
+                finally:  # its shell commands, before the SDK shuts Claude Code down
+                    if not self.wrap or sys.platform == "darwin":  # (Linux srt: the PID
+                        self._tree.kill_below()  # namespace ends them with the sandbox)
         finally:  # nothing Claude Code started outlives the session, however it ends
             watcher.cancel()
             self._tree.close()

@@ -63,7 +63,7 @@ def developer(trees: SizedTrees, files: int):
     return write
 
 
-def setup(make_harness, *dev_sizes: int):
+def setup(make_harness, *dev_sizes: int, pipeline: str = DEV_REVIEW):
     trees = SizedTrees()
     budget = Budget(trees)
     script = {
@@ -71,7 +71,7 @@ def setup(make_harness, *dev_sizes: int):
         "reviewer": [review()],
     }
     h = make_harness(
-        DEV_REVIEW,
+        pipeline,
         script,
         trees_for=lambda run_id: trees,
         batch_budget_for=lambda run_id: budget,
@@ -162,3 +162,38 @@ def test_a_step_without_a_change_or_without_trees_is_not_checked(make_harness):
         batch_budget_for=lambda run_id: (_ for _ in ()).throw(AssertionError("no trees")),
     )
     assert start(h).status == "completed"
+
+
+def test_a_budget_that_cannot_be_measured_pauses_the_run(make_harness):
+    h, _, budget = setup(make_harness, 1)
+
+    def broken(base, head):
+        raise RuntimeError("git diff failed")
+
+    budget.over = broken
+    state = start(h)
+    assert (state.status, state.pending.id) == ("paused", "worktree")
+    assert "git diff failed" in state.pending.reason
+
+
+def test_an_invalid_oversized_answer_tells_the_person_deciding(make_harness):
+    h, trees, _ = setup(make_harness, 5)
+    h.runners.script["dev"] = [lambda ctx: setattr(trees, "pending_size", 5) or "not a handoff"]
+    state = start(h)
+    assert state.pending.id == "invalid-output"
+    assert "larger than one review batch" in state.pending.reason
+
+
+def test_the_run_time_limit_comes_before_the_split_attempt(make_harness):
+    timed = DEV_REVIEW.replace("version: 1.0.0\n", "version: 1.0.0\nmax_minutes: 60\n")
+    h, trees, _ = setup(make_harness, 5, 1, pipeline=timed)
+
+    def slow_and_big(ctx):
+        h.clock.advance(120)  # the run's limit passes during the oversized attempt
+        trees.pending_size = 5
+        return answer("dev-report", open_questions=[])
+
+    h.runners.script["dev"] = [slow_and_big, developer(trees, 1)]
+    state = start(h)
+    assert state.pending.id == "run-timeout"
+    assert h.runners.calls["dev"] == 1

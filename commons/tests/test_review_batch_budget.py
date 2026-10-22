@@ -73,6 +73,13 @@ def test_repository_diff_settings_do_not_change_the_count(repo, key, value):
     assert "30 changed lines" in reason
 
 
+def test_attributes_in_the_agents_tree_do_not_hide_lines(repo):
+    # `* -diff` would print "Binary files differ" for every file: no line counted
+    files = {".gitattributes": "* -diff\n", "big.py": "x\n" * 30}
+    budget, base, head, _ = step(repo, files, max_lines=20)
+    assert "changed lines" in " ".join(budget.over(base, head))
+
+
 def test_the_limits_read_as_a_sentence(repo):
     budget, *_ = step(repo, {}, max_files=12, max_lines=400)
     text = budget.limits()

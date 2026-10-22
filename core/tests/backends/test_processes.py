@@ -3,6 +3,7 @@ cross-OS test set for `agentic.backends.processes`, which every backend uses. Ea
 spawns a grandchild that would outlive its parent and proves it does not survive."""
 
 import asyncio
+import contextvars
 import os
 import subprocess
 import sys
@@ -197,6 +198,46 @@ def test_closing_the_scope_closes_every_tree_in_it(tmp_path):
     finally:
         cleanup(first, *pids)
         cleanup(second)
+
+
+def test_a_tree_adopted_after_its_scope_closed_is_killed_at_once(tmp_path):
+    # a tool thread that was waiting (on a lock, say) when its step ended
+    with process_scope():
+        thread_context = contextvars.copy_context()  # as a worker thread holds it
+    parent = spawn(tmp_path, PARENT)
+    grandchild = grandchild_of(parent)
+    try:
+        thread_context.run(ProcessTree().adopt, parent)
+        assert gone(grandchild)
+    finally:
+        cleanup(parent, grandchild)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_a_settled_tree_never_signals_its_old_group(tmp_path, monkeypatch):
+    done = subprocess.Popen([sys.executable, "-c", "pass"], **spawn_group())
+    done.wait(timeout=10)
+    tree = ProcessTree().adopt(done)
+    assert tree.settle()  # nothing was left in its group: the pid may be reused from here
+    signalled = []
+    monkeypatch.setattr(os, "killpg", lambda *a: signalled.append(a))
+    monkeypatch.setattr(os, "kill", lambda *a: signalled.append(a))
+    tree.close()
+    assert signalled == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX re-parents orphans; Windows has the job")
+def test_kill_below_ends_the_commands_but_not_the_cli(tmp_path):
+    parent = spawn(tmp_path, DETACHER)  # its child runs in a group of its own
+    tree = ProcessTree().adopt(parent)
+    grandchild = grandchild_of(parent)
+    try:
+        tree.kill_below()  # before a graceful shutdown of the CLI
+        assert gone(grandchild)
+        assert parent.poll() is None  # the CLI itself is left to shut down
+    finally:
+        tree.close()
+        cleanup(parent, grandchild)
 
 
 def test_a_closed_tree_leaves_the_scope(tmp_path):

@@ -237,7 +237,8 @@ class StepCheckpoints:
         return config
 
 
-#: `git diff` as Zyroflo's budget reads it, whatever the repository configures.
+#: `git diff` as Zyroflo's budget reads it, whatever the repository configures or the
+#: agent's `.gitattributes` says (`--text`: a `-diff` or `binary` file still counts).
 _PLAIN_DIFF = (
     "-c",
     "diff.noprefix=false",
@@ -247,6 +248,7 @@ _PLAIN_DIFF = (
     "--no-ext-diff",
     "--no-textconv",
     "--no-color",
+    "--text",
     "--src-prefix=a/",
     "--dst-prefix=b/",
 )

@@ -107,10 +107,11 @@ STOP_SIGNALS = ("SIGTERM", "SIGHUP", "SIGBREAK")
 
 @contextmanager
 def stop_signals_as_interrupts() -> Iterator[None]:
-    """While open, a stop signal raises KeyboardInterrupt, so the running step is
-    cancelled and everything it started is killed (M2-22) - its process scope closes -
-    instead of the CLI dying with its agent processes left running. The previous
-    handlers come back afterwards; outside the main thread nothing changes."""
+    """While open, a stop signal does what Ctrl-C does: inside `asyncio.run`, the
+    runner's SIGINT handler cancels the running step cleanly (its spend is recorded, its
+    process scope closes and kills everything it started, M2-22); elsewhere it raises
+    KeyboardInterrupt - instead of the CLI dying with its agent processes left running.
+    The previous handlers come back afterwards; outside the main thread nothing changes."""
     previous = {}
     for name in STOP_SIGNALS:
         number = getattr(signal, name, None)
@@ -128,7 +129,11 @@ def stop_signals_as_interrupts() -> Iterator[None]:
 
 
 def _interrupt(signum: int, frame: object) -> None:
-    raise KeyboardInterrupt
+    handler = signal.getsignal(signal.SIGINT)
+    if callable(handler):  # asyncio's (cancel the main task) or Python's default
+        handler(signal.SIGINT, frame)
+    else:
+        raise KeyboardInterrupt
 
 
 def run() -> None:

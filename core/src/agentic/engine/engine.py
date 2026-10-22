@@ -92,8 +92,8 @@ PROMPT_HEAD = "Pipeline: {pipeline} · step: {step} · iteration: {iteration}"
 FAILING_PAUSE = "failing-handoff"
 #: The gate of a step whose change is still larger than one review batch (M2-24).
 BATCH_GATE = "diff-budget"
-#: The capability that lets an agent change the tree: its steps are told the budget.
-WRITING_TOOL = "edit_files"
+#: The capabilities that let an agent change the tree: its steps are told the budget.
+WRITING_TOOLS = frozenset({"edit_files", "run_shell"})
 BATCH_NOTICE = (
     "Review batch budget: keep this step's change within {limits}, so one person can "
     "review it. If the work is larger, deliver a first self-contained part within the "
@@ -1206,8 +1206,13 @@ class _Run:
                 self._pause("worktree", f"{type(error).__name__}: {error}", step=step.id)
                 return False
             self._marks = (step.id, iteration, base, commit)
-        over = self._over_batch(base, commit) if outcome.status == "completed" else []
-        if over and not self._split_asked(step.id, iteration):
+        try:  # an invalid answer's change is measured too: the person deciding is told
+            measured = outcome.status in ("completed", "invalid")
+            over = self._over_batch(base, commit) if measured else []
+        except Exception as error:  # an unreadable repo policy, a failed git diff
+            self._pause("worktree", f"{type(error).__name__}: {error}", step=step.id)
+            return False
+        if over and outcome.status == "completed" and not self._split_asked(step.id, iteration):
             return await self._ask_split(step, iteration, attempt, started, cost, base, over)
         return self._outcome(
             step.id, iteration, attempt, outcome, started, cost, closing, agent, over=over
@@ -1275,6 +1280,9 @@ class _Run:
         earlier = self.state.feedback.get(step.id)
         self.state.feedback[step.id] = f"{earlier}\n\n{request}" if earlier else request
         self.save()
+        if self._timed_out():  # the run's own time limit comes first, as before any step
+            self._pause("run-timeout", self._timeout_reason(), step=step.id)
+            return False
         return await self._agent(step, iteration, None)
 
     def _outcome(
@@ -1339,6 +1347,8 @@ class _Run:
             reason = "the answer is not a valid handoff after one retry: " + "; ".join(
                 outcome.errors
             )
+            if over:  # an edit-and-approve would hand the reviewer an oversized batch
+                reason += "; the change is also larger than one review batch: " + "; ".join(over)
             self._history(
                 step,
                 iteration,
@@ -1478,7 +1488,8 @@ class _Run:
 
     def _prompt(self, step: str, iteration: int, agent: ResolvedAgent | None = None) -> str:
         parts = [PROMPT_HEAD.format(pipeline=self.state.pipeline, step=step, iteration=iteration)]
-        batch = self._batch() if agent is not None and WRITING_TOOL in agent.tools else None
+        writes = agent is not None and bool(WRITING_TOOLS & set(agent.tools))
+        batch = self._batch() if writes else None
         if batch is not None:
             parts.append(BATCH_NOTICE.format(limits=batch.limits()))
         if self.state.inputs:

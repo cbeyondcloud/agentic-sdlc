@@ -177,6 +177,8 @@ async def run_process(
     if not done:
         await _stop(tree, finished)
         return ShellResult(exit_code=None, stdout=out.text(), stderr=err.text(), timed_out=True)
+    if tree.settle():  # nothing left in the background: finished now, not at step end
+        tree.close()
     return ShellResult(
         exit_code=process.returncode, stdout=out.text(), stderr=err.text(), timed_out=False
     )

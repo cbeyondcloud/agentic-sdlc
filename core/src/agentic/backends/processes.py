@@ -22,7 +22,8 @@ running after a time limit, a stopped run or a Ctrl-C. So:
     synchronous tools run in (a code-intelligence build, `run_contained`).
 
 A process that has exited is never signalled by its pid, which the OS may have given to
-someone else; only its group, session or job is. What POSIX cannot reach: a grandchild
+someone else; only its group, session or job is - and on POSIX not even those once
+`settle` found nothing left in them. What POSIX cannot reach: a grandchild
 that starts a session of its own AND outlives its parent is re-parented to init and
 leaves no trace; on Linux the sandbox's PID namespace (`srt`, bubblewrap) ends it.
 """
@@ -38,7 +39,7 @@ import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 KILL_WAIT_S = 5.0
 _SESSION = "import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])"
@@ -85,6 +86,7 @@ class ProcessTree:
         self._process: Started | None = None
         self._job: _Job | None = None
         self._scope: ProcessScope | None = None
+        self._settled = False  # exited with nothing left: never signal its group again
         self._lock = threading.RLock()
 
     def adopt(self, process: Started) -> "ProcessTree":
@@ -103,11 +105,35 @@ class ProcessTree:
         """Whether the OS holds the tree together (Windows: the child is in a job)."""
         return self._job is not None
 
+    def settle(self) -> bool:
+        """After the child has exited: whether it left nothing running in its group
+        (and, on Linux, its session). Then the tree is finished on POSIX: its pid, free
+        for the OS to reuse, is never signalled again, not even as a group. A tree that
+        left something running stays open for its scope to close. Windows needs no such
+        care (the job holds the tree, not a pid)."""
+        with self._lock:
+            pid = self.pid
+            if pid is None or not self._exited():
+                return False
+            if os.name == "nt" or self._settled:
+                return self._settled
+            try:
+                os.killpg(pid, 0)
+                return False  # its group still has members, which hold the id
+            except ProcessLookupError:
+                pass
+            except (PermissionError, OSError):
+                return False
+            if Path("/proc").is_dir() and any(row.sid == pid for row in _table()):
+                return False
+            self._settled = True
+            return True
+
     def kill(self) -> None:
         """Kill the child and everything below it. Harmless when they are gone."""
         with self._lock:
             pid = self.pid
-            if pid is None:
+            if pid is None or self._settled:
                 return
             if not self._exited():  # its pid is still its own
                 kill_tree(pid)
@@ -117,6 +143,21 @@ class ProcessTree:
                 _kill_session(pid)
             if self._job is not None:
                 self._job.terminate()
+
+    def kill_below(self) -> None:
+        """Kill what the live child started in process groups of their own (an agent
+        CLI's shell commands), before the CLI is shut down gracefully - while they can
+        still be found by parent id (POSIX re-parents them when it exits). What stays in
+        the child's own group, the CLI itself included, is left to `close`. On Windows
+        the job keeps them all."""
+        with self._lock:
+            pid = self.pid
+            if pid is None or os.name == "nt" or self._exited():
+                return
+            below = set(descendants(pid))
+            for row in _table():
+                if row.pid in below and row.pgid != pid:
+                    _signal(row.pid)
 
     def close(self) -> None:
         """The child's work is over: nothing it started may outlive it."""
@@ -163,8 +204,8 @@ def kill_tree(pid: int) -> None:
 def descendants(pid: int) -> list[int]:
     """Every process below `pid` (POSIX): from /proc on Linux, else from `ps`."""
     children: dict[int, list[int]] = {}
-    for child, parent, _ in _table():
-        children.setdefault(parent, []).append(child)
+    for row in _table():
+        children.setdefault(row.ppid, []).append(row.pid)
     found: list[int] = []
     queue = [pid]
     while queue:
@@ -175,9 +216,16 @@ def descendants(pid: int) -> list[int]:
     return found
 
 
-def _table() -> list[tuple[int, int, int | None]]:
-    """(pid, parent pid, session id or None) of every process (POSIX)."""
-    rows: list[tuple[int, int, int | None]] = []
+class _Row(NamedTuple):
+    pid: int
+    ppid: int
+    pgid: int
+    sid: int | None  # None where `ps` names no session (macOS)
+
+
+def _table() -> list[_Row]:
+    """Every process (POSIX): from /proc on Linux, else from `ps`."""
+    rows: list[_Row] = []
     proc = Path("/proc")
     if proc.is_dir():
         for entry in proc.iterdir():
@@ -190,15 +238,15 @@ def _table() -> list[tuple[int, int, int | None]]:
             # after the name: state, ppid, pgrp, session, ...
             fields = stat_line.rsplit(")", 1)[-1].split()
             if len(fields) > 3:
-                rows.append((int(entry.name), int(fields[1]), int(fields[3])))
+                rows.append(_Row(int(entry.name), int(fields[1]), int(fields[2]), int(fields[3])))
         return rows
     listing = subprocess.run(
-        ["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, check=False
+        ["ps", "-A", "-o", "pid=,ppid=,pgid="], capture_output=True, text=True, check=False
     ).stdout
     for line in listing.splitlines():
         parts = line.split()
-        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-            rows.append((int(parts[0]), int(parts[1]), None))
+        if len(parts) == 3 and all(part.isdigit() for part in parts):
+            rows.append(_Row(int(parts[0]), int(parts[1]), int(parts[2]), None))
     return rows
 
 
@@ -226,9 +274,9 @@ def _kill_session(sid: int) -> None:
     there the process group is the reach)."""
     if sid == os.getsid(0) or not Path("/proc").is_dir():
         return
-    for pid, _, session in _table():
-        if session == sid:
-            _signal(pid)
+    for row in _table():
+        if row.sid == sid:
+            _signal(row.pid)
 
 
 # ── the scope ─────────────────────────────────────────────────────────────────
@@ -239,6 +287,7 @@ class ProcessScope:
 
     def __init__(self) -> None:
         self._trees: set[ProcessTree] = set()
+        self._closed = False
         self._lock = threading.Lock()
 
     @property
@@ -247,9 +296,15 @@ class ProcessScope:
             return frozenset(self._trees)
 
     def add(self, tree: ProcessTree) -> None:
+        """Register `tree`; once the scope is closed (its step is over - a tool thread
+        that was still waiting starts a process late), the tree is closed at once."""
         with self._lock:
-            self._trees.add(tree)
-        tree._scope = self
+            closed = self._closed
+            if not closed:
+                self._trees.add(tree)
+                tree._scope = self
+        if closed:
+            tree.close()
 
     def discard(self, tree: ProcessTree) -> None:
         with self._lock:
@@ -257,7 +312,7 @@ class ProcessScope:
 
     def close(self) -> None:
         with self._lock:
-            trees, self._trees = list(self._trees), set()
+            trees, self._trees, self._closed = list(self._trees), set(), True
         for tree in trees:
             try:
                 tree.close()
