@@ -222,8 +222,9 @@ def _kill_group(pgid: int) -> None:
 
 
 def _kill_session(sid: int) -> None:
-    """Kill what is left of the session `sid` (Linux; macOS's `ps` names no session)."""
-    if sid == os.getsid(0):
+    """Kill what is left of the session `sid` (Linux; macOS's `ps` names no session, so
+    there the process group is the reach)."""
+    if sid == os.getsid(0) or not Path("/proc").is_dir():
         return
     for pid, _, session in _table():
         if session == sid:
