@@ -450,6 +450,7 @@ class Runtime:
             run_budget_usd=run_budget_usd,
             sandbox_label=decision.label,
             trees_for=wiring.trees_for,
+            batch_budget_for=wiring.batch_budget_for,  # M2-24: one review batch per step
             step_logs=StepLogs(self.redact(gateway)),
             redact=self.redact(gateway),  # pause reasons and step details in run.json
             handoff_prefix=RUNS.as_posix(),  # repo-relative Agentic-Handoff trailers (DF-174)
@@ -491,6 +492,7 @@ class Runtime:
             skills=library if isinstance(library, InstalledSkills) else None,
             codeintel_for=codeintel_for,
             scanner=production_scanner(self.ws.policy()),  # tool output, as model calls
+            batch=self.ws.policy().review_batch,
         )
 
     def _catalog_root(self) -> Path | None:
