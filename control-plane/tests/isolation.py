@@ -12,6 +12,7 @@ row for its table, not yet inserted, with unique keys on every call."""
 
 from __future__ import annotations
 
+import itertools
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -104,3 +105,25 @@ class EndpointCase:
 
 #: filled by the tasks that add object routes
 ENDPOINT_CASES: list[EndpointCase] = []
+
+
+# ── row factories (one per table in TENANT_TABLES) ────────────────────────────
+
+_sequence = itertools.count(1)
+
+
+@register("audit_log")
+async def _audit_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    seq = next(_sequence)
+    return {
+        "tenant_id": tenant_id,
+        "seq": seq,
+        "at": "2026-10-22T09:30:00.000Z",
+        "actor": "system:test",
+        "actor_kind": "system",
+        "event": "test.row",
+        "target": "",
+        "reason": "",
+        "prev": "",
+        "hash": f"sha256:{seq:064x}",
+    }

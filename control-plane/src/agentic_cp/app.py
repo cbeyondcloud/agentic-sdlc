@@ -121,7 +121,7 @@ async def check_ready(engine: AsyncEngine, settings: Settings) -> Readiness:
         for reason in status.reasons:
             log.error("readyz: database guarantee missing: %s", reason)
         if settings.require_db_enforcement:
-            code = TENANCY if TENANCY in status.codes else AUDIT
+            code = AUDIT if AUDIT in status.codes else TENANCY
             what = "tenant isolation" if code == TENANCY else "insert-only audit"
             raise ApiProblem(
                 503, code, f"the database does not enforce {what}; the server log has details"

@@ -4,6 +4,8 @@
     migrate               upgrade the database (owner role, AGENTIC_CP_OWNER_DATABASE_URL)
                           and re-align the runtime role's grants
     db grant-runtime      create or re-align the runtime role of AGENTIC_CP_DATABASE_URL
+    admin audit verify --tenant S
+                          verify one tenant's audit chain
     openapi [--write | --check]
                           write or compare control-plane/openapi.json
 
@@ -129,6 +131,52 @@ def _grant_runtime(args: argparse.Namespace) -> int:
     return 0
 
 
+class CommandError(Exception):
+    """An operator command was refused; `code` is the exit status."""
+
+    def __init__(self, message: str, code: int) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+async def _with_tenant(settings: Settings, slug: str, work):
+    """Run `work(conn, tenant)` as the owner role inside `slug`'s tenant context: an
+    operator command never touches a tenant without setting it (Review Focus 6)."""
+    from agentic_cp.db import make_owner_engine
+    from agentic_cp.tenancy.context import tenant_tx
+    from agentic_cp.tenancy.tenants import tenant_by_slug
+
+    engine = make_owner_engine(settings)
+    try:
+        async with engine.begin() as conn:
+            tenant = await tenant_by_slug(conn, slug)
+        if tenant is None:
+            raise CommandError(f"no tenant {slug!r}", 3)
+        async with tenant_tx(engine, tenant.id) as conn:
+            return await work(conn, tenant)
+    finally:
+        await engine.dispose()
+
+
+def _audit_verify(args: argparse.Namespace) -> int:
+    from agentic_cp.audit import read_records, verify
+
+    settings = _settings()
+    _owner_dsn(settings)
+
+    async def work(conn, tenant):
+        return await verify(conn), len(await read_records(conn))
+
+    problems, total = asyncio.run(_with_tenant(settings, args.tenant, work))
+    for problem in problems:
+        print(problem)
+    if problems:
+        print(f"tenant {args.tenant}: audit chain BROKEN ({len(problems)} problems)")
+        return 1
+    print(f"tenant {args.tenant}: audit chain intact ({total} records)")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m agentic_cp", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -147,6 +195,15 @@ def build_parser() -> argparse.ArgumentParser:
     grant = db.add_parser("grant-runtime", help="create or re-align the runtime role")
     grant.set_defaults(run=_grant_runtime)
 
+    admin = commands.add_parser("admin", help="operator commands (owner role)")
+    admin_commands = admin.add_subparsers(dest="admin_command", required=True)
+    audit = admin_commands.add_parser("audit", help="audit chains").add_subparsers(
+        dest="audit_command", required=True
+    )
+    audit_verify = audit.add_parser("verify", help="verify one tenant's audit chain")
+    audit_verify.add_argument("--tenant", required=True, help="the tenant's slug")
+    audit_verify.set_defaults(run=_audit_verify)
+
     openapi = commands.add_parser("openapi", help="write or check openapi.json")
     mode = openapi.add_mutually_exclusive_group()
     mode.add_argument("--write", action="store_true")
@@ -162,6 +219,9 @@ def main(argv: list[str] | None = None) -> int:
     except SettingsError as error:
         print(f"error: {error}", file=sys.stderr)
         return 3
+    except CommandError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return error.code
 
 
 if __name__ == "__main__":

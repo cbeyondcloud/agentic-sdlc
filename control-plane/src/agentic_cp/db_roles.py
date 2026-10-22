@@ -295,6 +295,22 @@ async def _check(
         if writable:
             status.fail(TENANCY, f"the runtime role {name} may change tenants beyond its revision")
 
+    for table in INSERT_ONLY:
+        if table not in present:
+            continue
+        label = "audit" if table == "audit_log" else table
+        changes = await _scalar(
+            conn,
+            f"select has_table_privilege(CAST(:o AS oid), '{schema}.{table}', 'UPDATE') "
+            f"or has_table_privilege(CAST(:o AS oid), '{schema}.{table}', 'DELETE') "
+            f"or has_table_privilege(CAST(:o AS oid), '{schema}.{table}', 'TRUNCATE')",
+            oid,
+        )
+        if changes:
+            status.fail(AUDIT, f"the runtime role {name} may change {label} rows directly")
+        if table not in tables:
+            status.fail(AUDIT, f"evidence table {table} is not a registered tenant table")
+
     definers = await conn.execute(
         text(
             "select p.proname, coalesce(p.proconfig, '{}'), p.proacl::text[] from pg_proc p "
