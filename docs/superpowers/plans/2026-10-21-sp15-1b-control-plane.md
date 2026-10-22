@@ -9,10 +9,10 @@ This file does not restate the parent plan. It records what this track builds, t
 **Rows:** M2-02 (policy sync), M2-03 rest (CODEOWNERS maintainers, repo-scoped checks, DF items), M2-04 (ingest), M2-20 (control-plane sink, offline queue, replay; personal-skill/memory sync stays with M2-45).
 
 **Architecture** (parent plan Architecture, slice-1b parts):
-- `control-plane/src/agentic_cp/`: `gitops.py` (`GitRunner`: one subprocess runner, the parent plan's flags and env, per-tenant `GIT_CONFIG_GLOBAL`, scrubbed errors, URL policy), `policy_sync/` (`validate.py`, `service.py`, `api.py`, `worker.py`), `tenancy/api.py` (`/v1/tenant`), `rbac/codeowners.py` + `rbac/repos.py` + `rbac/repos_api.py`, `ingest/` (`store.py`, `api.py`), `body_limit.py` (ASGI body cap, DF-420); migrations `0005_policy.py`, `0006_repos.py`, `0007_runs.py`, `0008_role_seed.py`;
+- `control-plane/src/agentic_cp/`: `gitops.py` (`GitRunner`: one subprocess runner, the parent plan's flags and env, per-tenant `GIT_CONFIG_GLOBAL`, scrubbed errors, URL policy), `policy_sync/` (`validate.py`, `service.py`, `api.py`, `worker.py`), `tenancy/api.py` (`/v1/tenant`), `rbac/codeowners.py` + `rbac/repos.py` + `rbac/repos_api.py`, `ingest/` (`store.py`, `api.py`), `body_limit.py` (ASGI body cap, DF-420); migrations `0005_policy.py`, `0006_repos.py`, `0007_role_seed.py`, `0008_runs.py`;
 - core: `agentic.policy.load` gains `load_policy(root, *, version=None)` and `tree_digest(root)`; `agentic.policy.repos` (the repo matcher moved out of the CLI guard); `agentic.orgapi.models` gains the slice-1b wire models;
 - commons: `sdlc_commons.ledger.verify_entries` (Zyroflo's chain rules over entries in memory);
-- CLI: `agentic_cli/control_plane.py` (client, errors, login record, `ControlPlaneSink`), changes to `commands/login.py`, `policy_source.py`, `workspace.py`, `commands/init.py`, `repo_guard.py`, `publishing.py`, `runtime.py`, `commands/runs.py` (`agentic runs sync`); core `agentic.telemetry.sinks` gains the cursor fixes and background forwarding.
+- CLI: `agentic_cli/control_plane.py` (client, errors, login record, `ControlPlaneSink`), changes to `commands/login.py`, `policy_source.py`, `workspace.py`, `commands/init.py`, `repo_guard.py`, `publishing.py`, `runtime.py`, `commands/sync.py` (`agentic sync`: `agentic runs` is already a command, so it cannot also be a group); core `agentic.telemetry.sinks` gains the cursor fixes and background forwarding.
 
 **Tech Stack:** as slice 1a, plus `codeowners==0.9.0` (control plane only). No other new dependency.
 
@@ -43,6 +43,8 @@ Numbered after slice 1a's R1-R11.
 - **R19 In org mode a control plane wins over `policy_repo`.** With `org` and a control-plane URL in the user config, init fetches the tenant's bundle (ND-2); `policy_repo` cloning stays for orgs without a control plane.
 - **R20 Sink delivery never blocks a run (DF-304).** With a control plane, runs record through a `ForwardingRecorder(background=True)`: `record` appends to the ledger and wakes a delivery thread. The ledger and the cursor are the offline queue; a failed delivery waits for the next event or `agentic runs sync`. A CLI command that ran the engine waits at most 5 s for pending deliveries before it exits, then reports how many events stay queued.
 - **R21 `ingest.gap` rewinds the cursor once.** When the control plane's head is behind the sink's cursor (its database was restored, or a cursor was copied), `ControlPlaneSink` raises `SinkBehind(head)`; `forward` checks the local chain at that head (same `seq` and `hash`) and re-delivers from `head + 1`. A head that is not in the local chain is a `SinkError` (the two chains forked).
+- **R23 The runtime role may change its own tenant's policy source.** Besides `rbac_revision`, it gets `UPDATE (policy_repo_url, policy_branch, webhook_token_sha256)` on `tenants` (the `own_tenant` policy keeps it to its own row), because org admins set them through `/v1/tenant`; `enforcement_status` allows exactly these columns (`db_roles.TENANT_WRITABLE`) and still fails on any other.
+- **R24 The CLI sends its token over https only.** `ControlPlaneClient` refuses a plain `http://` control-plane URL unless the host is a loopback address (development).
 - **R22 Builtin roles grow with the catalogue without undoing tenant edits (DF-419).** `roles.seed_permissions` records what the seed last gave each builtin role; `seed_roles` (run by `migrate` for every tenant) adds the permissions that are in the release's seed but not in `seed_permissions` - new in this release - and leaves permissions a tenant removed removed. Audited `rbac.seeded` with the additions.
 
 ## Global Constraints
@@ -70,7 +72,7 @@ The parent plan's Review Focus 1, 3, 4, 5 and 6 (slice-1b parts), plus:
 | DF-404 team must exist in the active policy | Task 7 (R14) |
 | DF-377 policy cache leftovers never removed | Task 10: `_swap_in` first removes every `.repo.new-*`, `.repo.old-*` and `.fetched.json.tmp-*` beside the cache, ignoring errors |
 | DF-405 repo maintainers from CODEOWNERS | Task 8 |
-| DF-418 `/v1/rbac/check` takes the repo team from the body | Task 8: a registered repo's team comes from `repos`; a conflicting `team` is 422 `rbac.repo_team_mismatch`; an unregistered repo has no team scope |
+| DF-418 `/v1/rbac/check` takes the repo team from the body | Task 8: a registered repo's team comes from `repos`; a conflicting `team` is 422 `rbac.repo_team_mismatch`; an unregistered repo takes the claimed team (check 7 runs before registration, and registering needs `agent.edit.repo` in that very team) |
 | DF-417 `put_role` validates before authorising | Task 8 (RBAC touch-ups): `require(rbac.assign)` first |
 | DF-419 builtin roles do not pick up new catalogue permissions | Task 8 (R22) |
 | DF-182 / DF-340 verify at login, register with the control plane, min CLI version | Control-plane half in Task 10 (`login --for control-plane` verifies through `/v1/me` before storing; `init --repo` registers the repo). Gateway-key verification: retarget M2-17. Minimum CLI version: M2-08 |
@@ -95,14 +97,14 @@ As parent Task 7, with R12-R15.
 ### Task 8: Repos and maintainers from CODEOWNERS; RBAC touch-ups (M2-03)
 
 As parent Task 8, plus DF-417, DF-418, DF-419.
-- Files: `control-plane/pyproject.toml` (`codeowners==0.9.0`), root `pyproject.toml` (contract), `uv.lock`; `core/src/agentic/policy/repos.py`; `cli/src/agentic_cli/repo_guard.py` (imports the moved matcher); `control-plane/src/agentic_cp/rbac/{codeowners.py, repos.py, repos_api.py, store.py, authz.py, api.py, defaults.py}`, `migrations/versions/{0006_repos.py, 0008_role_seed.py}`, `tables.py`, `policy_sync/worker.py` (refresh); `control-plane/tests/isolation.py`.
+- Files: `control-plane/pyproject.toml` (`codeowners==0.9.0`), root `pyproject.toml` (contract), `uv.lock`; `core/src/agentic/policy/repos.py`; `cli/src/agentic_cli/repo_guard.py` (imports the moved matcher); `control-plane/src/agentic_cp/rbac/{codeowners.py, repos.py, repos_api.py, store.py, authz.py, api.py, defaults.py}`, `migrations/versions/{0006_repos.py, 0007_role_seed.py}`, `tables.py`, `policy_sync/worker.py` (refresh); `control-plane/tests/isolation.py`.
 - Tests: `core/tests/policy/test_repos.py`, `control-plane/tests/{test_codeowners.py, test_repos_api.py, test_rbac_touchups.py}`.
 - [ ] Steps 1-5 as above; commit `feat(control-plane): per-tenant repo maintainers derived from CODEOWNERS over git (M2-03)`.
 
 ### Task 9: Run event ingest per tenant (M2-04)
 
 As parent Task 9, with R16, R17 and DF-420.
-- Files: `commons/src/sdlc_commons/ledger.py` (`verify_entries`), `core/src/agentic/orgapi/models.py`, `control-plane/src/agentic_cp/{body_limit.py, app.py, tables.py}`, `ingest/{__init__.py, store.py, api.py}`, `migrations/versions/0007_runs.py`; `control-plane/tests/isolation.py`.
+- Files: `commons/src/sdlc_commons/ledger.py` (`verify_entries`), `core/src/agentic/orgapi/models.py`, `control-plane/src/agentic_cp/{body_limit.py, app.py, tables.py}`, `ingest/{__init__.py, store.py, api.py}`, `migrations/versions/0008_runs.py`; `control-plane/tests/isolation.py`.
 - Tests: `commons/tests/test_ledger_verify_entries.py`, `control-plane/tests/test_ingest.py`, `control-plane/tests/test_body_limit.py`.
 - [ ] Steps 1-5; commit `feat(control-plane): per-tenant run event ingest with chain verification and idempotent replay (M2-04)`.
 
@@ -115,8 +117,8 @@ As parent Task 10, with R18, R19, DF-182 (control-plane half), DF-184, DF-203, D
 
 ### Task 10b: Control-plane sink, offline queue, replay (M2-20)
 
-- Files: `core/src/agentic/telemetry/sinks.py` (DF-172 cursor-hash check, DF-179 fsync and empty cursor, `SinkBehind` rewind R21, `ForwardingRecorder(background=True)` R20), `cli/src/agentic_cli/control_plane.py` (`ControlPlaneSink`), `cli/src/agentic_cli/runtime.py` (sinks per run, `flush_sinks`), `cli/src/agentic_cli/commands/runs.py` (`agentic runs sync [RUN_ID]`).
-- Tests: `core/tests/telemetry/test_sinks_*` new cases, `cli/tests/test_control_plane_sink.py`, `cli/tests/run/test_runs_sync.py`.
+- Files: `core/src/agentic/telemetry/sinks.py` (DF-172 cursor-hash check, DF-179 fsync and empty cursor, `SinkBehind` rewind R21, `ForwardingRecorder(background=True)` R20), `cli/src/agentic_cli/control_plane.py` (`ControlPlaneSink`), `cli/src/agentic_cli/runtime.py` (sinks per run, `flush_sinks`), `cli/src/agentic_cli/commands/{runs.py, gates.py}` (close the sinks after the engine), `cli/src/agentic_cli/commands/sync.py` (`agentic sync [RUN_ID]`).
+- Tests: `core/tests/telemetry/test_sink_delivery.py`, `cli/tests/test_control_plane_sink.py` (sink, wiring and `agentic sync`).
 - [ ] Steps 1-5; commit `feat(cli): control-plane sink with offline queue and idempotent replay (M2-20)`.
 
 ### Task 11: Entry points, contract tests, verification, review

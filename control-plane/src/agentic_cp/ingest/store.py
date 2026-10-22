@@ -43,11 +43,14 @@ def head_problem(code: str, detail: str, head: ChainHead) -> ApiProblem:
 
 
 def broken(problems: list[str]) -> ApiProblem:
+    """422 with the problems, each cut short: they quote values the caller sent, and the
+    refusal's audit record keeps them."""
+    shown = [problem[:300] for problem in problems[:100]]
     return ApiProblem(
         422,
         "ingest.chain_broken",
-        f"the batch does not verify ({problems[0]})",
-        extra={"problems": problems[:100]},
+        f"the batch does not verify ({shown[0]})",
+        extra={"problems": shown},
     )
 
 

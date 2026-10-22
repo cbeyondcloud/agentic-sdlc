@@ -69,13 +69,13 @@ def check_repo_url(url: str, *, allow_local: bool) -> str:
                 "credentials for the tenant instead",
                 credentials=True,
             )
-        if scheme in ("https", "ssh") and parts.hostname:
+        if scheme in ("https", "ssh") and parts.hostname and not parts.hostname.startswith("-"):
             return value
         if scheme == "file" and allow_local:
             return value
         raise RepoUrlError("a repository URL must use https:// or ssh:// (or user@host:path)")
-    if _SCP.fullmatch(value):
-        return value
+    if _SCP.fullmatch(value) and not value.split("@", 1)[1].startswith("-"):
+        return value  # a host starting with '-' would be an ssh option
     if _is_path(value):
         if allow_local:
             return value

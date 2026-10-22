@@ -80,6 +80,8 @@ async def test_policy_source_refuses_credentials_in_url(api, bad, caplog):
         "--upload-pack=touch /tmp/x",
         "ext::sh -c touch% /tmp/x",
         "http://git.example.test/org/policy.git",
+        "ssh://-oProxyCommand=touch/x",
+        "git@-oProxyCommand:x",
     ],
 )
 async def test_policy_source_refuses_local_and_option_urls(api, bad):

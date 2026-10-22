@@ -107,7 +107,12 @@ async def serve_preflight(settings: Settings, engine: AsyncEngine | None = None)
     try:
         await check_ready(db, settings)
     except ApiProblem as problem:
-        return f"{problem.code}: {problem.detail}" + (f" ({problem.hint})" if problem.hint else "")
+        refusal = f"{problem.code}: {problem.detail}"
+        if problem.code in (AUDIT, TENANCY):  # the operator needs each reason, not a summary
+            async with db.connect() as conn:
+                status = await enforcement_status(conn, schema=settings.db_schema)
+            refusal += "".join(f"\n  - {reason}" for reason in status.reasons)
+        return refusal + (f" ({problem.hint})" if problem.hint else "")
     finally:
         if engine is None:
             await db.dispose()
