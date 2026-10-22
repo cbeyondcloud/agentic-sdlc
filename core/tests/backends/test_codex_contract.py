@@ -18,6 +18,7 @@ from conformance import CASES, TASK, FakeContract, slice_
 from responses_stub import Reply, ResponsesStub, tool_outputs
 
 from agentic.backends.codex import CODEX_VERSION, CodexRunner, CodexSettings, lock_down
+from agentic.backends.codex_hooks import CodexHook
 from agentic.backends.codex_rules import ShellRules
 from agentic.engine.engine import StepContext
 from agentic.policy.model import ModelPrice
@@ -77,7 +78,7 @@ def agent_for(resolved, tools=("read_files", "run_shell"), **changes):
     return resolved.model_copy(update={**update, **changes})
 
 
-def runner_for(agent, world, tmp_path, *, budget=None, contract=None, time_limit_s=120):
+def runner_for(agent, world, tmp_path, *, budget=None, contract=None, time_limit_s=120, hook=None):
     stub, proxy, tree = world
     budget = budget or slice_()
     settings = CodexSettings(
@@ -104,6 +105,7 @@ def runner_for(agent, world, tmp_path, *, budget=None, contract=None, time_limit
         rules=RULES,
         cwd=tree,
         srt_boundary=True,  # emit allow rules as production does under srt
+        hook=hook,
         environ=environ,
     )
     return CodexRunner(
@@ -252,6 +254,32 @@ def test_catalog_gives_apply_patch_to_any_model(resolved, world, tmp_path):  # D
     tools = {t.get("name"): t.get("type") for t in stub.model_calls()[0]["body"]["tools"]}
     assert tools.get("apply_patch") == "custom"
     assert (tree / "hello.txt").read_text(encoding="utf-8") == "hello from codex\n"
+
+
+def test_the_hook_guard_blocks_a_redirect_chain_and_unlisted_commands(resolved, world, tmp_path):
+    # DF-116, Review Focus 3: Codex trusts our hook (its trusted_hash matches) and runs
+    # it before each command; the guard refuses what execpolicy let through (S3 run O/J)
+    from sdlc_commons.codex_hook import hook_argv, write_spec
+    from sdlc_commons.guards import Guard
+
+    stub, _, tree = world
+    guard = Guard(tree, "r-1", deny_shell=("git push",), allow_shell=("echo", "printf"))
+    spec = write_spec(tmp_path / "guard" / "guard.json", guard, tree)
+    stub.queue = [
+        Reply(shell="echo ok > f && git push origin main"),
+        Reply(shell="curl -s http://example.com"),
+        Reply(shell="printf allowed-%s ran"),
+        Reply(text="VALID"),
+    ]
+    hook = CodexHook(argv=hook_argv(spec))
+    assert run(runner_for(agent_for(resolved), world, tmp_path, hook=hook)).status == "completed"
+    calls = stub.model_calls()
+    # Codex resends the whole history each turn: each call's newest tool result is last
+    redirect, unlisted, allowed = (tool_outputs(call)[-1] for call in calls[1:4])
+    assert "refused by the agentic guard" in redirect and "git push" in redirect
+    assert "refused by the agentic guard" in unlisted and "curl" in unlisted
+    assert "allowed-ran" in allowed
+    assert not (tree / "f").exists()  # the refused chain never ran at all
 
 
 def test_tool_surface_follows_capabilities(resolved, world, tmp_path):

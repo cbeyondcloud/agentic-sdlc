@@ -203,7 +203,8 @@ def test_developer_instructions_written_to_the_config_file(resolved, tmp_path):
 
 def test_each_step_iteration_gets_its_own_home(resolved, tmp_path):
     launch = launch_for(resolved, tmp_path)
-    assert launch.home == tmp_path / "homes" / "r-1" / "develop-2" / resolved.definition.name
+    home = tmp_path / "homes" / "r-1" / "develop-2" / resolved.definition.name
+    assert launch.home == home.resolve()
 
 
 def test_files_are_written_with_lf_line_endings(resolved, tmp_path):

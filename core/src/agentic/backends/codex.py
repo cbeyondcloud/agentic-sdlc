@@ -51,6 +51,7 @@ from agentic.agents.runner import (
 from agentic.agents.tools import ToolContext
 from agentic.backends.claude_code import _blanked, _descendants
 from agentic.backends.codex_catalog import model_catalog
+from agentic.backends.codex_hooks import CodexHook, hook_table
 from agentic.backends.codex_rules import ShellRules, compile_rules
 from agentic.policy import ResolvedAgent
 from agentic.sandbox.process import KILL_WAIT_S, safe_env
@@ -136,17 +137,18 @@ def lock_down(
     rules: ShellRules,
     cwd: Path,
     srt_boundary: bool,
+    hook: CodexHook | None = None,
     environ: Mapping[str, str] | None = None,
 ) -> CodexLaunch:
     """The command, environment and CODEX_HOME files for one step: every lock-down
     setting. `srt_boundary` says srt wraps the process (allow rules are emitted only
-    then). The worktree path is resolved: Codex matches the trust entry against the
-    real path (macOS temp folders are symlinks)."""
+    then); `hook` is the guard hook (DF-116). Paths are resolved: Codex matches the
+    trust entry against the real worktree path and the hook's trust key against the
+    real config path (macOS temp folders are symlinks)."""
     agent = step.agent
     tree = Path(cwd).resolve().as_posix()
-    home = (
-        settings.home_root / step.run_id / f"{step.step}-{step.iteration}" / agent.definition.name
-    )
+    folder = f"{step.step}-{step.iteration}"
+    home = (settings.home_root / step.run_id / folder / agent.definition.name).resolve()
     headers = {**identity.headers(), "traceparent": _traceparent(identity.run_id)}
     header_env = {name: _env_name(name) for name in headers}
     base = settings.gateway_url.rstrip("/")
@@ -201,6 +203,8 @@ def lock_down(
     if schema is not None:
         argv += ["--output-schema", (home / "schema.json").as_posix()]
     argv += ["-o", last_message.as_posix(), *overrides(config), "-"]
+    if hook is not None:  # in the file only: its trust key names the config file's path
+        config["hooks"] = hook_table(hook, home / "config.toml")
     catalog = model_catalog(
         agent.model, tools=agent.tools, effort=agent.effort, overrides=settings.catalog_overrides
     )
@@ -630,11 +634,14 @@ class CodexBackend:
         prices: Pricer,
         rules_for: Callable[["StepContext"], ShellRules] = lambda step: ShellRules.of(step.agent),
         wrap_for: Callable[["StepContext"], Sequence[str] | None] = lambda step: None,
+        # the guard hook (DF-116), given a step and its tree; None: execpolicy alone
+        hook_for: Callable[["StepContext", Path], CodexHook | None] = lambda step, tree: None,
         version: Callable[[Sequence[str]], str] = check_version,
         fallback_estimate_usd: Decimal = Decimal("0.01"),  # per call of an unpriced model
     ) -> None:
         self.settings, self.identity_for, self.prices = settings, identity_for, prices
         self.rules_for, self.wrap_for, self.version = rules_for, wrap_for, version
+        self.hook_for = hook_for
         self.fallback_estimate_usd = fallback_estimate_usd
         self._checked = False
 
@@ -664,6 +671,7 @@ class CodexBackend:
             rules=self.rules_for(step),
             cwd=cwd,
             srt_boundary=bool(wrap),
+            hook=self.hook_for(step, cwd),
         )
         return CodexRunner(
             step.agent,
