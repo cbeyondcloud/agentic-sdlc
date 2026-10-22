@@ -5,7 +5,8 @@ owner; re-implemented here and extended with the row-level-security checks):
 
 * the **owner** role runs migrations and grants and owns every object;
 * the **runtime** role, the API's, owns nothing, is `NOSUPERUSER NOBYPASSRLS NOCREATEROLE
-  NOINHERIT`, belongs to no role, may only `SELECT, INSERT` on the evidence tables, sees
+  NOCREATEDB NOREPLICATION NOINHERIT`, belongs to no role, may not create objects in the
+  schema, may only `SELECT, INSERT` on the evidence tables (no column grant either), sees
   only its own row of `tenants` and may change only its `rbac_revision`, and may execute
   only the registered `SECURITY DEFINER` functions.
 
@@ -213,8 +214,8 @@ async def _check(
 ) -> None:
     found = await conn.execute(
         text(
-            "select oid, rolname, rolsuper, rolbypassrls from pg_roles "
-            "where rolname = coalesce(:r, current_user)"
+            "select oid, rolname, rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, "
+            "rolreplication from pg_roles where rolname = coalesce(:r, current_user)"
         ),
         {"r": role},
     )
@@ -222,11 +223,18 @@ async def _check(
     if row is None:
         status.fail(TENANCY, f"the runtime role {role!r} does not exist")
         return
-    oid, name, superuser, bypass = row
+    oid, name, superuser, bypass, *attributes = row
     if superuser:
         status.fail(TENANCY, f"the runtime role {name} is a superuser")
     if bypass:
         status.fail(TENANCY, f"the runtime role {name} has BYPASSRLS")
+    for held, attribute in zip(attributes, ("CREATEROLE", "CREATEDB", "REPLICATION"), strict=True):
+        if held:
+            status.fail(TENANCY, f"the runtime role {name} has {attribute}")
+    if await _scalar(
+        conn, f"select has_schema_privilege(CAST(:o AS oid), '{schema}', 'CREATE')", oid
+    ):
+        status.fail(TENANCY, f"the runtime role {name} may create objects in schema {schema}")
     member_of = await _scalar(
         conn, "select count(*) from pg_auth_members where member = CAST(:o AS oid)", oid
     )
@@ -294,10 +302,14 @@ async def _check(
     for extra in tenant_policies:
         status.fail(TENANCY, f"table tenants has an unregistered policy {extra}")
     if "tenants" in present:
+        # has_table_privilege ignores column grants: look at every column but rbac_revision
         writable = await _scalar(
             conn,
-            f"select has_column_privilege(CAST(:o AS oid), '{schema}.tenants', 'name', 'UPDATE') "
-            f"or has_table_privilege(CAST(:o AS oid), '{schema}.tenants', 'INSERT') "
+            "select exists (select 1 from pg_attribute a "
+            f"where a.attrelid = '{schema}.tenants'::regclass and a.attnum > 0 "
+            "and not a.attisdropped and a.attname <> 'rbac_revision' "
+            "and has_column_privilege(CAST(:o AS oid), a.attrelid, a.attnum, 'UPDATE')) "
+            f"or has_any_column_privilege(CAST(:o AS oid), '{schema}.tenants', 'INSERT') "
             f"or has_table_privilege(CAST(:o AS oid), '{schema}.tenants', 'DELETE') "
             f"or has_table_privilege(CAST(:o AS oid), '{schema}.tenants', 'TRUNCATE')",
             oid,
@@ -311,7 +323,7 @@ async def _check(
         label = "audit" if table == "audit_log" else table
         changes = await _scalar(
             conn,
-            f"select has_table_privilege(CAST(:o AS oid), '{schema}.{table}', 'UPDATE') "
+            f"select has_any_column_privilege(CAST(:o AS oid), '{schema}.{table}', 'UPDATE') "
             f"or has_table_privilege(CAST(:o AS oid), '{schema}.{table}', 'DELETE') "
             f"or has_table_privilege(CAST(:o AS oid), '{schema}.{table}', 'TRUNCATE')",
             oid,

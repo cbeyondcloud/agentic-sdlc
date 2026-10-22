@@ -1,8 +1,10 @@
 """The RBAC API (M2-03): roles, assignments and permission checks in the caller's tenant.
 
-Every write bumps `rbac_revision` and appends its audit record in the same transaction, so
-a refused change (a guard, a failed insert) leaves neither behind, and every replica's
-enforcer cache sees a committed change on its next request."""
+Every write first takes the tenant's RBAC lock (`lock_rbac`), so concurrent writers run
+one after the other and each guard reads what the previous one committed. Every write
+bumps `rbac_revision` and appends its audit record in the same transaction, so a refused
+change (a guard, a failed insert) leaves neither behind, and every replica's enforcer
+cache sees a committed change on its next request."""
 
 from __future__ import annotations
 
@@ -31,7 +33,7 @@ from agentic_cp.rbac import store
 from agentic_cp.rbac.authz import Org, Repo, Team, authorize, describe, require
 from agentic_cp.rbac.defaults import BUILTIN, ORG_ADMIN
 from agentic_cp.tenancy.context import tenant_tx
-from agentic_cp.tenancy.tenants import bump_rbac_revision
+from agentic_cp.tenancy.tenants import bump_rbac_revision, lock_rbac
 
 router = APIRouter(prefix=f"{API_PREFIX}/rbac", tags=["rbac"], responses=PROBLEM_RESPONSES)
 
@@ -113,6 +115,7 @@ async def put_role(
     if name == ORG_ADMIN and "rbac.assign" not in body.permissions:
         raise ApiProblem(409, "rbac.admin_needs_assign", "the org-admin role must keep rbac.assign")
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+        await lock_rbac(conn)
         await require(ctx, "rbac.assign", Org(), conn=conn, cache=state.enforcers)
         before = await store.get_role(conn, name)
         if before is not None and before.name in BUILTIN and not BUILTIN[name].assignable:
@@ -139,6 +142,7 @@ async def delete_role(name: str, request: Request, ctx: Caller) -> Response:
     """Delete a custom role that nobody holds (org `rbac.assign`)."""
     state = request.app.state
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+        await lock_rbac(conn)
         role = await store.get_role(conn, _checked_role_name(name))
         if role is None:
             raise not_found("role")
@@ -203,6 +207,7 @@ async def create_assignment(body: AssignmentRequest, request: Request, ctx: Call
     state = request.app.state
     kind, value = ("team", body.team) if body.team else ("org", "")
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+        await lock_rbac(conn)
         org_wide = await _may_assign_in(ctx, conn, state.enforcers, body.team)
         role = await store.get_role(conn, body.role)
         if role is None:
@@ -252,6 +257,7 @@ async def delete_assignment(id: UUID, request: Request, ctx: Caller) -> Response
     """Revoke an assignment. The tenant's last org admin cannot be removed."""
     state = request.app.state
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+        await lock_rbac(conn)
         row = await store.get_assignment(conn, id)
         if row is None:
             raise not_found("assignment")

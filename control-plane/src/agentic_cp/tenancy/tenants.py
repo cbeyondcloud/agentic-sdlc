@@ -101,6 +101,18 @@ async def current_tenant(conn: AsyncConnection) -> TenantRow:
     return _row(row)
 
 
+async def lock_rbac(conn: AsyncConnection) -> None:
+    """Serialise the tenant's RBAC writers: wait for, then hold until commit, the lock on the
+    tenant's row that `bump_rbac_revision` takes anyway. Every RBAC write calls it before
+    its first read, so a guard (the last org admin, a duplicate assignment) reads what the
+    previous writer committed instead of a snapshot both share (READ COMMITTED). The
+    no-key lock leaves inserts elsewhere in the tenant (their foreign-key checks) free."""
+    tenant_id = await require_tenant_id(conn)
+    await conn.execute(
+        select(tenants.c.id).where(tenants.c.id == tenant_id).with_for_update(key_share=True)
+    )
+
+
 async def bump_rbac_revision(conn: AsyncConnection) -> int:
     """Advance the transaction's tenant's RBAC revision; returns the new value. Called in
     the same transaction as every RBAC change, so every replica's enforcer cache sees it."""

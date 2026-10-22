@@ -167,6 +167,57 @@ async def test_enforcement_status_reports_rls_gaps(probe):
         await _drop_role(db, role)
 
 
+#: Grants and role attributes the catalogue checks must catch: (statement with `{role}`,
+#: expected code, a fragment of the reason). Column grants are invisible to
+#: `has_table_privilege`, so each is listed on its own.
+PRIVILEGE_GAPS = {
+    "audit column update": (
+        "GRANT UPDATE (hash) ON agentic.audit_log TO {role}",
+        "audit.unenforced",
+        "may change audit rows",
+    ),
+    "tenants column update": (
+        "GRANT UPDATE (status) ON agentic.tenants TO {role}",
+        "tenancy.unenforced",
+        "may change tenants",
+    ),
+    "tenants column insert": (
+        "GRANT INSERT (slug, name) ON agentic.tenants TO {role}",
+        "tenancy.unenforced",
+        "may change tenants",
+    ),
+    "createrole": ("ALTER ROLE {role} CREATEROLE", "tenancy.unenforced", "CREATEROLE"),
+    "createdb": ("ALTER ROLE {role} CREATEDB", "tenancy.unenforced", "CREATEDB"),
+    "replication": ("ALTER ROLE {role} REPLICATION", "tenancy.unenforced", "REPLICATION"),
+    "schema create": (
+        "GRANT CREATE ON SCHEMA agentic TO {role}",
+        "tenancy.unenforced",
+        "create objects in schema",
+    ),
+}
+
+
+@pytest.mark.parametrize("gap", sorted(PRIVILEGE_GAPS))
+async def test_enforcement_status_reports_column_grants_and_role_attributes(db, gap):
+    statement, code, fragment = PRIVILEGE_GAPS[gap]
+    role = await _gap_role(db)
+    try:
+        async with db.owner.connect() as conn:
+            assert (await enforcement_status(conn, role=role)).enforced
+        admin = await _admin(db)
+        try:
+            await admin.execute(statement.format(role=role))
+        finally:
+            await admin.close()
+        async with db.owner.connect() as conn:
+            status = await enforcement_status(conn, role=role)
+        assert status.enforced is False, gap
+        assert code in status.codes
+        assert any(fragment in reason for reason in status.reasons), status.reasons
+    finally:
+        await _drop_role(db, role)
+
+
 async def test_enforcement_status_reports_an_unregistered_table(db):
     async with db.owner.begin() as conn:
         await conn.exec_driver_sql("CREATE TABLE stray (id int primary key)")

@@ -1,14 +1,18 @@
 """The RBAC API (M2-03, Review Focus 4 and 7): roles, assignments, checks, guards, and an
 enforcer that never drifts from the tables - not across replicas, not after a refusal."""
 
+import asyncio
+import contextlib
+
 import pytest
 from apiclient import assign, check, member
 from sqlalchemy import select
 
 from agentic_cp.audit import read_records
+from agentic_cp.rbac import store
 from agentic_cp.rbac.authz import build_enforcer
 from agentic_cp.rbac.defaults import DEFAULT_ROLES
-from agentic_cp.rbac.store import PolicyRows, load_rows
+from agentic_cp.rbac.store import PolicyRows, load_rows, org_admin_count
 from agentic_cp.tables import tenants
 from agentic_cp.tenancy.context import tenant_tx
 
@@ -227,3 +231,50 @@ async def test_roles_are_listed_per_tenant(api):
     names_b = {r["name"] for r in (await api.get("/v1/rbac/roles", api.b.admin_token)).json()}
     assert "a-only" in names_a and "a-only" not in names_b
     assert {spec.name for spec in DEFAULT_ROLES} <= names_b
+
+
+def _rendezvous(monkeypatch, name: str) -> list[object]:
+    """Make two concurrent writers meet right after `store.<name>` returns (a guard's read),
+    so both act on the same snapshot unless the writers are serialised. A writer that waits
+    alone (the other is blocked on a lock) goes on after a short timeout."""
+    real = getattr(store, name)
+    seen: list[object] = []
+    both = asyncio.Event()
+
+    async def meet(*args, **kwargs):
+        found = await real(*args, **kwargs)
+        seen.append(found)
+        if len(seen) == 2:
+            both.set()
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(both.wait(), 1.5)
+        return found
+
+    monkeypatch.setattr(store, name, meet)
+    return seen
+
+
+async def test_concurrent_revocations_never_remove_the_last_org_admin(api, monkeypatch):
+    second, second_id = await member(api, api.a, "second@a.example.test", "org-admin")
+    listed = (await api.get("/v1/rbac/assignments", api.a.admin_token)).json()
+    first_id = next(a["id"] for a in listed if a["email"] == "admin@a.example.test")
+    _rendezvous(monkeypatch, "org_admin_count")
+    replies = await asyncio.gather(
+        api.delete(f"/v1/rbac/assignments/{second_id}", api.a.admin_token),
+        api.delete(f"/v1/rbac/assignments/{first_id}", second),
+    )
+    statuses = sorted(reply.status_code for reply in replies)
+    assert statuses[0] == 204 and statuses[1] in (403, 409), [r.text for r in replies]
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        assert await org_admin_count(conn) == 1
+
+
+async def test_concurrent_identical_assignments_give_one_201_and_one_409(api, monkeypatch):
+    _rendezvous(monkeypatch, "find_assignment")
+    replies = await asyncio.gather(
+        assign(api, api.a.admin_token, "twice@a.example.test", "developer", "payments"),
+        assign(api, api.a.admin_token, "twice@a.example.test", "developer", "payments"),
+    )
+    assert sorted(reply.status_code for reply in replies) == [201, 409], [r.text for r in replies]
+    listed = await api.get("/v1/rbac/assignments?user=twice@a.example.test", api.a.admin_token)
+    assert len(listed.json()) == 1
