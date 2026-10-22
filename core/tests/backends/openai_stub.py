@@ -86,6 +86,7 @@ class OpenAIStub:
                         "method": "POST",
                         "path": self.path,
                         "headers": self._headers(),
+                        "auth": self.headers.get("authorization"),  # a test key only
                         "model": body.get("model"),
                         "tools": tools,
                         "temperature": body.get("temperature"),

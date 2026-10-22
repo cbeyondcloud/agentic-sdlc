@@ -49,6 +49,16 @@
   - The ACP `PromptResponse.usage` covers only the turn's last model call.
   - `usage_update.cost` is the session's summed cost at the model's configured prices. It is sent only when the model has a `limit.context`.
 
+## Found by the contract tests (the real 1.18.35 binary), and closed
+
+- **Plugins still load.** OpenCode's newer internal plugin loader (`packages/core/src/config.ts` and `config/plugin/external.ts`) ignores both `OPENCODE_DISABLE_PROJECT_CONFIG` and `--pure`. It still imports `.opencode/{plugin,plugins}/*.{js,ts}`, and it installs and imports `plugin(s)` npm packages named in a project `opencode.json[c]`, from the working folder up to the repository root. A planted plugin wrote its file in the first contract run.
+  - **Closed** with the pre-scan S7 named, as a generic profile hook. `AcpProfile.refuse_tree` stops the agent from ever starting in such a tree (fail closed, with a message naming the files). OpenCode's edit rules also deny `.opencode/*` and `opencode.json[c]`, so an agent cannot plant code for the next step.
+  - The rest of a hostile config stays inert: MCP server, instructions, `AGENTS.md`, agents, permissions, provider and model. A mutation run that dropped `OPENCODE_DISABLE_PROJECT_CONFIG` failed the hostile-config test, as it should.
+- **srt broke OpenCode's self-calls.** In ACP mode OpenCode calls its own HTTP server on loopback. Under srt with `proxy_everything` (NO_PROXY cleared), those calls went to srt's proxy and were refused ("OpenCode service failure").
+  - **Closed** with the generic `AcpProfile.own_server` = `("--port", "127.0.0.1")`. The runner gives the agent a free port and exempts exactly `127.0.0.1:<port>` from proxies.
+  - An experiment in the check image showed that Bun honours host:port `NO_PROXY` entries. A gateway on another loopback port therefore still goes through the sandbox proxy, so TokenLean LITE on a laptop keeps working.
+  - The profile also pins `--hostname 127.0.0.1 --mdns=false`, so no config can bind the server to every interface.
+
 ## Global Constraints
 
 - **Provider-agnostic engine.** `runner.py` and `profile.py` carry no vendor names, flags or types. A new ACP agent is a new `AcpProfile` value plus its contract tests (E2-06).

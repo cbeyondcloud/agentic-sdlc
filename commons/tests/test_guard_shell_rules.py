@@ -31,6 +31,11 @@ def test_shell_rules_carry_the_framework_floor(tmp_path: Path):
     assert "infra/**" in rules.deny_paths
     assert set(FRAMEWORK_PROTECTED) <= set(rules.deny_paths)
     assert len(rules.deny) == len(set(rules.deny))
+    # Zyroflo's destructive floor, matched wherever its words stand (review)
+    assert "git reset --hard" in rules.deny_anywhere and "git push -f" in rules.deny_anywhere
+    assert any(rule.startswith("rm -r") for rule in rules.deny_anywhere)
+    # builtins that change the environment are not allowed to an agent CLI's shell
+    assert not {"export", "set", "unset"} & set(rules.allow)
 
 
 def test_without_an_allow_list_everything_not_denied_is_allowed(tmp_path: Path):

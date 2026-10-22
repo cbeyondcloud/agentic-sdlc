@@ -179,10 +179,14 @@ def _not_offered(method: str) -> Exception:
 
 
 def _described(tool_call) -> str:
-    title = getattr(tool_call, "title", None) or getattr(tool_call, "tool_call_id", "a tool")
+    """What was refused, for the step's record: the kind of tool and the command's program
+    only - its arguments can carry a credential (the guard never quotes a command either),
+    and an agent's tool title often is the whole command."""
+    kind = getattr(tool_call, "kind", None) or "tool"
     raw = getattr(tool_call, "raw_input", None)
     command = raw.get("command") if isinstance(raw, dict) else None
-    return f"{title}: {command}" if isinstance(command, str) else str(title)
+    words = command.split() if isinstance(command, str) else []
+    return f"{kind}: {words[0]} ..." if words else str(kind)
 
 
 class AcpRunner:
@@ -285,38 +289,44 @@ class AcpRunner:
         argv, env = self._launch()
         shutil.rmtree(self.home, ignore_errors=True)  # a retried step starts clean
         self.home.mkdir(parents=True, exist_ok=True)
-        write_files(self.home, self.files)
-        with (self.home / _STDERR).open("wb") as stderr:
-            async with acp.spawn_agent_process(
-                self._client,
-                argv[0],
-                *argv[1:],
-                env=env,
-                cwd=str(self.cwd),
-                transport_kwargs={"stderr": stderr, "limit": STDIO_LIMIT},
-            ) as (conn, process):
-                self._process = process
-                try:
-                    sid = await self._open(conn, schema)
-                except (ConnectionError, acp.RequestError) as error:
-                    raise RuntimeError(
-                        f"the {self.profile.name} agent did not start a session ({error}); "
-                        f"its stderr ends: {self._stderr_tail()}"
-                    ) from error
-                first = [
-                    acp.text_block(_instructions(task, self.contract)),
-                    acp.text_block(task.prompt),
-                ]
-                text = await self._turn(conn, sid, first)
-                if self.contract is None:
-                    return self._outcome("completed", text)
-                accepted, errors = self.contract.check(text)
-                if errors:  # one retry, in the same session (OUTPUT_RETRIES = 1)
-                    text = await self._turn(conn, sid, [acp.text_block(retry_message(errors))])
-                    accepted, errors = self.contract.check(text)
-                if errors:
-                    return self._outcome("invalid", text, errors=errors)
-                return self._outcome("completed", accepted if accepted is not None else text)
+        try:
+            write_files(self.home, self.files)
+            with (self.home / _STDERR).open("wb") as stderr:
+                async with acp.spawn_agent_process(
+                    self._client,
+                    argv[0],
+                    *argv[1:],
+                    env=env,
+                    cwd=str(self.cwd),
+                    transport_kwargs={"stderr": stderr, "limit": STDIO_LIMIT},
+                ) as (conn, process):
+                    self._process = process
+                    try:
+                        return await self._converse(conn, task, acp, schema)
+                    finally:  # nothing it started outlives the step, however it ends
+                        self._kill()
+        finally:  # its state - the transcript included - goes with the step
+            shutil.rmtree(self.home, ignore_errors=True)
+
+    async def _converse(self, conn, task: AgentTask, acp, schema) -> AgentOutcome:
+        try:
+            sid = await self._open(conn, schema)
+        except (ConnectionError, acp.RequestError) as error:
+            raise RuntimeError(
+                f"the {self.profile.name} agent did not start a session ({error}); "
+                f"its stderr ends: {self._stderr_tail()}"
+            ) from error
+        first = [acp.text_block(_instructions(task, self.contract)), acp.text_block(task.prompt)]
+        text = await self._turn(conn, sid, first)
+        if self.contract is None:
+            return self._outcome("completed", text)
+        accepted, errors = self.contract.check(text)
+        if errors:  # one retry, in the same session (OUTPUT_RETRIES = 1)
+            text = await self._turn(conn, sid, [acp.text_block(retry_message(errors))])
+            accepted, errors = self.contract.check(text)
+        if errors:
+            return self._outcome("invalid", text, errors=errors)
+        return self._outcome("completed", accepted if accepted is not None else text)
 
     async def _open(self, conn, schema) -> str:
         """Initialize (ACP v1 only), authenticate and open a session; its id."""
@@ -371,10 +381,12 @@ class AcpRunner:
            (every model call of the turn, summed by the agent): the difference since
            the last turn;
         2. else its reported token usage for the turn;
-        3. else an estimate from the text sent and received (CHARS_PER_TOKEN).
+        3. else a floor estimated from the text (CHARS_PER_TOKEN): the prompt once per
+           model call, the answer once.
 
-        With no price for the model, `fallback_estimate_usd` per model call (1 + the
-        turn's tool calls). The call is recorded before `LimitHit` is raised."""
+        A turn charged by 2 or 3 counts towards the next reported session cost, so it is
+        never charged twice. With no price for the model, `fallback_estimate_usd` per
+        model call (1 + the turn's tool calls). The call is recorded before `LimitHit`."""
         model, calls = self.agent.model, 1 + turn.tool_calls
         read = int(getattr(usage, "cached_read_tokens", None) or 0)
         write = int(getattr(usage, "cached_write_tokens", None) or 0)
@@ -407,14 +419,17 @@ class AcpRunner:
                 estimate = max(total - self._cost_seen, Decimal(0))
                 self._cost_seen = max(self._cost_seen, total)
                 reason = f"{name}: session cost at policy prices"
-            elif tokens_in + tokens_out > 0:
-                estimate = estimate_usd(price, tokens_in, tokens_out, read, write)
-                reason = f"{name}: usage at policy prices"
             else:
-                tokens_in = math.ceil(sent_chars / CHARS_PER_TOKEN)
-                tokens_out = math.ceil(len(text) / CHARS_PER_TOKEN)
-                estimate = estimate_usd(price, tokens_in, tokens_out)
-                reason = f"{name} reported no usage: estimated client-side from text length"
+                if tokens_in + tokens_out > 0:
+                    estimate = estimate_usd(price, tokens_in, tokens_out, read, write)
+                    reason = f"{name}: usage at policy prices"
+                else:  # a floor: every model call re-sends at least the prompt
+                    tokens_in = math.ceil(sent_chars / CHARS_PER_TOKEN) * calls
+                    tokens_out = math.ceil(len(text) / CHARS_PER_TOKEN)
+                    estimate = estimate_usd(price, tokens_in, tokens_out)
+                    reason = f"{name} reported no usage: estimated client-side from text length"
+                if self.profile.session_cost:  # a later session cost already includes it
+                    self._cost_seen += estimate
             cost = CallCost(
                 "estimated",
                 estimate,

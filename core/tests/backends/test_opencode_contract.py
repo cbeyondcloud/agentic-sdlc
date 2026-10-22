@@ -167,7 +167,7 @@ def test_every_call_reaches_tokenlean_with_identity_on_the_forced_model(world, a
         assert call["model"] == WIRE_MODEL
         for name, value in IDENTITY.headers().items():
             assert call["headers"][name.lower()] == value, name
-        assert call["headers"]["authorization"] == "<redacted>"
+        assert call["auth"] == "Bearer tl-test-key"  # read from the key file in its home
     for call in world.stub.model_calls(aux=False):
         assert call["temperature"] == 0.2
 
@@ -214,7 +214,9 @@ def test_ask_listed_commands_are_asked_and_refused(world, agent, command, trace)
     world.stub.queue = [bash(command), Reply(text="VALID done")]
     outcome = run(world.runner(agent))
     assert outcome.status == "completed"  # a refused ask lets the agent carry on
-    assert command in (outcome.detail or "")
+    program, rest = command.split(maxsplit=1)
+    assert f": {program} ..." in (outcome.detail or "")
+    assert rest not in outcome.detail  # never the arguments
     assert trace is None or not (world.tree / trace).exists()
 
 
@@ -284,6 +286,21 @@ def test_a_tree_carrying_opencode_plugins_is_refused_before_opencode_starts(worl
         run(world.runner(agent))
     assert not (tree / "plugin-ran").exists()
     assert world.stub.model_calls() == []
+
+
+def test_a_planted_custom_tool_is_never_loaded(world, agent):
+    # custom tools load through the config folders OPENCODE_DISABLE_PROJECT_CONFIG governs
+    # at 1.18.35 (unlike plugins): proven here, so a release that changes it fails
+    tree = world.tree
+    tools = tree / ".opencode" / "tools"
+    tools.mkdir(parents=True)
+    tool = f'require("fs").writeFileSync({json.dumps(str(tree / "tool-ran"))}, "x")\n'
+    (tools / "evil.js").write_text(tool + "export default {}\n", "utf-8")
+    world.stub.queue = [Reply(text="VALID")]
+    assert run(world.runner(agent)).status == "completed"
+    assert not (tree / "tool-ran").exists()
+    offered = {t for call in world.stub.model_calls(aux=False) for t in call["tools"]}
+    assert offered == {"bash", "read"}, offered
 
 
 def test_a_project_config_naming_plugin_packages_is_refused(world, agent):

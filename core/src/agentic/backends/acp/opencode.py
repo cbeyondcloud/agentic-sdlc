@@ -39,6 +39,7 @@ from agentic.backends.acp.profile import AcpProfile, Launch, ShellRules, StepSet
 from agentic.backends.capabilities import CAPABILITIES
 
 PROVIDER = "tokenlean"
+KEY_FILE = "tokenlean.key"  # in the step home
 #: Every permission key OpenCode 1.18.35 asks about, in the order they are written.
 PERMISSION_KEYS = (
     "read",
@@ -117,14 +118,14 @@ def code_in_tree(tree: Path) -> list[str]:
 
 
 def _up_to_repository(tree: Path) -> list[Path]:
-    """`tree` and its parents up to the repository root (the first holding `.git`); the
-    tree alone when it is in no repository."""
+    """`tree` and its parents up to the repository root (the first holding `.git`);
+    every parent when it is in no repository - OpenCode then searches up to `/`."""
     folders = []
     for folder in [tree, *tree.parents]:
         folders.append(folder)
         if (folder / ".git").exists():
-            return folders
-    return [tree]
+            break
+    return folders
 
 
 def _paths(glob: str) -> list[str]:
@@ -150,18 +151,30 @@ def opencode_permissions(tools: Sequence[str], rules: ShellRules) -> dict:
                 perms[key].update({pattern: "deny" for pattern in _paths(glob)})
             perms[key].update({pattern: "deny" for pattern in _OWN_FILES})
         elif key == "bash":
-            bash = {"*": "deny"}
-            for action, prefixes in (("allow", rules.allow), ("ask", rules.ask)):
-                for rule in prefixes:
-                    bash.update({f"{p} *": action for p in spelled_out(rule)})
-            for rule in rules.deny:  # last, so a deny wins over an allow it covers
-                for prefix in spelled_out(rule):
-                    bash.pop(f"{prefix} *", None)
-                    bash[f"{prefix} *"] = "deny"
-            perms[key] = bash
+            perms[key] = _bash(rules)
         else:
             perms[key] = "allow"
     return perms
+
+
+def _bash(rules: ShellRules) -> dict:
+    """OpenCode's `bash` rules: the last match wins, so deny-all first, then allow, ask
+    and deny, each moved to the end when written again - an ask or deny always lands
+    after any broader allow it narrows. `x *` matches `x` and `x ...`; a deny-anywhere
+    rule `p w` becomes `p *w*` (the words anywhere after the program)."""
+    ordered = [("*", "deny")]
+    ordered += [(f"{p} *", "allow") for rule in rules.allow for p in spelled_out(rule)]
+    ordered += [(f"{p} *", "ask") for rule in rules.ask for p in spelled_out(rule)]
+    ordered += [(f"{p} *", "deny") for rule in rules.deny for p in spelled_out(rule)]
+    for rule in rules.deny_anywhere:
+        for spelled in spelled_out(rule):
+            program, _, words = spelled.partition(" ")
+            ordered.append((f"{program} *{words}*" if words else f"{program} *", "deny"))
+    bash: dict = {}
+    for pattern, action in ordered:
+        bash.pop(pattern, None)
+        bash[pattern] = action
+    return bash
 
 
 def model_name(model: str) -> str:
@@ -199,7 +212,9 @@ def opencode_config(setup: StepSetup) -> dict:
                 "name": "TokenLean",
                 "options": {
                     "baseURL": setup.gateway_url.rstrip("/") + "/v1",
-                    "apiKey": setup.api_key,
+                    # read from a file in the step home, so the agent's shell commands
+                    # (which inherit its environment) never see the key
+                    "apiKey": f"{{file:{(setup.home / KEY_FILE).as_posix()}}}",
                     "headers": dict(setup.headers),
                 },
                 "models": {name: model},
@@ -240,7 +255,8 @@ def configure(setup: StepSetup) -> Launch:
             "OPENCODE_CONFIG_CONTENT": json.dumps(config),
             "OPENCODE_PERMISSION": json.dumps(config["permission"]),
             "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
-        }
+        },
+        files={KEY_FILE: setup.api_key},
     )
 
 

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from conformance import CASES, TASK, FakeContract, slice_
+from test_processes import gone
 
 from agentic.agents.runner import AgentTask, ResumeError
 from agentic.backends.acp.profile import AcpProfile, Launch
@@ -188,7 +189,9 @@ def test_every_permission_request_is_rejected_once(world):
     answers = world.events("permission")
     assert [a["outcome"] for a in answers] == [{"outcome": "selected", "optionId": "reject"}] * 2
     assert outcome.status == "completed"
-    assert "touch made-by-agent.txt" in outcome.detail and "echo read-only" in outcome.detail
+    # the program only: a command's arguments can carry a credential (as in the guard)
+    assert "execute: touch" in outcome.detail and "execute: echo" in outcome.detail
+    assert "made-by-agent.txt" not in outcome.detail and "read-only" not in outcome.detail
 
 
 def test_with_no_reject_option_a_request_is_cancelled_never_allowed(world):
@@ -216,6 +219,18 @@ def test_the_agent_runs_in_the_tree_with_a_home_of_its_own(world, monkeypatch):
     assert Path(world.events("cwd")[0]["cwd"]).resolve() == world.tree.resolve()
     assert Path(world.events("new_session")[0]["cwd"]) == world.tree
     assert world.events("new_session")[0]["mcp_servers"] == 0
+
+
+def test_what_the_agent_started_does_not_outlive_the_step(world):
+    run(world.runner([[{"spawn": True}, {"say": "VALID"}]]))
+    (spawned,) = world.events("spawned")
+    assert gone(spawned["pid"])
+
+
+def test_the_step_home_is_thrown_away_with_the_step(world):
+    run(world.runner([[{"say": "VALID"}]]))
+    assert world.events("initialize")
+    assert not (world.home_root / "r-1" / "develop-1" / "developer").exists()
 
 
 def test_the_client_offers_the_agent_no_file_or_terminal_access(world):
@@ -300,6 +315,16 @@ def test_without_a_session_cost_the_turn_s_usage_is_priced(world):
     expected = (Decimal(1000) * 3 + Decimal(200) * 15) / Decimal(1_000_000)
     assert budget.spent() == expected
     assert (outcome.usage.input_tokens, outcome.usage.output_tokens) == (1000, 200)
+
+
+def test_a_turn_charged_from_usage_is_not_charged_again_by_the_next_session_cost(world):
+    turns = [
+        [{"say": "prose"}, {"usage": {"input": 1000, "output": 0}}],  # no session cost
+        [{"say": "VALID"}, {"cost": 0.005}],  # the session so far, the first turn included
+    ]
+    budget = slice_()
+    run(world.runner(turns, budget=budget, contract=FakeContract()))
+    assert budget.spent() == Decimal("0.005")
 
 
 def test_a_session_cost_from_a_profile_without_our_prices_is_ignored(world):

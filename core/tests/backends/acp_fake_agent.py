@@ -14,6 +14,7 @@ The script (JSON) holds:
                                           offers no reject option) and logs the answer
       {"cost": usd}                       a usage_update with the session's cost
       {"usage": {"input": n, "output": n, "cache_read": n}}   the turn's PromptResponse usage
+      {"spawn": true}                     a background process left running (its pid logged)
       {"sleep": seconds}
       {"stop": reason}                    the turn's stop reason (default end_turn)
 """
@@ -21,6 +22,7 @@ The script (JSON) holds:
 import asyncio
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -120,6 +122,13 @@ class FakeAgent:
                     cached_read_tokens=tokens.get("cache_read"),
                     total_tokens=tokens.get("input", 0) + tokens.get("output", 0),
                 )
+            elif "spawn" in action:  # a background process the agent leaves running
+                child = subprocess.Popen(
+                    [sys.executable, "-c", "import time; time.sleep(60)"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self.log("spawned", pid=child.pid)
             elif "sleep" in action:
                 await asyncio.sleep(action["sleep"])
             elif "stop" in action:

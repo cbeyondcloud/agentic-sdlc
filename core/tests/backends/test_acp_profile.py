@@ -1,6 +1,7 @@
 """The generic parts of an ACP profile (M2-57; spike S7): our shell policy in neutral form,
 and the per-step environment every ACP agent is launched with. Pure data - no agent runs."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,7 @@ def test_rules_come_from_the_resolved_agent(resolved):
     assert ShellRules.from_agent(agent) == ShellRules(
         allow=("pytest", "ruff"), ask=("npm publish",), deny=("git push",), deny_paths=("infra/**",)
     )
+    assert ShellRules.from_agent(agent).deny_anywhere == ()  # the guard's floor: from commons
 
 
 def test_alternatives_in_a_rule_are_spelled_out():
@@ -85,6 +87,8 @@ def test_profile_files_are_written_under_the_home(tmp_path):
     write_files(tmp_path, {"cfg/agent.json": "{}", "notes.txt": "x"})
     assert (tmp_path / "cfg" / "agent.json").read_text(encoding="utf-8") == "{}"
     assert (tmp_path / "notes.txt").exists()
+    if os.name != "nt":  # a key file: the user only
+        assert (tmp_path / "notes.txt").stat().st_mode & 0o077 == 0
 
 
 @pytest.mark.parametrize("name", ["../escape.txt", "/abs/escape.txt", "a/../../escape.txt"])

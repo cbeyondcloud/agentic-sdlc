@@ -10,8 +10,8 @@ compiled into the agent's own config. The engine (`runner.py`) knows no agent by
 a new ACP agent is a new `AcpProfile` plus its pinned contract tests (E2-06).
 
 Every agent runs with a home of its own per step: no user config, credentials or
-history of the developer's is ever read, and the agent's own state is thrown away
-with the step.
+history of the developer's is ever read, and the agent's own state (its transcript
+included) is deleted when the step ends.
 """
 
 import itertools
@@ -37,6 +37,9 @@ class ShellRules:
     ask: tuple[str, ...] = ()
     deny: tuple[str, ...] = ()
     deny_paths: tuple[str, ...] = ()
+    # refused when the words after the program appear anywhere in the command, not only
+    # first (`git reset --hard`, `rm -r|-R`): the guard's destructive floor
+    deny_anywhere: tuple[str, ...] = ()
 
     @classmethod
     def from_agent(cls, agent: ResolvedAgent) -> "ShellRules":
@@ -147,3 +150,5 @@ def write_files(home: Path, files: Mapping[str, str]) -> None:
         target = home.joinpath(*relative.parts)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
+        if os.name != "nt":  # profile files may hold the key: the user only
+            target.chmod(0o600)

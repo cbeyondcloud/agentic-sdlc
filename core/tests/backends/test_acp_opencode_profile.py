@@ -101,6 +101,22 @@ def test_shell_rules_deny_all_then_allow_then_ask_then_deny_last():
     ]
 
 
+def test_an_ask_overrides_a_broader_allow_listed_after_it():  # review: last match wins
+    rules = ShellRules(allow=("git push", "git"), ask=("git push",))
+    bash = opencode_permissions(CODING, rules)["bash"]
+    assert list(bash.items()) == [("*", "deny"), ("git *", "allow"), ("git push *", "ask")]
+
+
+def test_the_destructive_floor_is_denied_wherever_its_words_stand():
+    rules = ShellRules(allow=("git", "rm"), deny_anywhere=("git reset --hard", "rm -r|-R"))
+    bash = opencode_permissions(CODING, rules)["bash"]
+    assert list(bash.items())[-3:] == [
+        ("git *reset --hard*", "deny"),
+        ("rm *-r*", "deny"),
+        ("rm *-R*", "deny"),
+    ]
+
+
 def test_a_deny_overrides_an_allow_that_covers_it():
     bash = opencode_permissions(CODING, ShellRules(allow=("git",), deny=("git",)))["bash"]
     assert list(bash.items())[-1] == ("git *", "deny")
@@ -178,6 +194,15 @@ def test_nothing_above_the_repository_is_looked_at(tmp_path):
     assert code_in_tree(root) == []
 
 
+def test_outside_any_repository_every_parent_is_looked_at(tmp_path):
+    # OpenCode takes `/` as the project then, and reads every parent's `.opencode/`
+    write(tmp_path / ".opencode" / "plugins" / "above.js", "x")
+    tree = tmp_path / "plain" / "folder"
+    tree.mkdir(parents=True)
+    (found,) = code_in_tree(tree)
+    assert "above.js" in found
+
+
 def test_a_project_config_without_plugins_is_fine(tmp_path):
     root = repo(tmp_path)
     write(root / "opencode.json", '{"model": "x/y", "mcp": {}, "instructions": ["A.md"]}')
@@ -198,8 +223,14 @@ def test_the_only_provider_is_tokenlean_with_our_key_and_identity(coder):
     provider = config["provider"]["tokenlean"]
     assert provider["npm"] == "@ai-sdk/openai-compatible"
     assert provider["options"]["baseURL"] == "https://tokenlean.acme.internal/v1"
-    assert provider["options"]["apiKey"] == "tl-key"
+    assert provider["options"]["apiKey"] == "{file:/state/home/tokenlean.key}"
     assert provider["options"]["headers"] == HEADERS
+
+
+def test_the_key_is_a_file_in_the_step_home_never_in_the_environment(coder):
+    launch = configure(setup_for(coder))
+    assert launch.files == {"tokenlean.key": "tl-key"}
+    assert not any("tl-key" in value for value in launch.env.values())
 
 
 def test_the_resolved_model_is_forced_for_the_small_model_too(coder):
