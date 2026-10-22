@@ -246,6 +246,42 @@ async def _repo_maintainer_row(conn: AsyncConnection, tenant_id: UUID) -> dict[s
     }
 
 
+def _run_row(tenant_id: UUID, user_id: UUID) -> dict[str, Any]:
+    return {
+        "tenant_id": tenant_id,
+        "run_id": f"run-{next(_sequence)}",
+        "team": "payments",
+        "started_by": user_id,
+        "policy_version": "git:" + "c" * 40,
+        "policy_known": False,
+        "head_seq": 1,
+        "head_hash": "sha256:" + "a" * 64,
+    }
+
+
+@register("runs")
+async def _runs_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    return _run_row(tenant_id, user["id"])
+
+
+@register("run_events")
+async def _run_event_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    run = await _insert(conn, "runs", _run_row(tenant_id, user["id"]))
+    return {
+        "tenant_id": tenant_id,
+        "run_id": run["run_id"],
+        "seq": 1,
+        "hash": "sha256:" + "a" * 64,
+        "prev": "",
+        "event": "run_opened",
+        "step": "",
+        "at": "2026-10-22T09:30:00.000+00:00",
+        "entry": {"seq": 1, "event": "run_opened"},
+    }
+
+
 @register("policy_active")
 async def _policy_active_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
     version = await _insert(conn, "policy_versions", _version_row(tenant_id))
@@ -331,6 +367,28 @@ async def _repo_in_b(api) -> dict[str, str]:
     return {"repo_key": APP_KEY}
 
 
+async def _run_in_b(api) -> dict[str, str]:
+    """A run ingested in tenant b only (by b's org admin, who holds run.trigger)."""
+    from sdlc_commons import ledger as ledger_module
+    from sdlc_commons.ledger import RunIdentity, RunLedger
+
+    run_id = f"iso-run-{next(_sequence)}"
+    ledger = RunLedger(Path(tempfile.mkdtemp(prefix="cp-iso-")), run_id)
+    ledger.open(
+        identity=RunIdentity(team="payments", policy_version="git:" + "c" * 40),
+        kind="feature",
+        project="demo",
+        owner="payments",
+        criticality="low",
+    )
+    entries = ledger.events()
+    ledger.release()
+    ledger_module._IDENTITIES.pop(run_id, None)
+    made = await api.post(f"/v1/runs/{run_id}/events", api.b.admin_token, {"entries": entries})
+    assert made.status_code == 200, made.text
+    return {"run_id": run_id}
+
+
 ENDPOINT_CASES += [
     EndpointCase("tokens", "DELETE", "/v1/tokens/{id}", _token_in_b),
     EndpointCase("tokens", "GET", "/v1/tokens", _token_in_b, must_not_list=True),
@@ -365,5 +423,17 @@ ENDPOINT_CASES += [
         "/v1/users/{email}/handles",
         _user_in_b,
         body={"handles": ["git.example.test:someone"]},
+    ),
+    EndpointCase("runs", "GET", "/v1/runs/{run_id}", _run_in_b),
+    EndpointCase("runs", "GET", "/v1/runs/{run_id}/events", _run_in_b),
+    EndpointCase(
+        # another tenant's run id is a new, unknown run here: a batch not starting at
+        # seq 1 is a gap at head 0, exactly as for a run id nobody used
+        "runs",
+        "POST",
+        "/v1/runs/{run_id}/events",
+        _run_in_b,
+        body={"entries": [{"seq": 2}]},
+        expect_status=409,
     ),
 ]

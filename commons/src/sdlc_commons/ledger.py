@@ -21,7 +21,7 @@ import json
 import os
 import re
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -484,3 +484,89 @@ def entry_hash(entry: Mapping[str, object]) -> str:
     `hash` (and `signature`). Chains kept outside a run folder (the control plane's audit
     table) use it, so one verifier checks the run ledger and the audit chain alike."""
     return approve.entry_hash(dict(entry))
+
+
+def verify_entries(
+    entries: Sequence[object],
+    *,
+    run_id: str,
+    after: tuple[int, str] = (0, ""),
+    identity: tuple[str, str] | None = None,
+) -> list[str]:
+    """Every problem in a run's events held in memory ([] = intact), each naming the event
+    by its position in the run (`event <seq>`). The control plane verifies an ingested batch
+    with it (SP15), continuing from the head it stored (`after`: its seq and hash).
+
+    Zyroflo's chain rules (`events.verify`): each entry links to the previous hash, its
+    recorded hash matches its contents (`entry_hash`), its `seq` is the next one and it
+    claims `run_id`. Plus the schema a writer is held to (`events.append`): a known event
+    type carrying only its declared fields; our `ext.agentic` ids in their patterns; and one
+    run identity (team, policy version) on every entry - `identity`, when given, is the
+    one the run already has."""
+    problems: list[str] = []
+    seq, prev = after
+    expected = identity
+    for entry in entries:
+        seq += 1
+        where = f"event {seq}"
+        if not isinstance(entry, Mapping):
+            problems.append(f"{where}: not an event (a JSON object)")
+            prev = ""
+            continue
+        what = entry.get("event")
+        if entry.get("prev", "") != prev:
+            problems.append(
+                f"{where} ({what}): links to {entry.get('prev', '')!r}, the previous event "
+                f"hashes to {prev!r} - an event was edited, inserted, removed or reordered"
+            )
+        if entry.get("hash") != entry_hash(entry):
+            problems.append(f"{where} ({what}): its recorded hash does not match its contents")
+        if entry.get("seq") != seq or isinstance(entry.get("seq"), bool):
+            problems.append(f"{where} ({what}): seq {entry.get('seq')!r} - expected {seq}")
+        if entry.get("run_id") != run_id:
+            problems.append(f"{where} ({what}): claims run {entry.get('run_id')!r}, not {run_id!r}")
+        problems += _schema_problems(where, entry)
+        found = _identity_of(entry)
+        if expected is None:
+            expected = found
+        elif found != expected:
+            problems.append(
+                f"{where} ({what}): run identity {found} differs from the run's {expected}"
+            )
+        prev = str(entry.get("hash", ""))
+    return problems
+
+
+def _schema_problems(where: str, entry: Mapping) -> list[str]:
+    what = entry.get("event")
+    if what not in events.TYPES:
+        return [f"{where}: unknown event type {what!r} (one of {', '.join(events.TYPES)})"]
+    allowed = set(events.COMMON) | set(events.FIELDS[what]) | set(events.OPTIONAL)
+    problems = [
+        f"{where} ({what}): field {name!r} is not declared for {what}"
+        for name in sorted(set(entry) - allowed)
+    ]
+    for name in events.COMMON:
+        if name not in entry:
+            problems.append(f"{where} ({what}): missing field {name!r}")
+    ext = entry.get("ext")
+    if ext is None:
+        return problems
+    if not isinstance(ext, Mapping) or set(ext) - {NAMESPACE}:
+        return [*problems, f"{where} ({what}): ext may only hold the {NAMESPACE!r} block"]
+    block = ext.get(NAMESPACE, {})
+    if not isinstance(block, Mapping):
+        return [*problems, f"{where} ({what}): ext.{NAMESPACE} is not a mapping"]
+    for name, value in block.items():
+        spec = FIELDS.get(name)
+        values = value if isinstance(value, list) else [value]
+        if spec is None:
+            problems.append(f"{where} ({what}): ext.{NAMESPACE}.{name} is not declared")
+        elif not all(isinstance(v, str) and re.fullmatch(spec["pattern"], v) for v in values):
+            problems.append(f"{where} ({what}): ext.{NAMESPACE}.{name} is not a valid id")
+    return problems
+
+
+def _identity_of(entry: Mapping) -> tuple[str | None, str | None]:
+    block = _agentic(dict(entry))
+    return block.get("team"), block.get("policy_version")

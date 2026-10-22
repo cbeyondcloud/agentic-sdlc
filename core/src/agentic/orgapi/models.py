@@ -290,6 +290,43 @@ class HandlesInfo(BaseModel):
     handles: list[str]
 
 
+class ChainHead(BaseModel):
+    """The last event a chain holds: `seq` 0 and `hash` "" before the first."""
+
+    seq: int = 0
+    hash: str = ""
+
+
+class IngestRequest(RequestModel):
+    """`POST /v1/runs/{run_id}/events`: run ledger entries exactly as chained (Zyroflo's
+    format), in order; the server caps the count (`max_ingest_entries`)."""
+
+    entries: list[dict[str, Any]] = Field(min_length=1, max_length=5000)
+
+
+class IngestResult(BaseModel):
+    """What an ingest stored: new entries, replayed ones (no-ops), and the head after."""
+
+    accepted: int
+    duplicates: int
+    head: ChainHead
+
+
+class RunSummary(BaseModel):
+    """`GET /v1/runs/{run_id}`: a run as the control plane holds it (ND-11: PR links point
+    here until a web UI exists)."""
+
+    run_id: str
+    team: str
+    started_by: str
+    policy_version: str
+    policy_known: bool
+    status: str
+    head: ChainHead
+    opened_at: datetime
+    last_event_at: datetime | None = None
+
+
 class Problem(BaseModel):
     """An RFC 9457 problem document. `code` is a stable machine name
     (`auth.invalid_token`, ...); `hint` is a next step the CLI prints as is. A problem never
@@ -301,3 +338,7 @@ class Problem(BaseModel):
     detail: str
     code: str
     hint: str | None = None
+    head: ChainHead | None = None
+    """`ingest.gap` / `ingest.fork`: the chain head the server holds (resend from it)."""
+    problems: list[str] | None = None
+    """`ingest.chain_broken`: each problem, naming the event by its seq."""

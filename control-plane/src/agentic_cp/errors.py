@@ -53,6 +53,7 @@ class ApiProblem(Exception):
         *,
         hint: str | None = None,
         headers: dict[str, str] | None = None,
+        extra: dict | None = None,
     ) -> None:
         super().__init__(f"{status} {code}: {detail}")
         self.status = status
@@ -60,6 +61,8 @@ class ApiProblem(Exception):
         self.detail = detail
         self.hint = hint
         self.headers = headers or {}
+        self.extra = extra or {}
+        """Extension members the `Problem` model declares (`head`, `problems`)."""
 
 
 def not_found(what: str = "object") -> ApiProblem:
@@ -75,9 +78,15 @@ def problem_response(
     *,
     hint: str | None = None,
     headers: dict[str, str] | None = None,
+    extra: dict | None = None,
 ) -> JSONResponse:
     body = Problem(
-        title=HTTPStatus(status).phrase, status=status, detail=detail, code=code, hint=hint
+        title=HTTPStatus(status).phrase,
+        status=status,
+        detail=detail,
+        code=code,
+        hint=hint,
+        **(extra or {}),
     )
     return JSONResponse(
         body.model_dump(exclude_none=True),
@@ -94,7 +103,12 @@ def _field(loc: tuple) -> str:
 
 async def _on_problem(request: Request, error: ApiProblem) -> JSONResponse:
     return problem_response(
-        error.status, error.code, error.detail, hint=error.hint, headers=error.headers
+        error.status,
+        error.code,
+        error.detail,
+        hint=error.hint,
+        headers=error.headers,
+        extra=error.extra,
     )
 
 

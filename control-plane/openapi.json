@@ -317,6 +317,23 @@
         "title": "AuditVerification",
         "type": "object"
       },
+      "ChainHead": {
+        "description": "The last event a chain holds: `seq` 0 and `hash` \"\" before the first.",
+        "properties": {
+          "hash": {
+            "default": "",
+            "title": "Hash",
+            "type": "string"
+          },
+          "seq": {
+            "default": 0,
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "title": "ChainHead",
+        "type": "object"
+      },
       "CheckRequest": {
         "additionalProperties": false,
         "description": "`POST /v1/rbac/check`: may the caller (or `user`, needing `rbac.assign`) do\n`permission` for the org, a team or a repo?",
@@ -494,6 +511,50 @@
         "title": "HandlesUpdate",
         "type": "object"
       },
+      "IngestRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/runs/{run_id}/events`: run ledger entries exactly as chained (Zyroflo's\nformat), in order; the server caps the count (`max_ingest_entries`).",
+        "properties": {
+          "entries": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "IngestRequest",
+        "type": "object"
+      },
+      "IngestResult": {
+        "description": "What an ingest stored: new entries, replayed ones (no-ops), and the head after.",
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "integer"
+          },
+          "duplicates": {
+            "title": "Duplicates",
+            "type": "integer"
+          },
+          "head": {
+            "$ref": "#/components/schemas/ChainHead"
+          }
+        },
+        "required": [
+          "accepted",
+          "duplicates",
+          "head"
+        ],
+        "title": "IngestResult",
+        "type": "object"
+      },
       "Me": {
         "description": "`GET /v1/me`: who the token belongs to, in which tenant, and what they hold.",
         "properties": {
@@ -669,6 +730,16 @@
             "title": "Detail",
             "type": "string"
           },
+          "head": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChainHead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "hint": {
             "anyOf": [
               {
@@ -679,6 +750,20 @@
               }
             ],
             "title": "Hint"
+          },
+          "problems": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problems"
           },
           "status": {
             "title": "Status",
@@ -902,6 +987,67 @@
           "permissions"
         ],
         "title": "RoleUpdate",
+        "type": "object"
+      },
+      "RunSummary": {
+        "description": "`GET /v1/runs/{run_id}`: a run as the control plane holds it (ND-11: PR links point\nhere until a web UI exists).",
+        "properties": {
+          "head": {
+            "$ref": "#/components/schemas/ChainHead"
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event At"
+          },
+          "opened_at": {
+            "format": "date-time",
+            "title": "Opened At",
+            "type": "string"
+          },
+          "policy_known": {
+            "title": "Policy Known",
+            "type": "boolean"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_by": {
+            "title": "Started By",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "team",
+          "started_by",
+          "policy_version",
+          "policy_known",
+          "status",
+          "head",
+          "opened_at"
+        ],
+        "title": "RunSummary",
         "type": "object"
       },
       "SyncOutcome": {
@@ -2199,6 +2345,189 @@
         "summary": "Refresh Repo",
         "tags": [
           "repos"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}": {
+      "get": {
+        "description": "The run: who started it, its team, policy version and chain head. Readable by its\nstarter and by holders of `dashboard.view.team` or `audit.read.team` in its team.",
+        "operationId": "get_run_v1_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Run",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/events": {
+      "get": {
+        "description": "The run's events exactly as received, after `after_seq` (for `agentic audit verify`).",
+        "operationId": "get_events_v1_runs__run_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_seq",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After Seq",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Get Events V1 Runs  Run Id  Events Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Events",
+        "tags": [
+          "runs"
+        ]
+      },
+      "post": {
+        "description": "Append a batch of the run's chained events: verified entry by entry, stored all or\nnothing; replayed entries are no-ops (`duplicates`).",
+        "operationId": "ingest_v1_runs__run_id__events_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ingest",
+        "tags": [
+          "runs"
         ]
       }
     },

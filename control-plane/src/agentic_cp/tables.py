@@ -44,6 +44,8 @@ TENANT_TABLES: tuple[str, ...] = (
     "policy_active",
     "repos",
     "repo_maintainers",
+    "runs",
+    "run_events",
 )
 
 #: A tenant's slug: lower-case, starts with a letter, 2-63 characters.
@@ -238,6 +240,44 @@ repo_maintainers = Table(
         ["tenant_id", "repo_key"], ["repos.tenant_id", "repos.repo_key"], ondelete="CASCADE"
     ),
     ForeignKeyConstraint(["tenant_id", "user_id"], ["users.tenant_id", "users.id"]),
+)
+
+#: Runs reported by CLIs (M2-04): one row per run, holding its identity and chain head.
+#: The key includes the tenant, so one run id in two tenants is two runs.
+runs = Table(
+    "runs",
+    metadata,
+    _tenant_id(),
+    Column("run_id", Text, primary_key=True),
+    Column("team", Text, nullable=False),
+    Column("started_by", UUID(as_uuid=True), nullable=False),
+    Column("policy_version", Text, nullable=False),
+    Column("policy_known", Boolean, nullable=False),
+    Column("status", Text, nullable=False, server_default="open"),
+    Column("head_seq", BigInteger, nullable=False, server_default="0"),
+    Column("head_hash", Text, nullable=False, server_default=""),
+    Column("opened_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("last_event_at", DateTime(timezone=True), nullable=True),
+    ForeignKeyConstraint(["tenant_id", "started_by"], ["users.tenant_id", "users.id"]),
+)
+
+#: Each run's chained events exactly as received (insert-only evidence; `entry` is the
+#: whole entry, so the stored chain re-verifies with `sdlc_commons.ledger.verify_entries`).
+run_events = Table(
+    "run_events",
+    metadata,
+    _tenant_id(),
+    Column("run_id", Text, primary_key=True),
+    Column("seq", BigInteger, primary_key=True, autoincrement=False),
+    Column("hash", Text, nullable=False),
+    Column("prev", Text, nullable=False),
+    Column("event", Text, nullable=False),
+    Column("step", Text, nullable=False),
+    Column("at", Text, nullable=False),
+    Column("entry", JSONB, nullable=False),
+    Column("received_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    ForeignKeyConstraint(["tenant_id", "run_id"], ["runs.tenant_id", "runs.run_id"]),
+    CheckConstraint("seq > 0", name="run_events_seq_positive"),
 )
 
 #: Unique constraints that deliberately span tenants: credential hashes, looked up before
