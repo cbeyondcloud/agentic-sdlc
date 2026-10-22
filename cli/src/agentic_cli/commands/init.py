@@ -15,6 +15,7 @@ authorises anything.
 import os
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit
 
 import typer
 from rich.markup import escape
@@ -281,10 +282,19 @@ def _register(
         out.warn("the repo was not registered with the control plane: no origin or no team")
         return None
     try:
-        return client.register_repo(scrub_url_credentials(remote), team).repo_key
+        return client.register_repo(_shareable(remote), team).repo_key
     except control_plane.ControlPlaneError as error:
         out.warn(f"the repo was not registered with the control plane: {error}")
         return None
+
+
+def _shareable(remote: str) -> str:
+    """The remote as the control plane may store it: an https URL loses any credentials;
+    an ssh user (`git@`) is part of the address and is kept (review F3)."""
+    parsed = urlsplit(remote)
+    if parsed.password or (parsed.scheme in ("http", "https") and parsed.username):
+        return scrub_url_credentials(remote)
+    return remote
 
 
 class _NotOpened(Exception):

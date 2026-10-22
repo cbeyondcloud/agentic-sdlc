@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 import pytest
-from cli_helpers import snapshot
+from cli_helpers import git, snapshot
 from cp_fakes import CP_URL, TOKEN, FakeControlPlane
 from test_init_dev import deps, policy_repo, setup_repo  # noqa: F401 - shared fixtures
 
@@ -92,6 +92,26 @@ def test_org_init_repo_checks_agent_edit_repo(repo, plane, monkeypatch, capsys):
     assert plane.registered == [{"remote": "https://github.com/acme/app.git", "team": "payments"}]
     out = json.loads(capsys.readouterr().out)
     assert out["registered"] == "github.com/acme/app"
+
+
+@pytest.mark.parametrize(
+    ("origin", "sent"),
+    [
+        ("ssh://git@github.com/acme/app.git", "ssh://git@github.com/acme/app.git"),
+        ("git@github.com:acme/app.git", "git@github.com:acme/app.git"),
+        (
+            "https://x-token:" + "s3cr3t" + "@github.com/acme/app.git",
+            "https://github.com/acme/app.git",
+        ),
+    ],
+)
+def test_org_init_repo_registers_a_shareable_remote(repo, plane, monkeypatch, origin, sent):
+    """Review F3: an ssh user is part of the address and is kept; https credentials are not
+    sent to the control plane."""
+    git(repo, "remote", "set-url", "origin", origin)
+    monkeypatch.chdir(repo)
+    assert main(["--json", "init", "--repo", "--team", "payments", "--no-pr"]) == ExitCode.OK
+    assert plane.registered[-1]["remote"] == sent
 
 
 def test_org_init_repo_refused_without_agent_edit_repo(repo, plane, monkeypatch, capsys):

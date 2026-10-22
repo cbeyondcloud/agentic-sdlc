@@ -289,6 +289,16 @@ async def test_nan_and_nul_are_refused(api, dev, tmp_path):
     assert sent.status_code == 422
 
 
+async def test_refusals_before_authorisation_are_not_audited(api, tmp_path):
+    """Review F5: a caller with no role cannot write audit records by sending junk."""
+    _, nobody = await api.add_user(api.a, "nobody@a.example.test")
+    before = len((await api.get("/v1/audit", api.a.admin_token)).json())
+    for body in ([{"seq": 0}], [{"seq": 1, "event": "run_opened"}]):
+        reply = await post(api, nobody, body)
+        assert reply.status_code == 422
+    assert len((await api.get("/v1/audit", api.a.admin_token)).json()) == before
+
+
 async def test_runs_never_cross_tenants_in_the_tables(api, dev, tmp_path):
     await post(api, dev, chain(tmp_path))
     async with tenant_tx(api.db.app, api.b.id) as conn:

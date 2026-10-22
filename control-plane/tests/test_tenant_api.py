@@ -114,7 +114,11 @@ class OfflineGit(GitRunner):
 async def test_remote_urls_are_accepted_when_local_repos_are_not(api):
     strict = api.with_settings(allow_local_repos=False)
     strict.app.state.git = OfflineGit(strict.settings)
-    for good in ("https://git.example.test/org/policy.git", "git@git.example.test:org/p.git"):
+    for good in (
+        "https://git.example.test/org/policy.git",
+        "git@git.example.test:org/p.git",
+        "git@git.example.test:/srv/git/policy.git",  # scp form with an absolute path
+    ):
         reply = await strict.put(
             "/v1/tenant/policy-source", api.a.admin_token, {"repo": good, "branch": "main"}
         )

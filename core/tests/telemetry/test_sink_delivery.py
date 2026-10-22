@@ -149,6 +149,29 @@ def test_background_recorder_does_not_block_on_a_slow_sink(tmp_path):
     assert list(sink.kept) == [1, 2, 3, 4]
 
 
+def test_close_delivers_entries_written_straight_to_the_ledger(tmp_path):
+    """Gate entries are appended by Zyroflo itself, so no `record` woke the thread:
+    `close` still forwards them before it stops (review F4)."""
+    ledger, sink = Ledger(tmp_path), Dedup()
+    recorder = ForwardingRecorder(ledger, [sink], background=True)
+    recorder.record("step_started")
+    for _ in range(50):  # let the thread go idle after its flush
+        if sink.kept:
+            break
+        time.sleep(0.02)
+    ledger.record("gate_decided")  # not through the recorder
+    assert recorder.close(timeout=10) == {"control-plane": 0}
+    assert list(sink.kept) == [1, 2]
+
+
+def test_close_waits_for_a_slow_final_delivery(tmp_path):
+    ledger, sink = Ledger(tmp_path), Dedup()
+    sink.slow = 1.5  # longer than any fixed join, shorter than the grace
+    recorder = ForwardingRecorder(ledger, [sink], background=True)
+    recorder.record("run_closed")
+    assert recorder.close(timeout=10) == {"control-plane": 0}
+
+
 def test_close_reports_what_stays_queued(tmp_path):
     ledger, sink = Ledger(tmp_path), Dedup()
     sink.offline = True

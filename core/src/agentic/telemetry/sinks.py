@@ -147,6 +147,9 @@ class ForwardingRecorder:
         self._flushing = threading.Lock()  # one forward per sink cursor at a time
         self._wake, self._stop, self._idle = threading.Event(), threading.Event(), threading.Event()
         self._idle.set()
+        # wake and idle change together under this lock, so a request made while the thread
+        # finishes a flush is never lost between its "anything new?" check and going idle
+        self._state = threading.Lock()
         self._thread: threading.Thread | None = None
         if background and self.sinks:
             self._thread = threading.Thread(
@@ -161,8 +164,7 @@ class ForwardingRecorder:
     def record(self, event: str, phase: str = "", **fields: object) -> object:
         entry = self.ledger.record(event, phase, **fields)
         if self._thread is not None:
-            self._idle.clear()
-            self._wake.set()  # the delivery thread forwards it; the run goes on
+            self._request()  # the delivery thread forwards it; the run goes on
         else:
             self.flush()
         return entry
@@ -197,9 +199,11 @@ class ForwardingRecorder:
     def close(self, timeout: float = 5.0) -> dict[str, int]:
         """Give the delivery thread up to `timeout` seconds to forward what is pending,
         then stop it; returns what stays queued per sink (the next forward, or
-        `agentic runs sync`, delivers it)."""
+        `agentic sync`, delivers it)."""
         if self._thread is not None:
-            self._wake.set()
+            # one more flush, even with nothing recorded since: entries Zyroflo appended
+            # itself (gate decisions) never woke the thread
+            self._request()
             self._idle.wait(timeout)
             self._stop.set()
             self._wake.set()
@@ -207,18 +211,25 @@ class ForwardingRecorder:
             self._thread = None
         return self.pending()
 
+    def _request(self) -> None:
+        with self._state:
+            self._idle.clear()
+            self._wake.set()
+
     def _deliver_in_background(self) -> None:
-        while not self._stop.is_set():
+        while True:
             self._wake.wait()
-            self._wake.clear()
+            with self._state:
+                self._wake.clear()
             if self._stop.is_set():
                 break
             try:
                 self.flush()
             except Exception as error:  # the ledger itself could not be read
                 self.on_error("all", error)
-            if not self._wake.is_set():
-                self._idle.set()
+            with self._state:
+                if not self._wake.is_set():
+                    self._idle.set()
 
     def write_artifact(self, rel: str, text: str) -> str:
         return self.ledger.write_artifact(rel, text)

@@ -127,6 +127,26 @@ async def test_webhook_rotation_requires_policy_edit_org_and_is_audited(api):
     assert issued.json()["path"].rsplit("/", 1)[1] not in str(records)
 
 
+async def test_access_log_never_shows_a_webhook_token(api):
+    """Review F2: uvicorn's access log line carries the path; the token is masked."""
+    import logging
+
+    secret = WEBHOOK_TOKEN_PREFIX + "s" * 43
+    record = logging.LogRecord(
+        "uvicorn.access",
+        logging.INFO,
+        __file__,
+        1,
+        '%s - "%s %s HTTP/%s" %d',
+        ("127.0.0.1:5000", "POST", f"/v1/policy/webhook/{secret}?x=1", "1.1", 202),
+        None,
+    )
+    for handler_filter in logging.getLogger("uvicorn.access").filters:
+        handler_filter.filter(record)
+    assert secret not in record.getMessage()
+    assert "/v1/policy/webhook/<redacted>" in record.getMessage()
+
+
 class RefuseWebhooksOf:
     def __init__(self, tenant_id):
         self.tenant_id = tenant_id

@@ -5,6 +5,7 @@ local repos, so git really runs and no network is used."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 
@@ -24,7 +25,10 @@ from sqlalchemy import select
 
 from agentic_cp.gitops import GitError, GitRunner
 from agentic_cp.policy_sync.worker import run_pass
+from agentic_cp.rbac import repos as repo_store
+from agentic_cp.rbac import repos_api
 from agentic_cp.tables import audit_log, repo_maintainers, tenants
+from agentic_cp.tables import repos as repos_table
 from agentic_cp.tenancy.context import tenant_tx
 
 pytestmark = pytest.mark.anyio
@@ -224,6 +228,78 @@ async def test_git_errors_never_show_credentials(api, repos, caplog):
     assert all(secret not in record.getMessage() for record in caplog.records)
     async with tenant_tx(api.db.owner, api.a.id) as conn:
         assert all(secret not in str(row) for row in await conn.execute(select(audit_log)))
+
+
+async def test_concurrent_registrations_of_one_repo_do_not_fail(api, repos):
+    """Review F8: two registrations racing give 201 and 200, never a 500."""
+    replies = await asyncio.gather(
+        _register(api, api.a.admin_token), _register(api, api.a.admin_token)
+    )
+    assert sorted(r.status_code for r in replies) == [200, 201], [r.text for r in replies]
+
+
+async def test_registration_fetches_before_taking_the_audit_lock(api, repos):
+    """Review F6: the git fetch happens before any audit append (which holds the tenant's
+    chain lock to commit), so a slow host never blocks the tenant's other audited writes."""
+    order: list[str] = []
+    real_fetch, real_append = repo_store.fetch_codeowners, repos_api.append
+
+    def fetch(*args, **kwargs):
+        order.append("fetch")
+        return real_fetch(*args, **kwargs)
+
+    async def append(*args, **kwargs):
+        order.append("append")
+        return await real_append(*args, **kwargs)
+
+    repo_store.fetch_codeowners, repos_api.append = fetch, append
+    try:
+        assert (await _register(api, api.a.admin_token)).status_code == 201
+    finally:
+        repo_store.fetch_codeowners, repos_api.append = real_fetch, real_append
+    assert order[0] == "fetch"
+
+
+async def test_a_failed_refresh_is_retried_after_the_interval_not_every_pass(api, repos, caplog):
+    """Review F7: an unreachable repo is not refetched on every worker pass."""
+    _, _, git = repos
+    await _register(api, api.a.admin_token)
+    api.clock.advance(timedelta(minutes=api.settings.codeowners_refresh_minutes + 1))
+    offline = LeakyOfflineGit(api.settings)
+    await run_pass(api.db.app, offline, api.settings, api.clock)
+    calls: list[str] = []
+
+    class Counting(LeakyOfflineGit):
+        def _spawn(self, argv, env, cwd, timeout):
+            if "fetch" in argv and "HEAD" in argv:
+                calls.append("fetch")
+            return super()._spawn(argv, env, cwd, timeout)
+
+    await run_pass(api.db.app, Counting(api.settings), api.settings, api.clock)
+    assert calls == []  # the failed attempt counts: next try after the interval
+
+
+class Recording(MappedGit):
+    def __init__(self, settings, hosts):
+        super().__init__(settings, hosts)
+        self.argvs: list[list[str]] = []
+
+    def _spawn(self, argv, env, cwd, timeout):
+        self.argvs.append(list(argv))
+        return super()._spawn(argv, env, cwd, timeout)
+
+
+async def test_refresh_rechecks_a_stored_remote(api, repos):
+    """Review F10: a remote stored by hand is checked again before git sees it."""
+    _, app, _ = repos
+    await _register(api, api.a.admin_token)
+    async with tenant_tx(api.db.owner, api.a.id) as conn:
+        await conn.execute(repos_table.update().values(remote="--upload-pack=touch /tmp/owned"))
+    recording = Recording(api.settings, {APP_REMOTE: app})
+    api.app.state.git = recording
+    reply = await api.post(f"/v1/repos/{APP_KEY}/refresh", api.a.admin_token)
+    assert reply.status_code == 502 and reply.json()["code"] == "repo.fetch_failed"
+    assert not any("--upload-pack" in arg for argv in recording.argvs for arg in argv)
 
 
 async def test_worker_refreshes_due_repos(api, repos):

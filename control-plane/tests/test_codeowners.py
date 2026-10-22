@@ -3,6 +3,8 @@ last match wins, `@org/team` reported unresolved; the file is fetched over git."
 
 from __future__ import annotations
 
+import os
+
 from policy_repos import commit, git, make_app_repo, url, write
 
 from agentic_cp.gitops import GitRunner
@@ -43,6 +45,26 @@ def _settings(tmp_path) -> Settings:
             "AGENTIC_CP_POLICY_WORKDIR": str(tmp_path / "work"),
         }
     )
+
+
+def test_git_env_holds_no_server_credentials(tmp_path, monkeypatch):
+    """R25: without its own gitconfig a tenant's git sees no system or global config, no
+    ssh key and no inherited GIT_SSH_COMMAND; with one, only that config."""
+    monkeypatch.setenv("GIT_SSH_COMMAND", "ssh -i /srv/keys/deploy")
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'credential.helper=store'")
+    monkeypatch.setenv("GIT_SSL_CAINFO", "/etc/ssl/corp.pem")
+    config_dir = tmp_path / "gitconfig"
+    config_dir.mkdir()
+    (config_dir / "tenant-a.gitconfig").write_text("[core]\n", encoding="utf-8")
+    settings = _settings(tmp_path).model_copy(update={"git_config_dir": config_dir})
+    bare = GitRunner(settings).env("tenant-b")
+    assert bare["GIT_CONFIG_GLOBAL"] == os.devnull and bare["GIT_CONFIG_NOSYSTEM"] == "1"
+    assert "/srv/keys/deploy" not in bare["GIT_SSH_COMMAND"]
+    assert "IdentityFile=none" in bare["GIT_SSH_COMMAND"]
+    assert "GIT_CONFIG_PARAMETERS" not in bare and bare["GIT_SSL_CAINFO"] == "/etc/ssl/corp.pem"
+    own = GitRunner(settings).env("tenant-a")
+    assert own["GIT_CONFIG_GLOBAL"] == str(config_dir / "tenant-a.gitconfig")
+    assert "GIT_SSH_COMMAND" not in own and own["GIT_CONFIG_NOSYSTEM"] == "1"
 
 
 def test_fetch_codeowners_from_git_default_branch(tmp_path):

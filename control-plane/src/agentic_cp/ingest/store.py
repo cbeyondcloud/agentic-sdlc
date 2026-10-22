@@ -42,11 +42,17 @@ def head_problem(code: str, detail: str, head: ChainHead) -> ApiProblem:
     )
 
 
-def broken(problems: list[str]) -> ApiProblem:
+class Unaudited(ApiProblem):
+    """A refusal made before the caller was authorised for the run: not audited, so a
+    caller without rights cannot write the tenant's audit chain (review F5)."""
+
+
+def broken(problems: list[str], *, authorised: bool = True) -> ApiProblem:
     """422 with the problems, each cut short: they quote values the caller sent, and the
     refusal's audit record keeps them."""
     shown = [problem[:300] for problem in problems[:100]]
-    return ApiProblem(
+    kind = ApiProblem if authorised else Unaudited
+    return kind(
         422,
         "ingest.chain_broken",
         f"the batch does not verify ({shown[0]})",
@@ -71,7 +77,7 @@ def _checked(entries: list) -> list[dict]:
         if "\\u0000" in text:
             problems.append(f"event {seq}: holds a NUL character")
     if problems:
-        raise broken(problems)
+        raise broken(problems, authorised=False)
     return entries
 
 
@@ -99,7 +105,9 @@ async def ingest_batch(
     if first["seq"] == 1:
         identity = _identity(first)
         if identity is None:
-            raise broken([f"event 1 ({first.get('event')}): carries no run identity"])
+            raise broken(
+                [f"event 1 ({first.get('event')}): carries no run identity"], authorised=False
+            )
         await conn.execute(
             insert(runs)
             .values(

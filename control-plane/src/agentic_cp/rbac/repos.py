@@ -18,11 +18,12 @@ from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy import or_, select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from agentic.policy.repos import repo_host
 from agentic_cp.audit import AuditEvent, append
-from agentic_cp.gitops import GitError, GitRunner
+from agentic_cp.gitops import GitError, GitRunner, RepoUrlError, check_repo_url
 from agentic_cp.policy_sync.service import Actor
 from agentic_cp.rbac.codeowners import Maintainers, fetch_codeowners, maintainers
 from agentic_cp.settings import Settings
@@ -67,17 +68,22 @@ async def get_repo(conn: AsyncConnection, repo_key: str) -> RepoRow | None:
 
 async def insert_repo(
     conn: AsyncConnection, repo_key: str, remote: str, team: str, registered_by: str
-) -> None:
+) -> bool:
+    """Insert the repo; False when another registration inserted it first (review F8)."""
     tenant_id = await require_tenant_id(conn)
-    await conn.execute(
-        repos.insert().values(
+    inserted = await conn.execute(
+        insert(repos)
+        .values(
             tenant_id=tenant_id,
             repo_key=repo_key,
             remote=remote,
             team=team,
             registered_by=registered_by,
         )
+        .on_conflict_do_nothing()
+        .returning(repos.c.repo_key)
     )
+    return inserted.first() is not None
 
 
 async def maintainer_emails(conn: AsyncConnection, repo_key: str) -> list[str]:
@@ -108,8 +114,12 @@ async def refresh(
     row = await get_repo(conn, repo_key)
     if row is None:
         raise LookupError(repo_key)
+    try:  # again here: a remote stored before the rule, or by hand, never reaches git (R12)
+        remote = check_repo_url(row.remote, allow_local=settings.allow_local_repos)
+    except RepoUrlError as error:
+        raise GitError(str(error)) from None
     workdir = Path(settings.policy_workdir) / str(tenant.id) / "repos"
-    found = await asyncio.to_thread(fetch_codeowners, git, workdir, row.remote, tenant.slug)
+    found = await asyncio.to_thread(fetch_codeowners, git, workdir, remote, tenant.slug)
     derived = maintainers(found.text, repo_host(repo_key)) if found else Maintainers()
     await conn.execute(
         update(repos)
@@ -232,3 +242,7 @@ async def refresh_due(
                 await refresh(conn, git, settings, tenant, repo_key, clock, REFRESH_ACTOR)
         except GitError as error:
             log.warning("repo %s: CODEOWNERS refresh failed: %s", repo_key, error)
+            async with tenant_tx(engine, tenant_id) as conn:  # next try after the interval
+                await conn.execute(
+                    update(repos).where(repos.c.repo_key == repo_key).values(refreshed_at=clock())
+                )

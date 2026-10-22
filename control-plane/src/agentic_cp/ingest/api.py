@@ -11,7 +11,7 @@ from sqlalchemy import select
 from agentic.orgapi import API_PREFIX, ChainHead, IngestRequest, IngestResult, RunSummary
 from agentic_cp.auth.deps import Caller
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
-from agentic_cp.ingest.store import AUDITED, audit_rejection, ingest_batch
+from agentic_cp.ingest.store import AUDITED, Unaudited, audit_rejection, ingest_batch
 from agentic_cp.rbac.authz import Team, authorize
 from agentic_cp.tables import run_events, runs, users
 from agentic_cp.tenancy.context import tenant_tx
@@ -45,7 +45,7 @@ async def ingest(run_id: str, body: IngestRequest, request: Request, ctx: Caller
                 conn, ctx, run_id, body.entries, cache=state.enforcers, clock=state.clock
             )
     except ApiProblem as problem:
-        if problem.code in AUDITED:
+        if problem.code in AUDITED and not isinstance(problem, Unaudited):
             async with tenant_tx(state.engine, ctx.tenant_id) as conn:
                 await audit_rejection(conn, ctx, run_id, problem, state.clock)
         raise

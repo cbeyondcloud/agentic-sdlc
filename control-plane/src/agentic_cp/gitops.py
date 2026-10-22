@@ -33,12 +33,16 @@ FLAGS = (
     "-c",
     "protocol.ext.allow=never",
 )
-#: Inherited GIT_* variables that only shape the network (everything else, such as
-#: GIT_DIR or GIT_CONFIG_PARAMETERS, could point git somewhere else and is dropped).
-_KEPT_GIT_VARS = frozenset(
-    {"GIT_SSH", "GIT_SSH_COMMAND", "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "GIT_PROXY_COMMAND"}
+#: Inherited GIT_* variables that only shape the network: the deployment's CA bundle and
+#: proxy. Everything else - GIT_DIR, GIT_CONFIG_PARAMETERS, GIT_SSH_COMMAND (an ssh key) -
+#: is dropped: a credential reaches git only through the tenant's own config (R25).
+_KEPT_GIT_VARS = frozenset({"GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "GIT_PROXY_COMMAND"})
+#: ssh without the service account's own keys, agent or config: a tenant without its own
+#: git config fetches anonymously (its config may set `core.sshCommand` with its key).
+_ANONYMOUS_SSH = (
+    "ssh -F none -o IdentitiesOnly=yes -o IdentityFile=none -o IdentityAgent=none -o BatchMode=yes"
 )
-_SCP = re.compile(r"[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:(?![/\\])[^\s]+")
+_SCP = re.compile(r"[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:(?!\\)[^\s\\]+")
 _UNSAFE = re.compile(r"[\s\x00-\x1f\x7f]")
 
 
@@ -98,17 +102,25 @@ class GitRunner:
         self.settings = settings
 
     def env(self, tenant_slug: str | None) -> dict[str, str]:
+        """git's environment for one tenant (R25): its own `<slug>.gitconfig` as the global
+        config when mounted, else none at all; never the system config, the service
+        account's `~/.gitconfig`, credential helpers or ssh keys - one tenant must not
+        fetch another tenant's private repo with credentials the server happens to hold."""
         env = {
             key: value
             for key, value in os.environ.items()
             if not key.startswith("GIT_") or key in _KEPT_GIT_VARS
         }
         env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        env["GIT_CONFIG_GLOBAL"] = os.devnull
+        env["GIT_SSH_COMMAND"] = _ANONYMOUS_SSH
         config_dir = self.settings.git_config_dir
         if config_dir is not None and tenant_slug:
             tenant_config = Path(config_dir) / f"{tenant_slug}.gitconfig"
             if tenant_config.is_file():
                 env["GIT_CONFIG_GLOBAL"] = str(tenant_config)
+                del env["GIT_SSH_COMMAND"]  # the tenant's core.sshCommand, or plain ssh
         return env
 
     def run(self, args: Sequence[str], *, cwd: Path, tenant_slug: str | None = None) -> bytes:

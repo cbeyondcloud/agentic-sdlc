@@ -97,7 +97,22 @@ async def register_repo(
                 f"{key} does not match the org policy's allowed_repo_patterns",
                 hint="ask an org admin to allow it in org.yaml",
             )
-        await store.insert_repo(conn, key, remote, body.team, ctx.email)
+        if not await store.insert_repo(conn, key, remote, body.team, ctx.email):
+            # another registration won the race: answer as for a re-registration (F8)
+            existing = await store.get_repo(conn, key)
+            if existing.team != body.team:
+                raise ApiProblem(
+                    409, "repo.team_mismatch", f"{key} is registered for team {existing.team}"
+                )
+            response.status_code = 200
+            return _info(existing, await store.maintainer_emails(conn, key))
+        tenant = await current_tenant(conn)
+        try:  # the fetch runs before any audit append takes the tenant's chain lock (F6)
+            row = await store.refresh(
+                conn, state.git, state.settings, tenant, key, state.clock, actor
+            )
+        except GitError as error:  # the whole registration rolls back
+            raise _fetch_failed(error) from None
         await append(
             conn,
             AuditEvent(
@@ -110,13 +125,6 @@ async def register_repo(
             ),
             clock=state.clock,
         )
-        tenant = await current_tenant(conn)
-        try:
-            row = await store.refresh(
-                conn, state.git, state.settings, tenant, key, state.clock, actor
-            )
-        except GitError as error:  # the whole registration rolls back
-            raise _fetch_failed(error) from None
         return _info(row, await store.maintainer_emails(conn, key))
 
 
