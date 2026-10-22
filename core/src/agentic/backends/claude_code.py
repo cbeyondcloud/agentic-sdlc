@@ -22,10 +22,7 @@ import copy
 import json
 import os
 import shlex
-import signal
 import stat
-import subprocess
-import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -45,6 +42,7 @@ from agentic.agents.runner import (
 )
 from agentic.agents.tools import ToolContext
 from agentic.backends.capabilities import CAPABILITIES
+from agentic.backends.processes import ProcessTree, session_leader
 from agentic.policy import ResolvedAgent
 from agentic.sandbox.process import SECRET_NAME
 from agentic.transport import BudgetSlice, CallCost, CallIdentity, LimitHit, Pricer
@@ -196,6 +194,7 @@ class ClaudeCodeRunner:
         self.usage = RunUsage()
         self._last_text = ""
         self._client = None
+        self._tree = ProcessTree()
 
     async def run(self, task: AgentTask) -> AgentOutcome:
         session = asyncio.ensure_future(self._session(task))
@@ -220,31 +219,27 @@ class ClaudeCodeRunner:
             return self._outcome("stopped", self._last_text, stopped=stop.why, detail=stop.detail)
 
     def _kill_tree(self) -> None:
-        """Kill the Claude Code process and every process it started (review I4)."""
+        """Kill the Claude Code process and every process it started (review I4): it
+        starts each shell command in a process group of its own, so the shared helper
+        kills every descendant, the group and (Windows) the job."""
+        self._adopt()
+        self._tree.kill()
+
+    def _adopt(self) -> bool:
+        """Contain the Claude Code process once the SDK has started it."""
+        if self._tree.pid is not None:
+            return True
         process = getattr(getattr(self._client, "_transport", None), "_process", None)
-        pid = getattr(process, "pid", None)
-        if pid is None:
-            return
-        if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-            return
-        # Claude Code starts each shell command in a process group of its own, so the
-        # group of Claude Code alone is not enough: kill every descendant, found by
-        # parent id before anything dies (orphans are re-parented), then the group.
-        for target in [*_descendants(pid), pid]:
-            try:
-                os.kill(target, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        try:  # the launcher made Claude Code a session leader: its group is its own
-            os.killpg(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
+        if getattr(process, "pid", None) is None:
+            return False
+        self._tree.adopt(process)
+        return True
+
+    async def _adopt_when_started(self) -> None:
+        """The SDK starts Claude Code inside `connect`, before its handshake: adopt it
+        at once, so even a stop during the handshake kills it (DF-451)."""
+        while not self._adopt():
+            await asyncio.sleep(0.01)
 
     async def resume(self, state_path, decisions, expected_digest) -> AgentOutcome:
         raise ResumeError("claude-code steps never pause for approval (don't-ask mode)")
@@ -262,18 +257,27 @@ class ClaudeCodeRunner:
             options["cli_path"] = str(_launcher(self.wrap or [], options))
         elif self.wrap:
             raise RuntimeError("wrapping Claude Code in a sandbox needs macOS, Linux or WSL2 (D38)")
-        async with ClaudeSDKClient(options=ClaudeAgentOptions(**options)) as client:
-            self._client = client
-            text = await self._turn(client, task.prompt)
-            if self.contract is None:
-                return self._outcome("completed", text)
+        client = self._client = ClaudeSDKClient(options=ClaudeAgentOptions(**options))
+        self._tree = ProcessTree()
+        watcher = asyncio.ensure_future(self._adopt_when_started())
+        try:
+            async with client:
+                return await self._converse(client, task)
+        finally:  # nothing Claude Code started outlives the session, however it ends
+            watcher.cancel()
+            self._tree.close()
+
+    async def _converse(self, client, task: AgentTask) -> AgentOutcome:
+        text = await self._turn(client, task.prompt)
+        if self.contract is None:
+            return self._outcome("completed", text)
+        accepted, errors = self.contract.check(text)
+        if errors:  # one retry, in the same session (OUTPUT_RETRIES = 1)
+            text = await self._turn(client, retry_message(errors))
             accepted, errors = self.contract.check(text)
-            if errors:  # one retry, in the same session (OUTPUT_RETRIES = 1)
-                text = await self._turn(client, retry_message(errors))
-                accepted, errors = self.contract.check(text)
-            if errors:
-                return self._outcome("invalid", text, errors=errors)
-            return self._outcome("completed", accepted if accepted is not None else text)
+        if errors:
+            return self._outcome("invalid", text, errors=errors)
+        return self._outcome("completed", accepted if accepted is not None else text)
 
     async def _turn(self, client, prompt: str) -> str:
         from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
@@ -439,41 +443,6 @@ class ClaudeCodeBackend:
         )
 
 
-def _descendants(pid: int) -> list[int]:
-    """Every process below `pid` (POSIX): from /proc on Linux, else from `ps`."""
-    children: dict[int, list[int]] = {}
-    proc = Path("/proc")
-    if proc.is_dir():
-        for entry in proc.iterdir():
-            if not entry.name.isdigit():
-                continue
-            try:
-                stat_line = (entry / "stat").read_text()
-            except OSError:
-                continue
-            fields = stat_line.rsplit(")", 1)[-1].split()
-            if len(fields) > 1:
-                children.setdefault(int(fields[1]), []).append(int(entry.name))
-    else:
-        listing = subprocess.run(
-            ["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, check=False
-        ).stdout
-        for line in listing.splitlines():
-            parts = line.split()
-            if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                children.setdefault(int(parts[1]), []).append(int(parts[0]))
-    found, queue = [], [pid]
-    while queue:
-        for child in children.get(queue.pop(), []):
-            if child not in found:
-                found.append(child)
-                queue.append(child)
-    return found
-
-
-_SESSION = "import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])"
-
-
 def _launcher(wrap: Sequence[str], options: dict) -> Path:
     """An executable script that starts Claude Code as a session leader (so the time
     limit can kill its whole process group, review I4), under `wrap` (srt, D38) when
@@ -482,7 +451,7 @@ def _launcher(wrap: Sequence[str], options: dict) -> Path:
     folder = Path(options["env"]["CLAUDE_CONFIG_DIR"])
     folder.mkdir(parents=True, exist_ok=True)
     script = folder / "claude-launcher"
-    parts = [sys.executable, "-c", _SESSION, *wrap, claude]
+    parts = session_leader([*wrap, claude])
     command = " ".join(shlex.quote(part) for part in parts)
     script.write_text(f'#!/bin/sh\nexec {command} "$@"\n', encoding="utf-8")
     script.chmod(script.stat().st_mode | stat.S_IXUSR)

@@ -30,7 +30,6 @@ import json
 import os
 import re
 import secrets
-import signal
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -50,10 +49,11 @@ from agentic.agents.runner import (
     retry_message,
 )
 from agentic.agents.tools import ToolContext
-from agentic.backends.claude_code import _blanked, _descendants
+from agentic.backends.claude_code import _blanked
 from agentic.backends.codex_catalog import model_catalog
 from agentic.backends.codex_hooks import CodexHook, hook_table
 from agentic.backends.codex_rules import ShellRules, compile_rules
+from agentic.backends.processes import ProcessTree, spawn_group
 from agentic.policy import ResolvedAgent
 from agentic.sandbox.process import KILL_WAIT_S, safe_env
 from agentic.security.untrusted import HANDOFF_TAG, fence
@@ -434,6 +434,7 @@ class CodexRunner:
         self.usage = RunUsage()
         self._last_text = ""
         self._process: asyncio.subprocess.Process | None = None
+        self._tree: ProcessTree | None = None
         self._pending: EventReader | None = None  # the running exec's, until charged
         self._turns = 0
 
@@ -493,11 +494,6 @@ class CodexRunner:
         command in an earlier exec may have changed them (they sit in a writable place)."""
         self.launch.write(instructions)
         argv = [*(self.wrap or []), *self.launch.argv]
-        group = (
-            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-            if os.name == "nt"
-            else {"start_new_session": True}
-        )
         try:
             process = await asyncio.create_subprocess_exec(
                 *argv,
@@ -507,11 +503,12 @@ class CodexRunner:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 limit=16 * 1024 * 1024,  # one JSONL event can carry a large tool output
-                **group,
+                **spawn_group(),
             )
         except OSError as error:
             raise CodexError(f"the Codex CLI did not start: {error}") from error
         self._process = process
+        tree = self._tree = ProcessTree().adopt(process)
         stderr = asyncio.ensure_future(_tail(process.stderr))
         reader = self._pending = EventReader()
         try:
@@ -536,6 +533,7 @@ class CodexRunner:
             if process.returncode is None:
                 self._kill_tree()
                 await self._reap()
+            tree.close()  # what its commands left behind goes with the exec
         errors = await stderr
         failed = code != 0 or reader.ended_badly
         if failed:
@@ -642,27 +640,9 @@ class CodexRunner:
 
     def _kill_tree(self) -> None:
         """Kill Codex and every process it started (its shell commands may start
-        sessions of their own, so the group alone is not enough)."""
-        process = self._process
-        if process is None or process.returncode is not None:
-            return
-        if os.name == "nt":
-            subprocess.run(
-                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-            return
-        for target in [*_descendants(process.pid), process.pid]:
-            try:
-                os.kill(target, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
+        sessions of their own, so the group alone is not enough: the shared helper)."""
+        if self._tree is not None:
+            self._tree.kill()
 
     def _outcome(self, status, text, *, stopped=None, detail=None, errors=None) -> AgentOutcome:
         return AgentOutcome(
