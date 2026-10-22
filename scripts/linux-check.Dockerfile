@@ -19,3 +19,19 @@ RUN set -e; arch="$(dpkg --print-architecture)"; \
       "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_${file}.tar.gz"; \
     echo "$sum  /tmp/gitleaks.tgz" | sha256sum -c -; \
     tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks; rm /tmp/gitleaks.tgz
+# The pinned Codex CLI for the codex backend's contract tests (M2-40, spike S3): the Linux
+# musl binary from the GitHub release, checked against the release's sha256 (Apache-2.0).
+# Developer laptops never get it from here: on Windows it runs inside WSL2 (D38).
+ARG CODEX_TAG=rust-v0.160.1
+RUN set -e; arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) file=x86_64; sum=9226581be592d18f7e7f740a352fdb63aa61e45e39f7eb9b09d3888c84bba33f ;; \
+      arm64) file=aarch64; sum=f54dc5852042445bf41da3aa31156f3cb02f52c5a1a04074de73dc5598f7e1f7 ;; \
+      *) echo "no pinned codex for $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -sSfL -o /tmp/codex.tgz \
+      "https://github.com/openai/codex/releases/download/${CODEX_TAG}/codex-${file}-unknown-linux-musl.tar.gz"; \
+    echo "$sum  /tmp/codex.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/codex.tgz -C /usr/local/bin; \
+    mv "/usr/local/bin/codex-${file}-unknown-linux-musl" /usr/local/bin/codex; \
+    chmod 0755 /usr/local/bin/codex; rm /tmp/codex.tgz

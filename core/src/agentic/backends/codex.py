@@ -53,7 +53,7 @@ from agentic.backends.claude_code import _blanked, _descendants
 from agentic.backends.codex_catalog import model_catalog
 from agentic.backends.codex_rules import ShellRules, compile_rules
 from agentic.policy import ResolvedAgent
-from agentic.sandbox.process import safe_env
+from agentic.sandbox.process import KILL_WAIT_S, safe_env
 from agentic.security.untrusted import HANDOFF_TAG, fence
 from agentic.transport import BudgetSlice, CallCost, CallIdentity, LimitHit, Pricer
 from agentic.transport.cost import estimate_usd
@@ -414,6 +414,7 @@ class CodexRunner:
                 await session
             except (asyncio.CancelledError, Exception):  # noqa: BLE001 - it is being stopped
                 pass
+            await self._reap()
             detail = f"the step's time limit ({self.time_limit_s}s) was reached"
             return self._outcome("stopped", self._last_text, stopped="time", detail=detail)
         try:
@@ -544,6 +545,14 @@ class CodexRunner:
             self.costs.add(cost, estimate)
             raise
         self.costs.add(cost, charged)
+
+    async def _reap(self) -> None:
+        """Wait (briefly) for a killed Codex to exit, so its pipes close in this loop."""
+        if self._process is not None:
+            try:
+                await asyncio.wait_for(self._process.wait(), KILL_WAIT_S)
+            except TimeoutError:
+                pass
 
     def _kill_tree(self) -> None:
         """Kill Codex and every process it started (its shell commands may start
