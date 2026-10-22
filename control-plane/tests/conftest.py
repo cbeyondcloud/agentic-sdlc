@@ -10,8 +10,10 @@ import asyncio
 import secrets
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
+from uuid import UUID
 
 import pytest
+from isolation import create_probe, probe_row, probe_table
 from pg import (
     APP_ROLE,
     OWNER_ROLE,
@@ -24,9 +26,13 @@ from pg import (
     start_container,
     unavailable,
 )
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agentic_cp.db import engine_for, migrate_async
+from agentic_cp.db_roles import grant_runtime
+from agentic_cp.tenancy.context import tenant_tx
+from agentic_cp.tenancy.tenants import create_tenant
 
 
 @pytest.fixture
@@ -56,6 +62,8 @@ class TestDb:
     name: str
     owner_dsn: str
     app_dsn: str
+    admin_dsn: str
+    """A superuser on this database (for tests that break the setup on purpose)."""
     owner: AsyncEngine
     app: AsyncEngine
     schema: str = SCHEMA
@@ -91,7 +99,13 @@ async def _prepare_template(server: Server, template: str, roles: Roles) -> None
 
 
 async def after_migrate_template(owner_dsn: str, roles: Roles) -> None:
-    """What the deployment does after `migrate`: grant the runtime role (Task 3)."""
+    """What the deployment does after `migrate`: grant the runtime role."""
+    engine = engine_for(owner_dsn, SCHEMA)
+    try:
+        async with engine.begin() as conn:
+            await grant_runtime(conn, APP_ROLE, roles.app_password, SCHEMA)
+    finally:
+        await engine.dispose()
 
 
 @pytest.fixture(scope="session")
@@ -130,6 +144,7 @@ async def db(pg_server: Server, pg_template: Template) -> AsyncIterator[TestDb]:
         name=name,
         owner_dsn=owner_dsn,
         app_dsn=app_dsn,
+        admin_dsn=str(make_url(pg_server.admin_dsn).set(database=name).render_as_string(False)),
         owner=engine_for(owner_dsn, SCHEMA),
         app=engine_for(app_dsn, SCHEMA),
     )
@@ -139,6 +154,27 @@ async def db(pg_server: Server, pg_template: Template) -> AsyncIterator[TestDb]:
         await test_db.owner.dispose()
         await test_db.app.dispose()
         await _drop_database(pg_server, name)
+
+
+@pytest.fixture
+async def two_tenants(db: TestDb) -> tuple[TestDb, UUID, UUID]:
+    """Tenants `a` and `b`, created by the owner role (as `admin tenant create` does)."""
+    async with db.owner.begin() as conn:
+        a = await create_tenant(conn, "tenant-a", "Tenant A")
+        b = await create_tenant(conn, "tenant-b", "Tenant B")
+    return db, a.id, b.id
+
+
+@pytest.fixture
+async def probe(two_tenants) -> tuple[TestDb, UUID, UUID]:
+    """The probe table with two rows in each of tenants a and b."""
+    db, a, b = two_tenants
+    await create_probe(db)
+    for tenant in (a, b):
+        async with tenant_tx(db.owner, tenant) as conn:
+            for _ in range(2):
+                await conn.execute(probe_table.insert().values(await probe_row(conn, tenant)))
+    return db, a, b
 
 
 @pytest.fixture

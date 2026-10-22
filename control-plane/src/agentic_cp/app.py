@@ -11,10 +11,14 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import FastAPI
+from pydantic import BaseModel
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from agentic_cp.db import make_engine
-from agentic_cp.errors import install_problem_handlers
+from agentic.orgapi import PROBLEM_MEDIA_TYPE, Problem
+from agentic_cp.db import current_revision, head_revision, make_engine
+from agentic_cp.db_roles import AUDIT, TENANCY, enforcement_status
+from agentic_cp.errors import ApiProblem, install_problem_handlers, log
 from agentic_cp.settings import Settings
 
 Clock = Callable[[], datetime]
@@ -65,4 +69,61 @@ def create_app(
         """Liveness: the process answers. Never touches the database."""
         return {"status": "ok"}
 
+    @app.get("/readyz", tags=["health"], responses=PROBLEM_RESPONSES)
+    async def readyz() -> Readiness:
+        """Readiness: the database answers, is migrated to this release and enforces tenant
+        isolation and insert-only evidence (fail closed unless relaxed for development)."""
+        return await check_ready(db, settings)
+
     return app
+
+
+class Readiness(BaseModel):
+    status: str
+    db_enforced: bool
+
+
+#: Documented on routes that answer problems (the OpenAPI document shows the shape).
+PROBLEM_RESPONSES: dict = {
+    "default": {"model": Problem, "content": {PROBLEM_MEDIA_TYPE: {}}},
+}
+
+
+async def serve_preflight(settings: Settings, engine: AsyncEngine | None = None) -> str | None:
+    """Why `serve` must not start (the readiness checks, ND-5), or None."""
+    db = engine if engine is not None else make_engine(settings)
+    try:
+        await check_ready(db, settings)
+    except ApiProblem as problem:
+        return f"{problem.code}: {problem.detail}" + (f" ({problem.hint})" if problem.hint else "")
+    finally:
+        if engine is None:
+            await db.dispose()
+    return None
+
+
+async def check_ready(engine: AsyncEngine, settings: Settings) -> Readiness:
+    try:
+        async with engine.connect() as conn:
+            revision = await current_revision(conn)
+            status = await enforcement_status(conn, schema=settings.db_schema)
+    except (OSError, SQLAlchemyError) as error:
+        log.warning("readyz: database unavailable (%s)", type(error).__name__)
+        raise ApiProblem(503, "db.unavailable", "the database is not reachable") from None
+    if revision != head_revision():
+        raise ApiProblem(
+            503,
+            "db.migrations_pending",
+            "the database is not migrated to this release",
+            hint="run `python -m agentic_cp migrate`",
+        )
+    if not status.enforced:
+        for reason in status.reasons:
+            log.error("readyz: database guarantee missing: %s", reason)
+        if settings.require_db_enforcement:
+            code = TENANCY if TENANCY in status.codes else AUDIT
+            what = "tenant isolation" if code == TENANCY else "insert-only audit"
+            raise ApiProblem(
+                503, code, f"the database does not enforce {what}; the server log has details"
+            )
+    return Readiness(status="ready", db_enforced=status.enforced)

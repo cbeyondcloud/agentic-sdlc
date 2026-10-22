@@ -2,6 +2,8 @@
 
     serve                 run the API (uvicorn)
     migrate               upgrade the database (owner role, AGENTIC_CP_OWNER_DATABASE_URL)
+                          and re-align the runtime role's grants
+    db grant-runtime      create or re-align the runtime role of AGENTIC_CP_DATABASE_URL
     openapi [--write | --check]
                           write or compare control-plane/openapi.json
 
@@ -11,6 +13,7 @@ tool run by the platform team (kubectl exec, compose run), not the developers' C
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -60,9 +63,14 @@ def _settings() -> Settings:
 def _serve(args: argparse.Namespace) -> int:
     import uvicorn
 
-    from agentic_cp.app import create_app
+    from agentic_cp.app import create_app, serve_preflight
 
-    uvicorn.run(create_app(_settings()), host=args.host, port=args.port, log_level="info")
+    settings = _settings()
+    refusal = asyncio.run(serve_preflight(settings))
+    if refusal:
+        print(f"error: refusing to serve - {refusal}", file=sys.stderr)
+        return 1
+    uvicorn.run(create_app(settings), host=args.host, port=args.port, log_level="info")
     return 0
 
 
@@ -73,11 +81,51 @@ def _owner_dsn(settings: Settings) -> str:
 
 
 def _migrate(args: argparse.Namespace) -> int:
-    from agentic_cp.db import migrate
+    """Upgrade, then re-align the runtime role's grants with the new tables (a later
+    evidence table must never stay writable)."""
+    settings = _settings()
+    head = asyncio.run(_migrate_and_regrant(settings))
+    print(f"database at revision {head}")
+    return 0
+
+
+async def _migrate_and_regrant(settings: Settings) -> str:
+    from agentic_cp.db import make_owner_engine, migrate_async
+    from agentic_cp.db_roles import grant_runtime, runtime_role_exists
+
+    head = await migrate_async(_owner_dsn(settings), settings.db_schema)
+    engine = make_owner_engine(settings)
+    try:
+        async with engine.begin() as conn:
+            if await runtime_role_exists(conn, settings.runtime_role):
+                await grant_runtime(conn, settings.runtime_role, None, settings.db_schema)
+    finally:
+        await engine.dispose()
+    return head
+
+
+def _grant_runtime(args: argparse.Namespace) -> int:
+    """Create or re-align the runtime role named in AGENTIC_CP_DATABASE_URL, with the
+    password from that DSN (sent as a SCRAM verifier)."""
+    from sqlalchemy.engine import make_url
+
+    from agentic_cp.db import make_owner_engine
+    from agentic_cp.db_roles import grant_runtime
 
     settings = _settings()
-    head = migrate(_owner_dsn(settings), settings.db_schema)
-    print(f"database at revision {head}")
+    _owner_dsn(settings)
+    password = make_url(settings.database_url.get_secret_value()).password
+
+    async def run() -> None:
+        engine = make_owner_engine(settings)
+        try:
+            async with engine.begin() as conn:
+                await grant_runtime(conn, settings.runtime_role, password, settings.db_schema)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+    print(f"runtime role {settings.runtime_role} granted")
     return 0
 
 
@@ -92,6 +140,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     migrate = commands.add_parser("migrate", help="upgrade the database to this release")
     migrate.set_defaults(run=_migrate)
+
+    db = commands.add_parser("db", help="database roles").add_subparsers(
+        dest="db_command", required=True
+    )
+    grant = db.add_parser("grant-runtime", help="create or re-align the runtime role")
+    grant.set_defaults(run=_grant_runtime)
 
     openapi = commands.add_parser("openapi", help="write or check openapi.json")
     mode = openapi.add_mutually_exclusive_group()

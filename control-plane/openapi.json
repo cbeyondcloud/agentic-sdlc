@@ -1,4 +1,71 @@
 {
+  "components": {
+    "schemas": {
+      "Problem": {
+        "description": "An RFC 9457 problem document. `code` is a stable machine name\n(`auth.invalid_token`, ...); `hint` is a next step the CLI prints as is. A problem never\nechoes a submitted secret and never names another tenant.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          },
+          "status": {
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "default": "about:blank",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "status",
+          "detail",
+          "code"
+        ],
+        "title": "Problem",
+        "type": "object"
+      },
+      "Readiness": {
+        "properties": {
+          "db_enforced": {
+            "title": "Db Enforced",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "db_enforced"
+        ],
+        "title": "Readiness",
+        "type": "object"
+      }
+    }
+  },
   "info": {
     "title": "agentic control plane",
     "version": "1"
@@ -26,6 +93,39 @@
           }
         },
         "summary": "Healthz",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/readyz": {
+      "get": {
+        "description": "Readiness: the database answers, is migrated to this release and enforces tenant\nisolation and insert-only evidence (fail closed unless relaxed for development).",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "Default Response"
+          }
+        },
+        "summary": "Readyz",
         "tags": [
           "health"
         ]

@@ -17,6 +17,7 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from agentic_cp.settings import SCHEMA_PATTERN, Settings
+from agentic_cp.tenancy.context import install_tenant_guc
 
 
 def async_url(dsn: str) -> URL:
@@ -28,13 +29,16 @@ def async_url(dsn: str) -> URL:
 
 
 def engine_for(dsn: str, schema: str, *, pool_size: int = 5) -> AsyncEngine:
-    """An engine on `dsn` whose connections resolve unqualified names in `schema` only."""
-    return create_async_engine(
+    """An engine on `dsn` whose connections resolve unqualified names in `schema` only and
+    whose every transaction runs in the context's tenant (or in none)."""
+    engine = create_async_engine(
         async_url(dsn),
         pool_pre_ping=True,
         pool_size=pool_size,
         connect_args={"server_settings": {"search_path": _checked_schema(schema)}},
     )
+    install_tenant_guc(engine)
+    return engine
 
 
 def make_engine(settings: Settings) -> AsyncEngine:
