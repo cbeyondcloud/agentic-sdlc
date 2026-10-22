@@ -12,6 +12,11 @@ are components of a multi-repo run, and the code-intelligence adapter.
     pipelines: [feature-delivery]
     components: [libs/shared]
     codeintel: {adapter: code-review-graph}
+
+`codeintel.adapter: domain-graph` adds the estate's domain graph (built by Zyroflo's
+graph build) alongside code-review-graph: `graph` is its folder (default
+`.agentic/local/graph`) and `component` this repo's component in it (unset: the repo
+is the whole estate).
 """
 
 from pathlib import Path
@@ -23,6 +28,7 @@ from agentic.definitions.errors import DefinitionError
 from agentic.yamlio import YamlFileError, dump_yaml, load_yaml
 
 CONFIG_REL = ".agentic/config.yaml"
+DEFAULT_GRAPH = ".agentic/local/graph"  # the domain graph's folder when `graph` is not set
 _SLUG = r"^[a-z][a-z0-9-]{0,63}$"
 
 
@@ -37,7 +43,15 @@ class _Strict(BaseModel):
 
 
 class CodeIntelConfig(_Strict):
-    adapter: Literal["code-review-graph", "none"] = "code-review-graph"
+    # domain-graph: a built domain graph of the estate, alongside code-review-graph (M2-43)
+    adapter: Literal["code-review-graph", "domain-graph", "none"] = "code-review-graph"
+    graph: str | None = Field(default=None, min_length=1)  # repo-relative, absolute or ~
+    component: str | None = Field(default=None, min_length=1)  # None: the repo is the estate
+
+    @property
+    def graph_folder(self) -> str:
+        """Where the built domain graph is: `graph`, or the git-ignored local folder."""
+        return self.graph or DEFAULT_GRAPH
 
 
 class RepoConfig(_Strict):
