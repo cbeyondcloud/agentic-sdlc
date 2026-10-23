@@ -65,6 +65,13 @@ class Settings(BaseModel):
     user_token_days: Annotated[int, Field(ge=1, le=90)] = 90
     service_token_max_days: Annotated[int, Field(ge=1, le=365)] = 365
     enforcer_cache_tenants: Annotated[int, Field(ge=1)] = 256
+    kill_ttl_seconds: Annotated[int, Field(ge=1, le=30)] = 10
+    """How long a CLI may cache the kill-switch state (`KillState.ttl_seconds`, ruling R1)."""
+    min_cli_version: str | None = None
+    """The deployment's minimum CLI version (M2-08); a tenant's `org.yaml: min_cli_version`
+    can only raise it (ruling R7)."""
+    run_slot_hours: Annotated[int, Field(ge=1, le=720)] = 24
+    """A registered run holds a concurrency slot while open and active this recently (R8)."""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Settings:

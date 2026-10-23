@@ -403,7 +403,27 @@ async def _run_in_b(api) -> dict[str, str]:
     return {"run_id": run_id}
 
 
+async def _switch_in_b(api) -> dict[str, str]:
+    """A tenant-wide kill switch in tenant b only (it would match every run in a)."""
+    made = await api.post(
+        "/v1/killswitch",
+        api.b.admin_token,
+        {"scope_kind": "tenant", "reason": f"b-only {next(_sequence)}"},
+    )
+    assert made.status_code == 201, made.text
+    return {"id": made.json()["id"], "reason": made.json()["reason"]}
+
+
 ENDPOINT_CASES += [
+    EndpointCase("killswitch", "DELETE", "/v1/killswitch/{id}", _switch_in_b),
+    EndpointCase("killswitch", "GET", "/v1/killswitch", _switch_in_b, must_not_list=True),
+    EndpointCase(
+        "killswitch",
+        "GET",
+        "/v1/killswitch/state?team=payments",
+        _switch_in_b,
+        must_not_list=True,
+    ),
     EndpointCase("tokens", "DELETE", "/v1/tokens/{id}", _token_in_b),
     EndpointCase("tokens", "GET", "/v1/tokens", _token_in_b, must_not_list=True),
     EndpointCase("rbac", "GET", "/v1/rbac/roles/{name}", _role_in_b),
