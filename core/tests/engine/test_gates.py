@@ -261,3 +261,50 @@ def test_invalid_output_can_be_rejected_back_to_the_step(make_harness):
     done = decide(h, Reject("invalid-output", LEAD, "write the handoff format"))
     assert done.status == "completed"
     assert "write the handoff format" in h.runners.prompts["designer"][-1]
+
+
+HELPED = """\
+name: test
+version: 1.0.0
+steps:
+  - id: tidy
+    agent: helper
+  - id: develop
+    agent: dev
+"""
+
+
+def silent_helper(make_harness):
+    """A run whose first step (no handoff contract) ends without a final message (DF-433)."""
+    h = make_harness(HELPED, {"helper": ["   "], "dev": [answer("dev-report")]})
+    state = run(h.engine.start("test", {}, STARTER, "r-1"))
+    assert (state.pending.id, state.pending.step) == ("invalid-output", "tidy")
+    h.runners.script["helper"] = ["Renamed the module."]  # what a second pass would say
+    return h, state
+
+
+def test_a_step_that_ends_without_a_message_says_so(make_harness):  # review F1
+    _, state = silent_helper(make_harness)
+    reason = state.pending.reason
+    assert reason.startswith("the agent finished without a final message")
+    assert "approve it as it is" in reason and "reject it with feedback" in reason
+    assert "valid handoff" not in reason and "retry" not in reason
+
+
+def test_a_step_without_a_message_can_be_approved_as_it_is(make_harness):
+    h, _ = silent_helper(make_harness)
+    asked = h.runners.calls["helper"]
+    done = decide(h, Approve("invalid-output", LEAD))
+    assert done.status == "completed"
+    assert [r.outcome for r in done.history if r.step == "tidy"] == ["invalid", "completed"]
+    assert h.runners.calls["helper"] == asked  # accepted as it is, not run again
+    assert h.gates["r-1"].entries[-1]["verdict"] == "approve"
+
+
+def test_a_step_without_a_message_has_no_handoff_to_edit(make_harness):
+    h, _ = silent_helper(make_harness)
+    asked = h.runners.calls["helper"]
+    with pytest.raises(GateRefused, match="nothing to edit"):
+        decide(h, Edit("invalid-output", LEAD, "handoffs/tidy-1.invalid.md", "a note"))
+    done = decide(h, Reject("invalid-output", LEAD, "say what you changed"))
+    assert done.status == "completed" and h.runners.calls["helper"] > asked

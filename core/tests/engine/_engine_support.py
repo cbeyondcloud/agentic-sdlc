@@ -28,6 +28,7 @@ AGENTS = {
     "designer": "type: general\nproduces: design\nconsumes: [requirements]\n",
     "dev": "type: developer\nconsumes: [design, review]\n",
     "reviewer": "type: general\nproduces: review\nconsumes: [dev-report]\n",
+    "helper": "type: general\n",  # hands over no handoff: its steps have no contract
 }
 
 
