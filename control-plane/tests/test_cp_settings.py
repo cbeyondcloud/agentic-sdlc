@@ -42,6 +42,8 @@ def test_settings_refuse_the_retired_tenant_variable_with_a_hint():
         ("AGENTIC_CP_MAX_INGEST_ENTRIES", "0", "max_ingest_entries"),
         ("AGENTIC_CP_DB_SCHEMA", "agentic; drop", "db_schema"),
         ("AGENTIC_CP_REQUIRE_DB_ENFORCEMENT", "perhaps", "require_db_enforcement"),
+        ("AGENTIC_CP_MIN_CLI_VERSION", "1.2.x", "min_cli_version"),  # review F4
+        ("AGENTIC_CP_MIN_CLI_VERSION", "latest", "min_cli_version"),
     ],
 )
 def test_settings_refuse_bad_values(name, value, field):

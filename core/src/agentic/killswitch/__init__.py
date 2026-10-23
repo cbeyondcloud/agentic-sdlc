@@ -52,6 +52,14 @@ _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _AGENT = re.compile(r"[a-z][a-z0-9-]{0,63}(?:@[0-9A-Za-z][0-9A-Za-z.+-]{0,63})?")
 _OPAQUE = re.compile(r"\S{1,200}")
+#: Glob characters in the free-form kinds: matching is exact, so a pattern would match no
+#: run and an operator would believe it stopped many (review F5). A model id may carry
+#: brackets (a variant suffix), so only `*` and `?` are refused there.
+_WILDCARDS = {
+    "repo": re.compile(r"[*?\[\]]"),
+    "model": re.compile(r"[*?]"),
+    "backend": re.compile(r"[*?]"),
+}
 
 
 @dataclass(frozen=True)
@@ -198,6 +206,13 @@ def scope_problem(kind: str, value: str) -> str | None:
     pattern, what = checks[kind]
     if not pattern.fullmatch(value):
         return f"{value!r} is not {what}"
+    globs = _WILDCARDS.get(kind)
+    if globs is not None and (wildcard := globs.search(value)):
+        return (
+            f"{value!r}: a switch matches one {kind} exactly, so the wildcard "
+            f"{wildcard.group()!r} would stop nothing (name each {kind}, or use a team: or "
+            f"{GLOBAL} switch)"
+        )
     if kind == "repo" and value.count("/") < 2:
         return f"{value!r} is not a repo as host/owner/name"
     if kind == "user" and value != value.lower():

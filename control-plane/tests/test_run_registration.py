@@ -12,7 +12,7 @@ from policy_repos import commit, make_policy_repo, url, write
 from sqlalchemy import update
 
 from agentic.orgapi import CLI_VERSION_HEADER
-from agentic_cp.tables import runs
+from agentic_cp.tables import policy_versions, runs
 from agentic_cp.tenancy.context import tenant_tx
 
 pytestmark = pytest.mark.anyio
@@ -176,6 +176,23 @@ async def test_locally_edited_pipeline_refused_with_the_approved_hash(api, versi
     assert not check["passed"]
     assert SHA in check["detail"] and edited in check["detail"]
     assert result["registered"] is False
+
+
+async def test_a_version_accepted_before_settings_were_stored_is_checked_in_full(api, version):
+    """Review F2: a version accepted before migration 0009 has `settings = {}`; its
+    pipelines, caps and minimum CLI version are read from its stored bundle instead of
+    refusing every managed pipeline and enforcing no caps."""
+    async with tenant_tx(api.db.owner, api.a.id) as conn:
+        await conn.execute(
+            update(policy_versions).where(policy_versions.c.version == version).values(settings={})
+        )
+    token = api.a.admin_token
+    first = await _register(api, token, _body(version, "run-1"))
+    assert first["registered"], first["checks"]
+    assert _check(first, "pipeline")["passed"]
+    assert (await _register(api, token, _body(version, "run-2")))["registered"]
+    third = await _register(api, token, _body(version, "run-3"))
+    assert not _check(third, "concurrency")["passed"]  # per_user 2 from limits.yaml
 
 
 async def test_unapproved_pipeline_file_refused(api, version):

@@ -42,10 +42,24 @@ def test_min_cli_version_is_read_from_org_yaml(tmp_path):
     assert load_policy(root).min_cli_version == "0.4.0"
 
 
-def test_min_cli_version_must_look_like_a_version(tmp_path):
+@pytest.mark.parametrize("value", ["latest", "1.2.x", "1.2abc", "1.2-x-y", "1.0+local"])
+def test_min_cli_version_must_be_a_version_the_control_plane_can_compare(tmp_path, value):
+    """Review F4: a value the control plane's PEP 440 comparison would drop (so no minimum
+    is enforced) is refused when the policy loads, and so the version is rejected."""
     root = tmp_path / "policy"
     shutil.copytree(FIXTURE / "policy", root)
     org = root / "org.yaml"
-    org.write_text(org.read_text(encoding="utf-8") + "min_cli_version: latest\n", encoding="utf-8")
+    text = org.read_text(encoding="utf-8") + f"min_cli_version: '{value}'\n"
+    org.write_text(text, encoding="utf-8")
     with pytest.raises(PolicyError, match="min_cli_version"):
         load_policy(root)
+
+
+@pytest.mark.parametrize("value", ["1", "0.4.0", "1.2.3.4", "2.0.0rc1", "1.0.post2", "1.1.dev3"])
+def test_min_cli_version_accepts_release_pre_post_and_dev_versions(tmp_path, value):
+    root = tmp_path / "policy"
+    shutil.copytree(FIXTURE / "policy", root)
+    org = root / "org.yaml"
+    text = org.read_text(encoding="utf-8") + f"min_cli_version: '{value}'\n"
+    org.write_text(text, encoding="utf-8")
+    assert load_policy(root).min_cli_version == value

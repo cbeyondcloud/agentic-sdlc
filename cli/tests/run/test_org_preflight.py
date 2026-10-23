@@ -135,6 +135,39 @@ def test_an_org_approval_is_checked_and_records_the_role_held(org, gateway, cli,
     assert (entry["required_role"], entry["role_held"]) == ("team-lead", "team-lead")
 
 
+def test_four_eyes_compares_the_signed_in_person_who_started_and_who_approves(
+    org, gateway, cli, policy_repo
+):
+    """Review F1: in org mode the run's starter is the signed-in person, as the approver
+    is, so a git address that differs from the control-plane address cannot approve the
+    person's own regulated run."""
+    path = policy_repo / "pipelines" / "deliver.yaml"
+    text = path.read_text(encoding="utf-8").replace("regime: team", "regime: regulated")
+    path.write_bytes(text.encode("utf-8"))
+    org.email = "dev@corp.example"  # git user.email is dev@example.invalid
+    org.assignments = [{"role": "team-lead", "scope": "team", "team": "payments"}]
+    started = start(cli)
+    assert started.code == ExitCode.PAUSED, started.err
+    assert started.json()["starter"] == "dev@corp.example"
+    refused = cli("approve", started.json()["run_id"])
+    assert refused.code == ExitCode.REFUSED and "four-eyes" in refused.err
+
+
+def test_a_run_refused_locally_never_takes_a_concurrency_slot(org, gateway, cli):
+    """Review F3: every local refusal comes before the run is registered, so a typo does
+    not hold one of the user's concurrency slots for a day."""
+    missing = cli("--json", "run", "deliver")  # the pipeline needs --input request=...
+    assert missing.code == ExitCode.REFUSED and "missing input" in missing.err
+    unknown = start(cli, "--input", "colour=blue")
+    assert unknown.code == ExitCode.REFUSED and "unknown input" in unknown.err
+    assert org.registrations == []
+    first = start(cli, "--run-id", "dup-1")
+    assert first.code == ExitCode.PAUSED, first.err
+    again = start(cli, "--run-id", "dup-1")
+    assert again.code == ExitCode.REFUSED and "already exists" in again.err
+    assert len(org.registrations) == 1
+
+
 def test_a_kill_switch_kills_the_run_and_it_never_resumes(org, gateway, cli):
     org.add_switch("agent", "ba", mode="kill", reason="bad prompt release")
     result = start(cli)

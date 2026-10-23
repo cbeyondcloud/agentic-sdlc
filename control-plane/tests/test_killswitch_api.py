@@ -73,6 +73,8 @@ async def test_scope_values_are_validated(api):
         {"scope_kind": "user", "scope_value": "not-an-email"},
         {"scope_kind": "agent", "scope_value": ""},
         {"scope_kind": "team", "scope_value": "payments", "team": "search"},
+        {"scope_kind": "repo", "scope_value": "github.com/acme/*"},  # review F5
+        {"scope_kind": "model", "scope_value": "acme/*"},
     ):
         refused = await _set(api, token, **body)
         assert refused.status_code == 422, (body, refused.text)

@@ -43,6 +43,7 @@ from agentic.engine.gates import Authorizer, StandaloneAuthorizer
 from agentic.engine.preflight import PreflightReport, Problem, preflight
 from agentic.engine.state import RunStore
 from agentic.killswitch import KillSwitch, NoKillSwitch
+from agentic.orgapi import Me
 from agentic.orgapi.rbac import OrgAuthorizer
 from agentic.policy import ResolvedAgent
 from agentic.policy.repos import normalise_remote
@@ -174,10 +175,45 @@ class Runtime:
         self.sink_problem: str | None = None  # why runs are not reported (a warning)
         self._killswitch: KillSwitch | None = None
         self._repo_key: str | None | bool = False  # False: not looked up yet
+        self._me: Me | None | bool = False  # False: not asked yet
 
     @property
     def user(self) -> str:
-        return self.ws.user()
+        """The person acting. In org mode with a control plane, the signed-in person
+        (`/v1/me`): the starter, the approver and whoever skips or stops a step are then one
+        identity, which four-eyes compares (review F1). Otherwise AGENTIC_USER or git
+        user.email. CliError (exit 2) when the control plane cannot say who you are."""
+        me = self.me()
+        return me.user.email if me is not None else self.ws.user()
+
+    def known_user(self) -> str:
+        """`user`, or - when the control plane cannot answer - the signed-in person last
+        verified, else the workspace's person: for records that need no check (`stop`)."""
+        try:
+            return self.user
+        except CliError:
+            record = control_plane.login_record(self.ws.home) or {}
+            return str(record.get("user") or "") or self.ws.user()
+
+    def me(self, why: str = "in org mode the control plane says who you are") -> Me | None:
+        """Who the control plane says you are (fetched once), in org mode with one; None
+        otherwise. CliError (exit 2, starting with `why`) when it is configured but cannot
+        answer."""
+        if self._me is False:
+            try:
+                client = self.control_plane()
+                if client is None:
+                    self._me = None
+                else:
+                    with client:
+                        self._me = client.me()
+            except control_plane.ControlPlaneError as error:
+                raise CliError(
+                    f"{why}: {error}",
+                    ExitCode.REFUSED,
+                    hint=error.hint,
+                ) from None
+        return self._me  # type: ignore[return-value]
 
     # ── ledgers ──────────────────────────────────────────────────────────────
 
@@ -530,18 +566,9 @@ class Runtime:
         plane, the roles `/v1/me` reports (`OrgAuthorizer`, so an org admin standing in for
         the named role is recorded as such, DF-409) and the signed-in person; otherwise the
         standalone authorizer (no RBAC) and None (the workspace's person decides)."""
-        try:
-            client = self.control_plane()
-        except control_plane.ControlPlaneError as error:
-            raise CliError(
-                f"gate decisions in org mode are checked by the control plane: {error}",
-                ExitCode.REFUSED,
-                hint=error.hint,
-            ) from None
-        if client is None:
+        me = self.me(why="gate decisions in org mode are checked by the control plane")
+        if me is None:
             return StandaloneAuthorizer(), None
-        with client:
-            me = client.me()
         return OrgAuthorizer(me, self.ws.team), me.user.email
 
     def killswitch(self) -> KillSwitch:

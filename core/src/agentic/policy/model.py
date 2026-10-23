@@ -191,6 +191,9 @@ class EvalPolicy(_Strict):
 #: The guard's own review batch budget (Zyroflo's policy defaults, which core cannot
 #: import; a commons test keeps the two equal): an org's limits may only tighten it.
 REVIEW_BATCH_CEILING = {"max_files": 40, "max_lines": 1500}
+#: `min_cli_version` (M2-08): a strict subset of PEP 440 - release, then optional aN/bN/rcN,
+#: .postN and .devN - so the control plane never meets a value it cannot compare.
+MIN_VERSION_PATTERN = r"^[0-9]+(\.[0-9]+){0,3}((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$"
 
 
 class ReviewBatchPolicy(_Strict):
@@ -347,13 +350,10 @@ class OrgPolicy(_Strict):
     tool_pins: dict[str, ToolPin] = {}  # tools `init` fetches from the mirror (M1-51)
     allow_repo_pipelines: bool = False  # D33: pipelines only from the policy repo
     # M2-08: older CLIs are refused runs with an upgrade message (the control plane's own
-    # floor applies too; the higher wins)
-    min_cli_version: (
-        Annotated[
-            str, StringConstraints(pattern=r"^[0-9]+(\.[0-9]+){0,3}([.+-]?[A-Za-z0-9.+-]+)?$")
-        ]
-        | None
-    ) = None
+    # floor applies too; the higher wins). Release, pre-release, post and dev parts only:
+    # every value this accepts is a PEP 440 version the control plane compares, so none is
+    # silently dropped (review F4)
+    min_cli_version: Annotated[str, StringConstraints(pattern=MIN_VERSION_PATTERN)] | None = None
     # D39: `init --repo` adds the nightly index export workflow only when this is on
     index_export_workflow: bool = False
     sandbox: SandboxPolicy = SandboxPolicy()  # D38

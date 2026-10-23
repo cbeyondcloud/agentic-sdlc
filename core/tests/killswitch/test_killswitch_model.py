@@ -139,6 +139,23 @@ def test_scope_problem_refuses_bad_values(kind, value):
     assert scope_problem(kind, value)
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "repo:github.com/acme/*",
+        "repo:github.com/acme/app?",
+        "repo:github.com/acme/[ab]pp",
+        "model:acme/*",
+        "backend:nat?ve",
+    ],
+)
+def test_a_wildcard_scope_is_refused_since_switches_match_exactly(text):
+    """Review F5: `repo:github.com/acme/*` would be stored, match no run, and leave the
+    operator believing the whole org was stopped."""
+    with pytest.raises(ValueError, match="wildcard"):
+        parse_scope(text)
+
+
 def test_parse_scope_refuses_unknown_kind():
     with pytest.raises(ValueError, match="scope"):
         parse_scope("planet:mars")

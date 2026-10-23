@@ -31,7 +31,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from agentic.orgapi import API_PREFIX, ActivePolicy, SyncOutcome
-from agentic.policy import tree_digest
+from agentic.policy import OrgPolicy, PolicyError, load_policy, tree_digest
 from agentic.policy.load import pipeline_digests
 from agentic.policy.portable import portable_path_problems
 from agentic_cp.audit import AuditEvent, append
@@ -331,19 +331,37 @@ def _build(git: GitRunner, workdir: Path, tenant: TenantRow, commit: str, versio
         pipelines = pipeline_digests(root)
     teams = sorted(policy.teams) if policy is not None else []
     patterns = list(policy.allowed_repo_patterns) if policy is not None else []
-    settings = (
-        {
-            "min_cli_version": policy.min_cli_version,
-            "concurrency": dict(policy.concurrency),
-            "allow_repo_pipelines": policy.allow_repo_pipelines,
-            "pipelines": pipelines,
-        }
-        if policy is not None
-        else {}
-    )
+    settings = run_settings(policy, pipelines) if policy is not None else {}
     bundle = gzip_bytes(archive)
     digest = "sha256:" + hashlib.sha256(bundle).hexdigest()
     return Built(found, teams, patterns, bundle, digest, tree, settings)
+
+
+def run_settings(policy: OrgPolicy, pipelines: dict[str, str]) -> dict:
+    """What run registration reads from an accepted version (M2-08, M2-21)."""
+    return {
+        "min_cli_version": policy.min_cli_version,
+        "concurrency": dict(policy.concurrency),
+        "allow_repo_pipelines": policy.allow_repo_pipelines,
+        "pipelines": pipelines,
+    }
+
+
+def settings_from_bundle(bundle: bytes, version: str) -> dict:
+    """`run_settings` read back from a stored bundle, for a version accepted before they
+    were stored (migration 0009 adds the column empty, and versions are insert-only, so it
+    is never backfilled: review F2). {} when the policy no longer loads - its pipelines are
+    then refused, never waved through."""
+    with tempfile.TemporaryDirectory(prefix="agentic-cp-policy-") as scratch:
+        root = Path(scratch) / "tree"
+        with tarfile.open(fileobj=io.BytesIO(gzip.decompress(bundle)), mode="r:") as tar:
+            tar.extractall(root, filter="data")
+        root.mkdir(exist_ok=True)
+        try:
+            policy = load_policy(root / "policy", version=version)
+        except PolicyError:
+            return {}
+        return run_settings(policy, pipeline_digests(root))
 
 
 def gzip_bytes(data: bytes) -> bytes:

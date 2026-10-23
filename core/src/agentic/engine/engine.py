@@ -254,7 +254,7 @@ class Engine:
         if self.store.exists(run_id):
             raise EngineError(f"run {run_id} already exists - resume it instead")
         definition = self.definitions.pipeline(pipeline)
-        _check_inputs(definition, inputs)
+        check_inputs(definition, inputs)
         now = self.clock.now()
         state = RunState(
             run_id=run_id,
@@ -360,7 +360,7 @@ class Engine:
             return await run.decide(decision, authorizer, self_approval)
 
 
-def _check_inputs(pipeline: PipelineDefinition, inputs: Mapping[str, str]) -> None:
+def check_inputs(pipeline: PipelineDefinition, inputs: Mapping[str, str]) -> None:
     """A pipeline that declares `inputs:` gets exactly those: none it does not know, and
     every one not marked `required: false` (DF-54). A pipeline declaring none takes any."""
     declared = pipeline.inputs
@@ -1917,5 +1917,6 @@ __all__ = [
     "RunRecorder",
     "StepContext",
     "StepRunnerFactory",
+    "check_inputs",
     "pipeline_digest",
 ]
