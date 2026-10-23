@@ -205,15 +205,21 @@ class Runtime:
                     hint = f" ({error.hint})" if error.hint else ""
                     self.sink_problem = f"runs are not reported to the control plane: {error}{hint}"
                 if client is not None:
-                    self._sinks = [control_plane.ControlPlaneSink(client)]
+                    guard = control_plane.publish_guard(self.ws.policy)
+                    self._sinks = [control_plane.ControlPlaneSink(client, guard=guard)]
         return self._sinks
 
     def forwarding(self, run_id: str) -> ForwardingRecorder:
         """The run's recorder: the ledger first, then the sinks on a background thread, so
-        a slow control plane never holds up the run (DF-304)."""
+        a slow control plane never holds up the run (DF-304). In org mode each event is
+        screened by the publish scan before it is chained (M2-49) - signed in or not, as
+        a run recorded offline is published by `agentic sync` later."""
         if run_id not in self._recorders:
+            screen = None
+            if self.ws.settings.get("org"):
+                screen = control_plane.publish_guard(self.ws.policy).screen
             self._recorders[run_id] = ForwardingRecorder(
-                self.recorder(run_id), self.sinks(), background=True
+                self.recorder(run_id), self.sinks(), background=True, screen=screen
             )
         return self._recorders[run_id]
 

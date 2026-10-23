@@ -40,7 +40,8 @@ def register(app: typer.Typer) -> None:
         runs = [run_id] if run_id else _run_ids(ws)
         results: dict[str, dict] = {}
         with client:
-            sink = control_plane.ControlPlaneSink(client)
+            guard = control_plane.publish_guard(ws.policy)  # M2-49: nothing unscanned leaves
+            sink = control_plane.ControlPlaneSink(client, guard=guard)
             for name in runs:
                 results[name] = _sync_run(ws, sink, name)
         data = {"runs": results}
