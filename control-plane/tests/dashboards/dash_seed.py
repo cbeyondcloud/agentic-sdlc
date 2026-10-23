@@ -338,6 +338,8 @@ GATEWAY_AUDIT = (
 
 
 async def fill_gateway(dsn: str, ddl=GATEWAY_DDL, calls=CALLS) -> None:
+    """The gateway's tables (`ddl`) with `calls` and, when `ddl` makes `audit_events`, the
+    gateway audit rows."""
     conn = await asyncpg.connect(dsn)
     try:
         for statement in ddl:
@@ -358,7 +360,8 @@ async def fill_gateway(dsn: str, ddl=GATEWAY_DDL, calls=CALLS) -> None:
                 call.cost,
                 call.status,
             )
-        for n, (gateway, action) in enumerate(GATEWAY_AUDIT):
+        audited = any("audit_events" in statement for statement in ddl)
+        for n, (gateway, action) in enumerate(GATEWAY_AUDIT if audited else ()):
             await conn.execute(
                 "INSERT INTO audit_events (tenant_id, request_id, timestamp, action, details)"
                 ' VALUES ($1, $2, $3, $4, \'{"categories": ["injection"]}\'::jsonb)',

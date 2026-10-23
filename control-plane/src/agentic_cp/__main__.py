@@ -8,6 +8,9 @@
                           re-align the runtime role's grants, seed every tenant's builtin
                           roles and report the database guarantees
     db grant-runtime      create or re-align the runtime role of AGENTIC_CP_DATABASE_URL
+    db link-usage --host H [--port P] --dbname D --user U [--password-env VAR]
+                          point the dashboards' usage views at the gateway's tables
+                          (postgres_fdw; the password only from the variable)
     admin audit verify --tenant S
                           verify one tenant's audit chain
     admin tenant create --slug S --name N --admin-email E [--policy-repo URL]
@@ -208,6 +211,59 @@ class CommandError(Exception):
     def __init__(self, message: str, code: int) -> None:
         super().__init__(message)
         self.code = code
+
+
+def _secret_from(variable: str, what: str) -> str:
+    """A password from the named environment variable: never from the command line, where a
+    process listing would show it."""
+    value = os.environ.get(variable, "")
+    if not value:
+        raise CommandError(f"set {variable} to {what} (it is never read from the command line)", 3)
+    return value
+
+
+def _link_usage(args: argparse.Namespace) -> int:
+    """Point the dashboards' usage views at the gateway's tables (M2-37, ruling L1)."""
+    from pydantic import SecretStr
+
+    from agentic_cp.app import utc_now
+    from agentic_cp.dashboards.link import GatewayDb, LinkError, audit_link, link_usage
+    from agentic_cp.db import make_owner_engine
+
+    settings = _settings()
+    _owner_dsn(settings)
+    password = _secret_from(args.password_env, "the gateway database password")
+    try:
+        gateway = GatewayDb(
+            host=args.host,
+            port=args.port,
+            dbname=args.dbname,
+            user=args.user,
+            password=SecretStr(password),
+            remote_schema=args.remote_schema,
+        )
+    except ValueError as error:
+        raise CommandError(str(error), 3) from None
+
+    async def run():
+        engine = make_owner_engine(settings)
+        try:
+            async with engine.begin() as conn:
+                result = await link_usage(conn, settings.db_schema, gateway)
+            await audit_link(engine, gateway, result, clock=utc_now)
+            return result
+        finally:
+            await engine.dispose()
+
+    try:
+        result = asyncio.run(run())
+    except LinkError as error:
+        raise CommandError(str(error), 1) from None
+    print(
+        f"gateway linked: {', '.join(result.linked)} read {gateway.remote_schema} in "
+        f"{gateway.dbname} on {gateway.host}:{gateway.port} (server {result.server})"
+    )
+    return 0
 
 
 async def _with_tenant(settings: Settings, slug: str, work):
@@ -555,6 +611,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     grant = db.add_parser("grant-runtime", help="create or re-align the runtime role")
     grant.set_defaults(run=_grant_runtime)
+    link = db.add_parser(
+        "link-usage", help="read the gateway's usage through postgres_fdw (dashboards)"
+    )
+    link.add_argument("--host", required=True, help="the gateway database's host")
+    link.add_argument("--port", type=int, default=5432)
+    link.add_argument("--dbname", required=True, help="the gateway database")
+    link.add_argument("--user", required=True, help="a read-only gateway database role")
+    link.add_argument(
+        "--password-env",
+        default="GATEWAY_DB_PASSWORD",
+        help="the variable holding that role's password (default GATEWAY_DB_PASSWORD)",
+    )
+    link.add_argument("--remote-schema", default="public", help="the gateway tables' schema")
+    link.set_defaults(run=_link_usage)
 
     admin = commands.add_parser("admin", help="operator commands (owner role)")
     admin_commands = admin.add_subparsers(dest="admin_command", required=True)

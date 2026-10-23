@@ -1,6 +1,7 @@
 """No string-built SQL outside the database layer (Review Focus 6): with the tenant in a GUC,
 injected SQL could call `set_config`, so raw SQL stays in `db.py`, `db_roles.py`,
-`tenancy/` and `migrations/`, where every statement is reviewed as such."""
+`tenancy/`, `migrations/` and `dashboards/` (view DDL, the gateway link and the dashboard
+reader roles: DDL like `db_roles.py`), where every statement is reviewed as such."""
 
 import ast
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 import agentic_cp
 
 PACKAGE = Path(agentic_cp.__file__).resolve().parent
-ALLOWED = ("db.py", "db_roles.py", "tenancy/", "migrations/")
+ALLOWED = ("db.py", "db_roles.py", "tenancy/", "migrations/", "dashboards/")
 
 
 def raw_sql_calls(source: str) -> list[int]:
