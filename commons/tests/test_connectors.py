@@ -182,3 +182,96 @@ def test_dig_tells_an_absent_path_from_a_null_value():
     assert connectors.dig(payload, "fields.summary", missing=ABSENT) is None
     assert connectors.dig(payload, "fields.nothing", missing=ABSENT) is ABSENT
     assert connectors.dig(payload, "fields.labels.1") == "b"
+
+
+# ── Jira Cloud REST v3: an Atlassian Document Format description (DF-462) ─────
+
+ADF_DESCRIPTION = {
+    "type": "doc",
+    "version": 1,
+    "content": [
+        {
+            "type": "paragraph",
+            "content": [
+                {"type": "text", "text": "Finance asked for "},
+                {"type": "text", "text": "four-eyes", "marks": [{"type": "strong"}]},
+                {"type": "text", "text": " on large refunds."},
+            ],
+        },
+        {"type": "heading", "attrs": {"level": 3}, "content": [{"type": "text", "text": "Done"}]},
+        {
+            "type": "bulletList",
+            "content": [
+                {
+                    "type": "listItem",
+                    "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": "a second"}]}
+                    ],
+                },
+                {
+                    "type": "listItem",
+                    "content": [
+                        {
+                            "type": "paragraph",
+                            "content": [
+                                {"type": "text", "text": "an audit line"},
+                                {"type": "hardBreak"},
+                                {"type": "mention", "attrs": {"id": "1", "text": "@Lee"}},
+                            ],
+                        }
+                    ],
+                },
+            ],
+        },
+    ],
+}
+
+
+def v3_issue(description) -> dict:
+    return {**JIRA_ISSUE, "fields": {**JIRA_ISSUE["fields"], "description": description}}
+
+
+def jira_item(payload: dict) -> ExternalItem:
+    return connectors.item_for("jira", connectors.mapping_for(None, "jira"), payload)
+
+
+def test_a_v3_adf_description_becomes_text():
+    item = jira_item(v3_issue(ADF_DESCRIPTION))
+
+    assert "'type'" not in item.spec and "{" not in item.spec
+    assert "Finance asked for four-eyes on large refunds.\nDone\n- a second\n" in item.spec
+    assert "- an audit line\n@Lee" in item.spec
+
+
+def test_adf_identity_is_stable_and_equals_the_text_body():
+    first = jira_item(v3_issue(ADF_DESCRIPTION))
+    again = jira_item(json.loads(json.dumps(v3_issue(ADF_DESCRIPTION))))
+    as_text = jira_item(v3_issue(connectors.adf_text(ADF_DESCRIPTION)))
+
+    assert first.identity == again.identity == as_text.identity
+
+
+def test_the_payload_given_is_not_changed():
+    payload = v3_issue(ADF_DESCRIPTION)
+    jira_item(payload)
+
+    assert payload["fields"]["description"] is ADF_DESCRIPTION
+
+
+def test_a_dict_that_is_not_an_adf_document_is_left_to_zyroflo():
+    assert "{'a': 1}" in jira_item(v3_issue({"a": 1})).spec
+
+
+@pytest.mark.parametrize(
+    "node, text",
+    [
+        ({"type": "doc", "content": []}, ""),
+        ({"type": "emoji", "attrs": {"shortName": ":tick:"}}, ":tick:"),
+        ({"type": "inlineCard", "attrs": {"url": "https://x.example/1"}}, "https://x.example/1"),
+        ({"type": "codeBlock", "content": [{"type": "text", "text": "a = 1"}]}, "a = 1"),
+        ({"type": "orderedList", "content": [{"type": "listItem", "content": []}]}, "-"),
+        ("not a node", ""),
+    ],
+)
+def test_adf_text_of_single_nodes(node, text):
+    assert connectors.adf_text(node) == text
