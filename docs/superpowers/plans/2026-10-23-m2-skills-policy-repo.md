@@ -80,7 +80,7 @@
 | Eval with/without | M1-63 `run_eval` + `build_report` with two blinded labels | `run_ab`: its pre-registered plan, calibration and PROMOTE rule are the A/B promotion gate (DF-387, deferred) |
 | Pull requests and reviews | our `GitHubHost` (httpx2) | PyGithub (LGPL) |
 | CODEOWNERS check | `codeowners` (MIT) in the control-plane test | — |
-| Catalog edit keeping comments | append-after-`skills:` text edit, verified by reloading | ruamel.yaml: a new dependency for one append |
+| Catalog edit keeping comments | append-after-`skills:` text edit, verified by reloading | ruamel.yaml round-trip mode (already a dependency): it can re-indent an admin's whole file; a text insert changes only the new lines |
 
 ## Global Constraints
 
