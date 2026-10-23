@@ -18,7 +18,7 @@ import hashlib
 import ipaddress
 import json
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +40,9 @@ from agentic.orgapi import (
     RunPreflight,
     RunSummary,
 )
+from agentic.security.pii import PiiDetector
+from agentic.security.publish_scan import PublishBlocked, PublishGuard
+from agentic.security.secret_scan import SecretScanner
 from agentic.telemetry.sinks import SinkBehind
 from agentic.transport.network import NetworkSettings, ssl_context
 from agentic_cli import __version__
@@ -343,21 +346,45 @@ class ControlPlaneSink:
     control plane, in batches. Any refusal raises, so `forward` keeps its cursor and the
     entries stay queued in the ledger; a control plane whose head is behind the batch
     raises `SinkBehind`, and `forward` catches it up from that head (R21). Replays are
-    no-ops on the server (duplicates), so delivery is at least once and never twice."""
+    no-ops on the server (duplicates), so delivery is at least once and never twice.
+
+    With a `guard` (the publish scan, M2-49) every entry is checked before anything is
+    sent: the clean entries before one holding a secret or personal data are sent, then
+    `PublishBlocked` is raised (audited), so it and what follows stay in the ledger."""
 
     name = "control-plane"
 
     def __init__(
-        self, client: ControlPlaneClient, batch: int = 200, max_bytes: int = MAX_BATCH_BYTES
+        self,
+        client: ControlPlaneClient,
+        batch: int = 200,
+        max_bytes: int = MAX_BATCH_BYTES,
+        *,
+        guard: PublishGuard | None = None,
     ) -> None:
         self.client = client
         self.batch = batch
         self.max_bytes = max_bytes
+        self.guard = guard
 
     def deliver(self, run_id: str, entries: Sequence[Mapping[str, object]]) -> None:
         """Send `entries` in batches of at most `batch` entries and about `max_bytes`;
         a 413 (the server's body or entry cap is lower) halves the batch and retries,
-        so a large offline backlog is never wedged (review F6)."""
+        so a large offline backlog is never wedged (review F6). Under the publish scan the
+        clean entries before a held-back one are sent, then `PublishBlocked` is raised
+        with `delivered` set, so the control plane has the run up to that entry."""
+        blocked: PublishBlocked | None = None
+        if self.guard is not None:
+            try:
+                self.guard.check(run_id, entries)
+            except PublishBlocked as error:
+                blocked, entries = error, entries[: error.index]
+        self._send(run_id, entries)
+        if blocked is not None:
+            blocked.delivered = len(entries)
+            raise blocked
+
+    def _send(self, run_id: str, entries: Sequence[Mapping[str, object]]) -> None:
         start, limit = 0, self.batch
         while start < len(entries):
             chunk = self._chunk(entries, start, limit)
@@ -449,6 +476,16 @@ def client_for(
                 hint=f"{LOGIN_HINT} to sign in to this control plane",
             )
     return ControlPlaneClient(url, found.value, transport=transport or make_transport())
+
+
+def publish_guard(policy: Callable[[], Any]) -> PublishGuard:
+    """The publish scan for what goes to the control plane (M2-49): org policy's, or -
+    when the policy cannot be read here (`agentic sync` in a repository not yet set up) -
+    the defaults, which mask every secret and personal-data kind. Never no scan."""
+    try:
+        return PublishGuard.from_policy(policy())
+    except CliError:
+        return PublishGuard(SecretScanner(), PiiDetector())
 
 
 def make_transport() -> httpx2.BaseTransport | None:

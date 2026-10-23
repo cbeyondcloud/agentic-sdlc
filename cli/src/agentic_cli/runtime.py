@@ -51,6 +51,7 @@ from agentic.sandbox.readiness import Readiness, SandboxDecision, decide_sandbox
 from agentic.skills.catalog import CatalogError, load_catalog
 from agentic.skills.install import log_record, sync_skills
 from agentic.skills.loader import InstalledSkills
+from agentic.skills.personal import MAX_PERSONAL_SKILLS, PersonalContext, load_personal
 from agentic.skills.select import pipeline_skills
 from agentic.telemetry.logs import StepLogs
 from agentic.telemetry.sinks import EventSink, ForwardingRecorder
@@ -62,7 +63,9 @@ from agentic_cli.codeintel import codeintel_settings, codeintel_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.repo_guard import origin_url
+from agentic_cli.skill_activity import SkillActivity, StampingRecorder
 from agentic_cli.standalone import PLACEHOLDER
+from agentic_cli.step_extras import StepExtras
 from agentic_cli.wiring import StepWiring, production_scanner
 from agentic_cli.workspace import RUNS, Workspace
 from sdlc_commons.gates import ZyrofloGates, regime_block_on
@@ -171,6 +174,10 @@ class Runtime:
         self._gateway_key: str | None = None  # the key `redact` masks once it is known
         self._restored: list[str] = []  # skills the last sync restored (a local edit)
         self._recorders: dict[str, ForwardingRecorder] = {}
+        self._stamped: dict[str, StampingRecorder] = {}
+        # skill and memory activations, stamped on each step_finished in the ledger (M2-45)
+        self.activity = SkillActivity()
+        self._personal: PersonalContext | None = None
         self._sinks: list[EventSink] | None = None
         self.sink_problem: str | None = None  # why runs are not reported (a warning)
         self._killswitch: KillSwitch | None = None
@@ -249,17 +256,25 @@ class Runtime:
                     hint = f" ({error.hint})" if error.hint else ""
                     self.sink_problem = f"runs are not reported to the control plane: {error}{hint}"
                 if client is not None:
-                    self._sinks = [control_plane.ControlPlaneSink(client)]
+                    guard = control_plane.publish_guard(self.ws.policy)
+                    self._sinks = [control_plane.ControlPlaneSink(client, guard=guard)]
         return self._sinks
 
-    def forwarding(self, run_id: str) -> ForwardingRecorder:
+    def forwarding(self, run_id: str) -> StampingRecorder:
         """The run's recorder: the ledger first, then the sinks on a background thread, so
-        a slow control plane never holds up the run (DF-304)."""
+        a slow control plane never holds up the run (DF-304). In org mode each event is
+        screened by the publish scan before it is chained (M2-49) - signed in or not, as
+        a run recorded offline is published by `agentic sync` later. Each step_finished
+        carries the skills and notes the step used (M2-45)."""
         if run_id not in self._recorders:
+            screen = None
+            if self.ws.settings.get("org"):
+                screen = control_plane.publish_guard(self.ws.policy).screen
             self._recorders[run_id] = ForwardingRecorder(
-                self.recorder(run_id), self.sinks(), background=True
+                self.recorder(run_id), self.sinks(), background=True, screen=screen
             )
-        return self._recorders[run_id]
+            self._stamped[run_id] = StampingRecorder(self._recorders[run_id], self.activity)
+        return self._stamped[run_id]
 
     def close_sinks(self, timeout: float = SINK_GRACE_S) -> dict[str, int]:
         """Wait (bounded) for the runs' pending deliveries; returns run -> events still
@@ -322,6 +337,7 @@ class Runtime:
             detail = f"skill {skill} had been changed locally; it was restored as pinned"
             report.problems.append(Problem(None, "skills", detail, severity="warning"))
         report.problems += self._publish_problems(pipeline)
+        report.problems += self._personal_problems(report)
         return report
 
     def _codeintel_missing(self) -> str | None:
@@ -523,6 +539,7 @@ class Runtime:
                 state_dir_for=lambda step: (
                     self.ws.repo / STATE / step.run_id / "agents" / f"{step.step}-{step.iteration}"
                 ),
+                prompt_extras=StepExtras.for_runtime(self),  # pre-pass, personal skills
             )
         return Engine(
             killswitch=None if offline else self.killswitch(),  # stopping needs no switch
@@ -643,8 +660,54 @@ class Runtime:
                     catalog = load_catalog(root)
                 except CatalogError as error:
                     raise CliError(str(error), ExitCode.INVALID) from error
-                self._library = InstalledSkills(catalog, installed_skills_root(self.ws))
+                self._library = InstalledSkills(
+                    catalog, installed_skills_root(self.ws), record=self.activity.record
+                )
         return self._library  # type: ignore[return-value]
+
+    def skill_library(self) -> InstalledSkills | None:
+        """The repo's shared skills (None without a catalog in the policy repo)."""
+        return self._installed()
+
+    def personal_context(self) -> PersonalContext:
+        """This user's personal skills and notes (M2-45), loaded once per command. Each
+        refused one is named in the audit log here and as a preflight warning."""
+        if self._personal is None:
+            found = load_personal(self.ws.home)
+            for refused in found.rejected:
+                fields = {"path": refused.path, "reason": refused.reason}
+                log_record("skills.personal_rejected", fields)
+            library = self.skill_library()
+            self._personal = PersonalContext(
+                found,
+                self.ws.policy().classifications,
+                shared=list(library.catalog.skills) if library is not None else [],
+                record=self.activity.record,
+            )
+        return self._personal
+
+    def _personal_problems(self, report: PreflightReport) -> list[Problem]:
+        """A personal skill or note that will not be used, said before the run (warnings):
+        the user's only other trace is the audit log."""
+        personal = self.personal_context()
+        problems = [
+            Problem(
+                None,
+                "personal-skills",
+                f"~/.agentic/{refused.path} is not used: {refused.reason}",
+                severity="warning",
+            )
+            for refused in personal.personal.rejected
+        ]
+        for agent_name, agent in sorted(report.resolved.items()):
+            if dropped := personal.over_cap(agent):
+                names = ", ".join(skill.name for skill in dropped)
+                detail = (
+                    f"agent {agent_name} gets at most {MAX_PERSONAL_SKILLS} personal skills; "
+                    f"not used: {names}"
+                )
+                problems.append(Problem(None, "personal-skills", detail, severity="warning"))
+        return problems
 
     def _skill_check(self, pipeline: str, *, live: bool):
         library = self._installed()

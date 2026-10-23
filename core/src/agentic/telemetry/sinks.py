@@ -17,7 +17,9 @@ never by a second one:
     forward. `flush()` forwards without recording (events Zyroflo appended itself,
     such as gate entries, are picked up this way). With `background=True` (a network
     sink, M2-20) `record` only wakes a delivery thread, so a slow sink never holds up
-    the run (DF-304); `close()` waits a bounded time and says what stays queued.
+    the run (DF-304); `close()` waits a bounded time and says what stays queued. A
+    `screen` (the publish scan, M2-49) sees each event's fields before the ledger
+    chains them and may mask them: a chained entry can never change on its way out.
 
 The ledger and the cursor ARE the offline queue: nothing is copied anywhere else, so a
 sink that was unreachable gets every event it missed, once and in order, on the next
@@ -43,7 +45,12 @@ _LOG = logging.getLogger("agentic.telemetry.sinks")
 
 
 class SinkError(Exception):
-    """The entries cannot be forwarded: the chain does not continue from the cursor."""
+    """The entries cannot be forwarded: the chain does not continue from the cursor.
+
+    A sink that sent the first entries of a batch before refusing the rest sets
+    `delivered` to how many it sent: `forward` moves the cursor past them."""
+
+    delivered: int = 0
 
 
 class SinkBehind(SinkError):
@@ -97,17 +104,23 @@ def forward(
     if not pending:
         return 0
     try:
-        sink.deliver(run_id, pending)
-    except SinkBehind as behind:  # R21: catch the sink up from its own head, once
-        if behind.seq >= start or (
-            behind.seq and entries[behind.seq - 1].get("hash") != behind.hash
-        ):
-            raise SinkError(
-                f"{sink.name}: its head (event {behind.seq}) is not in the local chain - "
-                "the two chains forked; nothing was sent"
-            ) from None
-        pending = _following(sink, entries, behind.seq, behind.hash)
-        sink.deliver(run_id, pending)
+        try:
+            sink.deliver(run_id, pending)
+        except SinkBehind as behind:  # R21: catch the sink up from its own head, once
+            if behind.seq >= start or (
+                behind.seq and entries[behind.seq - 1].get("hash") != behind.hash
+            ):
+                raise SinkError(
+                    f"{sink.name}: its head (event {behind.seq}) is not in the local chain - "
+                    "the two chains forked; nothing was sent"
+                ) from None
+            pending = _following(sink, entries, behind.seq, behind.hash)
+            sink.deliver(run_id, pending)
+    except SinkError as error:
+        if 0 < error.delivered <= len(pending):  # it took the start of the batch
+            last = pending[error.delivered - 1]
+            _save(cursor, {"seq": _seq(last), "hash": str(last.get("hash", ""))})
+        raise
     last = pending[-1]
     _save(cursor, {"seq": _seq(last), "hash": str(last.get("hash", ""))})
     return len(pending)
@@ -136,6 +149,7 @@ class ForwardingRecorder:
         *,
         on_error: Callable[[str, Exception], None] | None = None,
         background: bool = False,
+        screen: Callable[[str, dict], dict] | None = None,
     ) -> None:
         names = [sink.name for sink in sinks]
         if bad := [name for name in names if not _NAME.fullmatch(name)]:
@@ -144,6 +158,7 @@ class ForwardingRecorder:
             raise ValueError(f"sink names must be unique: {names}")
         self.ledger, self.sinks = ledger, list(sinks)
         self.on_error = on_error or _report
+        self.screen = screen
         self._flushing = threading.Lock()  # one forward per sink cursor at a time
         self._wake, self._stop, self._idle = threading.Event(), threading.Event(), threading.Event()
         self._idle.set()
@@ -162,6 +177,8 @@ class ForwardingRecorder:
         return self.ledger.run_dir
 
     def record(self, event: str, phase: str = "", **fields: object) -> object:
+        if self.screen is not None:  # before the chain: a chained entry never changes (M2-49)
+            fields = self.screen(event, fields)
         entry = self.ledger.record(event, phase, **fields)
         if self._thread is not None:
             self._request()  # the delivery thread forwards it; the run goes on

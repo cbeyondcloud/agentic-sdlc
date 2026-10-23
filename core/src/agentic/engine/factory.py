@@ -7,7 +7,9 @@ an agent-CLI backend; M1-28) with:
     are built by this same factory (DF-28);
   * the step's state folder;
   * when the tool context carries installed skills, the agent's skill block at the
-    end of its instructions (catalog or pre-loaded skills, M1-38).
+    end of its instructions (catalog or pre-loaded skills, M1-38);
+  * after it, `prompt_extras(step)` when given: what the framework adds for this step
+    (the review pre-pass, M2-48; personal skills and notes, M2-45).
 
 `PydanticStepRunners` is the native-only form kept for existing callers.
 """
@@ -39,9 +41,11 @@ class StepRunners:
         *,
         tools_for: Callable[[StepContext], ToolContext | None],
         state_dir_for: Callable[[StepContext], Path],
+        prompt_extras: Callable[[StepContext], str] | None = None,
     ) -> None:
         self.backends = dict(backends)
         self.tools_for, self.state_dir_for = tools_for, state_dir_for
+        self.prompt_extras = prompt_extras
 
     def __call__(self, step: StepContext) -> AgentRunner:
         spawner = self.root_spawner(step.agent, step) if self._has_children(step.agent) else None
@@ -95,10 +99,20 @@ class StepRunners:
             **kwargs,
         )
         skills = tool_context.skills if tool_context is not None else None
-        if isinstance(skills, SkillLibrary) and step.agent.skills:
-            # the agent's skill block (M1-38), made when the step runs (DF-146)
-            return SkillPromptRunner(runner, lambda: skills.prompt_for(step.agent))
-        return runner
+        shared = isinstance(skills, SkillLibrary) and bool(step.agent.skills)
+        extras = self.prompt_extras
+        if not shared and extras is None:
+            return runner
+
+        def prompt() -> str:
+            # the agent's skill block (M1-38), then the framework's extras (the review
+            # pre-pass, personal skills and notes) - made when the step runs (DF-146)
+            parts = [skills.prompt_for(step.agent)] if shared else []
+            if extras is not None:
+                parts.append(extras(step))
+            return "\n\n".join(part for part in parts if part)
+
+        return SkillPromptRunner(runner, prompt)
 
 
 class PydanticStepRunners(StepRunners):
