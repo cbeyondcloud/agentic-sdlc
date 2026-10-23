@@ -11,6 +11,9 @@
     db link-usage --host H [--port P] --dbname D --user U [--password-env VAR]
                           point the dashboards' usage views at the gateway's tables
                           (postgres_fdw; the password only from the variable)
+    db dashboard-role --tenant S --role R [--password-env VAR]
+                          bind one Grafana reader role to one tenant: the dash_* views,
+                          that tenant's rows only
     admin audit verify --tenant S
                           verify one tenant's audit chain
     admin tenant create --slug S --name N --admin-email E [--policy-repo URL]
@@ -263,6 +266,37 @@ def _link_usage(args: argparse.Namespace) -> int:
         f"gateway linked: {', '.join(result.linked)} read {gateway.remote_schema} in "
         f"{gateway.dbname} on {gateway.host}:{gateway.port} (server {result.server})"
     )
+    return 0
+
+
+def _dashboard_role(args: argparse.Namespace) -> int:
+    """Bind one Grafana reader role to one tenant (M2-37, ruling T1)."""
+    from agentic_cp.app import utc_now
+    from agentic_cp.dashboards.readers import ReaderError, bind_reader, checked_role
+
+    settings = _settings()
+    _owner_dsn(settings)
+    try:
+        role = checked_role(args.role)
+    except ReaderError as error:
+        raise CommandError(str(error), 3) from None
+    password = os.environ.get(args.password_env) or None
+
+    async def work(conn, tenant):
+        await bind_reader(
+            conn,
+            settings.db_schema,
+            role,
+            password,
+            runtime_role=settings.runtime_role,
+            clock=utc_now,
+        )
+
+    try:
+        asyncio.run(_with_tenant(settings, args.tenant, work))
+    except ReaderError as error:
+        raise CommandError(str(error), 2) from None
+    print(f"tenant {args.tenant}: dashboard reader role {role} bound (the dash_* views only)")
     return 0
 
 
@@ -630,6 +664,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     link.add_argument("--remote-schema", default="public", help="the gateway tables' schema")
     link.set_defaults(run=_link_usage)
+    reader = db.add_parser(
+        "dashboard-role", help="bind one Grafana reader role to one tenant (dashboards)"
+    )
+    reader.add_argument("--tenant", required=True, help="the tenant's slug")
+    reader.add_argument("--role", required=True, help="the login role Grafana connects as")
+    reader.add_argument(
+        "--password-env",
+        default="DASHBOARD_DB_PASSWORD",
+        help="the variable holding its password (default DASHBOARD_DB_PASSWORD; unset keeps "
+        "an existing role's password)",
+    )
+    reader.set_defaults(run=_dashboard_role)
 
     admin = commands.add_parser("admin", help="operator commands (owner role)")
     admin_commands = admin.add_subparsers(dest="admin_command", required=True)
