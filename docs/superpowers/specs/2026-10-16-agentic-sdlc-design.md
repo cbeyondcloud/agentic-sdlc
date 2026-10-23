@@ -256,7 +256,8 @@ agentic-org-policy/
 ├── pipelines/                # org-shared pipelines (org admins only, D33)
 ├── teams/<team>/            # team layer: agents/, pipelines/ (+ overlays/), skills/
 ├── skills/catalog.yaml       # approved skills, pinned by hash
-└── CODEOWNERS                # only org admins may merge policy/
+└── CODEOWNERS                # org admins own policy/; policy/teams/<team>.yaml and teams/<team>/
+                              #   also that team's leads (tighten-only narrowing; decision 93)
 ```
 
 ---
@@ -1051,7 +1052,7 @@ Skills (and memory) come in two kinds, following the ownership rule (D30):
 |---|---|---|---|---|---|
 | **Personal** | User | `~/.agentic/skills/<name>/` and personal notes `~/.agentic/memory/` (on the user's machine, synced to the control plane for backup/audit) | The user, freely | `agentic skills validate` on save; **instruction-only**, cannot widen tools/models/limits; can be disabled per repo classification by policy | Only that user's runs |
 | **Shared** | Repo | `.agentic/skills/<name>/` + `AGENTS.md` in the repo (committed) | Repo maintainers (CODEOWNERS) via PR | PR review; `skills validate` in CI; instruction-only; repo must be marked trusted | Everyone's runs in that repo |
-| **Shared** | Team | policy repo `skills/teams/<team>/` | Team lead via policy-repo PR | Admission checks (licence, validate, size, script scan); A/B eval recommended | That team's repos |
+| **Shared** | Team | policy repo `teams/<team>/skills/` (§4.3) | Team lead via policy-repo PR | Admission checks (licence, validate, size, script scan); A/B eval recommended | That team's repos |
 | **Shared** | Org | policy repo `skills/` catalog | Org admin via policy-repo PR | Full admission checks + human review of scripts + **A/B promotion gate** (M1-63) | Everyone, rolled out team by team |
 
 **Shared skills are read-only on developer machines.** They are downloaded pinned by sha256; before every run the CLI verifies the hashes, and a locally edited shared skill is restored from the catalog and logged (`skills.tamper_restored`). Precedence when names clash: shared org/team/repo skills that an agent definition references cannot be overridden by a personal skill of the same name — personal skills are added alongside, never replace.
