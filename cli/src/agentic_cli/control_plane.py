@@ -114,7 +114,7 @@ def control_plane_url(env: Mapping[str, str], settings: Mapping[str, Any]) -> st
     return found.strip().rstrip("/") or None
 
 
-def _checked_base(url: str) -> str:
+def checked_base(url: str) -> str:
     """`url` without a trailing slash; https, or plain http to a loopback address only (a
     token never crosses a network in clear)."""
     base = url.strip().rstrip("/")
@@ -147,7 +147,7 @@ class ControlPlaneClient:
         transport: httpx2.BaseTransport | None = None,
         timeout: httpx2.Timeout = TIMEOUT,
     ) -> None:
-        self.base_url = _checked_base(base_url)
+        self.base_url = checked_base(base_url)
         self._shown = scrub_url_credentials(self.base_url)
         self._token = token
         headers = {

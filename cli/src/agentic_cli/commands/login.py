@@ -69,6 +69,7 @@ def register(app: typer.Typer) -> None:
                     hint="set control_plane_url in ~/.agentic/config.yaml or "
                     f"{control_plane.URL_ENV} (your invite names it), or pass --url",
                 )
+            base = control_plane.checked_base(base)  # before the token is asked for (DF-498)
         else:
             name, label = _credential(target)
         credentials = Credentials()
@@ -84,7 +85,18 @@ def register(app: typer.Typer) -> None:
             with control_plane.ControlPlaneClient(
                 base, value, transport=control_plane.make_transport()
             ) as client:
-                me = client.me()  # verified before anything is stored (DF-182)
+                try:
+                    me = client.me()  # verified before anything is stored (DF-182)
+                except control_plane.ControlPlaneRefused as error:
+                    if error.status != 401:
+                        raise
+                    raise control_plane.ControlPlaneRefused(
+                        str(error),
+                        hint="the control plane did not accept this token: paste the whole "
+                        "token from your invite, or ask your org admin for a new one",
+                        code_name=error.code_name,
+                        status=error.status,
+                    ) from None
                 base = client.base_url
         try:
             credentials.store(name, value)

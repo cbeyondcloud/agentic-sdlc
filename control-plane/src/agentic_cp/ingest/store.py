@@ -12,6 +12,7 @@ anything is written, and the caller's transaction rolls back."""
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable, Mapping
 from datetime import datetime
 
@@ -60,9 +61,36 @@ def broken(problems: list[str], *, authorised: bool = True) -> ApiProblem:
     )
 
 
+def _value_problem(value: object) -> str | None:
+    """Why jsonb cannot keep `value` exactly (so the stored entry would not verify again),
+    or None. A NUL in a string or key is refused by Postgres (DF-494: the character itself,
+    not the six characters `\\u0000`). A float written with a positive exponent (1e16,
+    1.5e22) comes back as an integer and -0.0 as 0.0, which hash differently (DF-493)."""
+    if isinstance(value, str):
+        return "holds a NUL character" if "\x00" in value else None
+    if isinstance(value, float):
+        if value == 0 and math.copysign(1.0, value) < 0:
+            return "holds -0.0, which jsonb stores as 0.0 (write 0 or 0.0)"
+        if "e+" in repr(value):
+            return (
+                f"holds the float {value!r}, which jsonb hands back as an integer "
+                "(write it as an integer)"
+            )
+        return None
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if problem := _value_problem(key) or _value_problem(item):
+                return problem
+    elif isinstance(value, list):
+        for item in value:
+            if problem := _value_problem(item):
+                return problem
+    return None
+
+
 def _checked(entries: list) -> list[dict]:
     """Each entry is a JSON object with an integer seq, holding nothing Postgres jsonb
-    refuses (NaN, Infinity, a NUL character)."""
+    refuses or changes (NaN, Infinity, a NUL character, a float it renders differently)."""
     problems = []
     for n, entry in enumerate(entries, 1):
         seq = entry.get("seq") if isinstance(entry, Mapping) else None
@@ -70,12 +98,12 @@ def _checked(entries: list) -> list[dict]:
             problems.append(f"entry {n}: not an event with a positive integer seq")
             continue
         try:
-            text = json.dumps(entry, allow_nan=False)
+            json.dumps(entry, allow_nan=False)
         except (TypeError, ValueError):
             problems.append(f"event {seq}: holds a value JSON cannot carry (NaN or Infinity)")
             continue
-        if "\\u0000" in text:
-            problems.append(f"event {seq}: holds a NUL character")
+        if problem := _value_problem(entry):
+            problems.append(f"event {seq}: {problem}")
     if problems:
         raise broken(problems, authorised=False)
     return entries
@@ -198,6 +226,8 @@ async def ingest_batch(
     if closing:
         values["status"] = str(closing[-1].get("status") or "closed")[:32]
     if new_run:
+        values["policy_known"] = await _policy_known(conn, row.policy_version)
+    elif not row.policy_known:  # accepted since the run opened (DF-488): no longer flagged
         values["policy_known"] = await _policy_known(conn, row.policy_version)
     await conn.execute(update(runs).where(runs.c.run_id == run_id).values(**values))
     if new_run and not values["policy_known"]:

@@ -207,3 +207,38 @@ def test_no_user_is_refused(repo, tmp_path, monkeypatch):
     with pytest.raises(CliError) as caught:
         Workspace.load(repo, env={}, home=tmp_path / "home").user()
     assert caught.value.code == ExitCode.REFUSED and "user.email" in caught.value.hint
+
+
+def test_a_committed_init_record_is_ignored(repo, policy_repo, tmp_path):
+    """DF-353: `.agentic/local/` is git-ignored, so a committed init.json came with a cloned
+    repository, not from this person's `init`: it never chooses the policy."""
+    home = tmp_path / "home"
+    (home / "policy" / "standalone" / "policy").mkdir(parents=True)
+    record_init(repo, str(policy_repo))
+    git(repo, "add", "-f", ".agentic/local/init.json")
+    git(repo, "commit", "-qm", "ship our own policy choice")
+    assert Workspace.load(repo, env={}, home=home).policy_repo == home / "policy" / "standalone"
+
+
+def test_a_committed_standalone_policy_folder_is_ignored(repo, tmp_path):
+    """DF-353: the same for a committed `.agentic/local/policy/` folder."""
+    home = tmp_path / "home"
+    (home / "policy" / "standalone" / "policy").mkdir(parents=True)
+    write(repo / ".agentic" / "local" / "policy" / "policy" / "tiers.yaml", "tiers: {}\n")
+    assert (
+        Workspace.load(repo, env={}, home=home).policy_repo
+        == repo / ".agentic" / "local" / "policy"
+    )
+    git(repo, "add", "-f", ".agentic/local/policy")
+    git(repo, "commit", "-qm", "ship a policy")
+    assert Workspace.load(repo, env={}, home=home).policy_repo == home / "policy" / "standalone"
+
+
+@pytest.mark.parametrize("share", ["\\\\files.example\\policies", "//files.example/policies"])
+def test_a_recorded_policy_on_a_network_share_is_refused(repo, tmp_path, share):
+    """DF-353: a UNC path is never followed from a record (on Windows, touching it sends the
+    user's credentials to that server); an explicit setting still may name one."""
+    record_init(repo, share)
+    with pytest.raises(CliError) as caught:
+        Workspace.load(repo, env={}, home=tmp_path / "home").policy_repo  # noqa: B018
+    assert caught.value.code == ExitCode.REFUSED and "network share" in str(caught.value)

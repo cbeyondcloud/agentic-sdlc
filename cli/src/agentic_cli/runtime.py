@@ -39,9 +39,11 @@ from agentic.definitions import PipelineDefinition, UnknownDefinitionError
 from agentic.definitions.pipeline import ActionStep, AgentStep, GateStep, LoopStep
 from agentic.engine.engine import Engine, EngineError, StepContext
 from agentic.engine.factory import StepRunners
+from agentic.engine.gates import Authorizer, StandaloneAuthorizer
 from agentic.engine.preflight import PreflightReport, Problem, preflight
 from agentic.engine.state import RunStore
 from agentic.killswitch import KillSwitch, NoKillSwitch
+from agentic.orgapi.rbac import OrgAuthorizer
 from agentic.policy import ResolvedAgent
 from agentic.policy.repos import normalise_remote
 from agentic.sandbox.readiness import Readiness, SandboxDecision, decide_sandbox, readiness
@@ -522,6 +524,25 @@ class Runtime:
         if not self.ws.settings.get("org"):
             return None
         return control_plane.client_for(self.ws.env, self.ws.settings, self.ws.home)
+
+    def authorizer(self) -> tuple[Authorizer, str | None]:
+        """Who may decide at a gate, and the deciding person: in org mode with a control
+        plane, the roles `/v1/me` reports (`OrgAuthorizer`, so an org admin standing in for
+        the named role is recorded as such, DF-409) and the signed-in person; otherwise the
+        standalone authorizer (no RBAC) and None (the workspace's person decides)."""
+        try:
+            client = self.control_plane()
+        except control_plane.ControlPlaneError as error:
+            raise CliError(
+                f"gate decisions in org mode are checked by the control plane: {error}",
+                ExitCode.REFUSED,
+                hint=error.hint,
+            ) from None
+        if client is None:
+            return StandaloneAuthorizer(), None
+        with client:
+            me = client.me()
+        return OrgAuthorizer(me, self.ws.team), me.user.email
 
     def killswitch(self) -> KillSwitch:
         """The engine's kill-switch port (M2-19): the control plane's switches in org mode

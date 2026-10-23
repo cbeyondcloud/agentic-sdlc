@@ -652,7 +652,11 @@ class _Run:
                 "an invalid answer cannot be approved as it is: edit it into "
                 "a valid handoff, or reject it"
             )
-        return await self._approve(decision, proposed)
+        # the role the gate needed and the one the approver held (an org admin standing in,
+        # owner decision 74; DF-409): None where roles are not verified (standalone)
+        held = getattr(authorizer, "role_held", None)
+        roles = {"required_role": role, "role_held": held(approver, role) if held else None}
+        return await self._approve(decision, proposed, roles)
 
     def _gate_step(self, gate_id: str) -> GateStep | None:
         return next(
@@ -717,7 +721,9 @@ class _Run:
             proposed.path
         )
 
-    async def _approve(self, decision: Approve | Edit, proposed: "_Proposed | None") -> RunState:
+    async def _approve(
+        self, decision: Approve | Edit, proposed: "_Proposed | None", roles: dict | None = None
+    ) -> RunState:
         state, pending = self.state, self.state.pending
         changed, invalid = [], []
         for rel, digest in list(pending.artefacts.items()):
@@ -751,7 +757,7 @@ class _Run:
             dict(pending.artefacts),
             step=pending.step or pending.id,
             notes=decision.notes,
-            extra={"regime": state.regime},
+            extra={"regime": state.regime, **(roles or {})},
         )
         mark = ApprovalMark(
             gate=pending.id,

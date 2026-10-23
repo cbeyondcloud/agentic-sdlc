@@ -135,8 +135,8 @@ class Workspace:
                     "`agentic init --standalone --policy <folder>`",
                 )
             return root
-        if (self.repo / STANDALONE_POLICY).is_dir():
-            return self.repo / STANDALONE_POLICY
+        if (self.repo / STANDALONE_POLICY).is_dir() and not _tracked(self.repo, STANDALONE_POLICY):
+            return self.repo / STANDALONE_POLICY  # a committed one came with a clone (DF-353)
         if (self.home / STANDALONE_DIR).is_dir():  # `agentic init --standalone` (M1-62)
             return self.home / STANDALONE_DIR
         return None
@@ -215,7 +215,12 @@ class Workspace:
 
 def recorded_policy(repo: Path) -> Path | None:
     """The local policy `agentic init --standalone` used for `repo`, from the init state
-    it saved (`.agentic/local/init.json`); None for an org init or when there is none."""
+    it saved (`.agentic/local/init.json`); None for an org init or when there is none.
+
+    A committed init.json is ignored (`.agentic/local/` is git-ignored, so it came with a
+    clone, not from this person's init), and a record naming a network share (a UNC path)
+    is refused before anything touches it: on Windows that alone sends the user's
+    credentials to the server (DF-353)."""
     try:
         state = json.loads((repo / INIT_STATE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -225,7 +230,30 @@ def recorded_policy(repo: Path) -> Path | None:
     source = state.get("policy_source")
     if not isinstance(source, str) or not source.strip():
         return None
+    if _tracked(repo, INIT_STATE):
+        return None
+    if source.strip().startswith(("\\\\", "//")):
+        raise CliError(
+            f"the policy recorded for this repository is on a network share ({source.strip()}); "
+            "a recorded policy is never read from one",
+            ExitCode.REFUSED,
+            hint="copy the policy to a local folder and run `agentic init --standalone "
+            "--policy <folder>`, or set AGENTIC_POLICY_REPO",
+        )
     return Path(source.strip()).expanduser()
+
+
+def _tracked(repo: Path, rel: Path) -> bool:
+    """Whether git tracks `rel` (a file, or anything under a folder) in `repo`."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", str(repo), "ls-files", "-z", "--", rel.as_posix()],
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return done.returncode == 0 and bool(done.stdout.strip(b"\0"))
 
 
 def recorded_root(path: Path, repo: Path) -> Path | None:
