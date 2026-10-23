@@ -170,7 +170,9 @@ def jira_input(pipeline: PipelineDefinition) -> str:
     )
 
 
-def read_request(client: JiraClient, repo: Path, key: str) -> JiraRequest:
+def read_request(
+    client: JiraClient, repo: Path, key: str, *, token_hint: str | None = None
+) -> JiraRequest:
     """The issue `key`, mapped by the repo's connector (Zyroflo's `.sdlc/connectors/jira.json`,
     else the shipped one) into the run's request."""
     try:
@@ -180,7 +182,7 @@ def read_request(client: JiraClient, repo: Path, key: str) -> JiraRequest:
     try:
         payload = client.issue(key)
     except JiraError as error:
-        raise jira_failure(error) from error
+        raise jira_failure(error, token_hint) from error
     try:
         item = item_for(JIRA, mapping_for(repo, JIRA), payload)
     except ConnectorError as error:
@@ -199,13 +201,12 @@ def request_text(item: ExternalItem, key: str) -> str:
     return f"Jira issue {key}\n\n" + untrusted(item.spec, source=f"jira {key}")
 
 
-def jira_failure(error: JiraError) -> CliError:
-    """A failed read as a CliError: refused for a rejected token, invalid for an issue
-    that is not there, an error otherwise."""
+def jira_failure(error: JiraError, token: str | None = None) -> CliError:
+    """A failed read as a CliError: refused for a rejected token (`token`: how to replace
+    it), invalid for an issue that is not there, an error otherwise."""
     if error.status in (401, 403):
-        return CliError(
-            str(error), ExitCode.REFUSED, hint=f"set AGENTIC_JIRA_TOKEN, or run `{LOGIN}`"
-        )
+        hint = token or f"set {env_var(JIRA_TOKEN)}, or run `{LOGIN}`"
+        return CliError(str(error), ExitCode.REFUSED, hint=hint)
     if error.status == 404:
         return CliError(str(error), ExitCode.INVALID, hint="check the issue key and the site")
     return CliError(str(error), ExitCode.ERROR)
@@ -287,7 +288,7 @@ class IssueRun:
         settings = jira_settings(ws.settings, ws.env)
         client = connect_jira(ws, credentials)
         try:
-            request = read_request(client, ws.repo, key)
+            request = read_request(client, ws.repo, key, token_hint=token_hint(settings))
         except BaseException:
             client.close()
             raise
