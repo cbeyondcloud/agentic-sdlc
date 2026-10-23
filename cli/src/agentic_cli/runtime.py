@@ -55,6 +55,7 @@ from agentic_cli.codeintel import codeintel_for as codeintel_factory
 from agentic_cli.codeintel import codeintel_settings, codeintel_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.skill_activity import SkillActivity, StampingRecorder
 from agentic_cli.standalone import PLACEHOLDER
 from agentic_cli.step_extras import StepExtras
 from agentic_cli.wiring import StepWiring, production_scanner
@@ -165,6 +166,9 @@ class Runtime:
         self._gateway_key: str | None = None  # the key `redact` masks once it is known
         self._restored: list[str] = []  # skills the last sync restored (a local edit)
         self._recorders: dict[str, ForwardingRecorder] = {}
+        self._stamped: dict[str, StampingRecorder] = {}
+        # skill and memory activations, stamped on each step_finished in the ledger (M2-45)
+        self.activity = SkillActivity()
         self._sinks: list[EventSink] | None = None
         self.sink_problem: str | None = None  # why runs are not reported (a warning)
 
@@ -210,11 +214,12 @@ class Runtime:
                     self._sinks = [control_plane.ControlPlaneSink(client, guard=guard)]
         return self._sinks
 
-    def forwarding(self, run_id: str) -> ForwardingRecorder:
+    def forwarding(self, run_id: str) -> StampingRecorder:
         """The run's recorder: the ledger first, then the sinks on a background thread, so
         a slow control plane never holds up the run (DF-304). In org mode each event is
         screened by the publish scan before it is chained (M2-49) - signed in or not, as
-        a run recorded offline is published by `agentic sync` later."""
+        a run recorded offline is published by `agentic sync` later. Each step_finished
+        carries the skills and notes the step used (M2-45)."""
         if run_id not in self._recorders:
             screen = None
             if self.ws.settings.get("org"):
@@ -222,7 +227,8 @@ class Runtime:
             self._recorders[run_id] = ForwardingRecorder(
                 self.recorder(run_id), self.sinks(), background=True, screen=screen
             )
-        return self._recorders[run_id]
+            self._stamped[run_id] = StampingRecorder(self._recorders[run_id], self.activity)
+        return self._stamped[run_id]
 
     def close_sinks(self, timeout: float = SINK_GRACE_S) -> dict[str, int]:
         """Wait (bounded) for the runs' pending deliveries; returns run -> events still
@@ -486,7 +492,7 @@ class Runtime:
                 state_dir_for=lambda step: (
                     self.ws.repo / STATE / step.run_id / "agents" / f"{step.step}-{step.iteration}"
                 ),
-                prompt_extras=StepExtras.for_runtime(self),  # the review pre-pass (M2-48)
+                prompt_extras=StepExtras.for_runtime(self),  # pre-pass, personal skills
             )
         return Engine(
             definitions=self.ws.definitions(),
@@ -560,8 +566,14 @@ class Runtime:
                     catalog = load_catalog(root)
                 except CatalogError as error:
                     raise CliError(str(error), ExitCode.INVALID) from error
-                self._library = InstalledSkills(catalog, installed_skills_root(self.ws))
+                self._library = InstalledSkills(
+                    catalog, installed_skills_root(self.ws), record=self.activity.record
+                )
         return self._library  # type: ignore[return-value]
+
+    def skill_library(self) -> InstalledSkills | None:
+        """The repo's shared skills (None without a catalog in the policy repo)."""
+        return self._installed()
 
     def _skill_check(self, pipeline: str, *, live: bool):
         library = self._installed()

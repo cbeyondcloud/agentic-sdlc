@@ -7,6 +7,11 @@
     (`sdlc_commons.review_prepass`). The full report is kept in the run folder
     (`prepass/<step>-<iteration>.json`). A pre-pass that cannot run says so; it is never
     left out silently.
+  * Personal skills and notes (M2-45, D30). These come from the user's `~/.agentic/skills/`
+    and `~/.agentic/memory/` (`agentic.skills.personal`). They are given only when the
+    person running is the run's starter (a run with no readable state gets none), and only
+    where the repo's classification allows them. Each use reaches the run ledger through
+    `SkillActivity`.
 
 Everything here is built when the step runs, never when its runner is built (DF-146).
 """
@@ -19,9 +24,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from agentic.engine.engine import StepContext
+from agentic.engine.state import RunStateError
 from agentic.policy import OrgPolicy
 from agentic.review.prepass import builtin_checks, merge, prefixed, render
 from agentic.security.secret_scan import SecretScanner
+from agentic.skills.install import log_record
+from agentic.skills.personal import PersonalContext, load_personal
+from agentic_cli.errors import CliError
 from sdlc_commons.review_prepass import ToolLocator, external_checks
 from sdlc_commons.tool_fetch import ToolFetcher, ToolFetchError, current_platform
 from sdlc_commons.worktrees import WorktreeError, change_since_base
@@ -64,9 +73,14 @@ class StepExtras:
         policy: OrgPolicy,
         locator: ToolLocator,
         write_report: Callable[[str, str, str], None],
+        *,
+        personal: PersonalContext | None = None,
+        user: str | None = None,
+        starter_of: Callable[[str], str | None] = lambda run_id: None,
     ) -> None:
         self.target, self.policy, self.locator = target, policy, locator
         self.write_report = write_report  # (run id, run-relative path, text)
+        self.personal, self.user, self.starter_of = personal, user, starter_of
 
     @classmethod
     def for_runtime(cls, rt: Runtime) -> StepExtras:
@@ -75,11 +89,52 @@ class StepExtras:
         def write_report(run_id: str, rel: str, text: str) -> None:
             rt.recorder(run_id).write_artifact(rel, text)
 
-        return cls(rt.ws.repo, policy, tool_locator(rt.ws.home, policy), write_report)
+        def starter_of(run_id: str) -> str | None:
+            try:
+                return rt.store.load(run_id).starter
+            except RunStateError:
+                return None
+
+        found = load_personal(rt.ws.home)
+        for refused in found.rejected:  # said once per process, never silently skipped
+            log_record("skills.personal_rejected", {"path": refused.path, "reason": refused.reason})
+        library = rt.skill_library()
+        context = PersonalContext(
+            found,
+            policy.classifications,
+            shared=list(library.catalog.skills) if library is not None else [],
+            record=rt.activity.record,
+        )
+        try:
+            user = rt.user
+        except CliError:
+            user = None  # nobody known: no personal content
+        return cls(
+            rt.ws.repo,
+            policy,
+            tool_locator(rt.ws.home, policy),
+            write_report,
+            personal=context,
+            user=user,
+            starter_of=starter_of,
+        )
 
     def __call__(self, step: StepContext) -> str:
-        parts = [self.prepass(step)]
+        parts = [self.prepass(step), self.personal_block(step)]
         return "\n\n".join(part for part in parts if part)
+
+    # ── personal skills and notes ────────────────────────────────────────────
+
+    def personal_block(self, step: StepContext) -> str:
+        personal = self.personal
+        if personal is None or not (personal.personal.skills or personal.personal.memory):
+            return ""
+        starter = self.starter_of(step.run_id)
+        if self.user is None or starter != self.user:
+            # D30: a user's own skills shape only their own runs
+            log_record("skills.personal_skipped", {"run_id": step.run_id, "reason": "not owner"})
+            return ""
+        return personal.prompt_for(step.agent)
 
     # ── the review pre-pass ──────────────────────────────────────────────────
 

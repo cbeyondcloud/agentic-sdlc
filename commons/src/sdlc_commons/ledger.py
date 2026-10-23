@@ -244,11 +244,18 @@ class RunLedger:
     # ── events ────────────────────────────────────────────────────────────────
 
     def record(
-        self, event: str, phase: str = "", agent: AgentIdentity | None = None, **fields: object
+        self,
+        event: str,
+        phase: str = "",
+        agent: AgentIdentity | None = None,
+        skills: Sequence[str] = (),
+        **fields: object,
     ) -> dict:
         """Append one event to the chain. Every value is an id - no free text, no
         emails - and the ledger stamps the time. `agent` adds that agent's ids to
-        this event; the run's identity is added to every event."""
+        this event; `skills` adds the skills and notes used since the last one
+        (`<kind>/<name>/<version>/<sha256 hex>`, M2-45); the run's identity is added
+        to every event."""
         if self.run_id not in _IDENTITIES:
             raise LedgerError(
                 f"run {self.run_id} has no identity in this process - open() or resume() it first"
@@ -261,13 +268,24 @@ class RunLedger:
                 "identities - 'ext' cannot be passed"
             )
         _check_fields({"phase": phase, **fields} if phase else fields)
-        return self._append(event, phase, agent, fields)
+        return self._append(event, phase, agent, fields, skills=tuple(skills))
 
-    def _append(self, event: str, phase: str, agent: AgentIdentity | None, fields: dict) -> dict:
+    def _append(
+        self,
+        event: str,
+        phase: str,
+        agent: AgentIdentity | None,
+        fields: dict,
+        *,
+        skills: tuple[str, ...] = (),
+    ) -> dict:
         ext = None
-        if agent is not None:
+        if agent is not None or skills:
             _install()
-            ext = {NAMESPACE: agent.ext()}
+            block = agent.ext() if agent is not None else {}
+            if skills:
+                block["skills"] = [*block.get("skills", []), *skills]
+            ext = {NAMESPACE: block}
         try:
             return events.append(self.target, self.run_id, event, phase=phase, ext=ext, **fields)
         except (events.EventError, ValueError, OSError) as error:
