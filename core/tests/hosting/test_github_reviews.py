@@ -64,6 +64,17 @@ def test_get_pull_request_reports_merged():
     assert (declined.state, declined.merged) == ("closed", False)
 
 
+def test_pull_request_files_are_read_across_pages():
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        page = int(request.url.params["page"])
+        count = 100 if page == 1 else 3
+        rows = [{"filename": f"skills/internal/x/f{page}-{i}.md"} for i in range(count)]
+        return httpx2.Response(200, json=rows)
+
+    files = host(handler).pull_request_files(REPO, 4)
+    assert len(files) == 103 and files[0] == "skills/internal/x/f1-0.md"
+
+
 def test_review_posts_approve_and_request_changes():
     posted = []
 

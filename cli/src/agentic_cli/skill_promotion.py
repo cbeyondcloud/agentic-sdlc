@@ -47,9 +47,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from agentic.hosting import RepoRef
+from agentic.hosting import HostingError, RepoRef
 from agentic.hosting.base import ReviewHost
-from agentic.hosting.git import push_branch
+from agentic.hosting.git import fetch_branch, push_branch, rev_parse
+from agentic.policy import PolicyError, load_policy
 from agentic.policy.repos import normalise_remote
 from agentic.skills import SkillsError
 from agentic.skills.admission import Rejection
@@ -65,6 +66,8 @@ from agentic.skills.authoring import (
     skill_files_for_commit,
     skill_sha,
 )
+from agentic.skills.catalog import AdmissionLimits
+from agentic.yamlio import YamlFileError, load_yaml, split_front_matter
 from agentic_cli import control_plane, repo_setup
 from agentic_cli.errors import CliError
 from agentic_cli.evaluation import SKILL_EVAL_FILE, skill_eval_markdown
@@ -75,6 +78,8 @@ SUBMITTED = "skills-submitted"
 RETIRED = "skills-retired"
 EVALS = "skills-eval"
 BRANCH_PREFIX = PROMOTION_BRANCH.format(name="")
+#: Where the default branch is fetched to before a promotion branch is built on it.
+BASE_REF = "refs/agentic/skill-base"
 PERMISSIONS: dict[str, str] = {
     "repo": "agent.approve.repo",
     "team": "agent.publish.team",
@@ -110,10 +115,13 @@ def problems_as_dicts(found: list[Rejection]) -> list[dict[str, str]]:
 
 
 def latest_eval(home: Path, name: str, sha256: str, given: Path | None = None) -> dict:
-    """The skill-eval summary of exactly this skill version: from `given` (a folder
-    `skills eval` wrote), else the newest under `~/.agentic/skills-eval/<name>/`."""
+    """The skill-eval summary of exactly this skill version that measured: from `given`
+    (a folder `skills eval` wrote), else the newest such under
+    `~/.agentic/skills-eval/<name>/` - a later run the budget cap stopped does not hide
+    an earlier one that measured."""
     candidates = [given] if given is not None else _eval_folders(home / EVALS / name)
     seen_other = False
+    unmeasured: tuple[Path, str] | None = None
     for folder in candidates:
         path = folder / SKILL_EVAL_FILE
         try:
@@ -126,13 +134,16 @@ def latest_eval(home: Path, name: str, sha256: str, given: Path | None = None) -
             seen_other = True
             continue
         if summary.get("verdict") != "MEASURED":
-            raise CliError(
-                f"the eval of {name} did not measure ({summary.get('verdict')})",
-                ExitCode.REFUSED,
-                hint=f"see {folder}; run `agentic skills eval {name}` again",
-            )
+            unmeasured = unmeasured or (folder, str(summary.get("verdict")))
+            continue
         summary["folder"] = str(folder)
         return summary
+    if unmeasured is not None:
+        raise CliError(
+            f"no eval of this version of {name} measured (the newest: {unmeasured[1]})",
+            ExitCode.REFUSED,
+            hint=f"see {unmeasured[0]}; run `agentic skills eval {name}` again",
+        )
     why = "of an older version of the skill" if seen_other else "found"
     raise CliError(
         f"no eval of this version of {name} {why}: a submission carries its eval report",
@@ -187,24 +198,38 @@ def policy_checkout(settings: Mapping[str, Any], given: Path | None) -> Iterator
         yield target
 
 
-def head_text(repo: Path, path: str) -> str | None:
-    """`path` as committed at HEAD (LF text), or None when it is not there."""
+def head_text(repo: Path, path: str, rev: str = "HEAD") -> str | None:
+    """`path` as committed at `rev` (LF text), or None when it is not there."""
     done = subprocess.run(
-        [*_GIT, "-C", str(repo), "cat-file", "-p", f"HEAD:{path}"], capture_output=True
+        [*_GIT, "-C", str(repo), "cat-file", "-p", f"{rev}:{path}"], capture_output=True
     )
-    return (
-        done.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
-        if done.returncode == 0
-        else None
-    )
+    if done.returncode != 0:
+        return None
+    return done.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
 
 
-def head_has(repo: Path, path: str) -> bool:
+def head_has(repo: Path, path: str, rev: str = "HEAD") -> bool:
     done = subprocess.run(
-        [*_GIT, "-C", str(repo), "ls-tree", "-z", "--name-only", "HEAD", "--", path],
+        [*_GIT, "-C", str(repo), "ls-tree", "-z", "--name-only", rev, "--", path],
         capture_output=True,
     )
     return bool(done.stdout.strip(b"\0"))
+
+
+def branch_name(name: str, sha256: str) -> str:
+    """One branch per skill version: a resubmission after an edit is a new branch (and
+    pull request), never a force-push over the one a reviewer is reading."""
+    return PROMOTION_BRANCH.format(name=f"{name}-{sha256.removeprefix('sha256:')[:8]}")
+
+
+def org_limits(target: Path):
+    """The org's skill admission limits from the policy checkout's `policy/`, or None
+    when it does not load there (the policy-repo gate reports why)."""
+    try:
+        policy = load_policy(target / "policy")
+    except PolicyError:
+        return None
+    return AdmissionLimits(**policy.skill_limits.given())
 
 
 @dataclass(frozen=True)
@@ -217,10 +242,12 @@ class Submission:
     eval: dict
 
 
-def build_files(target: Path, sub: Submission, source: Path) -> tuple[dict[str, bytes], list[str]]:
-    """Every file of the promotion branch, and their paths for the description."""
+def build_files(
+    target: Path, sub: Submission, source: Path, rev: str = "HEAD"
+) -> tuple[dict[str, bytes], list[str]]:
+    """Every file of the promotion branch on top of `rev`, and their paths."""
     folder_rel, catalog_rel = promotion_paths(sub.scope, sub.name, sub.team)
-    if head_has(target, folder_rel):
+    if head_has(target, folder_rel, rev):
         raise CliError(
             f"a shared skill already exists at {folder_rel}",
             ExitCode.REFUSED,
@@ -231,7 +258,7 @@ def build_files(target: Path, sub: Submission, source: Path) -> tuple[dict[str, 
         entry = catalog_entry(sub.name, sub.sha256, owner=sub.submitter, path=folder_rel)
         try:
             text = add_catalog_entry(
-                head_text(target, catalog_rel), f"{INTERNAL}/{sub.name}", entry
+                head_text(target, catalog_rel, rev), f"{INTERNAL}/{sub.name}", entry
             )
         except SkillsError as error:
             raise CliError(f"{catalog_rel}: {error}", ExitCode.REFUSED) from error
@@ -255,20 +282,25 @@ def pr_body(sub: Submission, paths: list[str]) -> str:
         "report_id": sub.eval.get("report_id"),
         "verdict": sub.eval.get("verdict"),
     }
-    lines = [
-        f"## Promote the skill `{sub.name}`",
-        "",
-        f"Submitted by {sub.submitter} with `agentic skills submit`. The scope owner reviews it",
-        "(`agentic skills review`), and a person merges it through the code owners.",
-        "",
-        *(f"- `{path}`" for path in paths),
-        "",
-        skill_eval_markdown(sub.eval).rstrip(),
-        "",
-        f"<!-- agentic:skill-submission {json.dumps(block, sort_keys=True)} -->",
-    ]
-    body = "\n".join(lines) + "\n"
-    return body if len(body) <= MAX_BODY else body[: MAX_BODY - 200] + "\n\n(cut)\n"
+    head = "\n".join(
+        [
+            f"<!-- agentic:skill-submission {json.dumps(block, sort_keys=True)} -->",
+            f"## Promote the skill `{sub.name}`",
+            "",
+            f"Submitted by {sub.submitter} with `agentic skills submit`. The scope owner "
+            "reviews it",
+            "(`agentic skills review`), and a person merges it through the code owners.",
+            "",
+            *(f"- `{path}`" for path in paths),
+            "",
+            "",
+        ]
+    )
+    report = skill_eval_markdown(sub.eval)
+    room = MAX_BODY - len(head)
+    if len(report) > room:  # only the report is cut: the block stays whole (first line)
+        report = report[: max(room - 40, 0)] + "\n\n(report cut: see the eval folder)\n"
+    return head + report
 
 
 def submission_of(body: str | None) -> dict | None:
@@ -283,26 +315,62 @@ def submission_of(body: str | None) -> dict | None:
     return data if isinstance(data, dict) and data.get("name") else None
 
 
-def open_pull_request(
-    target: Path, branch: str, sub: Submission, paths: list[str], settings: Mapping[str, Any]
-) -> tuple[dict, Connection]:
-    conn = connect(target, settings)
-    with conn.errors():
-        push_branch(target, conn.remote, branch, secrets=[conn.token])
+@dataclass(frozen=True)
+class Proposed:
+    pull: dict  # number, url, created
+    repo: RepoRef
+    branch: str
+    commit: str | None  # None: this version's pull request was already open
+    paths: list[str]
+
+
+def propose(
+    target: Path,
+    sub: Submission,
+    source: Path,
+    settings: Mapping[str, Any],
+    warn: Callable[[str], None],
+) -> Proposed:
+    """Build the branch on the host's default branch - never on whatever the checkout has
+    checked out - push it and open its pull request; or find the one this version of the
+    skill already has."""
+    branch = branch_name(sub.name, sub.sha256)
+    with connect(target, settings) as conn, conn.errors():
         provider = conn.provider
+        base = provider.default_branch(conn.repo)
+        base_rev = _base(target, conn, base, warn)
+        files, paths = build_files(target, sub, source, base_rev)
         existing = provider.find_pull_request(conn.repo, branch)
         if existing is not None:
-            pull, created = existing, False
-        else:
-            pull = provider.open_pull_request(
-                conn.repo,
-                head=branch,
-                base=provider.default_branch(conn.repo),
-                title=pr_title(sub),
-                body=pr_body(sub, paths),
-            )
-            created = True
-    return {"number": pull.number, "url": pull.url, "created": created}, conn
+            pull = {"number": existing.number, "url": existing.url, "created": False}
+            return Proposed(pull, conn.repo, branch, None, paths)
+        message = f"{pr_title(sub)}\n\nSubmitted with agentic skills submit (skill {sub.sha256})."
+        name, commit = repo_setup.commit_on_branch(
+            target, dict(files), message, branch=branch, base=base_rev
+        )
+        push_branch(target, conn.remote, name, secrets=[conn.token])
+        opened = provider.open_pull_request(
+            conn.repo, head=name, base=base, title=pr_title(sub), body=pr_body(sub, paths)
+        )
+    pull = {"number": opened.number, "url": opened.url, "created": True}
+    return Proposed(pull, conn.repo, name, commit, paths)
+
+
+def _base(target: Path, conn: Connection, base: str, warn: Callable[[str], None]) -> str:
+    """The commit of `base` on the remote: fetched now; when the fetch fails, the
+    remote-tracking branch from the last fetch, said so."""
+    try:
+        return fetch_branch(target, conn.remote, base, BASE_REF, secrets=[conn.token])
+    except HostingError as error:
+        tracking = f"refs/remotes/{conn.remote}/{base}"
+        try:
+            found = rev_parse(target, tracking)
+        except HostingError:
+            raise CliError(
+                f"could not read {base} from {conn.remote}: {error}", ExitCode.ERROR
+            ) from None
+        warn(f"could not fetch {base} ({error}); building on {conn.remote}/{base} as last fetched")
+        return found
 
 
 def record_submission(home: Path, sub: Submission, repo: RepoRef, pull: dict, branch: str) -> Path:
@@ -322,9 +390,15 @@ def record_submission(home: Path, sub: Submission, repo: RepoRef, pull: dict, br
         "submitted_at": _now(),
         "state": "open",
     }
-    path = folder / f"{sub.name}.json"
+    path = folder / record_name(sub.name, sub.scope, sub.team)
     _write_json(path, record)
     return path
+
+
+def record_name(name: str, scope: str, team: str | None) -> str:
+    """One record per skill and scope (and team), so submitting one skill to two scopes
+    keeps both."""
+    return f"{name}.{scope}{f'.{team}' if team else ''}.json"
 
 
 # ── review ───────────────────────────────────────────────────────────────────
@@ -504,17 +578,54 @@ def _now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def check_for_submission(folder: Path, scope: Scope, limits=None) -> list[dict[str, str]]:
+def check_for_submission(
+    folder: Path, scope: Scope, limits: AdmissionLimits | None = None
+) -> list[dict[str, str]]:
     """A personal skill's problems before it is proposed to `scope`: the personal rules
-    (it is still instruction-only), and the target scope's own limits."""
+    (it is still instruction-only) and, for the policy repo, what its gate will check -
+    the org's size limits, and no declared licence but `internal` (the catalog entry is an
+    org-written skill's, and admission refuses a SKILL.md that disagrees with it)."""
     found = check_skill(folder, "personal")
     if scope != "repo":
         found += check_skill(folder, scope, limits=limits)
+        declared = _front_matter(folder).get("license")
+        if declared not in (None, INTERNAL):
+            why = (
+                f"it declares license: {declared}; a skill promoted to the {scope} catalog is "
+                f"`{INTERNAL}` - remove the license line"
+            )
+            found.append(Rejection("licence", "SKILL.md", why))
     return problems_as_dicts(found)
 
 
-def commit_branch(target: Path, files: dict[str, bytes], sub: Submission) -> tuple[str, str]:
-    message = f"{pr_title(sub)}\n\nSubmitted with agentic skills submit (skill {sub.sha256})."
-    return repo_setup.commit_on_branch(
-        target, dict(files), message, branch=PROMOTION_BRANCH.format(name=sub.name)
-    )
+def _front_matter(folder: Path) -> dict:
+    try:
+        header, _ = split_front_matter((folder / "SKILL.md").read_text(encoding="utf-8-sig"))
+        data = load_yaml(header, first_line=2)[0]
+    except (OSError, UnicodeDecodeError, YamlFileError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def scope_prefix(scope: str, team: str | None) -> str:
+    """Where a submission to `scope` may change files, in its target repository."""
+    if scope == "repo":
+        return ".agentic/skills/"
+    if scope == "team":
+        return f"teams/{team}/skills/"
+    return "skills/"
+
+
+def check_files(scope: str, team: str | None, files: list[str]) -> None:
+    """Refuse (exit 2) a submission that changes anything outside its scope's folder: the
+    RBAC check is bound to the files a pull request changes, never to the team its
+    (submitter-written) description names."""
+    prefix = scope_prefix(scope, team)
+    outside = [path for path in files if not path.startswith(prefix)]
+    if not files or outside:
+        shown = ", ".join(outside[:5]) or "no files"
+        raise CliError(
+            f"this {scope} submission must change only {prefix}, but it changes {shown}",
+            ExitCode.REFUSED,
+            hint="review it as a normal pull request instead",
+        )

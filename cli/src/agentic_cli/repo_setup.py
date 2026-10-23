@@ -152,16 +152,23 @@ def agents_md(repo: Path) -> str:
 
 
 def commit_on_branch(
-    repo: Path, files: dict[str, str | bytes], message: str, *, branch: str = BRANCH
+    repo: Path,
+    files: dict[str, str | bytes],
+    message: str,
+    *,
+    branch: str = BRANCH,
+    base: str = "HEAD",
 ) -> tuple[str, str]:
-    """Commit `files` on top of HEAD on a new branch, `branch` or `branch-<n>` when that
-    one exists; returns (branch, commit). In a repository with no commit yet, the branch
-    starts with them (a root commit). Bytes are committed as they are."""
-    parent = ["-p", "HEAD"] if _git_out(repo, "rev-parse", "--verify", "-q", "HEAD") else []
+    """Commit `files` on top of `base` (default HEAD) on a new branch, `branch` or
+    `branch-<n>` when that one exists; returns (branch, commit). In a repository with no
+    commit yet, the branch starts with them (a root commit). Bytes are committed as
+    they are."""
+    found = _git_out(repo, "rev-parse", "--verify", "-q", f"{base}^{{commit}}").strip()
+    parent = ["-p", found] if found else []
     with tempfile.TemporaryDirectory(prefix="agentic-init-") as scratch:
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
         if parent:
-            _git_run(repo, env, "read-tree", "HEAD")
+            _git_run(repo, env, "read-tree", found)
         for path, text in sorted(files.items()):
             # the repo's own bytes round-trip (surrogateescape)
             data = text if isinstance(text, bytes) else text.encode("utf-8", "surrogateescape")

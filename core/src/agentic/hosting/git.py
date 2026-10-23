@@ -66,6 +66,35 @@ def push_branch(
         raise HostingError(_scrub(f"git push of {branch} to {remote} failed: {tail}", known))
 
 
+def fetch_branch(
+    where: Path,
+    remote: str,
+    branch: str,
+    ref: str,
+    *,
+    timeout: int = 600,
+    secrets: Iterable[str] = (),
+) -> str:
+    """Fetch `branch` of `remote` into the local ref `ref` (replacing it), and return its
+    commit: the base a proposal is built on, whatever branch the checkout is on."""
+    _refuse_option(remote, "remote")
+    _refuse_option(branch, "branch")
+    _refuse_option(ref, "ref")
+    known = [s for s in secrets if s]
+    refspec = f"+refs/heads/{branch}:{ref}"
+    try:
+        done = _git(where, "fetch", "-q", "--no-tags", remote, refspec, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise HostingError(
+            _scrub(f"git fetch of {branch} from {remote} did not finish within {timeout}s", known)
+        ) from None
+    if done.returncode != 0:
+        printed = "\n".join(p for p in (done.stderr.strip(), done.stdout.strip()) if p)
+        tail = " / ".join(printed.splitlines()[-3:]) or f"exit {done.returncode}"
+        raise HostingError(_scrub(f"git fetch of {branch} from {remote} failed: {tail}", known))
+    return rev_parse(where, ref)
+
+
 #: The framework's plain settings, which a nested `agentic` call in a hook reads: every
 #: other `AGENTIC_*` variable may be a credential (`AGENTIC_<NAME>`, any name an org picks).
 _PLAIN_SETTINGS = frozenset(

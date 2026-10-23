@@ -194,6 +194,18 @@ class GitHubHost:
     def get_pull_request(self, repo: RepoRef, number: int) -> PullRequest:
         return _pull_request(self._json("GET", f"{self._repo_path(repo)}/pulls/{int(number)}"))
 
+    def pull_request_files(self, repo: RepoRef, number: int) -> list[str]:
+        """The paths the pull request changes (its first 3000, GitHub's own limit)."""
+        path = f"{self._repo_path(repo)}/pulls/{int(number)}/files"
+        found: list[str] = []
+        for page in range(1, 31):
+            rows = self._json("GET", path, params={"per_page": "100", "page": str(page)})
+            names = [str(r.get("filename")) for r in rows if isinstance(r, dict)]
+            found += [name for name in names if name]
+            if not isinstance(rows, list) or len(rows) < 100:
+                break
+        return found
+
     def review_pull_request(self, repo: RepoRef, number: int, *, approve: bool, body: str) -> None:
         """Approve, or request changes with `body` saying why. A host refuses a review of
         one's own pull request; that refusal is a HostingApiError like any other."""

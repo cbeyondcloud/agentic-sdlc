@@ -86,6 +86,14 @@ class FakeGitHub:
                 return 200, [p for p in pulls if p["head"]["ref"] == head]
             if method == "POST":
                 return self._create(body)
+        changed = re.fullmatch(_REPO + r"/pulls/(?P<n>\d+)/files", path)
+        if changed and method == "GET":
+            pull = next((p for p in self.pulls if p["number"] == int(changed["n"])), None)
+            if pull is None:
+                return 404, {"message": "Not Found"}
+            if query.get("page", ["1"])[0] != "1":
+                return 200, []
+            return 200, [{"filename": name} for name in self._changed(pull)]
         reviews = re.fullmatch(_REPO + r"/pulls/(?P<n>\d+)/reviews", path)
         if reviews and method == "POST":
             pull = next((p for p in self.pulls if p["number"] == int(reviews["n"])), None)
@@ -142,6 +150,18 @@ class FakeGitHub:
         """A person closed the pull request without merging it."""
         pull = next(p for p in self.pulls if p["number"] == number)
         pull.update(state="closed", merged=False)
+
+    def _changed(self, pull: dict) -> list[str]:
+        """The files a pull request changes: its branch against its base, in the remote."""
+        if self.bare is None:
+            return []
+        base, head = pull["base"]["ref"], pull["head"]["ref"]
+        done = subprocess.run(
+            ["git", "-C", str(self.bare), "diff", "--name-only", f"{base}...{head}"],
+            capture_output=True,
+            text=True,
+        )
+        return [line for line in done.stdout.splitlines() if line]
 
     def _head(self, branch: str) -> str | None:
         if self.bare is None:

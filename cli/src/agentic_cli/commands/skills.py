@@ -189,42 +189,32 @@ def register(app: typer.Typer) -> None:
         home = agentic_home()
         settings = user_config(home)
         folder = promo.personal_folder(home, name)
-        problems = promo.check_for_submission(folder, scope)  # type: ignore[arg-type]
-        if problems:
-            raise CliError(
-                f"{name} cannot be submitted: {problems[0]['path']}: {problems[0]['reason']}",
-                ExitCode.INVALID,
-                hint=f"agentic skills validate {name} --scope {scope}",
-            )
-        sha = promo.skill_sha(folder)
-        summary = promo.latest_eval(home, name, sha, report)
         chosen_team = _team(team, settings) if scope == "team" else None
-        place = (
-            nullcontext(find_repo(Path.cwd()))
-            if scope == "repo"
-            else promo.policy_checkout(settings, checkout)
-        )
-        with place as target:
-            sub = promo.Submission(
-                name,
-                scope,
-                chosen_team,
-                sha,
-                _person(settings, target),
-                summary,  # type: ignore[arg-type]
-            )
-            files, paths = promo.build_files(target, sub, folder)
-            branch, commit = promo.commit_branch(target, files, sub)
-            pull, conn = promo.open_pull_request(target, branch, sub, paths, settings)
-            record = promo.record_submission(home, sub, conn.repo, pull, branch)
+        with _target_repo(scope, settings, checkout) as target:
+            limits = promo.org_limits(target) if scope != "repo" else None
+            problems = promo.check_for_submission(folder, scope, limits)  # type: ignore[arg-type]
+            if problems:
+                first = problems[0]
+                raise CliError(
+                    f"{name} cannot be submitted: {first['path']}: {first['reason']}",
+                    ExitCode.INVALID,
+                    hint=f"agentic skills validate {name} --scope {scope}",
+                )
+            sha = promo.skill_sha(folder)
+            summary = promo.latest_eval(home, name, sha, report)
+            person = _person(settings, target)
+            sub = promo.Submission(name, scope, chosen_team, sha, person, summary)  # type: ignore[arg-type]
+            done = promo.propose(target, sub, folder, settings, out.warn)
+            record = promo.record_submission(home, sub, done.repo, done.pull, done.branch)
+        pull = done.pull
         data = {
             "name": name,
             "scope": scope,
             "team": chosen_team,
             "sha256": sha,
-            "branch": branch,
-            "commit": commit,
-            "files": paths,
+            "branch": done.branch,
+            "commit": done.commit,
+            "files": done.paths,
             "eval": summary["folder"],
             "pull_request": pull,
             "record": str(record),
@@ -306,7 +296,10 @@ def _decide(
                     f"#{number} is a {block.get('scope')} submission, not {scope}",
                     ExitCode.INVALID,
                 )
-            team = block.get("team")
+            team = block.get("team") if scope == "team" else None
+            with conn.errors():
+                files = host.pull_request_files(conn.repo, number)
+            promo.check_files(scope, team, files)  # the team checked is the files' team
             repo_key = promo.repo_key_of(conn) if scope == "repo" else None
             permission = promo.authorize(
                 scope, team, repo_key, settings, os.environ, home, out.warn
