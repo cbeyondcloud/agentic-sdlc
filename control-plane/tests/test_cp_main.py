@@ -40,6 +40,23 @@ async def test_serve_refuses_unenforced_database(operator_env, capsys):
     assert "table stray is neither tenants nor a registered tenant table" in err
 
 
+async def test_worker_refuses_unenforced_database(operator_env, capsys, monkeypatch):
+    """DF-495: the worker refuses what `serve` refuses (exit 2), before it leads."""
+    started: list[str] = []
+
+    async def never(*args, **kwargs):
+        started.append("ran")
+
+    monkeypatch.setattr(worker, "run_forever", never)
+    async with operator_env.db.owner.begin() as conn:
+        await conn.exec_driver_sql("CREATE TABLE stray (id int primary key)")
+    assert await _run("worker") == 2
+    err = capsys.readouterr().err
+    assert "refusing to run the worker" in err
+    assert "table stray is neither tenants nor a registered tenant table" in err
+    assert started == []
+
+
 async def test_migrate_applies_grants_and_seeds_every_tenant(operator_env, capsys):
     api = operator_env
     async with tenant_tx(api.db.owner, api.a.id) as conn:

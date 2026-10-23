@@ -40,6 +40,7 @@ from agentic_cp.rbac.import_api import router as rbac_import_router
 from agentic_cp.rbac.repos_api import router as repos_router
 from agentic_cp.settings import Settings
 from agentic_cp.tenancy.api import router as tenant_router
+from agentic_cp.tenancy.ratelimit import limiter_for
 
 Clock = Callable[[], datetime]
 
@@ -83,7 +84,7 @@ def create_app(
     app.state.engine = db
     app.state.clock = clock or utc_now
     app.state.git = git if git is not None else GitRunner(settings)
-    app.state.rate_limiter = rate_limiter
+    app.state.rate_limiter = rate_limiter if rate_limiter is not None else limiter_for(settings)
     # the gateway's key admin API (M2-17); tests pass a fake
     app.state.gateway_keys = (
         gateway_keys if gateway_keys is not None else gateway_keys_for(settings)

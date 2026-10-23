@@ -2,8 +2,9 @@
 
     serve                 run the API (uvicorn); refuses a database that does not enforce
                           tenant isolation and insert-only evidence
-    worker                the background worker: policy sync and CODEOWNERS refresh for
-                          every tenant (one leader at a time)
+    worker                the background worker: policy sync, CODEOWNERS refresh, auto-trip,
+                          mail and key revocations for every tenant (one leader at a time);
+                          refuses the databases `serve` refuses
     migrate               upgrade the database (owner role, AGENTIC_CP_OWNER_DATABASE_URL),
                           re-align the runtime role's grants, seed every tenant's builtin
                           roles and report the database guarantees
@@ -80,6 +81,12 @@ def _settings() -> Settings:
     return Settings.from_env(os.environ)
 
 
+_PREFLIGHT_HINT = (
+    "hint: fix the database (python -m agentic_cp migrate re-applies the grants); "
+    "AGENTIC_CP_REQUIRE_DB_ENFORCEMENT=false is for local development only"
+)
+
+
 def _serve(args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -89,11 +96,7 @@ def _serve(args: argparse.Namespace) -> int:
     refusal = asyncio.run(serve_preflight(settings))
     if refusal:
         print(f"error: refusing to serve - {refusal}", file=sys.stderr)
-        print(
-            "hint: fix the database (python -m agentic_cp migrate re-applies the grants); "
-            "AGENTIC_CP_REQUIRE_DB_ENFORCEMENT=false is for local development only",
-            file=sys.stderr,
-        )
+        print(_PREFLIGHT_HINT, file=sys.stderr)
         return 2
     uvicorn.run(create_app(settings), host=args.host, port=args.port, log_level="info")
     return 0
@@ -103,12 +106,17 @@ def _worker(args: argparse.Namespace) -> int:
     """Run the background worker until interrupted."""
     import logging
 
-    from agentic_cp.app import utc_now
+    from agentic_cp.app import serve_preflight, utc_now
     from agentic_cp.db import make_engine
     from agentic_cp.gitops import GitRunner
     from agentic_cp.policy_sync.worker import run_forever
 
     settings = _settings()
+    refusal = asyncio.run(serve_preflight(settings))  # what serve refuses, the worker does too
+    if refusal:
+        print(f"error: refusing to run the worker - {refusal}", file=sys.stderr)
+        print(_PREFLIGHT_HINT, file=sys.stderr)
+        return 2
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 
     async def run() -> None:

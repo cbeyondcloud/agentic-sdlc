@@ -122,6 +122,10 @@ class Settings(BaseModel):
     gateway_admin_key: SecretStr | None = None
     gateway_url: Annotated[str, AfterValidator(_http_url)] | None = None
     """The gateway URL people's CLIs use; handed out with a redeemed invite."""
+    rate_limit_per_minute: Annotated[int, Field(ge=0, le=1_000_000)] = 1200
+    """Requests per minute per token holder, in each process (DF-309); 0: no limit."""
+    tenant_rate_limit_per_minute: Annotated[int, Field(ge=0, le=10_000_000)] = 0
+    """Requests per minute for all of one tenant's callers together, per process; 0: none."""
     metrics_token: SecretStr | None = None
     """The bearer token Prometheus scrapes `/metrics` with (M2-12); None: `/metrics` is 404."""
     metrics_max_tenants: Annotated[int, Field(ge=1, le=1000)] = 100
