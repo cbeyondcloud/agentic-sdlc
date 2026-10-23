@@ -11,7 +11,7 @@ class ExitCode(IntEnum):
     PAUSED = 4  # the run is waiting for a person (a gate, an approval, a step error pause)
     STOPPED = 5  # the run stopped at a limit (budget, turns, time, stuck) or was killed
     USAGE = 64  # wrong command, flag or argument (sysexits EX_USAGE)
-    INTERRUPTED = 130  # Ctrl-C
+    INTERRUPTED = 130  # Ctrl-C, SIGTERM or SIGHUP
 
 
 EXIT_CODE_TABLE: tuple[tuple[ExitCode, str], ...] = (
@@ -32,5 +32,9 @@ EXIT_CODE_TABLE: tuple[tuple[ExitCode, str], ...] = (
     ),
     (ExitCode.STOPPED, "The run stopped at a limit (budget, turns, time, stuck) or was killed."),
     (ExitCode.USAGE, "Wrong command, flag or argument; see --help."),
-    (ExitCode.INTERRUPTED, "Interrupted (Ctrl-C)."),
+    (
+        ExitCode.INTERRUPTED,
+        "Interrupted: Ctrl-C, or the process was asked to stop (SIGTERM, SIGHUP, a closed "
+        "terminal); an interrupted run continues with `agentic resume <run>`.",
+    ),
 )

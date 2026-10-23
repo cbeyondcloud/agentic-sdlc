@@ -176,3 +176,9 @@ def test_steps_scan_tool_output_with_the_org_policy_scanner(workspace, policy_re
     decision = runtime.decide_sandbox(runtime.machine_readiness(), "solo", policy.sandbox)
     wiring = rt._wiring(decision)
     assert wiring.scanner is not None and wiring.scanner.action == "mask"
+
+
+def test_the_engine_s_wiring_knows_the_gateway_an_agent_process_may_reach(workspace, gateway):
+    # M2-42: the TokenLean host is the one model host an agent CLI process under srt reaches
+    engine = Runtime(Workspace.load()).engine(regime="solo")
+    assert engine.runner_factory.tools_for.__self__.gateway_url == "https://tokenlean.example"

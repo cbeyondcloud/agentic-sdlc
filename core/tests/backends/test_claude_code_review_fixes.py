@@ -209,3 +209,16 @@ def test_the_time_limit_ends_the_agents_commands(resolved, world, tmp_path):
     assert time.monotonic() - started < 4 + 4  # killed, not waited for
     time.sleep(10)
     assert not (tree / "late-marker").exists()  # the shell command died with the step
+
+
+def test_adoption_gives_up_with_a_warning_when_the_process_cannot_be_found(
+    resolved, world, tmp_path, monkeypatch, caplog
+):  # DF-481: an SDK that renamed its private attributes must not poll forever, silently
+    import agentic.backends.claude_code as claude_code
+
+    monkeypatch.setattr(claude_code, "ADOPT_DEADLINE_S", 0.2)
+    runner = make(resolved, world, tmp_path)
+    runner._client = object()  # no `_transport._process`: what a renamed attribute looks like
+    with caplog.at_level("WARNING", logger="agentic.backends.claude_code"):
+        asyncio.run(asyncio.wait_for(runner._adopt_when_started(), 5))
+    assert "outside the step's process scope" in caplog.text

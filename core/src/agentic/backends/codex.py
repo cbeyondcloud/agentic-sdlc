@@ -27,6 +27,7 @@ What S3 proved, applied to every run:
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -46,6 +47,7 @@ from agentic.agents.runner import (
     OutputContract,
     ResumeError,
     _instructions,
+    no_answer,
     retry_message,
 )
 from agentic.agents.tools import ToolContext
@@ -65,6 +67,7 @@ if TYPE_CHECKING:
     from agentic.engine.engine import StepContext
 
 #: The pinned Codex CLI release (rust-v0.160.1, 2026-10-05, Apache-2.0; spike S3).
+_log = logging.getLogger("agentic.backends.codex")
 CODEX_VERSION = "0.160.1"
 #: Our provider's id in Codex's config, and the variable holding the gateway key.
 PROVIDER = "agentic-gateway"
@@ -441,8 +444,9 @@ class CodexRunner:
     async def run(self, task: AgentTask) -> AgentOutcome:
         if self.require_sandbox and not self.wrap:
             raise CodexError(
-                "codex runs only inside the srt sandbox (decision 22): no sandbox wrap was "
-                "given for this step"
+                "codex steps run only inside the srt sandbox, and none was set up for this "
+                "step: enable the srt sandbox (agentic init says what to install) to use "
+                "codex steps"
             )
         session = asyncio.ensure_future(self._session(task))
         try:
@@ -479,8 +483,9 @@ class CodexRunner:
         if self.launch.schema is not None:
             instructions += "\n\n" + DOCUMENT_NOTICE
         text = await self._exec(task.prompt, instructions)
-        if self.contract is None:
-            return self._outcome("completed", text)
+        if self.contract is None:  # silence is no answer (DF-433)
+            errors = no_answer(text)
+            return self._outcome("invalid" if errors else "completed", text, errors=errors)
         accepted, errors = self.contract.check(text)
         if errors:  # one retry (OUTPUT_RETRIES = 1), in a new exec carrying the answer
             text = await self._exec(_retry_prompt(task.prompt, text, errors), instructions)
@@ -719,13 +724,20 @@ class CodexBackend:
         if native_windows():
             raise CodexError(
                 "the codex backend runs on macOS and Linux; on Windows run agentic inside "
-                "WSL2 (D38) - the native Windows packages are not supported"
+                "WSL2 (agentic init says how) - the native Windows packages are not supported"
             )
         if not self._checked:
             self.version(self.settings.cli)
             self._checked = True
         wrap = self.wrap_for(step)
         cwd = tool_context.tree if tool_context is not None else state_dir
+        hook = self.hook_for(step, cwd)
+        if hook is None:  # DF-431: the deny rules alone miss reordered or wrapped commands
+            _log.warning(
+                "codex step %s runs without the guard hook: its deny rules match only commands "
+                "that start with the listed words; the srt sandbox is the boundary",
+                step.step,
+            )
         launch = lock_down(
             step,
             settings=self.settings,
@@ -733,7 +745,7 @@ class CodexBackend:
             rules=self.rules_for(step),
             cwd=cwd,
             srt_boundary=bool(wrap),
-            hook=self.hook_for(step, cwd),
+            hook=hook,
         )
         return CodexRunner(
             step.agent,

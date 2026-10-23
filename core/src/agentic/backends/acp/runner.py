@@ -37,6 +37,7 @@ from agentic.agents.runner import (
     OutputContract,
     ResumeError,
     _instructions,
+    no_answer,
     retry_message,
 )
 from agentic.agents.tools import ToolContext
@@ -303,7 +304,9 @@ class AcpRunner:
             flag, host = self.profile.own_server
             direct = f"{host}:{_free_port(host)}"
             command += [flag, direct.rsplit(":", 1)[1]]
-            given = [h.strip() for h in env.get("NO_PROXY", "").split(",") if h.strip()]
+            # both spellings, merged: Linux and macOS users often set only `no_proxy` (DF-449)
+            said = f"{env.get('NO_PROXY', '')},{env.get('no_proxy', '')}"
+            given = [h.strip() for h in said.split(",") if h.strip()]
             env["NO_PROXY"] = env["no_proxy"] = ",".join(dict.fromkeys([*given, direct]))
             if self.wrap:  # inside, the sandbox's proxy takes everything else
                 command = ["env", f"NO_PROXY={direct}", f"no_proxy={direct}", *command]
@@ -357,8 +360,9 @@ class AcpRunner:
             ) from error
         first = [acp.text_block(_instructions(task, self.contract)), acp.text_block(task.prompt)]
         text = await self._turn(conn, sid, first)
-        if self.contract is None:
-            return self._outcome("completed", text)
+        if self.contract is None:  # silence is no answer (DF-433)
+            errors = no_answer(text)
+            return self._outcome("invalid" if errors else "completed", text, errors=errors)
         accepted, errors = self.contract.check(text)
         if errors:  # one retry, in the same session (OUTPUT_RETRIES = 1)
             text = await self._turn(conn, sid, [acp.text_block(retry_message(errors))])
@@ -536,10 +540,20 @@ class AcpBackend:
         # our shell policy for the step: the CLI passes the guard's, framework floor
         # included (`ShellRules(**guard.shell_rules())`); default, the agent's lists
         rules_for: Callable[["StepContext"], ShellRules] | None = None,
-        wrap_for: Callable[["StepContext"], Sequence[str] | None] = lambda step: None,
+        # the srt command prefix for the step (the CLI's `StepWiring.process_wrap_for`)
+        wrap_for: Callable[["StepContext"], Sequence[str] | None] | None = None,
         fallback_estimate_usd: Decimal = Decimal("0.01"),  # per call of an unpriced model
         time_limit_s: float | None = None,  # None: the agent's max_minutes
+        # no fail-open defaults (DF-445): without rules_for or wrap_for the agent would run
+        # with a shell under only its own lists, unsandboxed - tests must ask for that
+        unsandboxed: bool = False,
     ) -> None:
+        missing = [n for n, f in (("rules_for", rules_for), ("wrap_for", wrap_for)) if f is None]
+        if missing and not unsandboxed:
+            raise ValueError(
+                f"an ACP backend needs {' and '.join(missing)}: the framework's shell rules "
+                "and the srt sandbox wrap (pass unsandboxed=True only in tests)"
+            )
         self.profile, self.settings = profile, settings
         self.name = profile.name
         self.identity_for, self.prices = identity_for, prices
@@ -587,6 +601,6 @@ class AcpBackend:
             contract=step.contract,
             files=dict(launch.files),
             time_limit_s=self.time_limit_s,
-            wrap=self.wrap_for(step),
+            wrap=self.wrap_for(step) if self.wrap_for is not None else None,
             fallback_estimate_usd=self.fallback_estimate_usd,
         )

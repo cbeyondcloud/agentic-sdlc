@@ -120,6 +120,16 @@ def retry_message(errors: list[str]) -> str:
     return RETRY_MESSAGE.format(bullets="\n".join(f"- {error}" for error in errors))
 
 
+#: Why a step without a contract whose agent said nothing is invalid, not completed (DF-433).
+NO_ANSWER = "the agent gave no answer: its final message was empty"
+
+
+def no_answer(text: str | None) -> list[str]:
+    """The errors of a final answer given without a contract: none, unless it is empty.
+    Every backend's runner applies it, so silence never completes a step (DF-433)."""
+    return [] if text and text.strip() else [NO_ANSWER]
+
+
 class ResumeError(Exception):
     """A paused run that must not be resumed: edited, another agent's, or wrong decisions."""
 
@@ -340,12 +350,14 @@ class PydanticAIRunner:
             return self._stopped("stuck", seen, detail=seen["stuck"])
         if isinstance(result.output, DeferredToolRequests):
             return self._pause(result, instructions, seen)
+        errors = no_answer(result.output) if self.contract is None else []
         return AgentOutcome(
-            status="completed",
+            status="invalid" if errors else "completed",
             output=result.output,
             stopped=None,
             usage=_usage(seen),
             costs=self.costs,
+            errors=errors,
         )
 
     def _pydantic_agent(self, instructions: str) -> Agent:

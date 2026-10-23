@@ -350,6 +350,9 @@ OPENCODE = AcpProfile(
         "HTTPS_PROXY",
         "HTTP_PROXY",
         "NO_PROXY",
+        "https_proxy",  # what Linux and macOS users often set instead (DF-449)
+        "http_proxy",
+        "no_proxy",
     ),
     session_cost=True,
     refuse_tree=code_in_tree,

@@ -1,7 +1,8 @@
 """The shared ACP runner (M2-57; spike S7) against a scripted ACP agent run as a real
-subprocess over stdio (`acp_fake_agent.py`): the backend conformance cases, the prompt,
-the result, the permission gate, the per-step home, auth and mode, and every cost path.
-No agent binary is needed, so these run on Windows, macOS and Linux."""
+subprocess over stdio (`acp_fake_agent.py`): the prompt, the result, the permission gate,
+the per-step home, auth and mode, and every cost path (the conformance tiers run on this
+agent in test_conformance.py). No agent binary is needed, so these run on Windows, macOS
+and Linux."""
 
 import asyncio
 import json
@@ -12,7 +13,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from conformance import CASES, TASK, FakeContract, slice_
+from conformance import TASK, FakeContract, slice_
 from test_processes import gone
 
 from agentic.agents.runner import AgentTask, ResumeError
@@ -95,6 +96,7 @@ class World:
             prices=lambda model: price,
             fallback_estimate_usd=Decimal("0.01"),
             time_limit_s=time_limit_s,
+            unsandboxed=True,  # a scripted agent on the host: no shell, nothing to contain
         )
         step = StepContext("r-1", "develop", 1, agent or self.agent, budget or slice_(), contract)
         return backend.runner(step, tool_context=None, state_dir=self.tree, spawner=None)
@@ -120,25 +122,6 @@ def world(tmp_path, agent):
 
 def run(runner, task: AgentTask = TASK):
     return asyncio.run(runner.run(task))
-
-
-# ── the conformance every backend passes ──────────────────────────────────────
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case.__name__)
-def test_acp_conformance(case, world, agent):
-    def make(
-        agent, *, answers, budget, contract, time_limit_s=None, delay_s=0.0, over_budget=False
-    ):
-        turns = []
-        for index, answer in enumerate(answers):
-            turn = [{"sleep": delay_s}] if delay_s else []
-            turn.append({"say": answer})
-            turn.append({"cost": 1000.0 if over_budget else 0.001 * (index + 1)})
-            turns.append(turn)
-        return world.runner(turns, budget=budget, contract=contract, time_limit_s=time_limit_s)
-
-    case(make, agent)
 
 
 # ── prompt and result ─────────────────────────────────────────────────────────
@@ -452,6 +435,18 @@ def test_the_agent_s_own_server_gets_a_free_port_called_directly(world, monkeypa
     assert init["env"]["no_proxy"] == init["env"]["NO_PROXY"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows environment names are case-blind")
+def test_a_lower_case_no_proxy_is_merged_too(world, monkeypatch):  # DF-449
+    profile = fake_profile(own_server=("--port", "127.0.0.1"), inherit=("NO_PROXY", "no_proxy"))
+    monkeypatch.setenv("NO_PROXY", "corp.example")
+    monkeypatch.setenv("no_proxy", "lab.example,corp.example")
+    run(world.runner([[{"say": "VALID"}]], profile=profile))
+    (init,) = world.events("initialize")
+    port = init["argv"][init["argv"].index("--port") + 1]
+    expected = f"corp.example,lab.example,127.0.0.1:{port}"
+    assert init["env"]["NO_PROXY"] == init["env"]["no_proxy"] == expected
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="wrapping needs macOS, Linux or WSL2")
 def test_under_a_wrap_only_the_own_server_bypasses_the_sandbox_proxy(world):
     runner = world.runner([], profile=fake_profile(own_server=("--port", "127.0.0.1")))
@@ -472,3 +467,33 @@ def test_wrapping_in_a_sandbox_on_windows_is_refused(world):
     runner.wrap = ["srt", "--settings", "x", "--"]
     with pytest.raises(RuntimeError, match="WSL2"):
         run(runner)
+
+
+# ── no fail-open defaults (DF-445) ──────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("missing", ["rules_for", "wrap_for"])
+def test_a_backend_without_rules_or_a_sandbox_wrap_is_refused(missing):
+    given = {"rules_for": lambda step: None, "wrap_for": lambda step: None}
+    del given[missing]
+    settings = AcpSettings(gateway_url=GATEWAY, api_key="k", home_root=Path("h"))
+    with pytest.raises(ValueError, match=missing):
+        AcpBackend(
+            fake_profile(),
+            settings,
+            identity_for=lambda s: IDENTITY,
+            prices=lambda m: PRICE,
+            **given,
+        )
+
+
+def test_tests_may_run_unsandboxed_only_by_saying_so():
+    settings = AcpSettings(gateway_url=GATEWAY, api_key="k", home_root=Path("h"))
+    backend = AcpBackend(
+        fake_profile(),
+        settings,
+        identity_for=lambda s: IDENTITY,
+        prices=lambda m: PRICE,
+        unsandboxed=True,
+    )
+    assert backend.rules_for is None and backend.wrap_for is None

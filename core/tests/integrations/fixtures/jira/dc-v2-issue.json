@@ -1,0 +1,14 @@
+{
+  "expand": "renderedFields,names,schema,operations,editmeta,changelog,versionedRepresentations",
+  "id": "203117",
+  "self": "https://jira.acme.example/jira/rest/api/2/issue/203117",
+  "key": "OPS-7",
+  "fields": {
+    "summary": "Rotate the payments service certificates",
+    "description": "The certificates expire on 2026-11-30.",
+    "issuetype": {"id": "1", "name": "Bug", "subtask": false},
+    "status": {"name": "Open", "id": "1"},
+    "project": {"id": "10100", "key": "OPS", "name": "Operations"},
+    "reporter": {"name": "lee", "key": "JIRAUSER10100", "displayName": "Lee Okafor"}
+  }
+}

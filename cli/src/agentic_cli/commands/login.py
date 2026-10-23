@@ -1,6 +1,8 @@
 """`agentic login`: store the user's gateway key in the OS keyring (spec §24 step 3, M1-53),
 or, with `--for github` (or a host from `git_hosts`), the hosting token that opens pull
-requests (M1-58), or, with `--for control-plane`, the org's control-plane token (SP15).
+requests (M1-58), or, with `--for control-plane`, the org's control-plane token (SP15), or,
+with `--for jira`, the Jira token `run --from-jira` reads issues with (M2-50; stored under
+`jira.credential` when the user config names one).
 
 The key goes through `agentic.auth.Credentials.store` into the Windows Credential
 Manager, the macOS Keychain or the Secret Service; every later command finds it there
@@ -30,6 +32,7 @@ from agentic_cli.config import agentic_home, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.hosting import login_names
+from agentic_cli.jira import JIRA, login_credential
 from agentic_cli.output import Output
 
 GATEWAY = "gateway"
@@ -46,8 +49,8 @@ def register(app: typer.Typer) -> None:
         target: str = typer.Option(
             GATEWAY,
             "--for",
-            help="What the key is for: gateway (default), control-plane, a git host kind "
-            "such as github, or a host from git_hosts.",
+            help="What the key is for: gateway (default), control-plane, jira, a git host "
+            "kind such as github, or a host from git_hosts.",
         ),
         url: str | None = typer.Option(
             None, "--url", help="With --for control-plane: the control plane's URL (this time)."
@@ -112,6 +115,11 @@ def register(app: typer.Typer) -> None:
                 "Key stored in the OS keyring (not yet verified with the gateway). "
                 "Next: cd <repo> and run `agentic init`."
             )
+        elif wanted == JIRA:
+            shown = (
+                f"Token stored in the OS keyring as {name} (not yet verified). "
+                "`agentic run --from-jira` uses it."
+            )
         else:
             shown = (
                 f"Token stored in the OS keyring as {name} (not yet verified). "
@@ -159,9 +167,12 @@ def _credential(target: str) -> tuple[str, str]:
     wanted = target.strip().lower()
     if wanted == GATEWAY:
         return TOKENLEAN_KEY, "Gateway key"
-    names = login_names(user_config(agentic_home()))
+    settings = user_config(agentic_home())
+    if wanted == JIRA:
+        return login_credential(settings), "Jira token"
+    names = login_names(settings)
     if wanted not in names:
-        choices = ", ".join([GATEWAY, CONTROL_PLANE, *sorted(names)])
+        choices = ", ".join([GATEWAY, CONTROL_PLANE, JIRA, *sorted(names)])
         raise CliError(
             f"--for {target!r} is not something agentic keeps a key for",
             ExitCode.USAGE,

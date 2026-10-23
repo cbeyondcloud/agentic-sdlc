@@ -87,6 +87,11 @@ def test_every_backend_maps_tool_capabilities():
     assert CAPABILITIES["native"].children and not CAPABILITIES["claude-code"].children
 
 
+def test_the_matrix_says_which_backends_start_an_agent_process():  # M2-41 containment tier
+    own = {name: caps.own_process for name, caps in CAPABILITIES.items()}
+    assert own == {"native": False, "claude-code": True, "codex": True, "opencode": True}
+
+
 def test_unhonoured_policy_loads_from_org_yaml(fixtures, tmp_path: Path):
     root = tmp_path / "policy"
     shutil.copytree(fixtures / "policy" / "policy", root)
@@ -158,6 +163,9 @@ def test_codex_shell_default_deny_warns_by_default(resolved, policy):
     shell = [i for i in found if i.setting == "shell_default_deny"]
     assert [(i.setting, i.action) for i in shell] == [("shell_default_deny", "warn")]
     assert "codex" in shell[0].detail and "unlisted" in shell[0].detail
+    # DF-431: how weak a deny rule is, said plainly
+    assert "starts with the listed words" in shell[0].detail
+    assert "env git push" in shell[0].detail
 
 
 def test_an_org_can_block_backends_without_shell_default_deny(resolved, policy):

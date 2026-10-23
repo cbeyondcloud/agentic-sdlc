@@ -110,7 +110,7 @@ TERMINAL = ("completed", "failed", "stopped", "killed")
 #: The capabilities that let an agent change the tree: its steps are told the budget.
 WRITING_TOOLS = frozenset({"edit_files", "run_shell"})
 BATCH_NOTICE = (
-    "Review batch budget: keep this step's change within {limits}, so one person can "
+    "Review batch budget: this step's change may have {limits}, so one person can "
     "review it. If the work is larger, deliver a first self-contained part within the "
     "budget now and list what remains in your report; it comes in a later pass."
 )
@@ -647,7 +647,7 @@ class _Run:
             if refusal := self_approval(approver, state.starter):
                 raise GateRefused(f"four-eyes: {refusal} (someone else must approve your own run)")
         proposed = self._check_edit(decision) if isinstance(decision, Edit) else None
-        if proposed is None and pending.id == "invalid-output":
+        if proposed is None and pending.id == "invalid-output" and self._has_contract():
             raise GateRefused(
                 "an invalid answer cannot be approved as it is: edit it into "
                 "a valid handoff, or reject it"
@@ -663,10 +663,21 @@ class _Run:
             (s for s in self.pipeline.steps if isinstance(s, GateStep) and s.gate == gate_id), None
         )
 
+    def _has_contract(self) -> bool:
+        """Whether the step at the cursor hands over a handoff. One that does not can only
+        be invalid by ending without a final message (DF-433): a person may accept its
+        change as it is, but there is no handoff to edit."""
+        return bool(self._resolved(self._step_at_cursor()).produces)
+
     def _check_edit(self, decision: Edit) -> "_Proposed":
         """Validate the edited text; nothing is written until the approval it is part of
         is accepted (DF-50, DF-267)."""
         pending = self.state.pending
+        if pending.id == "invalid-output" and not self._has_contract():
+            raise GateRefused(
+                "this step hands over no handoff, so there is nothing to edit: look at its "
+                "change, then approve it as it is, or reject it with feedback for another pass"
+            )
         if decision.path not in pending.artefacts:
             raise GateRefused(
                 f"{decision.path} is not one of the files this gate pins: "
@@ -771,8 +782,10 @@ class _Run:
         self._clear_pending()
         if pending.id in ("blocked-output", BATCH_GATE):
             self._after_step()  # the person accepted (or edited) the handoff as it is
-        elif pending.id == "invalid-output" and edited is not None:
-            rel, digest, _ = edited
+        elif pending.id == "invalid-output":  # edited, or a contract-free step accepted
+            rel, digest = (
+                edited[:2] if edited is not None else next(iter(pending.artefacts.items()))
+            )
             step, iteration = pending.step, state.cursor.loop_iteration or 1
             self._history(
                 step,
@@ -781,7 +794,9 @@ class _Run:
                 started=self.e.clock.now(),
                 handoff=rel,
                 digest=digest,
-                detail="edited by a person",
+                detail="edited by a person"
+                if edited is not None
+                else "accepted by a person without a final message",
             )
             self.recorder.record(
                 "step_finished", step, outcome="completed", artifacts={rel: digest}
@@ -1439,9 +1454,16 @@ class _Run:
             rel = f"{base}.invalid.md"
             digest = self.recorder.write_artifact(rel, outcome.output or "")
             self.state.digests[rel] = digest
-            reason = "the answer is not a valid handoff after one retry: " + "; ".join(
-                outcome.errors
-            )
+            if agent.produces:
+                reason = "the answer is not a valid handoff after one retry: " + "; ".join(
+                    outcome.errors
+                )
+            else:  # no contract: the only way to be invalid is silence (DF-433)
+                reason = (
+                    "the agent finished without a final message, so the step is not complete: "
+                    "look at its change, then approve it as it is or reject it with feedback "
+                    "for another pass"
+                )
             if over:  # an edit that fixes the answer then waits at the diff-budget gate
                 reason += "; the change is also larger than one review batch: " + "; ".join(over)
             self._history(

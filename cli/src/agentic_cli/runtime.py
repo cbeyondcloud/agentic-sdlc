@@ -530,6 +530,8 @@ class Runtime:
         policy = self.ws.policy()
         decision = decide_sandbox(machine_readiness(), regime, policy.sandbox)
         wiring = self._wiring(decision)
+        # the one model host an agent CLI process may reach under srt (M2-42)
+        wiring.gateway_url = gateway.base_url if gateway is not None else None
         if gateway is None:
             runners = _no_model_calls
         else:

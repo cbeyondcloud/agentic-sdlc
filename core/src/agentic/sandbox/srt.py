@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
-from agentic.sandbox.process import ShellResult, run_process
+from agentic.sandbox.process import ShellResult, run_process, safe_env
 from agentic.sandbox.rules import SandboxRules, srt_settings
 
 SRT_VERSION = "0.0.78"
@@ -33,12 +33,18 @@ class SrtSandbox:
     isolated = True
 
     def __init__(
-        self, rules: SandboxRules, settings_dir: Path, *, srt: Sequence[str] = ("srt",)
+        self,
+        rules: SandboxRules,
+        settings_dir: Path,
+        *,
+        srt: Sequence[str] = ("srt",),
+        pass_env: Sequence[str] = (),  # policy's `sandbox.pass_env` (DF-365)
     ) -> None:
         self.rules = rules
         self.settings = Path(settings_dir) / SETTINGS_FILE
         self.tmp = Path(settings_dir) / "tmp"
         self.srt = tuple(srt)
+        self.pass_env = tuple(pass_env)
         self._written = False
 
     def _write_settings(self) -> None:
@@ -75,4 +81,4 @@ class SrtSandbox:
 
     async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
         argv = [*self.command_prefix(), "bash", "-c", command]
-        return await run_process(argv, cwd, timeout_s)
+        return await run_process(argv, cwd, timeout_s, env=safe_env(pass_through=self.pass_env))

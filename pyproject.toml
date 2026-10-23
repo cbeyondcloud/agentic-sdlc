@@ -171,6 +171,24 @@ allow_indirect_imports = true
 ignore_imports = ["agentic_cli.hosting -> agentic.hosting.github"]
 
 [[tool.importlinter.contracts]]
+name = "The Jira adapter only through the CLI's Jira module (M2-50: trackers behind the CLI)"
+type = "forbidden"
+source_modules = [
+    "agentic.agents",
+    "agentic.backends",
+    "agentic.engine",
+    "agentic.definitions",
+    "agentic.policy",
+    "agentic.telemetry",
+    "sdlc_commons",
+    "agentic_cli",
+    "agentic_cp",
+]
+forbidden_modules = ["agentic.integrations.jira"]
+allow_indirect_imports = true
+ignore_imports = ["agentic_cli.jira -> agentic.integrations.jira"]
+
+[[tool.importlinter.contracts]]
 name = "The CLI never imports the control plane (SP15: the wire contract is agentic.orgapi)"
 type = "forbidden"
 source_modules = ["agentic_cli"]

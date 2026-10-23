@@ -20,6 +20,7 @@ without the extra.
 import asyncio
 import copy
 import json
+import logging
 import os
 import shlex
 import stat
@@ -39,6 +40,7 @@ from agentic.agents.runner import (
     OutputContract,
     ResumeError,
     _instructions,
+    no_answer,
     retry_message,
 )
 from agentic.agents.tools import ToolContext
@@ -52,6 +54,12 @@ from agentic.transport.cost import estimate_usd
 if TYPE_CHECKING:
     from agentic.agents.children import ChildSpawner
     from agentic.engine.engine import StepContext
+
+_log = logging.getLogger("agentic.backends.claude_code")
+#: How long the runner looks for the Claude Code process the SDK starts (DF-481): it reads
+#: the SDK's private `_transport._process`, so a renamed attribute must end in a warning,
+#: not a poll for the whole session.
+ADOPT_DEADLINE_S = 30.0
 
 #: Switches that stop every request Claude Code makes besides model calls (S2 Q3).
 QUIET = {
@@ -238,8 +246,18 @@ class ClaudeCodeRunner:
 
     async def _adopt_when_started(self) -> None:
         """The SDK starts Claude Code inside `connect`, before its handshake: adopt it
-        at once, so even a stop during the handshake kills it (DF-451)."""
+        at once, so even a stop during the handshake kills it (DF-451). Gives up after
+        ADOPT_DEADLINE_S with a warning (DF-481)."""
+        deadline = asyncio.get_running_loop().time() + ADOPT_DEADLINE_S
         while not self._adopt():
+            if asyncio.get_running_loop().time() >= deadline:
+                _log.warning(
+                    "the Claude Code process was not found within %.0f s, so it runs outside "
+                    "the step's process scope (has claude-agent-sdk changed?); a stop may "
+                    "leave its commands running",
+                    ADOPT_DEADLINE_S,
+                )
+                return
             await asyncio.sleep(0.01)
 
     async def resume(self, state_path, decisions, expected_digest) -> AgentOutcome:
@@ -274,8 +292,9 @@ class ClaudeCodeRunner:
 
     async def _converse(self, client, task: AgentTask) -> AgentOutcome:
         text = await self._turn(client, task.prompt)
-        if self.contract is None:
-            return self._outcome("completed", text)
+        if self.contract is None:  # silence is no answer (DF-433)
+            errors = no_answer(text)
+            return self._outcome("invalid" if errors else "completed", text, errors=errors)
         accepted, errors = self.contract.check(text)
         if errors:  # one retry, in the same session (OUTPUT_RETRIES = 1)
             text = await self._turn(client, retry_message(errors))

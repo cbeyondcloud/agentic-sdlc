@@ -361,6 +361,28 @@ def test_an_agent_without_the_tool_gets_bundled_checklists_inlined(installed, re
     assert "activate_skill" not in prompt
 
 
+def test_the_body_counts_against_the_inlining_budget_and_a_left_out_file_is_recorded(
+    tmp_path, resolved
+):  # DF-369: one skill's text stays within max_skill_tokens, body included
+    root = tmp_path / "catalog"
+    body = "Write the test first. " * 60  # about 440 estimated tokens
+    files = {"small.md": "Keep it small.", "checklist.md": "Check this line. " * 40}
+    entries = {TDD: entry(skill_digest(make_skill(root, TDD, body=body, files=files)))}
+    write_catalog(root, entries, limits={"max_skill_tokens": 600})
+    catalog = load_catalog(root)
+    sync_skills(catalog, root, tmp_path / "dest", [TDD])
+    events = Events()
+    library = InstalledSkills(catalog, tmp_path / "dest", record=events)
+
+    text = library.load(TDD, list_files=False, inline_files=True)
+
+    assert "Keep it small." in text  # fits beside the body
+    assert "Check this line." not in text  # alone under 600, but not beside the body
+    assert "## Bundled file: checklist.md\n\n(not inlined: over the size budget)" in text
+    truncated = [f for e, f in events.seen if e == "skills.file_left_out"]
+    assert truncated == [{"skill": TDD, "file": "checklist.md", "budget": 600}]
+
+
 def test_an_agent_with_the_tool_gets_only_the_list_of_bundled_files(installed, resolved):
     prompt = skill_prompt(developer(resolved), installed, preload_all=False)
     assert "writing-good-tests.md" in prompt and "Test behaviour." not in prompt

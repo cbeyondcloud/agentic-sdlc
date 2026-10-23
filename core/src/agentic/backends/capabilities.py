@@ -46,6 +46,9 @@ class BackendCapabilities:
     # an unlisted shell command is refused (our guard's allow-list; Claude Code's
     # don't-ask mode). False: it runs, and prefix rules miss a command behind a redirect
     shell_default_deny: bool = True
+    # it starts an agent process of its own (an agent CLI), which the step's process scope
+    # must contain (M2-22) - what the runner conformance `containment` tier checks (M2-41)
+    own_process: bool = True
     notes: tuple[str, ...] = field(default=())
 
 
@@ -58,6 +61,7 @@ CAPABILITIES: dict[str, BackendCapabilities] = {
         approvals=True,
         children=True,
         stuck_check=True,
+        own_process=False,  # Pydantic AI runs in this process; its shell commands are scoped
     ),
     "claude-code": BackendCapabilities(
         name="claude-code",
@@ -153,8 +157,9 @@ def backend_issues(
         found += _unhonoured(
             policy,
             "shell_default_deny",
-            f"{agent.backend} (an unlisted command runs, and a command behind a redirect "
-            "escapes its prefix rules: the sandbox is the boundary)",
+            f"{agent.backend} (an unlisted command runs, and a deny rule matches only a "
+            "command that starts with the listed words: a redirect chain, `env git push` or "
+            "`git -C . push` escapes it; the sandbox is the boundary)",
         )
     return found
 

@@ -109,8 +109,20 @@ def test_naming_one_baseline_failure_twice_does_not_cover_a_second_failure():
         "failures: [tests/test_legacy.py::test_flaky_clock,\n"
         "           tests/test_legacy.py::test_flaky_clock]\n" + BASELINE_RED
     )
-    with pytest.raises(HandoffError, match="2 test"):
+    with pytest.raises(HandoffError, match="test_flaky_clock more than once"):
         parse_handoff(handoff("test-report", fields))
+
+
+def test_a_count_mismatch_names_both_numbers():  # DF-371: no self-contradicting message
+    fields = (
+        "verdict: pass\ntests: {passed: 40, failed: 0}\n"
+        "failures: [tests/test_legacy.py::test_flaky_clock]\n" + BASELINE_RED
+    )
+    with pytest.raises(HandoffError) as raised:
+        parse_handoff(handoff("test-report", fields))
+    said = str(raised.value)
+    assert "0 test(s) failed and `failures` names 1" in said
+    assert "must name each one" not in said
 
 
 @pytest.mark.parametrize(
