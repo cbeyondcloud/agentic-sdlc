@@ -29,6 +29,9 @@ dependencies = [
     # PEP 440 comparison of the CLI version against the minimum (M2-08); Apache-2.0 OR
     # BSD-2-Clause, pure Python, released 2026-08-04 (already in the lock transitively).
     "packaging==26.3",
+    # the gateway's key admin API (TokenLean /admin/keys, M2-17), imported only by
+    # agentic_cp.keys.gateway; the same range as core and the CLI (already in the lock)
+    "httpx2>=2.13.1,<2.14",
 ]
 
 [build-system]

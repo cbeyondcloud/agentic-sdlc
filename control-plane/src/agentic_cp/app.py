@@ -24,6 +24,8 @@ from agentic_cp.db_roles import AUDIT, TENANCY, enforcement_status
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, install_problem_handlers, log
 from agentic_cp.gitops import GitRunner
 from agentic_cp.ingest.api import router as runs_router
+from agentic_cp.keys.api import router as keys_router
+from agentic_cp.keys.gateway import gateway_keys_for
 from agentic_cp.killswitch.api import router as killswitch_router
 from agentic_cp.logredact import install_log_redaction
 from agentic_cp.notify.api import router as notify_router
@@ -49,6 +51,7 @@ def create_app(
     clock: Clock | None = None,
     git: object | None = None,
     rate_limiter: object | None = None,
+    gateway_keys: object | None = None,
 ) -> FastAPI:
     """The control-plane app. An `engine` passed in stays the caller's to dispose; one the
     app makes (lazily connecting, so health works without a database) it disposes at
@@ -76,6 +79,10 @@ def create_app(
     app.state.clock = clock or utc_now
     app.state.git = git if git is not None else GitRunner(settings)
     app.state.rate_limiter = rate_limiter
+    # the gateway's key admin API (M2-17); tests pass a fake
+    app.state.gateway_keys = (
+        gateway_keys if gateway_keys is not None else gateway_keys_for(settings)
+    )
     app.state.enforcers = EnforcerCache(settings.enforcer_cache_tenants)
     install_problem_handlers(app)
     install_log_redaction()  # the webhook token travels in the path (review F2)
@@ -91,6 +98,7 @@ def create_app(
     app.include_router(killswitch_router)
     app.include_router(notify_router)
     app.include_router(service_accounts_router)
+    app.include_router(keys_router)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:

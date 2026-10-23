@@ -497,6 +497,7 @@ ENDPOINT_CASES += [
         must_not_list=True,
     ),
     EndpointCase("notify", "GET", "/v1/notifications", _notification_in_b, must_not_list=True),
+    EndpointCase("proxy-keys", "DELETE", "/v1/users/{email}/proxy-keys", _user_in_b),
     EndpointCase("killswitch", "DELETE", "/v1/killswitch/{id}", _switch_in_b),
     EndpointCase("killswitch", "GET", "/v1/killswitch", _switch_in_b, must_not_list=True),
     EndpointCase(
