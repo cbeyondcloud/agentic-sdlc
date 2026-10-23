@@ -41,6 +41,16 @@ def test_template_loads(policy):
     assert policy.version.startswith(("git:", "sha256:"))
 
 
+def test_restricted_code_never_meets_personal_skills_or_memory(policy):
+    # Decision 89: personal skills and memory stay on elsewhere, off where code must not leave.
+    on = {
+        name: (rule.personal_skills, rule.personal_memory)
+        for name, rule in policy.classifications.items()
+    }
+    assert on.pop("restricted") == (False, False)
+    assert set(on.values()) == {(True, True)}
+
+
 def test_types_fix_the_builtin_kinds(policy):
     assert {name: policy.agent_types[name].produces for name in BUILTIN_TYPES} == BUILTIN_TYPES
 

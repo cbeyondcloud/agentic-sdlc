@@ -17,3 +17,5 @@ classifications:
   restricted:                           # code that must never leave your machine or network
     allowed_tiers: [local]
     allowed_backends: [native]
+    personal_skills: false              # only reviewed, shared skills and memory here
+    personal_memory: false
