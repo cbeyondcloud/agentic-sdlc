@@ -31,6 +31,7 @@ from agentic.codeintel import Candidates, CodeIntel, CodeIntelError
 from agentic.engine.engine import StepContext
 from agentic.policy import OrgPolicy, ResolvedAgent, ReviewBatchPolicy, SandboxPolicy
 from agentic.sandbox import SandboxRules, SrtSandbox, expand_home
+from agentic.sandbox.egress import egress_hosts
 from agentic.sandbox.readiness import SandboxDecision
 from agentic.security.secret_scan import SecretScanEvent, SecretScanner
 from sdlc_commons.guards import Guard
@@ -77,6 +78,7 @@ class StepWiring:
     skills: SkillCatalog | None = None  # the repo's installed skills
     codeintel_for: Callable[[Path, Path], CodeIntel] | None = None  # (tree, data folder)
     batch: ReviewBatchPolicy = field(default_factory=ReviewBatchPolicy)  # org policy (M2-24)
+    gateway_url: str | None = None  # TokenLean: the one model host an agent process reaches
     _trees: dict[str, StepCheckpoints] = field(default_factory=dict, repr=False)
     _homes: dict[str, Path] = field(default_factory=dict, repr=False)
 
@@ -115,24 +117,60 @@ class StepWiring:
     def _tools(self, step: StepContext) -> ToolContext:
         tree = self._home(step.run_id)
         guard = Guard.for_agent(self.target, step.run_id, step.agent)
+        pass_env = tuple(self.policy.pass_env)
         if not self.decision.use_srt:
             return ToolContext(
                 tree=tree,
                 guard=guard,
-                sandbox=LocalProcessSandbox(),
+                sandbox=LocalProcessSandbox(pass_env),
                 allow_unisolated=True,
                 secret_scanner=self.scanner,
             )
-        denials = self._denials(guard, step.run_id)
-        rules = SandboxRules(
-            write=(tree, *expand_home(self.policy.allow_write, self.home)),
+        rules = self._rules(guard, step.run_id, tree, egress_hosts(self.policy))
+        settings = self.state_root / step.run_id / "sandbox" / step.agent.definition.name
+        sandbox = SrtSandbox(rules, settings, pass_env=pass_env)
+        return ToolContext(tree=tree, guard=guard, sandbox=sandbox, secret_scanner=self.scanner)
+
+    def process_wrap_for(self, step: StepContext, *, write: tuple[Path, ...] = ()) -> list[str]:
+        """The srt command prefix for a whole agent CLI process (claude-code, codex,
+        opencode; M2-42, DF-443): it reaches the gateway and the registries and no other
+        host, every request goes through srt's proxy (`proxy_everything`), it writes only
+        the run's tree, policy's caches and `write` (the agent's per-step home), and the
+        guard's protected paths stay unwritable - for the agent's own shell commands too,
+        which run inside the same sandbox. Refused on a machine without srt."""
+        if not self.decision.use_srt:
+            raise ValueError(
+                self.decision.refusal
+                or "an agent CLI process runs only inside the srt sandbox, and this machine "
+                "has none ready (agentic init says what to install)"
+            )
+        if not self.gateway_url:
+            raise ValueError("an agent CLI process needs the gateway URL to allow its host")
+        tree = self._home(step.run_id)
+        guard = Guard.for_agent(self.target, step.run_id, step.agent)
+        hosts = egress_hosts(self.policy, self.gateway_url)
+        rules = self._rules(guard, step.run_id, tree, hosts, extra_write=write)
+        name = f"{step.agent.definition.name}-process"
+        settings = self.state_root / step.run_id / "sandbox" / name
+        sandbox = SrtSandbox(rules, settings, pass_env=tuple(self.policy.pass_env))
+        return sandbox.command_prefix(proxy_everything=True)
+
+    def _rules(
+        self,
+        guard: Guard,
+        run_id: str,
+        tree: Path,
+        hosts: tuple[str, ...],
+        *,
+        extra_write: tuple[Path, ...] = (),
+    ) -> SandboxRules:
+        denials = self._denials(guard, run_id)
+        return SandboxRules(
+            write=(tree, *extra_write, *expand_home(self.policy.allow_write, self.home)),
             deny_write=tuple(dict.fromkeys(p for d in denials for p in d.paths)),
             deny_read=expand_home(self.policy.effective_deny_read, self.home),
-            allowed_domains=tuple(self.policy.allowed_domains),
+            allowed_domains=hosts,
         )
-        settings = self.state_root / step.run_id / "sandbox" / step.agent.definition.name
-        sandbox = SrtSandbox(rules, settings)
-        return ToolContext(tree=tree, guard=guard, sandbox=sandbox, secret_scanner=self.scanner)
 
     def scanner_for(self, step: StepContext) -> SecretScanner:
         """The step's secret scanner (the backends' `scanner_for`)."""

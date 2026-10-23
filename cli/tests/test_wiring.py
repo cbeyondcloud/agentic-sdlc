@@ -2,6 +2,7 @@
 and a sandbox (M1-30, DF-46; D38). Real git, real Zyroflo trees."""
 
 import asyncio
+import json
 import subprocess
 from decimal import Decimal
 from pathlib import Path
@@ -153,6 +154,47 @@ def test_srt_rules_carry_policy_and_guard(repo, tmp_path, agent):
     assert home / ".ssh" in rules.deny_read and home / "secrets" in rules.deny_read
     assert rules.allowed_domains == ("pypi.org",)
     assert context.sandbox.settings.parent == tmp_path / "state" / RUN / "sandbox" / "developer"
+
+
+def test_shell_commands_never_get_the_gateway_host(repo, tmp_path, agent):  # M2-42
+    w = wiring(repo, tmp_path, SANDBOXED, allowed_domains=["pypi.org"])
+    w.gateway_url = "https://tokenlean.acme.example"
+    assert w.tools_for(step(agent)).sandbox.rules.allowed_domains == ("pypi.org",)
+
+
+def test_pass_env_reaches_both_sandboxes(repo, tmp_path, agent):  # DF-365
+    for decision in (SANDBOXED, UNSANDBOXED):
+        w = wiring(repo, tmp_path, decision, pass_env=["SSH_AUTH_SOCK"])
+        assert w.tools_for(step(agent)).sandbox.pass_env == ("SSH_AUTH_SOCK",)
+
+
+def test_an_agent_process_wrap_reaches_the_gateway_and_the_registries(repo, tmp_path, agent):
+    w = wiring(repo, tmp_path, SANDBOXED, allowed_domains=["pypi.org"], allow_write=["~/.cache/uv"])
+    w.gateway_url = "https://tokenlean.acme.example:8443"
+    home = tmp_path / "agent-home"
+    prefix = w.process_wrap_for(step(agent), write=(home,))
+
+    assert prefix[0] == "srt" and prefix[prefix.index("--") + 1] == "env"
+    assert "NO_PROXY=" in prefix and "no_proxy=" in prefix  # every request through srt's proxy
+    settings = json.loads(Path(prefix[prefix.index("--settings") + 1]).read_text("utf-8"))
+    assert settings["network"]["allowedDomains"] == ["tokenlean.acme.example:8443", "pypi.org"]
+    tree = w.tools_for(step(agent)).tree
+    written = settings["filesystem"]["allowWrite"]
+    assert written[:3] == [p.as_posix() for p in (tree, home, tmp_path / "home" / ".cache" / "uv")]
+    denied = settings["filesystem"]["denyWrite"]
+    assert (tree / ".env").as_posix() in denied and (tree / ".git").as_posix() in denied
+    assert (tmp_path / "home" / ".ssh").as_posix() in settings["filesystem"]["denyRead"]
+    folder = Path(prefix[prefix.index("--settings") + 1]).parent
+    assert folder == tmp_path / "state" / RUN / "sandbox" / "developer-process"
+
+
+def test_an_agent_process_wrap_needs_srt_and_a_gateway(repo, tmp_path, agent):
+    with pytest.raises(ValueError, match="srt"):
+        w = wiring(repo, tmp_path, UNSANDBOXED)
+        w.gateway_url = "https://tokenlean.acme.example"
+        w.process_wrap_for(step(agent))
+    with pytest.raises(ValueError, match="gateway"):
+        wiring(repo, tmp_path, SANDBOXED).process_wrap_for(step(agent))
 
 
 def test_unenforced_globs_are_reported(repo, tmp_path, agent):
