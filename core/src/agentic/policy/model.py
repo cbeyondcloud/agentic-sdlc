@@ -279,6 +279,19 @@ class PublishScanPolicy(_Strict):
         return self
 
 
+class ReviewPrepassPolicy(_Strict):
+    """The deterministic review pre-pass (M2-48): before an agent of one of `agent_types`
+    reviews a change, the framework scans it (secrets, blocked licences, new ignore rules;
+    and gitleaks, ast-grep and osv-scanner when the org pins them) and puts the results in
+    the agent's instructions. osv-scanner runs offline - it downloads the vulnerability
+    databases and sends no dependency list - unless `online_vulnerability_lookup` is on,
+    which sends the change's dependency list to the OSV service."""
+
+    enabled: bool = True
+    agent_types: list[str] = ["code-review"]
+    online_vulnerability_lookup: bool = False
+
+
 def _inside(path: str, folder: str) -> bool:
     path, folder = path.rstrip("/"), folder.rstrip("/")
     return path == folder or path.startswith(folder + "/")
@@ -378,6 +391,7 @@ class OrgPolicy(_Strict):
     sandbox: SandboxPolicy = SandboxPolicy()  # D38
     secret_scan: SecretScanPolicy = SecretScanPolicy()  # M1-41
     publish_scan: PublishScanPolicy = PublishScanPolicy()  # M2-49
+    review_prepass: ReviewPrepassPolicy = ReviewPrepassPolicy()  # M2-48
     review_batch: ReviewBatchPolicy = ReviewBatchPolicy()  # M2-24
     eval: EvalPolicy = EvalPolicy()  # M1-63
     # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
