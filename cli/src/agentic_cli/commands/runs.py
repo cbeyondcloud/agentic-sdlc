@@ -38,6 +38,7 @@ from agentic.engine.engine import TERMINAL
 from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
 from agentic_cli.commands.catalog import show_definition_warnings
+from agentic_cli.commands.killswitch import resume_scope
 from agentic_cli.driving import (
     drive,
     engine_errors,
@@ -112,7 +113,7 @@ def register(app: typer.Typer) -> None:
     @app.command("resume")
     def resume(
         ctx: typer.Context,
-        run_id: str,
+        run_id: Annotated[str | None, typer.Argument(help="The run to continue.")] = None,
         extra_minutes: Annotated[int, typer.Option(min=0, help="More run time.")] = 0,
         extra_budget: Annotated[str | None, typer.Option(help="More run budget, USD.")] = None,
         allow: Annotated[list[str] | None, typer.Option(help="Approve a paused tool call.")] = None,
@@ -120,9 +121,28 @@ def register(app: typer.Typer) -> None:
         skip: Annotated[
             bool, typer.Option("--skip", help="Skip the step a condition pause is about.")
         ] = False,
+        scope: Annotated[
+            str | None,
+            typer.Option("--scope", help="Admins: clear the pause switches of this scope."),
+        ] = None,
+        team: Annotated[
+            str | None, typer.Option("--team", help="With --scope: the team it was limited to.")
+        ] = None,
     ) -> None:
-        """Continue a paused or interrupted run."""
+        """Continue a paused or interrupted run (or, with --scope, end a pause switch)."""
         out: Output = ctx.obj
+        granted = extra_minutes or extra_budget is not None or allow or deny or skip
+        if (run_id is None) == (scope is None) or (scope is not None and granted):
+            raise CliError(
+                "resume takes a run, or --scope (and --team) to clear a pause switch",
+                ExitCode.USAGE,
+                hint="agentic resume <run>   or   agentic resume --scope team:<slug>",
+            )
+        if scope is not None:
+            resume_scope(out, scope, team)
+            return
+        if team is not None:
+            raise CliError("--team goes with --scope", ExitCode.USAGE)
         if skip and (extra_minutes or extra_budget is not None or allow or deny):
             raise CliError(
                 "--skip goes on its own: it skips the step and grants nothing else",
