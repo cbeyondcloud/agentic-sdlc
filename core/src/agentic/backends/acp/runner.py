@@ -22,7 +22,7 @@ import math
 import os
 import shutil
 import socket
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -49,6 +49,8 @@ from agentic.backends.acp.profile import (
     write_files,
 )
 from agentic.backends.processes import ProcessTree, session_leader
+from agentic.backends.turns import TurnCheck, TurnGuard
+from agentic.killswitch import RunKilled, Verdict
 from agentic.policy import ResolvedAgent
 from agentic.transport import BudgetSlice, CallCost, CallIdentity, LimitHit, Pricer
 from agentic.transport.cost import estimate_usd
@@ -148,6 +150,8 @@ class _Client:
     def __init__(self) -> None:
         self.turn = _Turn()
         self.refused: list[str] = []
+        # awaited at each tool call the agent reports: a turn boundary (the kill switch)
+        self.on_tool_call: Callable[[], Awaitable[None]] | None = None
 
     def begin(self) -> None:
         self.turn = _Turn()
@@ -161,6 +165,8 @@ class _Client:
         elif kind == "tool_call":  # what the agent said before a tool call is not its answer
             self.turn.tool_calls += 1
             self.turn.text = ""
+            if self.on_tool_call is not None:
+                await self.on_tool_call()
         elif kind == "usage_update":
             cost = update.cost
             if cost is not None and cost.currency.upper() == "USD":
@@ -226,7 +232,9 @@ def _described(tool_call) -> str:
 
 class AcpRunner:
     """Runs one agent step in one ACP session (an `AgentRunner`). It never pauses for a
-    person: every permission request is refused."""
+    person: every permission request is refused. The kill switch is asked before each
+    prompt and at each tool call the agent reports (`turn_guard`, decision 89): a kill
+    stops the session at once; a pause holds the run at the next step."""
 
     def __init__(
         self,
@@ -244,6 +252,7 @@ class AcpRunner:
         time_limit_s: float | None = None,
         wrap: Sequence[str] | None = None,
         fallback_estimate_usd: Decimal = Decimal("0.01"),
+        turn_guard: TurnGuard | None = None,
     ) -> None:
         self.agent, self.profile = agent, profile
         self.command, self.env, self.home, self.cwd = list(command), dict(env), home, cwd
@@ -262,15 +271,26 @@ class AcpRunner:
         self._tree = ProcessTree()
         self._last_text = ""
         self._cost_seen = Decimal(0)
+        self.turn_check = TurnCheck(turn_guard)
+        self._client.on_tool_call = self._tool_boundary
+        self._session_task: asyncio.Future | None = None
+        self._killed: Verdict | None = None  # a kill seen at a tool call
 
     async def run(self, task: AgentTask) -> AgentOutcome:
-        session = asyncio.ensure_future(self._session(task))
+        session = self._session_task = asyncio.ensure_future(self._session(task))
         try:
             done, _ = await asyncio.wait({session}, timeout=self.time_limit_s)
         except asyncio.CancelledError:  # the run was stopped: so is everything it started
             self._kill()
             session.cancel()
             raise
+        if self._killed is not None:  # the kill switch at a tool call cancelled the session
+            self._kill()
+            try:
+                await session
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - it was cancelled
+                pass
+            raise RunKilled(self._killed)
         if not done:  # the time limit: kill the agent and what it started, then close
             self._kill()
             session.cancel()
@@ -291,6 +311,18 @@ class AcpRunner:
     def _kill(self) -> None:
         """Kill the agent and every process it started (the shared helper)."""
         self._tree.kill()
+
+    async def _tool_boundary(self) -> None:
+        """At a tool call the agent reported: ask the kill switch. A kill stops the agent
+        and cancels the session (a notification handler cannot raise into the runner);
+        `run` then raises `RunKilled`."""
+        try:
+            await self.turn_check()
+        except RunKilled as killed:
+            self._killed = killed.verdict
+            self._kill()
+            if self._session_task is not None:
+                self._session_task.cancel()
 
     def _launch(self) -> tuple[list[str], dict[str, str]]:
         """The argv and environment the agent starts with: under `wrap` when given, as a
@@ -415,6 +447,7 @@ class AcpRunner:
         return text[-limit:].strip() or "(empty)"
 
     async def _turn(self, conn, session_id: str, blocks: list) -> str:
+        await self.turn_check()  # a kill before the prompt starts any model call
         self._client.begin()
         response = await conn.prompt(session_id=session_id, prompt=blocks)
         turn = self._client.turn
@@ -603,4 +636,5 @@ class AcpBackend:
             time_limit_s=self.time_limit_s,
             wrap=self.wrap_for(step) if self.wrap_for is not None else None,
             fallback_estimate_usd=self.fallback_estimate_usd,
+            turn_guard=step.turn_guard,
         )

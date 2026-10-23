@@ -56,6 +56,8 @@ from agentic.backends.codex_catalog import model_catalog
 from agentic.backends.codex_hooks import CodexHook, hook_table
 from agentic.backends.codex_rules import ShellRules, compile_rules
 from agentic.backends.processes import ProcessTree, spawn_group
+from agentic.backends.turns import TurnCheck, TurnGuard
+from agentic.killswitch import RunKilled
 from agentic.policy import ResolvedAgent
 from agentic.sandbox.process import KILL_WAIT_S, safe_env
 from agentic.security.untrusted import HANDOFF_TAG, fence
@@ -408,7 +410,9 @@ class CodexRunner:
       * turns - each tool result costs one more model call, so a tool call past
                 `max_turns` stops the step.
 
-    Codex never pauses for a person: `approval_policy = never` refuses prompt rules.
+    Codex never pauses for a person: `approval_policy = never` refuses prompt rules. The
+    kill switch is asked before each exec and at each tool call Codex reports (`turn_guard`,
+    decision 89): a kill stops the exec at once; a pause holds the run at the next step.
     """
 
     def __init__(
@@ -423,6 +427,7 @@ class CodexRunner:
         wrap: Sequence[str] | None = None,
         require_sandbox: bool = True,
         fallback_estimate_usd: Decimal = Decimal("0.01"),
+        turn_guard: TurnGuard | None = None,
     ) -> None:
         self.agent, self.launch, self.budget = agent, launch, budget
         self.price_for, self.contract = price_for, contract
@@ -440,6 +445,7 @@ class CodexRunner:
         self._tree: ProcessTree | None = None
         self._pending: EventReader | None = None  # the running exec's, until charged
         self._turns = 0
+        self.turn_check = TurnCheck(turn_guard)
 
     async def run(self, task: AgentTask) -> AgentOutcome:
         if self.require_sandbox and not self.wrap:
@@ -497,6 +503,7 @@ class CodexRunner:
     async def _exec(self, prompt: str, instructions: str) -> str:
         """One `codex exec`. CODEX_HOME's files are written first, every time: a shell
         command in an earlier exec may have changed them (they sit in a writable place)."""
+        await self.turn_check()  # a kill before the exec starts any model call
         self.launch.write(instructions)
         argv = [*(self.wrap or []), *self.launch.argv]
         try:
@@ -523,6 +530,7 @@ class CodexRunner:
                 process.stdin.close()
             except (BrokenPipeError, ConnectionResetError):
                 pass  # Codex exited before reading: its exit code and stderr say why
+            checked = 0  # tool calls the kill switch was asked about
             while line := await process.stdout.readline():
                 reader.feed(line.decode("utf-8", errors="replace"))
                 if reader.text:
@@ -533,6 +541,9 @@ class CodexRunner:
                     await process.wait()
                     self._account_cut("codex was killed at the turn limit before turn.completed")
                     raise _Stopped("turns", "the agent's turn limit was reached")
+                if reader.tool_calls > checked:  # a turn boundary: its result goes back
+                    checked = reader.tool_calls
+                    await self._turn_boundary(process)
             code = await process.wait()
         finally:  # whatever went wrong while reading, nothing is left running
             if process.returncode is None:
@@ -552,6 +563,20 @@ class CodexRunner:
             raise RuntimeError(f"Codex ended the step with an error: {detail}")
         self._last_text = unwrap_document(text)
         return self._last_text
+
+    async def _turn_boundary(self, process: asyncio.subprocess.Process) -> None:
+        """Ask the kill switch; on a kill, stop the exec, charge it as cut short, and
+        raise `RunKilled` (the stop wins over a limit the charge crosses)."""
+        try:
+            await self.turn_check()
+        except RunKilled:
+            self._kill_tree()
+            await process.wait()
+            try:
+                self._account_cut("codex was stopped by the kill switch before turn.completed")
+            except LimitHit:
+                pass
+            raise
 
     def _account(self, reader: EventReader, *, cut: str | None = None) -> None:
         """Count this exec's tool calls and charge its model calls, once. Codex reports
@@ -757,4 +782,5 @@ class CodexBackend:
             wrap=wrap,
             require_sandbox=self.settings.require_sandbox,
             fallback_estimate_usd=self.fallback_estimate_usd,
+            turn_guard=step.turn_guard,
         )
