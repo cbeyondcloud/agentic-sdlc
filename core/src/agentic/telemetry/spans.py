@@ -85,7 +85,10 @@ def finish_step_span(span: Span, outcome: "AgentOutcome") -> None:
     usage = outcome.usage
     span.set_attribute("gen_ai.aggregated_usage.input_tokens", usage.input_tokens)
     span.set_attribute("gen_ai.aggregated_usage.output_tokens", usage.output_tokens)
-    span.set_attribute("agentic.cost_usd", str(outcome.costs.total_usd()))
+    # the step's total under its own name (DF-176): agentic.cost_usd is each model-call
+    # span's own cost, so a backend summing it over a trace must not count the step too.
+    # A decimal string, like the call spans' value: a float would round the cost.
+    span.set_attribute("agentic.aggregated_cost_usd", str(outcome.costs.total_usd()))
     traces = [cost.trace_id for cost, _ in outcome.costs.calls if cost.trace_id]
     if traces:
         span.set_attribute("agentic.tokenlean.trace_ids", list(dict.fromkeys(traces)))
