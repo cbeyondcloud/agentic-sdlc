@@ -56,6 +56,7 @@ from agentic_cli.codeintel import codeintel_settings, codeintel_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.standalone import PLACEHOLDER
+from agentic_cli.step_extras import StepExtras
 from agentic_cli.wiring import StepWiring, production_scanner
 from agentic_cli.workspace import RUNS, Workspace
 from sdlc_commons.gates import ZyrofloGates, regime_block_on
@@ -485,6 +486,7 @@ class Runtime:
                 state_dir_for=lambda step: (
                     self.ws.repo / STATE / step.run_id / "agents" / f"{step.step}-{step.iteration}"
                 ),
+                prompt_extras=StepExtras.for_runtime(self),  # the review pre-pass (M2-48)
             )
         return Engine(
             definitions=self.ws.definitions(),
