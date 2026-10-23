@@ -286,6 +286,21 @@ class Adjudication(BaseModel):
     verdicts: list[FindingVerdict]
 
 
+#: The most of one finding's text the adjudicating judge sees (DF-391).
+MAX_FINDING_CHARS = 500
+_TAG_LIKE = re.compile(r"</?\s*[A-Za-z][\w:.-]*[^<>]*>")
+
+
+def _as_data(value: object, limit: int) -> str:
+    """A finding's field as one line of data (DF-391): the agent wrote it, so it may try
+    to close the findings block, add numbered lines or open a role - newlines become
+    spaces, tag-like text is removed, and it is capped at `limit` characters."""
+    text = str(value)
+    if any(mark in text for mark in ("\n", "\r", "<")):  # plain text stays byte for byte
+        text = " ".join(_TAG_LIKE.sub(" ", text).split())
+    return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
+
+
 class FindingJudge:
     """Adjudicates review findings that match no seeded defect (DF-244): an unmatched
     finding is not automatically false - real diffs carry real issues - so the judge
@@ -309,7 +324,8 @@ class FindingJudge:
         """One verdict per finding, in order; None when the judge cannot give exactly
         one each (re-asked once): unmeasured, never a guess."""
         numbered = "\n".join(
-            f"{i}. [{f.get('severity')}] {f.get('file')}:{f.get('line')} - {f.get('issue')}"
+            f"{i}. [{_as_data(f.get('severity'), 20)}] {_as_data(f.get('file'), 200)}:"
+            f"{_as_data(f.get('line'), 20)} - {_as_data(f.get('issue'), MAX_FINDING_CHARS)}"
             for i, f in enumerate(findings, start=1)
         )
         prompt = (

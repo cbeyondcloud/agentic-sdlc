@@ -175,6 +175,11 @@ def _dev_task_problems(root: Path, case: EvalCase) -> list[str]:
     workspace = root / PurePosixPath(case.inputs.workspace)
     tests = case.expected.tests
     for test in [*tests.fail_to_pass, *tests.pass_to_pass] if tests else []:
+        if " - " in test:  # pytest's summary puts ' - ' between an id and its message
+            problems.append(
+                f"test {test}: an id holding ' - ' cannot be read back from pytest's "
+                "summary (DF-390); rename the test or its parameter id"
+            )
         file = test.split("::", 1)[0]
         if not _is_file_exactly(workspace, PurePosixPath(file)):
             problems.append(f"test {test}: {file} is not a file of the workspace")

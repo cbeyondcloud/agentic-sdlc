@@ -1,0 +1,3 @@
+# How long records are kept, in days (a placeholder until the retention policy is
+# settled, open requirement OR-01).
+days: { audit: 365, traces: 30 }

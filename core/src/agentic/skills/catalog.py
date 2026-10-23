@@ -20,6 +20,16 @@ folder, or `library/skills/` for the shipped defaults. Each skill sits next to i
     excluded:                         # names that may never be catalogued, with why
       using-superpowers: duplicates the orchestrator
     preload_for: {tiers: [], models: []}   # weak/local models get skills pre-loaded
+    plugins:                          # agent-CLI plugins a team may opt into (M2-47)
+      superpowers:                    # folder: plugins/superpowers/
+        source: https://github.com/obra/superpowers
+        commit: ...
+        licence: MIT
+        owner: platform-team
+        version: 5.0.0
+        sha256: sha256:<64 hex>
+        scripts_reviewed_by: security-team
+        exclude: [skills/brainstorming/visual-companion/**]
 """
 
 import fnmatch
@@ -36,6 +46,7 @@ from agentic.definitions import DefinitionError
 from agentic.yamlio import YamlFileError, load_yaml, read_text
 
 CATALOG_FILE = "catalog.yaml"
+PLUGINS = "plugins"  # `<catalog>/plugins/<name>/`: agent-CLI plugins, not skills (M2-47)
 _SLUG = r"[a-z0-9]+(?:-[a-z0-9]+)*"
 KEY = re.compile(rf"^{_SLUG}/{_SLUG}$")
 DEFAULT_LICENCES = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "internal"]
@@ -73,6 +84,25 @@ class SkillEntry(_Strict):
     notes: str = ""  # what was changed from upstream, if anything
 
 
+class PluginEntry(_Strict):
+    """One approved agent-CLI plugin (M2-47, D28): installed whole, only into the step
+    config of a backend that loads plugins (claude-code, codex), never into the native
+    loop. Its folder is `<catalog>/plugins/<name>/`, pinned by `sha256`. A plugin carries
+    scripts and hooks, so a person must have reviewed them (decision 54)."""
+
+    source: str
+    commit: str
+    licence: str
+    owner: str
+    version: str
+    sha256: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    scripts_reviewed_by: str = Field(pattern=r"^.*\S.*$")
+    backends: list[str] = []  # empty: every backend that loads plugins
+    # POSIX globs of files never installed (the visual companion, its telemetry)
+    exclude: list[str] = []
+    notes: str = ""
+
+
 class PreloadRule(_Strict):
     """Which agents get their skills pre-loaded instead of discovered: weaker or local
     models, named by tier or by model glob (spec §11.1). Empty: none."""
@@ -96,13 +126,20 @@ class Catalog(_Strict):
     licences: list[str] = DEFAULT_LICENCES  # licences a skill may carry
     preload_for: PreloadRule = PreloadRule()
     limits: AdmissionLimits = AdmissionLimits()
+    plugins: dict[str, PluginEntry] = {}  # agent-CLI plugins a team may opt into (M2-47)
 
     @model_validator(mode="after")
     def keys_are_valid(self) -> Self:
-        problems = []
+        problems = [
+            f"plugin name {name!r} must be lowercase-with-hyphens"
+            for name in self.plugins
+            if not re.fullmatch(_SLUG, name)
+        ]
         for key in self.skills:
             if not KEY.match(key):
                 problems.append(f"key {key!r} must be '<source>/<name>' in lowercase-with-hyphens")
+            elif key.split("/")[0] == PLUGINS:
+                problems.append(f"{key}: '{PLUGINS}/' holds plugins, not a skill source")
             elif key in self.excluded or key.split("/")[1] in self.excluded:
                 why = self.excluded.get(key) or self.excluded[key.split("/")[1]]
                 problems.append(f"{key} is excluded and may not be catalogued: {why}")

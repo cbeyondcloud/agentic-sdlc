@@ -31,6 +31,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -67,6 +68,7 @@ from agentic.transport.cost import estimate_usd
 if TYPE_CHECKING:
     from agentic.agents.children import ChildSpawner
     from agentic.engine.engine import StepContext
+    from agentic.skills.plugins import CheckedPlugin
 
 #: The pinned Codex CLI release (rust-v0.160.1, 2026-10-05, Apache-2.0; spike S3).
 _log = logging.getLogger("agentic.backends.codex")
@@ -123,6 +125,7 @@ class CodexLaunch:
     catalog: dict
     schema: dict | None
     last_message: Path
+    plugins: Sequence["CheckedPlugin"] = ()
 
     def write(self, instructions: str) -> None:
         import tomli_w
@@ -135,6 +138,24 @@ class CodexLaunch:
         if self.schema is not None:
             _write(self.home / "schema.json", json.dumps(self.schema, indent=2) + "\n")
         self.last_message.unlink(missing_ok=True)
+        if self.plugins:
+            self._install_plugin_skills()
+
+    def _install_plugin_skills(self) -> None:
+        """The team's opt-in plugins (M2-47) as Codex user skills: each plugin's
+        `skills/<name>/` copied into this step's own `CODEX_HOME/skills/`. Codex's plugin
+        feature stays off, so nothing is fetched from its vendor's sites (DF-118)."""
+        skills = self.home / "skills"
+        if skills.exists():
+            shutil.rmtree(skills)
+        for plugin in self.plugins:
+            for relative, path in plugin.files():
+                parts = relative.split("/")
+                if len(parts) < 3 or parts[0] != "skills":
+                    continue
+                destination = skills.joinpath(*parts[1:])
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, destination)
 
 
 def lock_down(
@@ -147,6 +168,7 @@ def lock_down(
     srt_boundary: bool,
     hook: CodexHook | None = None,
     environ: Mapping[str, str] | None = None,
+    plugins: Sequence["CheckedPlugin"] = (),
 ) -> CodexLaunch:
     """The command, environment and CODEX_HOME files for one step: every lock-down
     setting. `srt_boundary` says srt wraps the process (allow rules are emitted only
@@ -181,7 +203,8 @@ def lock_down(
         "model_catalog_json": (home / "models.json").as_posix(),
         "history": {"persistence": "none"},
         # repo (.agents/, .codex/) and user skills would be listed to the model as
-        # instructions, untrusted worktree or not (review I2); org skills come with M2-47
+        # instructions, untrusted worktree or not (review I2); a team's opt-in plugin
+        # turns them on for its own skills only (M2-47, below)
         "skills": {"include_instructions": False},
         "features": {
             "plugins": False,
@@ -200,6 +223,15 @@ def lock_down(
     }
     if agent.effort is not None:
         config["model_reasoning_effort"] = agent.effort
+    if plugins:  # the team's opt-in (M2-47): skill instructions on, for these only
+        home_dir = (environ if environ is not None else os.environ).get("HOME")
+        if found := _skill_folders(Path(cwd), Path(home_dir) if home_dir else Path.home()):
+            raise CodexError(
+                f"other skill folders are in reach ({', '.join(found)}): with the team's "
+                "plugin on, Codex would list their skills to the model too, repo skills "
+                "included; run this step without the plugin, or remove them"
+            )
+        config["skills"] = {"include_instructions": True}
     passing = settings.pass_env
     env = {
         name: value
@@ -230,7 +262,24 @@ def lock_down(
         catalog=catalog,
         schema=schema,
         last_message=last_message,
+        plugins=tuple(plugins),
     )
+
+
+#: Where Codex finds skills besides its CODEX_HOME: the worktree and every folder above it
+#: (a repository's own skills, review I2), and the user's home.
+REPO_SKILL_FOLDERS = (".agents/skills", ".codex/skills")
+
+
+def _skill_folders(tree: Path, home: Path) -> list[str]:
+    """Every skill folder Codex could list besides the step's own: in `tree` or any
+    folder above it, or in `home`."""
+    found = []
+    for folder in dict.fromkeys([tree.resolve(), *tree.resolve().parents, home]):
+        found += [
+            (folder / rel).as_posix() for rel in REPO_SKILL_FOLDERS if (folder / rel).exists()
+        ]
+    return found
 
 
 def overrides(config: Mapping[str, object]) -> list[str]:
@@ -733,10 +782,13 @@ class CodexBackend:
         hook_for: Callable[["StepContext", Path], CodexHook | None] = lambda step, tree: None,
         version: Callable[[Sequence[str]], str] = check_version,
         fallback_estimate_usd: Decimal = Decimal("0.01"),  # per call of an unpriced model
+        # the team's opt-in plugins for this step (`agentic.skills.plugins.plugins_for`)
+        plugins_for: Callable[["StepContext"], Sequence["CheckedPlugin"]] = lambda step: (),
     ) -> None:
         self.settings, self.identity_for, self.prices = settings, identity_for, prices
         self.rules_for, self.wrap_for, self.version = rules_for, wrap_for, version
         self.hook_for = hook_for
+        self.plugins_for = plugins_for
         self.fallback_estimate_usd = fallback_estimate_usd
         self._checked = False
 
@@ -774,6 +826,7 @@ class CodexBackend:
             cwd=cwd,
             srt_boundary=bool(wrap),
             hook=hook,
+            plugins=self.plugins_for(step),
         )
         return CodexRunner(
             step.agent,

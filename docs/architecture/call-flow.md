@@ -81,7 +81,7 @@ sequenceDiagram
     end
 ```
 
-The Jira input source (`from: [text, file, jira]`) is 🔲 M2-50; today a request is given as `--input request=...`.
+A request is given as `--input request=...`, or taken from a Jira issue with `agentic run <pipeline> --from-jira PROJ-123` ✅ M2-50 (agentic_cli/jira.py · the `jira:` user settings in docs/user-config.md); the run reports back to the issue as it ends.
 
 ## 2. One agent step (the same for every agent step)
 

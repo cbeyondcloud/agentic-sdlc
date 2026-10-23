@@ -8,7 +8,9 @@ What S2 proved, applied to every run:
   * nothing else leaves the machine: Claude Code's telemetry, error reporting,
     auto-update and other non-essential traffic are switched off;
   * no user or project settings, hooks, plugins or CLAUDE.md load (`--bare` and an
-    explicit empty `setting_sources`), and each step has its own config folder;
+    explicit empty `setting_sources`), and each step has its own config folder; the one
+    exception is a plugin the team opted into from the org catalog (M2-47), pinned,
+    copied into that folder and passed explicitly;
   * the model is offered only the tools mapped from the agent's capabilities
     (`tools=`; `allowed_tools` only auto-approves), and the guard's permission rules
     apply in don't-ask mode - anything not allowed is refused, never asked about.
@@ -56,6 +58,7 @@ from agentic.transport.cost import estimate_usd
 if TYPE_CHECKING:
     from agentic.agents.children import ChildSpawner
     from agentic.engine.engine import StepContext
+    from agentic.skills.plugins import CheckedPlugin
 
 _log = logging.getLogger("agentic.backends.claude_code")
 #: How long the runner looks for the Claude Code process the SDK starts (DF-481): it reads
@@ -100,8 +103,11 @@ def lock_down(
     cwd: Path,
     edit_tree: bool,
     environ: Mapping[str, str] | None = None,
+    plugins: Sequence["CheckedPlugin"] = (),
 ) -> dict:
-    """The `ClaudeAgentOptions` keyword arguments for one step: every lock-down setting."""
+    """The `ClaudeAgentOptions` keyword arguments for one step: every lock-down setting.
+    `plugins` (the team's opt-in, M2-47) are copied into the step's own config folder and
+    loaded from there as local plugins - nothing of the user's own setup loads."""
     agent = step.agent
     mapped = CAPABILITIES["claude-code"].tools
     tools = list(dict.fromkeys(name for cap in agent.tools for name in mapped.get(cap, ())))
@@ -145,6 +151,13 @@ def lock_down(
         options["max_budget_usd"] = float(available)
     if settings.cli_path is not None:
         options["cli_path"] = str(settings.cli_path)
+    if plugins:
+        from agentic.skills.plugins import install_plugin
+
+        options["plugins"] = [
+            {"type": "local", "path": str(install_plugin(plugin, config_dir / "plugins"))}
+            for plugin in plugins
+        ]
     return options
 
 
@@ -439,10 +452,13 @@ class ClaudeCodeBackend:
         permissions_for: Callable[["StepContext"], dict],
         wrap_for: Callable[["StepContext"], Sequence[str] | None] = lambda step: None,
         fallback_estimate_usd: Decimal = Decimal("0.01"),  # per call of an unpriced model
+        # the team's opt-in plugins for this step (`agentic.skills.plugins.plugins_for`)
+        plugins_for: Callable[["StepContext"], Sequence["CheckedPlugin"]] = lambda step: (),
     ) -> None:
         self.settings, self.identity_for, self.prices = settings, identity_for, prices
         self.permissions_for, self.wrap_for = permissions_for, wrap_for
         self.fallback_estimate_usd = fallback_estimate_usd
+        self.plugins_for = plugins_for
 
     def runner(
         self,
@@ -461,6 +477,7 @@ class ClaudeCodeBackend:
             permissions=self.permissions_for(step),
             cwd=cwd,
             edit_tree="edit_files" in step.agent.tools,
+            plugins=self.plugins_for(step),
         )
         return ClaudeCodeRunner(
             step.agent,

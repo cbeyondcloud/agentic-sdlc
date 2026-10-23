@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agentic.skills.admission import DOWNLOAD_AND_RUN, HIDDEN, INJECTION, telemetry_urls
+from agentic.skills.admission import scan_text
 from agentic.skills.catalog import SkillsError, skill_digest, skill_files
 from agentic.skills.install import Record, log_record
 from agentic.skills.loader import estimate_tokens
@@ -215,15 +215,8 @@ def _instruction_only(path: Path, where: str) -> str:
         text = data.decode("utf-8").removeprefix("﻿")
     except UnicodeDecodeError:
         raise _Refused(where, "not UTF-8 text: a personal skill is instruction-only") from None
-    for number, line in enumerate(text.splitlines(), start=1):
-        if any(p.search(line) for p in DOWNLOAD_AND_RUN):
-            raise _Refused(f"{where}:{number}", "it downloads and runs code")
-        if any(p.search(line) for p in INJECTION):
-            raise _Refused(f"{where}:{number}", "it reads like a prompt injection")
-        if char := HIDDEN.search(line):
-            raise _Refused(f"{where}:{number}", f"hidden character U+{ord(char.group(0)):04X}")
-        if urls := telemetry_urls(line):
-            raise _Refused(f"{where}:{number}", f"telemetry or analytics URL: {urls[0]}")
+    for number, reason in scan_text(text)[:1]:  # the same scan as catalog admission (DF-142)
+        raise _Refused(f"{where}:{number}", reason)
     return text
 
 
@@ -234,6 +227,16 @@ def _note(root: Path, path: Path) -> MemoryNote:
     name = re.sub(r"[^a-z0-9._/-]+", "-", relative.lower()).strip("-./") or "note"
     content = text.replace("\r\n", "\n").encode("utf-8")
     return MemoryNote(name, f"sha256:{hashlib.sha256(content).hexdigest()}", text.strip())
+
+
+def _skill_text(skill: PersonalSkill) -> str:
+    return f"### Personal skill: {skill.name}\n\n{skill.body}"
+
+
+def skill_block(skills: list[PersonalSkill]) -> str:
+    """The text `skills` add to an agent's instructions, exactly as a run inlines them
+    (`agentic skills eval` measures this text); "" for none. Nothing is recorded."""
+    return "\n\n".join([HEADER, *map(_skill_text, skills)]) if skills else ""
 
 
 class PersonalContext:
@@ -299,7 +302,7 @@ class PersonalContext:
         parts = []
         for skill in wanted[:MAX_PERSONAL_SKILLS]:
             self._activated(skill.key, skill.version, skill.sha256, PERSONAL)
-            parts.append(f"### Personal skill: {skill.name}\n\n{skill.body}")
+            parts.append(_skill_text(skill))
         return parts
 
     def _memory(self) -> list[str]:
@@ -331,4 +334,5 @@ __all__ = [
     "PersonalSet",
     "PersonalSkill",
     "load_personal",
+    "skill_block",
 ]

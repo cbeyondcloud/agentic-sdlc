@@ -23,7 +23,7 @@ There is deliberately no merge operation: a person merges.
 
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 
 class HostingError(Exception):
@@ -40,6 +40,11 @@ class HostingError(Exception):
         super().__init__(message)
         self.transient = transient
         self.retry_after = retry_after
+
+
+class ListingIncomplete(HostingError):
+    """The host listed fewer of a pull request's files than it changes (a host caps its
+    listing): what was not listed cannot be checked."""
 
 
 @dataclass(frozen=True)
@@ -64,6 +69,9 @@ class PullRequest:
     head_sha: str  # the commit CI checks
     state: str = "open"
     body: str | None = None  # its description as it is now; None when the host did not say
+    title: str = ""
+    author: str = ""  # the host's login of whoever opened it
+    merged: bool = False  # closed by merging (only a single read says so reliably)
 
 
 @dataclass(frozen=True)
@@ -90,6 +98,36 @@ class HostingProvider(Protocol):
     def update_pull_request(self, repo: RepoRef, number: int, *, body: str) -> PullRequest: ...
 
     def checks(self, repo: RepoRef, sha: str) -> list[CheckRun]: ...
+
+
+@runtime_checkable
+class ReviewHost(Protocol):
+    """Reading and reviewing pull requests (M2-46: skill submissions). Separate from
+    `HostingProvider`, so publishing a run needs none of it. Still no merge: a person
+    merges, through the host's own branch protection and code owners."""
+
+    def list_pull_requests(self, repo: RepoRef, *, head_prefix: str = "") -> list[PullRequest]: ...
+
+    def get_pull_request(self, repo: RepoRef, number: int) -> PullRequest: ...
+
+    def pull_request_files(self, repo: RepoRef, number: int) -> list[str]:
+        """Every path the pull request touches - a renamed file's old path as well as its
+        new one. ListingIncomplete when the host lists fewer files than it changes."""
+        ...
+
+    def file_at(self, repo: RepoRef, path: str, ref: str) -> bytes | None:
+        """The bytes of the file `path` at commit `ref`; None when no file is there."""
+        ...
+
+    def common_ancestor(self, repo: RepoRef, base: str, head: str) -> str:
+        """The commit a pull request from `head` into `base` is compared with."""
+        ...
+
+    def review_pull_request(
+        self, repo: RepoRef, number: int, *, approve: bool, body: str, commit: str | None = None
+    ) -> None:
+        """Approve or request changes; with `commit`, the review is of that commit."""
+        ...
 
 
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://(.*)$", re.DOTALL)

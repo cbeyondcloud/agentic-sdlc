@@ -109,6 +109,9 @@ class TeamPolicy(_Strict):
     limits_max: dict[str, RoleLimits] = {}  # keyed by agent TYPE (D35)
     deny: DenyRules = DenyRules()
     skill_packs: list[str] = []  # opt-in skill packs from the org catalog (spec §11.2)
+    # agent-CLI plugins from the org catalog, for steps on a backend that loads plugins
+    # (never the native loop; M2-47, D28)
+    backend_plugins: list[str] = []
 
 
 #: Read-denied in every sandbox, whatever policy adds: where credentials live (D38).
@@ -434,6 +437,18 @@ class ToolPin(_Strict):
         return self
 
 
+class SkillLimits(_Strict):
+    """Org-wide skill admission limits (`limits.yaml` `skills:`); None keeps the
+    framework's default for that limit."""
+
+    max_skill_tokens: int | None = Field(default=None, ge=1)  # SKILL.md, estimated
+    max_total_bytes: int | None = Field(default=None, ge=1)  # the whole skill folder
+    max_catalog_tokens: int | None = Field(default=None, ge=1)  # one catalog line
+
+    def given(self) -> dict[str, int]:
+        return {name: value for name, value in self.model_dump().items() if value is not None}
+
+
 class OrgPolicy(_Strict):
     # --- models ---
     tiers: dict[str, TierSpec]
@@ -456,6 +471,11 @@ class OrgPolicy(_Strict):
     blocked_licences: list[str] = []
     licence_scan: bool = False
     retention_days: dict[str, int] = {}  # placeholder until OR-01
+    # licences a catalogued skill may carry, and the admission size limits: what the
+    # policy-repo gate admits skills under; a catalog may only narrow them (DF-143, DF-367).
+    # None / unset: the framework's own list and limits
+    skill_licences: list[str] | None = None
+    skill_limits: SkillLimits = SkillLimits()
 
     # --- teams ---
     teams: dict[str, TeamPolicy] = {}

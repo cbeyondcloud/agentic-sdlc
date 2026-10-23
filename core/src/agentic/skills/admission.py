@@ -22,13 +22,16 @@ The LLM scan, the human review of scripts and the A/B promotion gate (M1-63) are
 separate steps; this module is the static part.
 """
 
+import bisect
 import re
+import unicodedata
 from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
 from agentic.skills.catalog import (
     DEFAULT_LICENCES,
+    PLUGINS,
     AdmissionLimits,
     Catalog,
     CatalogError,
@@ -49,23 +52,47 @@ SCRIPT_SUFFIXES = frozenset(
 LICENCE_FILE = re.compile(r"^(LICEN[CS]E|COPYING)(\.(txt|md))?$", re.IGNORECASE)
 SPDX_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*$")
 
+_FETCH = r"(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)"
+_SHELL = r"(ba|z|da|k)?sh"
+#: What runs the text it is given: a shell or a script interpreter, maybe path-qualified
+#: (`/bin/sh`) and behind `sudo [-flags]` or `env` (review F6).
+_RUNNER = (
+    r"(sudo\s+(-\S+\s+)*)?(env\s+)?([\w.~-]*/)*"
+    rf"({_SHELL}|pwsh|powershell|python[0-9.]*|py|node|perl|ruby|php)(\.exe)?\b"
+)
+#: The pipes between a download and what runs it: a `tee` copy on the way is no excuse.
+_TO_RUNNER = rf"[^\n|]*(\|\s*tee\b[^\n|]*)*\|\s*{_RUNNER}"
+_SUBSTITUTED_FETCH = rf"[\"']?(\$\(|`)\s*{_FETCH}\b"
 DOWNLOAD_AND_RUN = [
-    re.compile(
-        r"\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^\n|]*\|\s*"
-        r"(sudo\s+)?(ba|z|da|k)?sh\b",
-        re.IGNORECASE,
-    ),
+    re.compile(rf"\b{_FETCH}\b{_TO_RUNNER}", re.IGNORECASE),
     re.compile(r"\|\s*(iex|Invoke-Expression)\b", re.IGNORECASE),
-    re.compile(r"\bbase64\s+(-d|--decode)\b[^\n|]*\|\s*(sudo\s+)?(ba|z)?sh\b"),
+    re.compile(rf"\bbase64\s+(-d|--decode)\b{_TO_RUNNER}"),
+    # process and command substitution (DF-142): `bash <(curl ...)`, `sh -c "$(curl ...)"`,
+    # `eval "$(curl ...)"`
+    re.compile(rf"(\b{_RUNNER}|\bsource|(^|\s)\.)\s+<\(\s*{_FETCH}\b", re.IGNORECASE),
+    re.compile(rf"\b{_RUNNER}\s+-c\s+{_SUBSTITUTED_FETCH}", re.IGNORECASE),
+    re.compile(rf"\beval\s+{_SUBSTITUTED_FETCH}", re.IGNORECASE),
 ]
 INJECTION = [
     re.compile(r"\bignore\s+(all\s+)?(the\s+)?(previous|prior|above)\s+instructions\b", re.I),
     re.compile(r"\bdisregard\s+(all\s+)?(your|previous|prior|the\s+above)\s+instructions\b", re.I),
+    re.compile(
+        r"\b(ignore|disregard)\s+(all\s+)?(of\s+)?(the|your)\s+instructions\s+above\b", re.I
+    ),
     re.compile(r"\bdo\s+not\s+(tell|inform)\s+the\s+user\b", re.I),
+    re.compile(
+        r"\bforget\s+(everything|all(\s+of)?(\s+the)?)\s+(above|before|prior|previous)\b", re.I
+    ),
+    # a role header hidden in an HTML comment, which a rendered page never shows (DF-142)
+    re.compile(r"<!--\s*(system|assistant|developer)\s*:", re.I),
 ]
-HIDDEN = re.compile(
-    r"[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f]"
-)
+#: Hidden characters besides Unicode's format (Cf) and control (Cc) categories: the
+#: variation-selector supplement, which can smuggle bytes past a reader (DF-142).
+_SMUGGLING = re.compile(r"[\U000e0100-\U000e01ef]")
+_ASCII_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_VISIBLE_CONTROLS = frozenset("\t\n\r")
+#: format, control, and the Unicode line and paragraph separators (only LF ends a line)
+_HIDDEN_CATEGORIES = frozenset({"Cf", "Cc", "Zl", "Zp"})
 
 BOM = chr(0xFEFF)
 URL = re.compile(r"https?://[^\s<>()\[\]\"'`]+", re.IGNORECASE)
@@ -110,6 +137,84 @@ def telemetry_urls(text: str) -> list[str]:
         elif TELEMETRY_WORDS.search(host_and_path.split("?", 1)[0]):
             found.append(url)
     return found
+
+
+def hidden_char(text: str) -> str | None:
+    """The first hidden character in `text`: a format (Cf: bidi controls, zero-width,
+    tag characters, the soft hyphen) or control (Cc) character other than tab, LF and
+    CR, or a supplementary variation selector. None when there is none."""
+    if text.isascii():
+        found = _ASCII_CONTROL.search(text)
+        return found.group(0) if found else None
+    for char in text:
+        if char in _VISIBLE_CONTROLS:
+            continue
+        if unicodedata.category(char) in _HIDDEN_CATEGORIES or _SMUGGLING.match(char):
+            return char
+    return None
+
+
+def scan_text(text: str) -> list[tuple[int, str]]:
+    """Every (line number, reason) the static scan finds in one file's text.
+
+    The scan is a tripwire for careless or lazy payloads, not a proof of safety (an LLM
+    scan and a person's review are the later steps, spec §11.3):
+
+      * download-and-run commands (a fetch piped, through any `tee`, into a shell or a
+        script interpreter; or substituted into `sh -c`, `eval` or `<(...)`), matched
+        on logical lines - a line ending with `\\`, a PowerShell backtick or a pipe
+        continues on the next, and is reported where it starts;
+      * prompt-injection phrases, matched on the whole text with every run of white
+        space read as one space, so a phrase split across lines is still found;
+      * hidden characters (`hidden_char`) and telemetry or analytics URLs, per line.
+
+    Only LF ends a line (a CR before it is dropped), as the secret scan counts lines: a
+    form feed or a Unicode line separator stays in its line and is reported as hidden."""
+    lines = [line.removesuffix("\r") for line in text.split("\n")]
+    found: list[tuple[int, str]] = []
+    for number, line in _logical_lines(lines):
+        if any(p.search(line) for p in DOWNLOAD_AND_RUN):
+            found.append((number, "downloads and runs code"))
+    words = [(m.group(0), n) for n, line in enumerate(lines, 1) for m in re.finditer(r"\S+", line)]
+    flat, starts = "", []
+    for word, _ in words:
+        starts.append(len(flat))
+        flat += word + " "
+    for pattern in INJECTION:
+        for match in pattern.finditer(flat):
+            index = bisect.bisect_right(starts, match.start()) - 1
+            found.append((words[max(index, 0)][1], "reads like a prompt injection"))
+    for number, line in enumerate(lines, start=1):
+        if char := hidden_char(line):
+            why = (
+                f"hidden character U+{ord(char):04X}: remove it or replace it with plain text "
+                "(text pasted from a word processor or a PDF often carries one)"
+            )
+            found.append((number, why))
+        for url in telemetry_urls(line):
+            found.append((number, f"telemetry or analytics URL: {url}"))
+    return sorted(dict.fromkeys(found), key=lambda item: item[0])
+
+
+def _logical_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """(first line number, text) with continued lines joined: after a `\\` or backtick,
+    and after a trailing pipe, which a shell also reads on (a Markdown table row, which
+    starts with a pipe too, is not continued)."""
+    joined: list[tuple[int, str]] = []
+    current: tuple[int, str] | None = None
+    for number, line in enumerate(lines, start=1):
+        stripped = line.rstrip()
+        escaped = stripped.endswith(("\\", "`"))
+        piped = stripped.endswith("|") and not stripped.lstrip().startswith("|")
+        continues = escaped or piped
+        part = stripped[:-1] if escaped else line
+        current = (number, part) if current is None else (current[0], f"{current[1]} {part}")
+        if not continues:
+            joined.append(current)
+            current = None
+    if current is not None:
+        joined.append(current)
+    return joined
 
 
 def admit(
@@ -172,7 +277,7 @@ def admit_catalog(
             else []
         )
         results[key] = pin + checked
-    for source in sorted(p for p in root.iterdir() if p.is_dir()):
+    for source in sorted(p for p in root.iterdir() if p.is_dir() and p.name != PLUGINS):
         for folder in sorted(p for p in source.iterdir() if p.is_dir()):
             key = f"{source.name}/{folder.name}"
             if key not in catalog.skills:
@@ -207,12 +312,21 @@ def _licence(
     return found
 
 
-def _validate(folder: Path) -> list[Rejection]:
+def skills_ref_problems(folder: Path) -> list[str] | None:
+    """`skills-ref validate`'s problems with the folder (the Agent Skills reference
+    validator), or None when skills-ref is not installed (agentic-core[skills])."""
     try:
         from skills_ref.validator import validate
     except ImportError:
+        return None
+    return list(validate(folder))
+
+
+def _validate(folder: Path) -> list[Rejection]:
+    problems = skills_ref_problems(folder)
+    if problems is None:
         return [Rejection("validate", ".", "skills-ref is not installed (agentic-core[skills])")]
-    return [Rejection("validate", "SKILL.md", problem) for problem in validate(folder)]
+    return [Rejection("validate", "SKILL.md", problem) for problem in problems]
 
 
 def _size(folder: Path, limits: AdmissionLimits) -> list[Rejection]:
@@ -260,19 +374,8 @@ def _scan(folder: Path, entry: SkillEntry) -> list[Rejection]:
             )
         if text is None:
             continue
-        text = text.removeprefix(BOM)
-        for number, line in enumerate(text.splitlines(), start=1):
-            where = f"{relative}:{number}"
-            if any(p.search(line) for p in DOWNLOAD_AND_RUN):
-                found.append(Rejection("scan", where, "downloads and runs code"))
-            if any(p.search(line) for p in INJECTION):
-                found.append(Rejection("scan", where, "reads like a prompt injection"))
-            if char := HIDDEN.search(line):
-                found.append(
-                    Rejection("scan", where, f"hidden character U+{ord(char.group(0)):04X}")
-                )
-            for url in telemetry_urls(line):
-                found.append(Rejection("scan", where, f"telemetry or analytics URL: {url}"))
+        for number, reason in scan_text(text.removeprefix(BOM)):
+            found.append(Rejection("scan", f"{relative}:{number}", reason))
     return found
 
 
@@ -285,4 +388,13 @@ def _front_matter(folder: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-__all__ = ["CatalogError", "Rejection", "admit", "admit_catalog", "telemetry_urls"]
+__all__ = [
+    "CatalogError",
+    "Rejection",
+    "admit",
+    "admit_catalog",
+    "hidden_char",
+    "scan_text",
+    "skills_ref_problems",
+    "telemetry_urls",
+]

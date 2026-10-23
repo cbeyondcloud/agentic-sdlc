@@ -156,6 +156,18 @@ def connect(
             ExitCode.REFUSED,
             hint=f"the pull request needs a {remote} remote on a hosting service",
         ) from error
+    return connect_to(repo, settings, remote=remote, credentials=credentials)
+
+
+def connect_to(
+    repo: RepoRef,
+    settings: Mapping[str, Any],
+    *,
+    remote: str = "",
+    credentials: Credentials | None = None,
+) -> Connection:
+    """The provider for `repo` itself, with no checkout (`agentic skills status` reads a
+    submission's pull request from its record). Refused as `connect` refuses."""
     configs = host_configs(settings)
     config = configs.get(repo.host)
     if config is None:

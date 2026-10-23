@@ -1,0 +1,49 @@
+# Settings for the whole organisation.
+
+# The repositories agents may work on, as host/owner/name globs. EDIT: your git host
+# and organisation. A repo outside every pattern is refused by `agentic init`.
+allowed_repo_patterns: ["git.example.com/your-org/*"]
+
+# D33: pipelines come only from this repo (pipelines/ and teams/<team>/pipelines/),
+# changed by pull requests the code owners approve. Repo-level pipelines are ignored.
+allow_repo_pipelines: false
+
+# Where `agentic init` fetches pinned tools from (tool-pins.yaml); an internal mirror.
+# tool_mirror_url: https://artifacts.example.com/agentic-tools/
+
+# The lowest CLI version that may register runs with the control plane.
+# min_cli_version: "1.0.0"
+
+# OS sandbox for agent commands (D38). Runs in these regimes refuse to start without
+# one; the library pipelines run in the `team` regime. On Windows the sandbox needs
+# WSL2 (`agentic init` says what to install).
+sandbox:
+  required_for: [team, regulated]
+  allowed_domains:                      # package registries a sandboxed command may reach
+    - pypi.org                          # EDIT: your internal mirrors instead, if any
+    - files.pythonhosted.org
+    - registry.npmjs.org
+    - repo.maven.apache.org
+  allow_write: []                       # writable besides the run's tree, e.g. "~/.cache/uv"
+  # environment variables agent commands keep although their name looks secret, e.g. an
+  # authenticated proxy or the SSH agent socket (never AGENTIC_*)
+  pass_env: []
+
+# A secret found in content about to leave for a model: refuse the call (block) or
+# replace the secret with a marker (mask). Either way it is recorded.
+secret_scan:
+  action: block
+
+# What is published (pull request bodies, tracker comments) is scanned too: personal
+# data is masked by default.
+publish_scan:
+  action: mask
+
+# When a backend cannot honour a resolved setting: ignore | warn | block.
+unhonoured: { temperature: warn, effort: warn }
+
+# The diff-size budget per review batch (a Developer step whose change is larger is
+# asked to split it). 40 files and 1500 lines are the ceiling; a limit may only tighten.
+review_batch:
+  max_files: 40
+  max_lines: 1500

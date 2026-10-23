@@ -103,6 +103,16 @@ CALIBRATION_KEY = "calibration-key.json"  # beside the report, never in calibrat
 
 
 @dataclass(frozen=True)
+class SkillVariant:
+    """A personal skill to evaluate (`agentic skills eval`, M2-46): its name, content hash
+    and the exact text a run adds to the agent's instructions (`skill_block`)."""
+
+    name: str
+    sha256: str
+    block: str
+
+
+@dataclass(frozen=True)
 class RunOptions:
     agent: str
     corpus: Path | None = None
@@ -119,6 +129,8 @@ class RunOptions:
     max_concurrency: int = 1
     classification: str | None = None  # for cases that name none (default: the org's)
     tag: str | None = None  # only cases carrying this tag (CI: `fixture`, the cassette subset)
+    # with a skill: every case runs without and with it, blind as X/Y (`skills eval`)
+    skill: SkillVariant | None = None
 
 
 @dataclass(frozen=True)
@@ -297,16 +309,28 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
     if any(c.inputs.workspace for c in cases):  # dev tasks: tools on a copy, tests after
         prepare, resolved, workspace_notes = _workspaces(resolved, folder, options.mode, policy)
         notes += workspace_notes
-    runner = AgentCaseRunner(
-        resolved,
-        model_for,
-        schema=BUILTIN_CATALOG.schema(kind),
-        state_root=folder / "state",
-        budget=money,
-        clock=None if options.mode == "live" else (lambda: FIXTURE_TIME),
-        corpus_root=root,
-        prepare=prepare,
-    )
+
+    def case_runner(agent: ResolvedAgent) -> AgentCaseRunner:
+        return AgentCaseRunner(
+            agent,
+            model_for,
+            schema=BUILTIN_CATALOG.schema(kind),
+            state_root=folder / "state",
+            budget=money,
+            clock=None if options.mode == "live" else (lambda: FIXTURE_TIME),
+            corpus_root=root,
+            prepare=prepare,
+        )
+
+    if options.skill is None:
+        labels = assign_labels([agent_id], seed=options.seed)
+        runners = {"X": case_runner(resolved)}
+    else:  # without and with the skill, blind as X/Y (M2-46)
+        labels = assign_labels(["without", "with"], seed=options.seed)
+        runners = {
+            labels.label("without"): case_runner(resolved),
+            labels.label("with"): case_runner(with_skill(resolved, options.skill)),
+        }
     evaluators = [
         ObjectiveMetrics(),
         RubricMetric(judge_for=judge_for, scrubber=scrubber, reference=reference),
@@ -318,11 +342,16 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
         try:
             if server is not None:
                 server.start()
-                server.expect(f"{c.id}/X/{r}/agent" for c in cases for r in range(repeats))
+                server.expect(
+                    f"{c.id}/{label}/{r}/agent"
+                    for c in cases
+                    for r in range(repeats)
+                    for label in runners
+                )
             runset = asyncio.run(
                 run_eval(
                     cases,
-                    {"X": runner},
+                    runners,
                     kind=kind,
                     repeats=repeats,
                     seed=options.seed,
@@ -345,7 +374,6 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             if r.record.status == "skipped" or r.record.error == BUDGET_STOP
         ]
         problems = server.finish(capped=capped) if server is not None else []
-        labels = assign_labels([agent_id], seed=options.seed)
         labels.seal_scores()
         judge_info = None
         if choice is not None:
@@ -444,6 +472,100 @@ def failure(result: RunResult) -> CliError | None:
             "no run could be scored", ExitCode.ERROR, hint=f"see {result.paths['markdown']}"
         )
     return None
+
+
+# ── skills eval (M2-46) ──────────────────────────────────────────────────────
+
+SKILL_EVAL_FILE = "skill-eval.json"
+
+
+def with_skill(agent: ResolvedAgent, skill: SkillVariant) -> ResolvedAgent:
+    """`agent` with the skill's text after its instructions, as a run inlines it."""
+    definition = agent.definition
+    instructions = f"{definition.instructions.rstrip()}\n\n{skill.block}"
+    return agent.model_copy(
+        update={"definition": definition.model_copy(update={"instructions": instructions})}
+    )
+
+
+def skill_comparison(report: EvalReport) -> dict:
+    """Each metric without and with the skill (and the difference), and the mean cost
+    and tokens of one run on each side - `None` where a side measured nothing."""
+    label_of = {variant: label for label, variant in report.labels.items()}
+    without, with_ = (report.aggregates.get(label_of[v], {}) for v in ("without", "with"))
+    metrics = {}
+    for name in sorted(set(without) | set(with_)):
+        before = without[name].value if name in without else None
+        after = with_[name].value if name in with_ else None
+        delta = None if before is None or after is None else round(after - before, 6)
+        metrics[name] = {"without": before, "with": after, "delta": delta}
+
+    def mean(variant: str, field_name: str) -> float | None:
+        values = [
+            getattr(run, field_name)
+            for run in report.runs
+            if run.label == label_of[variant] and getattr(run, field_name) is not None
+        ]
+        return round(fmean(values), 6) if values else None
+
+    return {
+        "metrics": metrics,
+        "cost": {v: mean(v, "cost_usd") for v in ("without", "with")},
+        "tokens_in": {v: mean(v, "tokens_in") for v in ("without", "with")},
+        "tokens_out": {v: mean(v, "tokens_out") for v in ("without", "with")},
+    }
+
+
+def write_skill_eval(result: RunResult, skill: SkillVariant) -> dict:
+    """Write `skill-eval.json` beside the report: which skill version was measured, on
+    which agent, cases and mode, and the comparison. `submit` attaches it."""
+    report = result.report
+    summary = {
+        "schema_version": 1,
+        "skill": skill.name,
+        "sha256": skill.sha256,
+        "agent": report.agent,
+        "agent_version": report.agent_version,
+        "report_id": report.report_id,
+        "created_at": report.created_at,
+        "mode": report.mode,
+        "verdict": report.verdict,
+        "cases": report.n,
+        "repeats": report.k,
+        "corpus_manifest_sha": report.corpus_manifest_sha,
+        "labels": report.labels,
+        "comparison": skill_comparison(report),
+    }
+    text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    (result.folder / SKILL_EVAL_FILE).write_bytes(text.encode("utf-8"))
+    return summary
+
+
+def skill_eval_markdown(summary: dict) -> str:
+    """The comparison as Markdown, for a person and for the submission's pull request."""
+
+    def shown(value: float | None) -> str:
+        return "-" if value is None else f"{value:.3f}"
+
+    lines = [
+        f"### Skill eval: `{summary['skill']}` on `{summary['agent']}`",
+        "",
+        f"- skill version: `{summary['sha256']}`",
+        f"- verdict: {summary['verdict']} ({summary['mode']}), {summary['cases']} cases x "
+        f"{summary['repeats']} repeats, report `{summary['report_id']}`",
+        "",
+        "| metric | without | with | change |",
+        "|---|---|---|---|",
+    ]
+    comparison = summary["comparison"]
+    for name, row in comparison["metrics"].items():
+        lines.append(
+            f"| {name} | {shown(row['without'])} | {shown(row['with'])} | {shown(row['delta'])} |"
+        )
+    for name in ("cost", "tokens_in", "tokens_out"):
+        row = comparison[name]
+        lines.append(f"| {name} per run | {shown(row['without'])} | {shown(row['with'])} | |")
+    return "\n".join(lines) + "\n"
 
 
 class EvalLedger:

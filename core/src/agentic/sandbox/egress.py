@@ -1,9 +1,9 @@
 """Which hosts a sandbox may reach (M2-42; spec §9.2, D38).
 
 Org policy names the package registries (`sandbox.allowed_domains`, checked as host names
-when the policy loads). An agent's shell commands get exactly those. A whole agent CLI
-process run under srt (claude-code, codex, opencode) also calls the model, so it gets the
-TokenLean host as well - and nothing else: every other host is refused by srt's proxy.
+when the policy loads). An agent's shell commands get exactly those. A whole agent-CLI
+process run under srt (any backend with `own_process`) also calls the model, so it gets
+the TokenLean host as well - and nothing else: every other host is refused by srt's proxy.
 """
 
 import ipaddress

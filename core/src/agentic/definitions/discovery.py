@@ -91,7 +91,8 @@ class DefinitionSet:
                 agent_files[agent.name] = path
             for path in _files(root / "handoffs", ".yaml"):
                 extensions.append(load_extension(path, layer))
-            for path in _files(root / "pipelines", ".yaml"):
+            # pipelines/overlays/: per-repo overlays (D33, loaded by M2-23), not pipelines
+            for path in _files(root / "pipelines", ".yaml", folders=("overlays",)):
                 if layer == "repo" and not allow_repo_pipelines:
                     found.warnings.append(
                         f"ignored repo pipeline {path.name}: pipelines are managed in the "
@@ -147,8 +148,9 @@ def _unknown_kinds(agent: AgentDefinition, catalog: "HandoffCatalog") -> list[st
     ]
 
 
-def _files(folder: Path, suffix: str) -> list[Path]:
-    """Every visible file in `folder`, which must all end in `suffix`.
+def _files(folder: Path, suffix: str, folders: tuple[str, ...] = ()) -> list[Path]:
+    """Every visible file in `folder`, which must all end in `suffix`; the subfolders
+    named in `folders` are someone else's and skipped.
 
     A wrong extension (reviewer.yml instead of reviewer.md, ship.yml instead of
     ship.yaml) or a stray file is an error: silently skipping it would hide a
@@ -156,7 +158,11 @@ def _files(folder: Path, suffix: str) -> list[Path]:
     """
     if not folder.is_dir():
         return []
-    entries = sorted(entry for entry in folder.iterdir() if not entry.name.startswith("."))
+    entries = sorted(
+        entry
+        for entry in folder.iterdir()
+        if not entry.name.startswith(".") and not (entry.name in folders and entry.is_dir())
+    )
     unexpected = [entry for entry in entries if not (entry.is_file() and entry.suffix == suffix)]
     if unexpected:
         names = ", ".join(entry.name for entry in unexpected)

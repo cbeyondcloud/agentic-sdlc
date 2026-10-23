@@ -18,19 +18,28 @@ commit statuses (Jenkins, many older integrations), mapped into the one vocabula
 `agentic.hosting.base`. There is no merge call: a person merges.
 """
 
+import base64
 import ipaddress
 from typing import Any
 from urllib.parse import quote
 
 import httpx2
 
-from agentic.hosting.base import CheckRun, HostingError, PullRequest, RepoRef, splice_body
+from agentic.hosting.base import (
+    CheckRun,
+    HostingError,
+    ListingIncomplete,
+    PullRequest,
+    RepoRef,
+    splice_body,
+)
 from agentic.transport.network import NetworkSettings, ssl_context
 
 GITHUB_COM = "github.com"
 GITHUB_COM_API = "https://api.github.com"
 API_VERSION = "2022-11-28"
 MAX_PAGES = 20  # 2000 checks on one commit is far past any real pipeline
+MAX_FILE_PAGES = 30  # GitHub lists at most 3000 files of a pull request
 #: commit status `state` -> (check `status`, `conclusion`)
 _STATUS_STATES = {
     "success": ("completed", "success"),
@@ -176,6 +185,103 @@ class GitHubHost:
                     )
                 )
         return runs
+
+    # ── reviews (ReviewHost, M2-46) ──────────────────────────────────────────
+
+    def list_pull_requests(self, repo: RepoRef, *, head_prefix: str = "") -> list[PullRequest]:
+        """The open pull requests whose branch starts with `head_prefix` (the newest 100)."""
+        params = {"state": "open", "per_page": "100", "sort": "created", "direction": "desc"}
+        rows = self._json("GET", f"{self._repo_path(repo)}/pulls", params=params)
+        found = []
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict) and str(row.get("head", {}).get("ref", "")).startswith(
+                head_prefix
+            ):
+                found.append(_pull_request(row))
+        return found
+
+    def get_pull_request(self, repo: RepoRef, number: int) -> PullRequest:
+        return _pull_request(self._json("GET", f"{self._repo_path(repo)}/pulls/{int(number)}"))
+
+    def pull_request_files(self, repo: RepoRef, number: int) -> list[str]:
+        """Every path the pull request touches: each file's `filename` and, for a rename,
+        its `previous_filename` (review F1). GitHub lists at most 3000 files, so a
+        listing shorter than the pull request's `changed_files` - or 30 full pages when
+        that count is missing - is ListingIncomplete, never a silent cut."""
+        pull = f"{self._repo_path(repo)}/pulls/{int(number)}"
+        data = self._json("GET", pull)
+        expected = data.get("changed_files") if isinstance(data, dict) else None
+        found: dict[str, None] = {}
+        entries = 0
+        complete = False
+        for page in range(1, MAX_FILE_PAGES + 1):
+            rows = self._json("GET", f"{pull}/files", params={"per_page": "100", "page": str(page)})
+            rows = rows if isinstance(rows, list) else []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                entries += 1
+                for key in ("previous_filename", "filename"):
+                    name = row.get(key)
+                    if isinstance(name, str) and name:
+                        found[name] = None
+            if len(rows) < 100:
+                complete = True
+                break
+        if isinstance(expected, int) and not isinstance(expected, bool):
+            complete = entries >= expected
+        if not complete:
+            raise ListingIncomplete(
+                f"GitHub API: pull request #{int(number)} changes "
+                f"{expected if expected is not None else 'more'} files and only {entries} "
+                "were listed"
+            )
+        return list(found)
+
+    def file_at(self, repo: RepoRef, path: str, ref: str) -> bytes | None:
+        """The bytes of the file `path` at commit `ref` (the contents API, base64); None
+        when nothing, a folder or a link is there."""
+        parts = path.split("/")
+        if not path or any(part in ("", ".", "..") for part in parts) or "\\" in path:
+            raise HostingError(f"GitHub API: refused to read the path {path!r}")
+        where = f"{self._repo_path(repo)}/contents/{quote(path, safe='/')}"
+        try:
+            data = self._json("GET", where, params={"ref": ref})
+        except HostingApiError as error:
+            if error.status == 404:
+                return None
+            raise
+        if not isinstance(data, dict) or data.get("type") != "file":
+            return None
+        if data.get("encoding") != "base64":  # over 1 MB the API sends no content
+            raise HostingError(f"GitHub API: {path} is too large to read through the API")
+        try:
+            return base64.b64decode(str(data.get("content") or ""))
+        except ValueError:
+            raise HostingError(f"GitHub API: the content of {path} is not base64") from None
+
+    def common_ancestor(self, repo: RepoRef, base: str, head: str) -> str:
+        """The commit GitHub compares a pull request from `head` into `base` with."""
+        where = f"{self._repo_path(repo)}/compare/{quote(base, safe='')}...{quote(head, safe='')}"
+        data = self._json("GET", where, params={"per_page": "1"})
+        sha = (data.get("merge_base_commit") or {}).get("sha") if isinstance(data, dict) else None
+        if not isinstance(sha, str) or not sha:
+            raise HostingError(f"GitHub API: no common ancestor of {base} and {head}")
+        return sha
+
+    def review_pull_request(
+        self, repo: RepoRef, number: int, *, approve: bool, body: str, commit: str | None = None
+    ) -> None:
+        """Approve, or request changes with `body` saying why; with `commit`, the review
+        is of that commit (a later push does not inherit it as checked). A host refuses
+        a review of one's own pull request; that refusal is a HostingApiError like any
+        other."""
+        event = "APPROVE" if approve else "REQUEST_CHANGES"
+        path = f"{self._repo_path(repo)}/pulls/{int(number)}/reviews"
+        payload = {"event": event, "body": body}
+        if commit:
+            payload["commit_id"] = commit
+        self._json("POST", path, json=payload)
 
     # ── HTTP ─────────────────────────────────────────────────────────────────
 
@@ -340,4 +446,7 @@ def _pull_request(data: Any) -> PullRequest:
         state=str(data.get("state") or "open"),
         # null is an empty description; no `body` key at all: not known (None)
         body=str(data["body"] or "") if "body" in data else None,
+        title=str(data.get("title") or ""),
+        author=str((data.get("user") or {}).get("login") or ""),
+        merged=bool(data.get("merged") or data.get("merged_at")),
     )
