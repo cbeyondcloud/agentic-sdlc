@@ -82,19 +82,29 @@ async def me(request: Request, ctx: Caller) -> Me:
 @router.post("/tokens", status_code=201)
 async def create_token(body: TokenRequest, request: Request, ctx: Caller) -> TokenIssued:
     """A new token for the caller in the caller's tenant (rotation). The value is in this
-    response only. `revoke_current` revokes the token that made the request."""
+    response only. `revoke_current` revokes the token that made the request. A service
+    token never mints one that outlives it: its expiry is what limits a leaked CI token."""
     state = request.app.state
+    now = state.clock()
     try:
-        lifetime = token_lifetime(state.settings, ctx.kind, body.days)
+        expires_at = now + token_lifetime(state.settings, ctx.kind, body.days)
     except TokenLifetimeError as error:
         raise ApiProblem(422, "auth.lifetime_too_long", str(error)) from None
-    now = state.clock()
+    if ctx.kind != "human" and expires_at > ctx.expires_at:
+        if body.days is not None:
+            raise ApiProblem(
+                422,
+                "auth.lifetime_too_long",
+                "a service account's token cannot outlive the token that creates it",
+                hint="an admin creates a new service account for a longer lifetime",
+            )
+        expires_at = ctx.expires_at
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         token_id, value = await issue_token(
             conn,
             user_id=ctx.user_id,
             name=body.name,
-            expires_at=now + lifetime,
+            expires_at=expires_at,
             created_by=ctx.email,
         )
         await append(
@@ -107,14 +117,14 @@ async def create_token(body: TokenRequest, request: Request, ctx: Caller) -> Tok
                 after={
                     "name": body.name,
                     "user": ctx.email,
-                    "expires_at": format_at(now + lifetime),
+                    "expires_at": format_at(expires_at),
                 },
             ),
             clock=state.clock,
         )
         if body.revoke_current and await revoke_token(conn, ctx.token_id, now=now):
             await append(conn, _revoked(ctx, ctx.token_id, "rotated"), clock=state.clock)
-    return TokenIssued(id=token_id, name=body.name, token=value, expires_at=now + lifetime)
+    return TokenIssued(id=token_id, name=body.name, token=value, expires_at=expires_at)
 
 
 @router.get("/tokens")

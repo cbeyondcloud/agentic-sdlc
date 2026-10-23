@@ -183,6 +183,20 @@ async def test_a_hand_made_grant_still_gives_a_service_account_nothing_more(api)
     assert not asked["allowed"]
 
 
+async def test_a_service_token_never_mints_a_token_that_outlives_itself(api):
+    """The required expiry means something: a leaked one-day CI token cannot be turned into
+    a year-long one through `POST /v1/tokens` (rotation keeps the lifetime)."""
+    made = (await _create(api, api.a.admin_token, {**BODY, "days": 1})).json()
+    rotated = await api.post("/v1/tokens", made["token"], {"name": "renew"})
+    assert rotated.status_code == 201, rotated.text
+    assert rotated.json()["expires_at"] == made["expires_at"]
+    longer = await api.post("/v1/tokens", made["token"], {"name": "renew", "days": 30})
+    assert longer.status_code == 422 and longer.json()["code"] == "auth.lifetime_too_long"
+    # nor through the token it just minted
+    again = await api.post("/v1/tokens", rotated.json()["token"], {"name": "again"})
+    assert again.status_code == 201 and again.json()["expires_at"] == made["expires_at"]
+
+
 async def test_a_service_account_of_one_tenant_is_unknown_in_another(api):
     made = (await _create(api, api.a.admin_token)).json()
     listed = await api.get("/v1/service-accounts", api.b.admin_token)
