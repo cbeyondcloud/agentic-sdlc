@@ -227,6 +227,16 @@ def test_a_dev_task_with_a_workspace_needs_its_solution(tmp_path: Path):
         load_corpus(tmp_path)
 
 
+def test_a_test_id_holding_space_dash_space_is_refused(tmp_path: Path):
+    """DF-390: pytest's summary separates an id from its message with ' - ', so an id
+    holding one would be read cut short and scored failed even when it passed."""
+    data = dev_task(tmp_path)
+    data["expected"]["tests"]["fail_to_pass"] = ["tests/test_slug.py::test_lower[a - b]"]
+    write(tmp_path, data, "dev_task")
+    with pytest.raises(CorpusError, match="' - '"):
+        load_corpus(tmp_path)
+
+
 def test_a_test_the_workspace_does_not_have_is_refused(tmp_path: Path):
     data = dev_task(tmp_path)
     data["expected"]["tests"]["pass_to_pass"] = ["tests/test_missing.py::test_x"]
