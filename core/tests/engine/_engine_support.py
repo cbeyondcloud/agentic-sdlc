@@ -100,8 +100,9 @@ class FakeGates:
             return False, f"changed since {gate} approved it: {', '.join(changed)}"
         return True, ""
 
-    def waiting(self, gate, step) -> None:
-        self.recorder.record("gate_waiting", step, gate=gate, hard=True)
+    def waiting(self, gate, step, *, role=None) -> None:
+        ext_ids = {"approver_role": role} if role else None
+        self.recorder.record("gate_waiting", step, ext_ids=ext_ids, gate=gate, hard=True)
 
 
 Behaviour = str | Callable[[StepContext], str]

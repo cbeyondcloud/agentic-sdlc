@@ -7,10 +7,11 @@ never appear in a repr, a log line or an error message."""
 
 from __future__ import annotations
 
+import re
 import tempfile
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from packaging.version import InvalidVersion, Version
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, SecretStr, ValidationError
@@ -44,6 +45,21 @@ def _pep440(value: str) -> str:
     except InvalidVersion:
         raise ValueError("not a PEP 440 version (for example 1.4.0)") from None
     return value
+
+
+def _http_url(value: str) -> str:
+    stripped = value.strip().rstrip("/")
+    if not re.fullmatch(r"https?://[^\s/?#]+(/[^\s?#]*)?", stripped):
+        raise ValueError("not an http(s) URL (for example https://cp.example.com)")
+    return stripped
+
+
+def checked_address(value: str) -> str:
+    """A mail address as a sender may use it, or ValueError."""
+    stripped = value.strip()
+    if not re.fullmatch(r"[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+", stripped):
+        raise ValueError("not an email address")
+    return stripped
 
 
 class Settings(BaseModel):
@@ -82,6 +98,30 @@ class Settings(BaseModel):
     rather than enforcing no minimum (review F4)."""
     run_slot_hours: Annotated[int, Field(ge=1, le=720)] = 24
     """A registered run holds a concurrency slot while open and active this recently (R8)."""
+    public_url: Annotated[str, AfterValidator(_http_url)] | None = None
+    """Where people reach this control plane (invite links, M2-18); no invite mail without."""
+    invite_hours: Annotated[int, Field(ge=1, le=336)] = 72
+    """How long an invite link works (ruling P8)."""
+    smtp_host: str | None = None
+    """The org's SMTP relay (M2-07); None: mails stay queued, nothing is sent."""
+    smtp_port: Annotated[int, Field(ge=1, le=65535)] = 587
+    smtp_security: Literal["starttls", "tls", "none"] = "starttls"
+    """`starttls` (default: never sent in clear), `tls` (implicit, port 465) or `none` (a
+    relay on the same host or cluster only)."""
+    smtp_username: str | None = None
+    smtp_password: SecretStr | None = None
+    smtp_from: Annotated[str, AfterValidator(checked_address)] | None = None
+    """The deployment's sender; a tenant's `mail_from` replaces it for that tenant."""
+    smtp_from_name: str = "agentic"
+    smtp_timeout_seconds: Annotated[int, Field(ge=1, le=300)] = 30
+    notify_max_attempts: Annotated[int, Field(ge=1, le=50)] = 8
+    """Sends of one mail before it is marked failed (ruling P2); a relay that cannot be used
+    at all does not count (review F3)."""
+    gateway_admin_url: Annotated[str, AfterValidator(_http_url)] | None = None
+    """The gateway's admin API (TokenLean `/admin/keys`, M2-17); None: no proxy keys."""
+    gateway_admin_key: SecretStr | None = None
+    gateway_url: Annotated[str, AfterValidator(_http_url)] | None = None
+    """The gateway URL people's CLIs use; handed out with a redeemed invite."""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Settings:

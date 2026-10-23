@@ -96,13 +96,15 @@ from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_age
 from agentic.telemetry.logs import StepLogs
 from agentic.telemetry.spans import finish_step_span, step_span
 from agentic.telemetry.trailers import CommitAudit, commit_message
-from agentic.transport import BudgetLedger, BudgetSlice, LimitHit
+from agentic.transport import BudgetLedger, BudgetSlice, GatewayKeyRejected, LimitHit
 from agentic.transport.budget import BudgetError
 
 _LOG = logging.getLogger("agentic.engine")
 PROMPT_HEAD = "Pipeline: {pipeline} · step: {step} · iteration: {iteration}"
 #: The pause of a run that reached its end while a newest handoff reports a failure.
 FAILING_PAUSE = "failing-handoff"
+#: The gateway refused the API key: resumable after `agentic login` (M2-17, ruling P11).
+GATEWAY_KEY_PAUSE = "gateway-key"
 #: The gate of a step whose change is still larger than one review batch (M2-24).
 BATCH_GATE = "diff-budget"
 #: A run in one of these states never runs again.
@@ -155,7 +157,10 @@ class GateLedger(Protocol):
 
     def state(self, gate: str) -> tuple[bool, str]: ...
 
-    def waiting(self, gate: str, step: str) -> None: ...
+    def waiting(self, gate: str, step: str, *, role: str | None = None) -> None:
+        """Record that the run waits at `gate`; `role` is the approver role it needs (None
+        for a pause that is not a pipeline gate)."""
+        ...
 
 
 class Clock(Protocol):
@@ -616,7 +621,8 @@ class _Run:
             step=step,
         )
         self.state.status = "awaiting_gate"
-        self.gates.waiting(gate, step)
+        gate_step = self._gate_step(gate)
+        self.gates.waiting(gate, step, role=gate_step.approver_role if gate_step else None)
         self.save()
 
     # ── decisions ────────────────────────────────────────────────────────────
@@ -1277,7 +1283,9 @@ class _Run:
                 detail=reason,
             )
             self.recorder.record("step_finished", step.id, outcome="error", cost=self._usd(cost))
-            self._pause("step-error", reason, step=step.id)
+            # a revoked gateway key: resumable once the person logs in again (M2-17)
+            pause_id = GATEWAY_KEY_PAUSE if isinstance(error, GatewayKeyRejected) else "step-error"
+            self._pause(pause_id, reason, step=step.id)
             return False
         cost = budget.total_spent()
         closing = self._close_slice(budget)
@@ -1933,6 +1941,7 @@ def _usd(amount: float | None) -> Decimal | None:
 __all__ = [
     "Clock",
     "FAILING_PAUSE",
+    "GATEWAY_KEY_PAUSE",
     "Engine",
     "EngineError",
     "GateLedger",

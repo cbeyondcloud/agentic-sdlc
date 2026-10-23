@@ -16,8 +16,10 @@ is an open run active within `run_slot_hours`)."""
 from __future__ import annotations
 
 import asyncio
+import tarfile
 from collections.abc import Iterable
 from datetime import datetime, timedelta
+from decimal import Decimal
 from uuid import UUID
 
 from packaging.version import InvalidVersion, Version
@@ -29,7 +31,11 @@ from agentic.orgapi import OrgCheck, RunPreflight, RunRegistration
 from agentic_cp.auth.tokens import TokenContext
 from agentic_cp.errors import ApiProblem
 from agentic_cp.killswitch.store import active_switches
-from agentic_cp.policy_sync.service import active_policy, settings_from_bundle
+from agentic_cp.policy_sync.service import (
+    RUN_SETTINGS_KEYS,
+    active_policy,
+    settings_from_bundle,
+)
 from agentic_cp.rbac.authz import EnforcerCache, Repo, Team, authorize
 from agentic_cp.settings import Settings
 from agentic_cp.tables import policy_versions, runs
@@ -71,24 +77,29 @@ def cli_version_problem(sent: str | None, minimum: str | None) -> str | None:
     return None
 
 
-async def _settings_of(conn: AsyncConnection, version: str) -> dict | None:
+async def version_settings(conn: AsyncConnection, version: str) -> dict | None:
     """The settings of an accepted version, or None when the tenant never accepted it. A
-    version accepted before settings were stored has `{}` (a version built since always
-    has keys): they are read from its bundle once per process (review F2)."""
+    version accepted before settings were stored has `{}`, and one stored by an older
+    release lacks a key this release reads (`team_budgets`, M2-16): they are read from its
+    bundle once per process (review F2)."""
     accepted = (policy_versions.c.version == version) & (policy_versions.c.status == "accepted")
     row = (await conn.execute(select(policy_versions.c.settings).where(accepted))).first()
     if row is None:
         return None
-    if row.settings:
-        return dict(row.settings)
+    stored = dict(row.settings or {})
+    if stored and set(RUN_SETTINGS_KEYS) <= set(stored):
+        return stored
     key = (await require_tenant_id(conn), version)
     if key not in _DERIVED:
         bundle = (await conn.execute(select(policy_versions.c.bundle).where(accepted))).scalar()
-        derived = await asyncio.to_thread(settings_from_bundle, bundle, version)
+        try:
+            derived = await asyncio.to_thread(settings_from_bundle, bundle, version)
+        except (OSError, EOFError, tarfile.TarError):  # an unreadable bundle derives nothing
+            derived = {}
         if len(_DERIVED) >= _DERIVED_MAX:
             _DERIVED.pop(next(iter(_DERIVED)))
         _DERIVED[key] = derived
-    return dict(_DERIVED[key])
+    return {**_DERIVED[key], **stored}  # what was stored wins; the bundle fills the gaps
 
 
 async def require_cli_version(
@@ -96,7 +107,7 @@ async def require_cli_version(
 ) -> str | None:
     """The minimum CLI version in force (None: none); 426 `cli.too_old` when `sent` is older."""
     active = await active_policy(conn)
-    org = (await _settings_of(conn, active.version) or {}) if active is not None else {}
+    org = (await version_settings(conn, active.version) or {}) if active is not None else {}
     minimum = minimum_version(settings.min_cli_version, org.get("min_cli_version"))
     if problem := cli_version_problem(sent, minimum):
         raise ApiProblem(426, "cli.too_old", problem, hint=UPGRADE_HINT.format(minimum=minimum))
@@ -242,7 +253,7 @@ async def register_run(
     exists = await conn.execute(select(runs.c.run_id).where(runs.c.run_id == body.run_id))
     if exists.first() is not None:
         raise ApiProblem(409, "runs.exists", f"run {body.run_id} is already registered")
-    version = await _settings_of(conn, body.policy_version)
+    version = await version_settings(conn, body.policy_version)
     policy = (
         OrgCheck(check="policy", passed=True, detail=f"{body.policy_version} is accepted")
         if version is not None
@@ -274,6 +285,7 @@ async def register_run(
                 policy_version=body.policy_version,
                 policy_known=True,
                 opened_at=now,
+                budget_usd=Decimal(body.budget_usd) if body.budget_usd else None,  # M2-16
             )
         )
     return RunPreflight(registered=registered, checks=checks, min_cli_version=minimum)

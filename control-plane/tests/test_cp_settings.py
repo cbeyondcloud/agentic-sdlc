@@ -66,3 +66,56 @@ def test_settings_error_never_echoes_a_secret_value():
     with pytest.raises(SettingsError) as caught:
         Settings.from_env(_env(AGENTIC_CP_MAX_BODY_BYTES=PASSWORD))
     assert PASSWORD not in str(caught.value)
+
+
+def test_mail_settings_default_to_starttls_and_no_relay():
+    settings = Settings.from_env(_env())
+    assert settings.smtp_host is None
+    assert settings.smtp_port == 587
+    assert settings.smtp_security == "starttls"
+    assert settings.invite_hours == 72  # ruling P8
+    assert settings.notify_max_attempts == 8
+    assert settings.public_url is None
+    assert settings.gateway_admin_url is None and settings.gateway_admin_key is None
+
+
+def test_mail_and_gateway_settings_are_read():
+    settings = Settings.from_env(
+        _env(
+            AGENTIC_CP_SMTP_HOST="relay.acme.example",
+            AGENTIC_CP_SMTP_PORT="465",
+            AGENTIC_CP_SMTP_SECURITY="tls",
+            AGENTIC_CP_SMTP_USERNAME="agentic",
+            AGENTIC_CP_SMTP_PASSWORD=PASSWORD,
+            AGENTIC_CP_SMTP_FROM="agentic@acme.example",
+            AGENTIC_CP_PUBLIC_URL="https://cp.acme.example/",
+            AGENTIC_CP_GATEWAY_ADMIN_URL="https://gateway.acme.example",
+            AGENTIC_CP_GATEWAY_ADMIN_KEY=PASSWORD,
+            AGENTIC_CP_GATEWAY_URL="https://gateway.acme.example",
+            AGENTIC_CP_INVITE_HOURS="24",
+        )
+    )
+    assert settings.smtp_security == "tls" and settings.smtp_port == 465
+    assert settings.smtp_password.get_secret_value() == PASSWORD
+    assert settings.public_url == "https://cp.acme.example"  # no trailing slash
+    assert settings.gateway_admin_key.get_secret_value() == PASSWORD
+    assert settings.invite_hours == 24
+    for text in (repr(settings), str(settings)):
+        assert PASSWORD not in text
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "field"),
+    [
+        ("AGENTIC_CP_SMTP_SECURITY", "maybe", "smtp_security"),
+        ("AGENTIC_CP_SMTP_PORT", "0", "smtp_port"),
+        ("AGENTIC_CP_INVITE_HOURS", "0", "invite_hours"),
+        ("AGENTIC_CP_INVITE_HOURS", "337", "invite_hours"),
+        ("AGENTIC_CP_PUBLIC_URL", "ftp://cp.example", "public_url"),
+        ("AGENTIC_CP_GATEWAY_ADMIN_URL", "gateway.example", "gateway_admin_url"),
+        ("AGENTIC_CP_SMTP_FROM", "not-an-address", "smtp_from"),
+    ],
+)
+def test_mail_settings_refuse_bad_values(name, value, field):
+    with pytest.raises(SettingsError, match=field):
+        Settings.from_env(_env(**{name: value}))

@@ -1,0 +1,8 @@
+<!doctype html>
+<html><body style="font-family: sans-serif; line-height: 1.4">
+<p>Run <b>$run_id</b> in team $team ($tenant_name) is waiting at gate <b>$gate</b> for
+approval by $role.</p>
+<pre style="background: #f4f4f4; padding: 8px">agentic show $run_id
+agentic approve $run_id
+agentic reject $run_id --feedback "..."</pre>
+</body></html>

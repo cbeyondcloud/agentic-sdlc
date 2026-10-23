@@ -133,7 +133,7 @@ def register(app: typer.Typer) -> None:
             _startable(rt, pipeline, given, run_id)
             engine = rt.engine(run_budget_usd=limit, regime=rt.pipeline(pipeline).regime)
             # registers the run (its concurrency slot) when the org agrees
-            org_checks(rt, pipeline, report, run_id, dry_run=False)
+            org_checks(rt, pipeline, report, run_id, dry_run=False, budget_usd=limit)
         if not report.passed or engine is None:
             out.result({"preflight": report.text()}, lambda c: c.print(report.text(), markup=False))
             raise CliError("preflight failed: nothing was started", ExitCode.INVALID)

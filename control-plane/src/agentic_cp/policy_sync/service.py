@@ -23,6 +23,7 @@ import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -337,13 +338,30 @@ def _build(git: GitRunner, workdir: Path, tenant: TenantRow, commit: str, versio
     return Built(found, teams, patterns, bundle, digest, tree, settings)
 
 
+#: Every key `run_settings` writes; a stored version lacking one is read again from its
+#: bundle (`ingest.register.version_settings`).
+RUN_SETTINGS_KEYS = (
+    "min_cli_version",
+    "concurrency",
+    "allow_repo_pipelines",
+    "pipelines",
+    "team_budgets",
+)
+
+
 def run_settings(policy: OrgPolicy, pipelines: dict[str, str]) -> dict:
-    """What run registration reads from an accepted version (M2-08, M2-21)."""
+    """What run registration (M2-08, M2-21) and budget alerts (M2-16) read from an accepted
+    version. Team budgets are decimal strings, never floats (DF-26)."""
     return {
         "min_cli_version": policy.min_cli_version,
         "concurrency": dict(policy.concurrency),
         "allow_repo_pipelines": policy.allow_repo_pipelines,
         "pipelines": pipelines,
+        "team_budgets": {
+            team: str(Decimal(str(team_policy.monthly_budget_usd)))
+            for team, team_policy in sorted(policy.teams.items())
+            if team_policy.monthly_budget_usd is not None
+        },
     }
 
 

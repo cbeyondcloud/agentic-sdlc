@@ -293,3 +293,47 @@ async def test_a_registered_run_then_ingests(api, version, tmp_path):
     made = await api.post("/v1/runs/led-1/events", api.a.admin_token, {"entries": entries})
     assert made.status_code == 200, made.text
     assert made.json()["accepted"] == len(entries)
+
+
+async def test_stored_settings_of_an_older_release_are_kept_when_the_bundle_cannot_load(api):
+    """Review: a version stored before `team_budgets` keeps its stored settings; the bundle
+    only fills in the missing key (here it cannot, being unreadable)."""
+    import uuid
+
+    from agentic_cp.ingest.register import version_settings
+
+    stored = {
+        "min_cli_version": "1.2.0",
+        "concurrency": {},
+        "allow_repo_pipelines": False,
+        "pipelines": {"pipelines/deliver.yaml": SHA},
+    }
+    commit_id = uuid.uuid4().hex + uuid.uuid4().hex[:8]
+    async with tenant_tx(api.db.owner, api.a.id) as conn:
+        await conn.execute(
+            policy_versions.insert().values(
+                tenant_id=api.a.id,
+                version=f"git:{commit_id}",
+                commit=commit_id,
+                branch="main",
+                status="accepted",
+                bundle=b"not a bundle",
+                digest="sha256:" + "0" * 64,
+                settings=stored,
+            )
+        )
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        found = await version_settings(conn, f"git:{commit_id}")
+    assert {key: found[key] for key in stored} == stored
+
+
+async def test_a_registered_run_keeps_its_budget_for_alerts(api, version):
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    await _register(api, api.a.admin_token, _body(version, "b-1", budget_usd="12.50"))
+    await _register(api, api.a.admin_token, _body(version, "b-2"))
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        found = dict((await conn.execute(select(runs.c.run_id, runs.c.budget_usd))).all())
+    assert found == {"b-1": Decimal("12.50"), "b-2": None}

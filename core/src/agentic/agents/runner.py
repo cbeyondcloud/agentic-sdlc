@@ -87,7 +87,7 @@ from agentic.policy import ResolvedAgent
 from agentic.security import SecretBlocked, SecretScanner
 from agentic.security.untrusted import DATA_NOTICE, HANDOFF_TAG, fence
 from agentic.telemetry.spans import model_instrumentation
-from agentic.transport import BudgetSlice, LimitHit
+from agentic.transport import BudgetSlice, GatewayKeyRejected, LimitHit
 
 Stopped = Literal["budget", "turns", "time", "stuck"]
 StuckCheck = Callable[[list[ModelMessage]], str | None]
@@ -340,6 +340,8 @@ class PydanticAIRunner:
             if hit is None:
                 if blocked := _found(error, SecretBlocked):
                     raise blocked from error  # the SDK wrapped it as a connection error
+                if rejected := _found(error, GatewayKeyRejected):
+                    raise rejected from error  # likewise: the engine pauses on it (M2-17)
                 raise
             return self._budget(hit, seen)
         if self.costs.limit_hit is not None and self.costs.limit_hit is not earlier_hit:

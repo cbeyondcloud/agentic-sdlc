@@ -64,6 +64,12 @@ def test_a_run_registers_with_the_org_checks_first(org, gateway, cli, policy_rep
     assert body["policy_version"].startswith(("git:", "sha256:"))
 
 
+def test_the_run_budget_is_registered_for_budget_alerts(org, gateway, cli):
+    """M2-16: the control plane alerts at 80 % and 100 % of the budget it was told."""
+    assert start(cli, "--budget", "12.5").code == ExitCode.PAUSED
+    assert org.registrations[0]["budget_usd"] == "12.5"
+
+
 @pytest.mark.parametrize("check", ["rbac", "killswitch", "policy", "pipeline", "concurrency"])
 def test_a_failing_org_check_refuses_the_run_before_any_spend(org, gateway, cli, check):
     org.failing_checks = {check: f"the {check} check says no"}

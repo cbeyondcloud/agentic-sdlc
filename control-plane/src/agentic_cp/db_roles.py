@@ -38,6 +38,7 @@ DEFINER_FUNCTIONS: dict[str, str] = {
     "active_tenant_ids": "active_tenant_ids()",
     "resolve_token": "resolve_token(bytea)",
     "resolve_webhook": "resolve_webhook(bytea)",
+    "resolve_invite": "resolve_invite(bytea)",
 }
 
 #: The columns of its own `tenants` row the runtime role may change (the `own_tenant`
@@ -56,6 +57,7 @@ TENANT_WRITABLE: tuple[str, ...] = (
 LOOKUP_POLICIES: dict[str, str] = {
     "tokens": "credential_lookup",
     "users": "credential_lookup",
+    "invites": "credential_lookup",
 }
 
 #: Evidence tables: the runtime role may only SELECT and INSERT (M2-05).

@@ -19,7 +19,7 @@ from pathlib import Path
 
 from agentic.agents.runner import ResumeError
 from agentic.definitions import DefinitionError, UnknownDefinitionError
-from agentic.engine.engine import FAILING_PAUSE, TERMINAL, EngineError
+from agentic.engine.engine import FAILING_PAUSE, GATEWAY_KEY_PAUSE, TERMINAL, EngineError
 from agentic.engine.expressions import ExpressionError
 from agentic.engine.gates import GateRefused
 from agentic.engine.state import RunState, RunStateError
@@ -187,6 +187,12 @@ def next_steps(state: RunState) -> list[str]:
         return [
             f"agentic resume {run}   (once the control plane is reachable again)",
             f"agentic stop {run} --reason ...",
+        ]
+    if pending.id == GATEWAY_KEY_PAUSE:  # the gateway refused the key (M2-17)
+        return [
+            "agentic login   (paste the new gateway key; or `agentic login --invite <link>` "
+            "from a new invite; ask your org admin if you have neither)",
+            f"agentic resume {run}",
         ]
     if pending.id == FAILING_PAUSE:  # resume would only pause again (DF-238)
         return [f"agentic show {run}", f"agentic stop {run} --reason ..."]

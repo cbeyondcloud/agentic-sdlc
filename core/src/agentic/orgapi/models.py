@@ -123,6 +123,8 @@ class Assignment(BaseModel):
     role: str
     scope: Literal["org", "team"]
     team: str | None = None
+    invited: bool = False
+    """The person was new: an invite was created (and mailed when the relay is set up)."""
 
 
 class AssignmentRequest(RequestModel):
@@ -383,6 +385,8 @@ class RunRegistration(RequestModel):
     models: list[str] = Field(default_factory=list, max_length=200)
     backends: list[str] = Field(default_factory=list, max_length=50)
     dry_run: bool = False
+    budget_usd: str | None = Field(default=None, pattern=r"^\d{1,9}(\.\d{1,6})?$")
+    """The run's budget (a decimal string): budget alerts at 80 % and 100 % (M2-16)."""
 
 
 class OrgCheck(BaseModel):
@@ -402,6 +406,162 @@ class RunPreflight(BaseModel):
     checks: list[OrgCheck]
     team_budget_remaining_usd: str | None = None
     min_cli_version: str | None = None
+
+
+#: A service account's name: lower-case letters, digits and '-' (M2-14).
+SERVICE_NAME = r"^[a-z][a-z0-9-]{1,40}$"
+
+
+class ServiceAccountRequest(RequestModel):
+    """`POST /v1/service-accounts`: a team-scoped account that may only trigger runs. Its
+    token expires after `days` (required, at most 365: owner decision 75)."""
+
+    name: str = Field(pattern=SERVICE_NAME)
+    team: str = Field(pattern=TEAM_SLUG)
+    days: int = Field(ge=1, le=365)
+
+
+class ServiceAccountIssued(BaseModel):
+    """The one response that carries the service account's token."""
+
+    id: UUID
+    email: str
+    team: str
+    token: str = Field(repr=False)
+    token_id: UUID
+    expires_at: datetime
+
+
+class ServiceAccountInfo(BaseModel):
+    id: UUID
+    email: str
+    team: str
+    status: str
+    created_at: datetime
+
+
+class RoleImportRequest(RequestModel):
+    """`POST /v1/rbac/import`: role assignments as CSV text (`email,role,team,handle`).
+    A dry run (the default) only reports what applying would do."""
+
+    csv: str = Field(max_length=2_000_000)
+    dry_run: bool = True
+
+
+class ImportRow(BaseModel):
+    """One CSV row's outcome: `add`, `unchanged` or `error` (with `error` saying why).
+    `line` is the row's first line in the file (1 is the header)."""
+
+    line: int
+    email: str = ""
+    role: str = ""
+    team: str | None = None
+    handle: str | None = None
+    action: Literal["add", "unchanged", "error"]
+    error: str | None = None
+
+
+class RoleImportResult(BaseModel):
+    applied: bool
+    added: int
+    unchanged: int
+    errors: int
+    rows: list[ImportRow]
+
+
+class InviteInfo(BaseModel):
+    """An invite without its token (only the invitee's mail carries the link)."""
+
+    id: UUID
+    email: str
+    expires_at: datetime
+    mailed: bool
+
+
+#: Invite tokens start with this (opaque; only their sha256 is stored).
+INVITE_PREFIX = "aci_"
+
+
+class InviteRedeem(RequestModel):
+    """`POST /v1/invites/redeem`: the token from the invite link (its `#` fragment)."""
+
+    token: str = Field(min_length=10, max_length=200, repr=False)
+
+
+class InviteRedeemed(BaseModel):
+    """What a redeemed invite gives, once: a control-plane token and, when the deployment
+    issues them, a gateway proxy key."""
+
+    tenant: TenantRef
+    email: str
+    control_plane_url: str | None = None
+    control_plane_token: str = Field(repr=False)
+    token_expires_at: datetime
+    gateway_url: str | None = None
+    gateway_key: str | None = Field(default=None, repr=False)
+    gateway_key_id: str | None = None
+    notice: str | None = None
+
+
+class OffboardRequest(RequestModel):
+    """`POST /v1/users/{email}/offboard`: why (recorded in the audit chain)."""
+
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class OffboardResult(BaseModel):
+    email: str
+    tokens_revoked: int
+    invites_revoked: int
+    proxy_keys_revoked: list[str]
+    proxy_keys_pending: list[str]
+    kill_switch: UUID | None = None
+
+
+class ProxyKeyIssued(BaseModel):
+    """A new gateway proxy key, in this response only."""
+
+    key: str = Field(repr=False)
+    key_id: str
+    gateway_url: str | None = None
+
+
+class ProxyKeysRevoked(BaseModel):
+    email: str
+    revoked: list[str]
+    pending: list[str]
+
+
+class NotificationInfo(BaseModel):
+    """A queued, sent or failed mail (never its body)."""
+
+    id: UUID
+    kind: str
+    recipient: str
+    subject: str
+    status: Literal["pending", "sent", "failed"]
+    attempts: int
+    next_attempt_at: datetime
+    last_error: str | None = None
+    created_at: datetime
+    sent_at: datetime | None = None
+
+
+def invite_url(public_url: str, token: str) -> str:
+    """The link an invite mail carries: the token in the fragment, which no server and no
+    log ever sees, and which a mail scanner opening the link cannot consume (ruling P8)."""
+    return f"{public_url.rstrip('/')}/invite#{token}"
+
+
+def parse_invite(link: str) -> tuple[str | None, str]:
+    """(control-plane base URL or None, token) from an invite link or a bare token."""
+    text = link.strip()
+    if "#" not in text:
+        return None, text
+    base, token = text.split("#", 1)
+    base = base.rstrip("/")
+    base = base.removesuffix("/invite").rstrip("/")
+    return base or None, token.strip()
 
 
 class Problem(BaseModel):

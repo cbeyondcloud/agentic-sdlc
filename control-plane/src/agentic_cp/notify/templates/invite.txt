@@ -1,0 +1,12 @@
+Hello $email,
+
+$inviter added you to $tenant_name's agentic workspace as $role$team_phrase.
+
+To set up, install the agentic CLI and run:
+
+    agentic login --invite "$link"
+
+The link works once and expires on $expires_at (UTC). It gives you your control-plane
+token and your model gateway key; both go straight into your system's keychain.
+
+If you did not expect this mail, ignore it: nothing happens until the link is used.

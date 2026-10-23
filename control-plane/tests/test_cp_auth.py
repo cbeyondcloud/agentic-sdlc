@@ -66,8 +66,11 @@ async def test_user_and_service_token_lifetimes(api):
     assert too_long.status_code == 422
     assert too_long.json()["code"] == "auth.lifetime_too_long"
     _, service = await api.add_user(api.a, "ci-bot@example.test", kind="service")
+    # a service token (30 days here) never mints one that outlives it
+    same = await api.post("/v1/tokens", service, {"name": "ci", "days": 30})
+    assert same.status_code == 201
     year = await api.post("/v1/tokens", service, {"name": "ci", "days": 365})
-    assert year.status_code == 201
+    assert year.status_code == 422
     longer = await api.post("/v1/tokens", service, {"name": "ci", "days": 366})
     assert longer.status_code == 422
     assert longer.json()["code"] == "auth.lifetime_too_long"

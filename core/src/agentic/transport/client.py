@@ -28,6 +28,7 @@ import hashlib
 import re
 import secrets
 from collections.abc import Iterable
+from typing import Literal
 
 import httpx2
 from opentelemetry.propagate import inject
@@ -74,6 +75,84 @@ class ForeignHostError(ValueError):
     """A request to a host other than TokenLean's."""
 
 
+class GatewayKeyRejected(Exception):
+    """The gateway refused the API key (HTTP 401): revoked, rotated or expired (M2-17).
+    Raised by the model clients, so a run can pause with what to do instead of failing
+    with a raw HTTP error."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "the model gateway refused your key (HTTP 401): it was revoked, rotated or has "
+            "expired - run `agentic login` with a new key (or `agentic login --invite <link>` "
+            "from a new invite)"
+        )
+
+
+class _KeyCheck(httpx2.AsyncBaseTransport):
+    """Turns the gateway's 401 into `GatewayKeyRejected` (after the response is read and
+    closed, so metering has released what it held)."""
+
+    def __init__(self, inner: httpx2.AsyncBaseTransport) -> None:
+        self.inner = inner
+
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
+        response = await self.inner.handle_async_request(request)
+        if response.status_code == 401:
+            await response.aclose()
+            raise GatewayKeyRejected()
+        return response
+
+    async def aclose(self) -> None:
+        await self.inner.aclose()
+
+
+class _SyncKeyCheck(httpx2.BaseTransport):
+    """`_KeyCheck` for the synchronous client."""
+
+    def __init__(self, inner: httpx2.BaseTransport) -> None:
+        self.inner = inner
+
+    def handle_request(self, request: httpx2.Request) -> httpx2.Response:
+        response = self.inner.handle_request(request)
+        if response.status_code == 401:
+            response.close()
+            raise GatewayKeyRejected()
+        return response
+
+    def close(self) -> None:
+        self.inner.close()
+
+
+def verify_gateway_key(
+    base_url: str,
+    api_key: str,
+    *,
+    network: NetworkSettings | None = None,
+    transport: httpx2.BaseTransport | None = None,
+    timeout: float = 10.0,
+) -> Literal["accepted", "rejected", "unknown"]:
+    """Ask the gateway whether it accepts `api_key` (`GET <base>/v1/models`, which needs a
+    valid key and costs nothing): `rejected` on 401/403, `unknown` when the gateway cannot
+    be reached or answers anything else (DF-182)."""
+    options: dict = {"timeout": timeout, "follow_redirects": False}
+    if transport is not None:
+        options["transport"] = transport
+    else:
+        settings = network or NetworkSettings()
+        options["verify"] = ssl_context(settings)
+        options["trust_env"] = settings.trust_env
+    try:
+        with httpx2.Client(**options) as client:
+            response = client.get(
+                f"{base_url.rstrip('/')}/v1/models", headers={"Authorization": f"Bearer {api_key}"}
+            )
+    except httpx2.HTTPError:
+        return "unknown"
+    if response.status_code in (401, 403):
+        return "rejected"
+    return "accepted" if response.is_success else "unknown"
+
+
 def make_client(
     base_url: str,
     identity: CallIdentity,
@@ -89,7 +168,7 @@ def make_client(
     body is secret-scanned first (`scanner`, default: block, default detectors)."""
     stamp = _stamper(base_url, identity, _allowed(allow))
     inner = _transport or make_sync_network_transport(network)
-    transport = SyncScanningTransport(inner, scanner or SecretScanner())
+    transport = SyncScanningTransport(_SyncKeyCheck(inner), scanner or SecretScanner())
     return httpx2.Client(
         base_url=base_url,
         headers=_auth(api_key),
@@ -119,7 +198,7 @@ def make_async_client(
         stamp(request)
 
     inner = _transport or make_network_transport(network)
-    transport = ScanningTransport(inner, scanner or SecretScanner())
+    transport = ScanningTransport(_KeyCheck(inner), scanner or SecretScanner())
     return httpx2.AsyncClient(
         base_url=base_url,
         headers=_auth(api_key),

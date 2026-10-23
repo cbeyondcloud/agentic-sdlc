@@ -74,7 +74,13 @@ async def ingest(run_id: str, body: IngestRequest, request: Request, ctx: Caller
     try:
         async with tenant_tx(state.engine, ctx.tenant_id) as conn:
             return await ingest_batch(
-                conn, ctx, run_id, body.entries, cache=state.enforcers, clock=state.clock
+                conn,
+                ctx,
+                run_id,
+                body.entries,
+                cache=state.enforcers,
+                clock=state.clock,
+                alerts=state.alert_sinks,
             )
     except ApiProblem as problem:
         if problem.code in AUDITED and not isinstance(problem, Unaudited):

@@ -33,6 +33,9 @@ class RoleSpec:
 
 ORG_ADMIN = "org-admin"
 REPO_MAINTAINER = "repo-maintainer"
+SERVICE_ACCOUNT = "service-account"
+#: All a service principal may ever do, whatever the tables say (spec §12.3, M2-14).
+SERVICE_PERMISSIONS = frozenset({"run.trigger"})
 
 DEFAULT_ROLES: tuple[RoleSpec, ...] = (
     RoleSpec(ORG_ADMIN, tuple(PERMISSIONS)),
@@ -110,7 +113,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
         ),
     ),
     RoleSpec("exec-viewer", ("dashboard.view.org",)),
-    RoleSpec("service-account", ("run.trigger",)),
+    RoleSpec(SERVICE_ACCOUNT, tuple(sorted(SERVICE_PERMISSIONS))),
 )
 
 BUILTIN = {spec.name: spec for spec in DEFAULT_ROLES}

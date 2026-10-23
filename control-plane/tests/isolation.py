@@ -302,6 +302,46 @@ async def _kill_switch_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, 
     }
 
 
+@register("notifications")
+async def _notification_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    n = next(_sequence)
+    return {
+        "tenant_id": tenant_id,
+        "id": uuid.uuid4(),
+        "kind": "invite",
+        "recipient": f"user-{n}@example.test",
+        "subject": "subject",
+        "body_text": "text",
+        "body_html": "<p>html</p>",
+        "dedupe_key": f"test:{n}",
+    }
+
+
+@register("invites")
+async def _invite_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    return {
+        "tenant_id": tenant_id,
+        "id": uuid.uuid4(),
+        "user_id": user["id"],
+        "token_sha256": uuid.uuid4().bytes + uuid.uuid4().bytes,
+        "created_by": "system:test",
+        "expires_at": datetime.now(UTC) + timedelta(hours=72),
+    }
+
+
+@register("proxy_keys")
+async def _proxy_key_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    return {
+        "tenant_id": tenant_id,
+        "key_id": uuid.uuid4().hex[:16],
+        "user_id": user["id"],
+        "team": "payments",
+        "created_by": "system:test",
+    }
+
+
 # ── endpoint cases ────────────────────────────────────────────────────────────
 
 
@@ -414,7 +454,58 @@ async def _switch_in_b(api) -> dict[str, str]:
     return {"id": made.json()["id"], "reason": made.json()["reason"]}
 
 
+async def _notification_in_b(api) -> dict[str, str]:
+    """A mail queued in tenant b only (to an address only b's users table holds)."""
+    from agentic_cp.notify.outbox import enqueue
+    from agentic_cp.notify.templates import render
+    from agentic_cp.tenancy.context import tenant_tx
+
+    recipient = f"b-only-{next(_sequence)}@b.example.test"
+    rendered = render(
+        "gate.waiting",
+        {"run_id": "r", "team": "payments", "gate": "g", "role": "x"},
+        tenant_name="B",
+    )
+    async with tenant_tx(api.db.app, api.b.id) as conn:
+        made = await enqueue(
+            conn,
+            kind="gate.waiting",
+            recipient=recipient,
+            rendered=rendered,
+            dedupe_key=recipient,
+            actor="system:test",
+            clock=api.clock,
+        )
+    return {"id": str(made), "recipient": recipient}
+
+
+async def _service_account_in_b(api) -> dict[str, str]:
+    name = f"bonly{next(_sequence)}"
+    made = await api.post(
+        "/v1/service-accounts", api.b.admin_token, {"name": name, "team": "payments", "days": 5}
+    )
+    assert made.status_code == 201, made.text
+    return {"id": made.json()["id"], "email": made.json()["email"]}
+
+
 ENDPOINT_CASES += [
+    EndpointCase(
+        "service-accounts",
+        "GET",
+        "/v1/service-accounts",
+        _service_account_in_b,
+        must_not_list=True,
+    ),
+    EndpointCase("notify", "GET", "/v1/notifications", _notification_in_b, must_not_list=True),
+    EndpointCase("proxy-keys", "DELETE", "/v1/users/{email}/proxy-keys", _user_in_b),
+    EndpointCase("provisioning", "POST", "/v1/users/{email}/invite", _user_in_b),
+    EndpointCase(
+        "provisioning",
+        "POST",
+        "/v1/users/{email}/offboard",
+        _user_in_b,
+        body={"reason": "left the company"},
+    ),
     EndpointCase("killswitch", "DELETE", "/v1/killswitch/{id}", _switch_in_b),
     EndpointCase("killswitch", "GET", "/v1/killswitch", _switch_in_b, must_not_list=True),
     EndpointCase(

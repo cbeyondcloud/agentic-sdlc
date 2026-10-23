@@ -33,6 +33,8 @@ class TenantRow:
     gateway_tenant: str | None
     rbac_revision: int
     created_at: datetime
+    mail_from: str | None = None
+    mail_from_name: str | None = None
 
     def __repr__(self) -> str:  # the webhook hash is not for logs
         return f"TenantRow(id={self.id}, slug={self.slug!r}, status={self.status!r})"

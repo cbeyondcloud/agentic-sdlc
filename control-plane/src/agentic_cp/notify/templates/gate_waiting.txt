@@ -1,0 +1,5 @@
+Run $run_id in team $team ($tenant_name) is waiting at gate $gate for approval by $role.
+
+See it:      agentic show $run_id
+Approve it:  agentic approve $run_id
+Or:          agentic reject $run_id --feedback "..."

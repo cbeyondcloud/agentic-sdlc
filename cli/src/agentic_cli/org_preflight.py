@@ -16,6 +16,7 @@ mode without a control plane runs with a warning that the checks were skipped.""
 from __future__ import annotations
 
 import hashlib
+from decimal import Decimal
 from pathlib import Path
 
 from agentic.engine.preflight import PreflightReport, Problem
@@ -28,7 +29,15 @@ SKIPPED = (
 )
 
 
-def org_checks(rt, name: str, report: PreflightReport, run_id: str, *, dry_run: bool):
+def org_checks(
+    rt,
+    name: str,
+    report: PreflightReport,
+    run_id: str,
+    *,
+    dry_run: bool,
+    budget_usd: Decimal | None = None,
+):
     """Add the org checks' problems to `report`; returns the control plane's answer, or None
     when there was none. `ControlPlaneRefused` for an old CLI (426) propagates (exit 2)."""
     ws = rt.ws
@@ -48,7 +57,7 @@ def org_checks(rt, name: str, report: PreflightReport, run_id: str, *, dry_run: 
             Problem(None, "org", "an org run needs a team: set team in ~/.agentic/config.yaml")
         )
         return None
-    body = registration(rt, name, report, run_id, dry_run=dry_run)
+    body = registration(rt, name, report, run_id, dry_run=dry_run, budget_usd=budget_usd)
     try:
         with client:
             answer: RunPreflight = client.register_run(body)
@@ -73,7 +82,15 @@ def org_checks(rt, name: str, report: PreflightReport, run_id: str, *, dry_run: 
     return answer
 
 
-def registration(rt, name: str, report: PreflightReport, run_id: str, *, dry_run: bool) -> dict:
+def registration(
+    rt,
+    name: str,
+    report: PreflightReport,
+    run_id: str,
+    *,
+    dry_run: bool,
+    budget_usd: Decimal | None = None,
+) -> dict:
     ws = rt.ws
     definitions = ws.definitions()
     path = definitions.pipeline_file(name)
@@ -87,7 +104,7 @@ def registration(rt, name: str, report: PreflightReport, run_id: str, *, dry_run
             except ValueError:
                 pipeline_file = None
     agents = sorted(report.resolved.values(), key=lambda a: a.definition.name)
-    return {
+    body = {
         "run_id": run_id,
         "team": ws.team,
         "repo": rt.repo_key(),
@@ -100,6 +117,9 @@ def registration(rt, name: str, report: PreflightReport, run_id: str, *, dry_run
         "backends": sorted({a.backend for a in agents}),
         "dry_run": dry_run,
     }
+    if budget_usd is not None:  # budget alerts at 80 % and 100 % (M2-16)
+        body["budget_usd"] = format(budget_usd.quantize(Decimal("0.000001")).normalize(), "f")
+    return body
 
 
 def plan_section(answer: RunPreflight | None) -> dict | None:

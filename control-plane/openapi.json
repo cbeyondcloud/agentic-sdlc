@@ -64,6 +64,11 @@
             "title": "Id",
             "type": "string"
           },
+          "invited": {
+            "default": false,
+            "title": "Invited",
+            "type": "boolean"
+          },
           "role": {
             "title": "Role",
             "type": "string"
@@ -511,6 +516,73 @@
         "title": "HandlesUpdate",
         "type": "object"
       },
+      "ImportRow": {
+        "description": "One CSV row's outcome: `add`, `unchanged` or `error` (with `error` saying why).\n`line` is the row's first line in the file (1 is the header).",
+        "properties": {
+          "action": {
+            "enum": [
+              "add",
+              "unchanged",
+              "error"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "email": {
+            "default": "",
+            "title": "Email",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handle"
+          },
+          "line": {
+            "title": "Line",
+            "type": "integer"
+          },
+          "role": {
+            "default": "",
+            "title": "Role",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "required": [
+          "line",
+          "action"
+        ],
+        "title": "ImportRow",
+        "type": "object"
+      },
       "IngestRequest": {
         "additionalProperties": false,
         "description": "`POST /v1/runs/{run_id}/events`: run ledger entries exactly as chained (Zyroflo's\nformat), in order; the server caps the count (`max_ingest_entries`).",
@@ -553,6 +625,138 @@
           "head"
         ],
         "title": "IngestResult",
+        "type": "object"
+      },
+      "InviteInfo": {
+        "description": "An invite without its token (only the invitee's mail carries the link).",
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mailed": {
+            "title": "Mailed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "expires_at",
+          "mailed"
+        ],
+        "title": "InviteInfo",
+        "type": "object"
+      },
+      "InviteRedeem": {
+        "additionalProperties": false,
+        "description": "`POST /v1/invites/redeem`: the token from the invite link (its `#` fragment).",
+        "properties": {
+          "token": {
+            "maxLength": 200,
+            "minLength": 10,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "InviteRedeem",
+        "type": "object"
+      },
+      "InviteRedeemed": {
+        "description": "What a redeemed invite gives, once: a control-plane token and, when the deployment\nissues them, a gateway proxy key.",
+        "properties": {
+          "control_plane_token": {
+            "title": "Control Plane Token",
+            "type": "string"
+          },
+          "control_plane_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Control Plane Url"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "gateway_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Key"
+          },
+          "gateway_key_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Key Id"
+          },
+          "gateway_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Url"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
+          "tenant": {
+            "$ref": "#/components/schemas/TenantRef"
+          },
+          "token_expires_at": {
+            "format": "date-time",
+            "title": "Token Expires At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant",
+          "email",
+          "control_plane_token",
+          "token_expires_at"
+        ],
+        "title": "InviteRedeemed",
         "type": "object"
       },
       "KillState": {
@@ -781,6 +985,154 @@
         "title": "Me",
         "type": "object"
       },
+      "NotificationInfo": {
+        "description": "A queued, sent or failed mail (never its body).",
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "next_attempt_at": {
+            "format": "date-time",
+            "title": "Next Attempt At",
+            "type": "string"
+          },
+          "recipient": {
+            "title": "Recipient",
+            "type": "string"
+          },
+          "sent_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent At"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "sent",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "recipient",
+          "subject",
+          "status",
+          "attempts",
+          "next_attempt_at",
+          "created_at"
+        ],
+        "title": "NotificationInfo",
+        "type": "object"
+      },
+      "OffboardRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/users/{email}/offboard`: why (recorded in the audit chain).",
+        "properties": {
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "OffboardRequest",
+        "type": "object"
+      },
+      "OffboardResult": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "invites_revoked": {
+            "title": "Invites Revoked",
+            "type": "integer"
+          },
+          "kill_switch": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kill Switch"
+          },
+          "proxy_keys_pending": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Proxy Keys Pending",
+            "type": "array"
+          },
+          "proxy_keys_revoked": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Proxy Keys Revoked",
+            "type": "array"
+          },
+          "tokens_revoked": {
+            "title": "Tokens Revoked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "email",
+          "tokens_revoked",
+          "invites_revoked",
+          "proxy_keys_revoked",
+          "proxy_keys_pending"
+        ],
+        "title": "OffboardResult",
+        "type": "object"
+      },
       "OrgCheck": {
         "description": "One org check: `check` is rbac, killswitch, policy, pipeline, concurrency or budget.",
         "properties": {
@@ -999,6 +1351,65 @@
         "title": "Problem",
         "type": "object"
       },
+      "ProxyKeyIssued": {
+        "description": "A new gateway proxy key, in this response only.",
+        "properties": {
+          "gateway_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Url"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "key_id": {
+            "title": "Key Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "key_id"
+        ],
+        "title": "ProxyKeyIssued",
+        "type": "object"
+      },
+      "ProxyKeysRevoked": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "pending": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pending",
+            "type": "array"
+          },
+          "revoked": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Revoked",
+            "type": "array"
+          }
+        },
+        "required": [
+          "email",
+          "revoked",
+          "pending"
+        ],
+        "title": "ProxyKeysRevoked",
+        "type": "object"
+      },
       "Readiness": {
         "properties": {
           "db_enforced": {
@@ -1146,6 +1557,63 @@
         "title": "RepoRegistration",
         "type": "object"
       },
+      "RoleImportRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/rbac/import`: role assignments as CSV text (`email,role,team,handle`).\nA dry run (the default) only reports what applying would do.",
+        "properties": {
+          "csv": {
+            "maxLength": 2000000,
+            "title": "Csv",
+            "type": "string"
+          },
+          "dry_run": {
+            "default": true,
+            "title": "Dry Run",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "csv"
+        ],
+        "title": "RoleImportRequest",
+        "type": "object"
+      },
+      "RoleImportResult": {
+        "properties": {
+          "added": {
+            "title": "Added",
+            "type": "integer"
+          },
+          "applied": {
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "errors": {
+            "title": "Errors",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ImportRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "applied",
+          "added",
+          "unchanged",
+          "errors",
+          "rows"
+        ],
+        "title": "RoleImportResult",
+        "type": "object"
+      },
       "RoleInfo": {
         "properties": {
           "builtin": {
@@ -1263,6 +1731,18 @@
             "maxItems": 50,
             "title": "Backends",
             "type": "array"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{1,9}(\\.\\d{1,6})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
           },
           "dry_run": {
             "default": false,
@@ -1405,6 +1885,112 @@
           "opened_at"
         ],
         "title": "RunSummary",
+        "type": "object"
+      },
+      "ServiceAccountInfo": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "team",
+          "status",
+          "created_at"
+        ],
+        "title": "ServiceAccountInfo",
+        "type": "object"
+      },
+      "ServiceAccountIssued": {
+        "description": "The one response that carries the service account's token.",
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "token_id": {
+            "format": "uuid",
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "team",
+          "token",
+          "token_id",
+          "expires_at"
+        ],
+        "title": "ServiceAccountIssued",
+        "type": "object"
+      },
+      "ServiceAccountRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/service-accounts`: a team-scoped account that may only trigger runs. Its\ntoken expires after `days` (required, at most 365: owner decision 75).",
+        "properties": {
+          "days": {
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Days",
+            "type": "integer"
+          },
+          "name": {
+            "pattern": "^[a-z][a-z0-9-]{1,40}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "team": {
+            "pattern": "^[a-z][a-z0-9-]{0,62}$",
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "team",
+          "days"
+        ],
+        "title": "ServiceAccountRequest",
         "type": "object"
       },
       "SyncOutcome": {
@@ -1866,6 +2452,49 @@
         ]
       }
     },
+    "/v1/invites/redeem": {
+      "post": {
+        "description": "Use an invite once: a control-plane token for the invite's tenant and, when this\ndeployment issues them, a gateway key bound to the tenant, the person and their team.\nBoth are in this response only.",
+        "operationId": "redeem_v1_invites_redeem_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteRedeem"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteRedeemed"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "summary": "Redeem",
+        "tags": [
+          "provisioning"
+        ]
+      }
+    },
     "/v1/killswitch": {
       "get": {
         "description": "The switches the caller may clear: every switch for `killswitch.global`, else the\nones limited to a team where the caller holds `killswitch.team`.",
@@ -2157,6 +2786,83 @@
         ]
       }
     },
+    "/v1/notifications": {
+      "get": {
+        "description": "The newest mails first (org `audit.read.org`).",
+        "operationId": "list_notifications_v1_notifications_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pending",
+                    "sent",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationInfo"
+                  },
+                  "title": "Response List Notifications V1 Notifications Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Notifications",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
     "/v1/policy/active": {
       "get": {
         "description": "The tenant's active policy version and where to download its bundle.",
@@ -2390,6 +3096,44 @@
         ]
       }
     },
+    "/v1/proxy-keys/rotate": {
+      "post": {
+        "description": "Replace the caller's newest gateway key: the old one stops working at once (within\nthe gateway's key refresh), the new one is in this response only. A key whose\nrevocation is pending is never rotated back to life; a new key that cannot be recorded\nis revoked again, so the gateway never holds a key the control plane does not know.",
+        "operationId": "rotate_own_key_v1_proxy_keys_rotate_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyKeyIssued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Own Key",
+        "tags": [
+          "proxy-keys"
+        ]
+      }
+    },
     "/v1/rbac/assignments": {
       "get": {
         "description": "Assignments in the tenant (org `rbac.assign`), or in one team (`rbac.assign.team`).",
@@ -2600,6 +3344,54 @@
           }
         ],
         "summary": "Check",
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/v1/rbac/import": {
+      "post": {
+        "description": "Org admins import any row; team leads rows of their own team (each row is checked\nlike a single assignment).",
+        "operationId": "import_roles_v1_rbac_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleImportResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Import Roles",
         "tags": [
           "rbac"
         ]
@@ -3189,6 +3981,113 @@
         ]
       }
     },
+    "/v1/service-accounts": {
+      "get": {
+        "description": "The tenant's service accounts (org `rbac.assign`), or one team's (its team lead).",
+        "operationId": "list_service_accounts_v1_service_accounts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 63,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ServiceAccountInfo"
+                  },
+                  "title": "Response List Service Accounts V1 Service Accounts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Service Accounts",
+        "tags": [
+          "service-accounts"
+        ]
+      },
+      "post": {
+        "description": "A new service account in `team` and its token (shown in this response only).",
+        "operationId": "create_service_account_v1_service_accounts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAccountIssued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Service Account",
+        "tags": [
+          "service-accounts"
+        ]
+      }
+    },
     "/v1/tenant": {
       "get": {
         "description": "The caller's tenant: its name and policy source (never a credential).",
@@ -3355,7 +4254,7 @@
         ]
       },
       "post": {
-        "description": "A new token for the caller in the caller's tenant (rotation). The value is in this\nresponse only. `revoke_current` revokes the token that made the request.",
+        "description": "A new token for the caller in the caller's tenant (rotation). The value is in this\nresponse only. `revoke_current` revokes the token that made the request. A service\ntoken never mints one that outlives it: its expiry is what limits a leaked CI token.",
         "operationId": "create_token_v1_tokens_post",
         "requestBody": {
           "content": {
@@ -3500,6 +4399,163 @@
         "summary": "Put Handles",
         "tags": [
           "repos"
+        ]
+      }
+    },
+    "/v1/users/{email}/invite": {
+      "post": {
+        "description": "Send a person a new invite (their earlier unused ones stop working).",
+        "operationId": "reinvite_v1_users__email__invite_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email",
+            "required": true,
+            "schema": {
+              "title": "Email",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reinvite",
+        "tags": [
+          "provisioning"
+        ]
+      }
+    },
+    "/v1/users/{email}/offboard": {
+      "post": {
+        "description": "End a person's access in one step (org `rbac.assign`, ruling P10): disabled (their\nroles stop counting), every control-plane token and unused invite revoked, a `user:`\nkill switch stopping their running work, and their gateway keys revoked - a key the\ngateway cannot revoke now is pending and the worker finishes it.",
+        "operationId": "offboard_v1_users__email__offboard_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email",
+            "required": true,
+            "schema": {
+              "title": "Email",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OffboardRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OffboardResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Offboard",
+        "tags": [
+          "provisioning"
+        ]
+      }
+    },
+    "/v1/users/{email}/proxy-keys": {
+      "delete": {
+        "description": "Revoke every gateway key of a person (org `rbac.assign`). A key the gateway cannot\nrevoke now is `pending`; the worker finishes it. The keys are marked first and the\ngateway called after that commit, holding no tenant lock (review F2).",
+        "operationId": "revoke_keys_v1_users__email__proxy_keys_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email",
+            "required": true,
+            "schema": {
+              "title": "Email",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyKeysRevoked"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Keys",
+        "tags": [
+          "proxy-keys"
         ]
       }
     }

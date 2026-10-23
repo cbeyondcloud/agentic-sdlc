@@ -15,19 +15,26 @@ from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from agentic_cp.alerts.sinks import default_sinks
 from agentic_cp.audit.api import router as audit_router
 from agentic_cp.auth.api import router as auth_router
+from agentic_cp.auth.service_accounts import router as service_accounts_router
 from agentic_cp.body_limit import BodyLimit
 from agentic_cp.db import current_revision, head_revision, make_engine
 from agentic_cp.db_roles import AUDIT, TENANCY, enforcement_status
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, install_problem_handlers, log
 from agentic_cp.gitops import GitRunner
 from agentic_cp.ingest.api import router as runs_router
+from agentic_cp.keys.api import router as keys_router
+from agentic_cp.keys.gateway import gateway_keys_for
 from agentic_cp.killswitch.api import router as killswitch_router
 from agentic_cp.logredact import install_log_redaction
+from agentic_cp.notify.api import router as notify_router
 from agentic_cp.policy_sync.api import router as policy_router
+from agentic_cp.provisioning.api import router as provisioning_router
 from agentic_cp.rbac.api import router as rbac_router
 from agentic_cp.rbac.authz import EnforcerCache
+from agentic_cp.rbac.import_api import router as rbac_import_router
 from agentic_cp.rbac.repos_api import router as repos_router
 from agentic_cp.settings import Settings
 from agentic_cp.tenancy.api import router as tenant_router
@@ -46,6 +53,8 @@ def create_app(
     clock: Clock | None = None,
     git: object | None = None,
     rate_limiter: object | None = None,
+    gateway_keys: object | None = None,
+    alert_webhook: object | None = None,
 ) -> FastAPI:
     """The control-plane app. An `engine` passed in stays the caller's to dispose; one the
     app makes (lazily connecting, so health works without a database) it disposes at
@@ -73,18 +82,29 @@ def create_app(
     app.state.clock = clock or utc_now
     app.state.git = git if git is not None else GitRunner(settings)
     app.state.rate_limiter = rate_limiter
+    # the gateway's key admin API (M2-17); tests pass a fake
+    app.state.gateway_keys = (
+        gateway_keys if gateway_keys is not None else gateway_keys_for(settings)
+    )
+    # where budget alerts go (M2-16): the mail outbox and the webhook seam
+    app.state.alert_sinks = default_sinks(alert_webhook)
     app.state.enforcers = EnforcerCache(settings.enforcer_cache_tenants)
     install_problem_handlers(app)
     install_log_redaction()  # the webhook token travels in the path (review F2)
     app.add_middleware(BodyLimit, max_bytes=settings.max_body_bytes)
     app.include_router(auth_router)
     app.include_router(rbac_router)
+    app.include_router(rbac_import_router)
     app.include_router(audit_router)
     app.include_router(tenant_router)
     app.include_router(policy_router)
     app.include_router(repos_router)
     app.include_router(runs_router)
     app.include_router(killswitch_router)
+    app.include_router(notify_router)
+    app.include_router(service_accounts_router)
+    app.include_router(keys_router)
+    app.include_router(provisioning_router)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:
