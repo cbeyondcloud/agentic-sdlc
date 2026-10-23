@@ -105,6 +105,37 @@ def test_finish_commits_each_step_on_the_run_branch(repo):
     ]
 
 
+def test_changed_lists_what_a_step_wrote_since_its_base(estate):  # M2-60, DF-443
+    checkpoints = open_run(estate)
+    root = checkpoints.prepare()
+    checkpoints.begin(fresh=True)
+    (root / "api" / "app.py").write_text("x = 2\n", encoding="utf-8")  # changed
+    (root / "lib" / ".github" / "workflows").mkdir(parents=True)
+    (root / "lib" / ".github" / "workflows" / "ci.yml").write_text("on: push\n", "utf-8")
+    (root / "lib" / "app.py").unlink()  # deleted
+    (root / "api" / ".venv").mkdir()
+    (root / "api" / ".venv" / "ignored.txt").write_text("x", encoding="utf-8")  # git ignores it
+    (root / "api" / "with space.txt").write_text("x", encoding="utf-8")
+
+    changed = sorted(checkpoints.changed())
+
+    assert changed == sorted(
+        [
+            root / "api" / "app.py",
+            root / "api" / "with space.txt",
+            root / "lib" / ".github" / "workflows" / "ci.yml",
+            root / "lib" / "app.py",
+        ]
+    )
+
+
+def test_nothing_changed_lists_nothing(repo):
+    checkpoints = open_run(repo)
+    checkpoints.prepare()
+    checkpoints.begin(fresh=True)
+    assert checkpoints.changed() == []
+
+
 def test_finish_leaves_test_run_caches_out_of_the_checkpoint(repo):  # M1-68 finding
     """Running the tests in the tree writes bytecode and tool caches; a repository with no
     .gitignore for them must not get them committed on the run branch (and in its PR)."""

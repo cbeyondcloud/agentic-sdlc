@@ -193,6 +193,20 @@ class StepCheckpoints:
             heads[name] = _git(path, "rev-parse", "HEAD")
         return heads
 
+    def changed(self) -> list[Path]:
+        """Every path a step changed since its trees' HEAD, in every component: tracked
+        files changed, added or deleted (staged or not) and untracked files git does not
+        ignore - what `finish` would commit (M2-60: the post-step protected-path check of
+        an agent CLI's writes)."""
+        found: dict[Path, None] = {}
+        for path in self._trees().values():
+            tracked = _git(path, "diff", "--name-only", "--no-renames", "-z", "HEAD", "--")
+            untracked = _git(path, "ls-files", "-z", "--others", "--exclude-standard")
+            for name in f"{tracked}\0{untracked}".split("\0"):
+                if name:
+                    found[path / name] = None
+        return list(found)
+
     def rollback(self, to: Mapping[str, str]) -> None:
         """Put each named component back at `to[component]`, a commit of the run's own
         branch; uncommitted work is discarded."""
