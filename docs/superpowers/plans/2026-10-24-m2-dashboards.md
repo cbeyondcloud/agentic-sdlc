@@ -9,7 +9,7 @@
 - **Tenancy for Grafana (ruling T1).** Each tenant gets one Grafana reader role, registered in the new column `tenants.dashboard_role` by `python -m agentic_cp db dashboard-role --tenant S --role R`. The command creates or aligns the login role (no inherit, no grants but `SELECT` on the `dash_*` views and `USAGE` on the schema), sets its role default `app.tenant_id` to the tenant, and appends `dashboard.reader_bound` to the tenant's audit chain. The views run with their owner's rights (not `security_invoker`), so the reader never touches a table. Forced RLS still filters every framework table by `app.tenant_id`. `dash_scope` adds the binding: a session sees its `app.tenant_id` tenant only if it is that tenant's registered reader, or a role that may already `SELECT` the tenant tables directly (runtime, owner). A reader that runs `SET app.tenant_id = <other tenant>` therefore gets no rows. Gateway rows are filtered by the tenant's `gateway_tenant`; a tenant without one sees no gateway rows.
 - **Views (`agentic_cp.dashboards.views`, created by migration `m2_37_usage_views`):** `usage_source`, `gateway_audit_source` (contracts); `dash_scope`; `dash_calls` (one row per gateway call with tag columns, `run_key`/`step_key`/`agent_key` that read `unattributed` when the tag is missing); `dash_step_runs` (one row per finished step execution: agent, outcome, reported cost, duration); `dash_runs`; `dash_run_cost`, `dash_step_cost`, `dash_agent_cost`, `dash_team_cost` (gateway cost next to the cost the engine reported, and their difference); `dash_gates`; `dash_agent_quality`; `dash_limit_events`; `dash_gateway_safety`; `dash_audit`; `dash_repos`. Every `dash_*` view has `tenant_id` first and joins `dash_scope`.
 - **Dashboards (`agentic_cp.dashboards.catalog`):** the seven dashboards as Python data, rendered to Grafana JSON in `agentic_cp/dashboards/grafana/*.json` (package data). `python -m agentic_cp dashboards --write|--check` keeps the committed JSON equal to the catalog, like `openapi --check`. Every panel reads the datasource uid `agentic-postgres`: in a multi-tenant deployment each tenant's Grafana organisation provisions that uid with its own reader role, so the JSON is the same for everyone.
-- **Local org stack (`deploy/org-local/`):** `docker-compose.yml` (project `agentic-org`): `cp-postgres` (the pinned Postgres image; first-start init creates the owner role, the database, `postgres_fdw` and the parameter grant), `cp-init` (one-shot: migrate, grant runtime, create tenant `local`, link usage, bind the reader, write Grafana's datasource file), `control-plane` (`serve`), `grafana` (official image, provisioning only). TokenLean LITE is started by TokenLean's own `deploy/lite/local/up.sh --mock` / `up.ps1 -Mock` from `TOKENLEAN_DIR` (read-only use; ruling S1), and our services join its network `tokenlean-lite_default`. `up`, `down`, `smoke` in bash and PowerShell; `CONTAINER_ENGINE=docker|podman`.
+- **Local org stack (`deploy/org-local/`):** `docker-compose.yml` (project `agentic-org`): `cp-postgres` (the pinned Postgres image; first-start init creates the owner role, the database, `postgres_fdw` and the parameter grant), `cp-init` (one-shot: migrate, grant runtime, create tenant `local`, link usage, bind the reader), `control-plane` (`serve`), `grafana` (official image, provisioning only; its datasource files read host, reader and password from the container environment). Smoke ends with one tagged mock call through the gateway that must appear in `dash_calls` queried through Grafana's datasource. TokenLean LITE is started by TokenLean's own `deploy/lite/local/up.sh --mock` / `up.ps1 -Mock` from `TOKENLEAN_DIR` (read-only use; ruling S1), and our services join its network `tokenlean-lite_default`. `up`, `down`, `smoke` in bash and PowerShell; `CONTAINER_ENGINE=docker|podman`.
 
 **Tech Stack:** Python 3.12, SQLAlchemy Core + Alembic + asyncpg (existing), Postgres 17 `postgres_fdw` (PostgreSQL licence, in the official image), Grafana `grafana/grafana:13.2.3` official image (AGPL-3.0, run unmodified as a separate service; ruling G1), compose v2. No new Python dependency.
 
@@ -23,7 +23,7 @@
 | Dashboards | Grafana official image, run unmodified; dashboards are our JSON | grafanalib 0.7.1 (Apache-2.0): a dependency for ~35 panels, and it trails Grafana's schema; grafana-foundation-sdk: generated, large, Go-first |
 | Metric doctrines | Zyroflo `sdlc/dashboard.py` + `_content/sdlc_templates/grafana`: "unmeasured is NULL, never 0", "what cannot be attributed is a row", panels for human wait at gates, loop-backs, decisions by approver | Zyroflo's files themselves: a SQLite datasource over one repo's `audit.db`, and the control plane may not import Zyroflo |
 | TokenLean LITE stack | TokenLean's own `deploy/lite/local` scripts and compose, started as documented | Copying or including its compose: duplicates its secret and key-file preparation, which only its `up` does |
-| Gateway dashboards | TokenLean's `dashboard/dashboards/*.json` (LITE set), mounted read-only from `TOKENLEAN_DIR` | — |
+| Gateway dashboards | TokenLean's `dashboard/dashboards/*.json` (LITE set: live, requests, billing, latency-breakup, sla, trust-safety, trends, quarterly), copied by `up` into the git-ignored `.state/` (a `:z` mount would relabel files in TokenLean's checkout) | Their Prometheus panels: no Prometheus in the local stack (deferred) |
 | Smoke | curl / `Invoke-WebRequest` | — |
 
 ## Global Constraints
@@ -55,7 +55,7 @@
 **Files:**
 - Create: `control-plane/src/agentic_cp/dashboards/__init__.py`, `control-plane/src/agentic_cp/dashboards/views.py`, `control-plane/src/agentic_cp/migrations/versions/m2_37_usage_views.py`
 - Modify: `control-plane/src/agentic_cp/tables.py` (`tenants.dashboard_role`)
-- Test: `control-plane/tests/test_dash_views.py`, seed helpers `control-plane/tests/dash_seed.py`
+- Test: `control-plane/tests/dashboards/test_dash_views.py`, seed helpers `control-plane/tests/dashboards/dash_seed.py`
 
 **Interfaces:**
 - `USAGE_COLUMNS: tuple[tuple[str, str, str], ...]` (name, SQL type, expression over TokenLean's `usage_events u`); `GATEWAY_AUDIT_COLUMNS` likewise.
@@ -64,7 +64,7 @@
 - Migration `m2_37_usage_views` (down `0010`): add `tenants.dashboard_role text unique`, create every view.
 
 - [ ] **Step 1: Failing tests:** `test_views_exist_after_migrate`, `test_placeholder_sources_are_empty`, `test_runtime_and_owner_see_their_tenant_in_scope`, `test_step_runs_read_cost_and_agent` (seeded run events), `test_bad_cost_value_is_null_not_an_error`.
-- [ ] **Step 2: Run** `uv run pytest control-plane/tests/test_dash_views.py -q`. Expected: FAIL (no module `agentic_cp.dashboards`).
+- [ ] **Step 2: Run** `uv run pytest control-plane/tests/dashboards/test_dash_views.py -q`. Expected: FAIL (no module `agentic_cp.dashboards`).
 - [ ] **Step 3: Implement.** **Step 4: Run.** Expected: PASS, and `test_cp_migrations.py` (metadata match, downgrade to base) still PASS.
 - [ ] **Step 5: Commit.** `feat(cp): usage contract views and tenant-scoped dashboard views (M2-37)`
 
@@ -73,7 +73,7 @@
 **Files:**
 - Create: `control-plane/src/agentic_cp/dashboards/link.py`
 - Modify: `control-plane/src/agentic_cp/__main__.py`
-- Test: `control-plane/tests/test_dash_link.py`
+- Test: `control-plane/tests/dashboards/test_dash_link.py`
 
 **Interfaces:**
 - `@dataclass(frozen=True) GatewayDb(host, port, dbname, user, password: SecretStr, remote_schema="public")`.
@@ -90,7 +90,7 @@
 **Files:**
 - Create: `control-plane/src/agentic_cp/dashboards/readers.py`
 - Modify: `control-plane/src/agentic_cp/__main__.py`
-- Test: `control-plane/tests/test_dash_isolation.py`
+- Test: `control-plane/tests/dashboards/test_dash_isolation.py`
 
 **Interfaces:**
 - `async bind_reader(owner_conn, schema, tenant, role, password: str | None, *, clock) -> None`: refuses the runtime or owner role name, a name bound to another tenant, and a views owner that is a superuser or has BYPASSRLS; creates or alters the role (`LOGIN NOINHERIT`), revokes its memberships and table rights, grants `USAGE` on the schema and `SELECT` on every `dash_*` view, sets `app.tenant_id` and `search_path` as role defaults, stores `tenants.dashboard_role`, audits `dashboard.reader_bound`. Needs `GRANT SET ON PARAMETER app.tenant_id TO <owner>` once (a DBA step; the error says so).
@@ -103,8 +103,8 @@
 ### Task 4: Reconciliation on a seeded database (M2-37, RF2, RF3)
 
 **Files:**
-- Modify: `control-plane/tests/dash_seed.py` (two tenants, runs, step and gate events, audit records, repos, kill switches; a TokenLean database with `usage_events` and `audit_events` on the same server, linked with `link_usage`; tenant b has its own `gateway_tenant`)
-- Test: `control-plane/tests/test_dash_reconcile.py`
+- Modify: `control-plane/tests/dashboards/dash_seed.py` (two tenants, runs, step and gate events, audit records, repos, kill switches; a TokenLean database with `usage_events` and `audit_events` on the same server, linked with `link_usage`; tenant b has its own `gateway_tenant`)
+- Test: `control-plane/tests/dashboards/test_dash_reconcile.py`
 
 - [ ] **Step 1: Failing tests:** `test_cost_reconciles_per_dimension` (run, step, agent, team; Decimal equality with the gateway total and with each seeded per-run/per-step sum), `test_unattributed_line_holds_untagged_calls`, `test_unmeasured_values_are_null`, `test_reported_and_gateway_cost_side_by_side` (DF-438), `test_team_is_the_authenticated_team_not_the_tag`, `test_other_gateway_tenant_never_counted`.
 - [ ] **Step 2-4:** run, fix views, run.
@@ -115,7 +115,7 @@
 **Files:**
 - Create: `control-plane/src/agentic_cp/dashboards/catalog.py`, `control-plane/src/agentic_cp/dashboards/grafana/{org,team,run-explorer,agent-quality,limits-safety,audit-explorer,adoption}.json`
 - Modify: `control-plane/src/agentic_cp/__main__.py` (`dashboards --write|--check`)
-- Test: `control-plane/tests/test_dash_catalog.py`
+- Test: `control-plane/tests/dashboards/test_dash_catalog.py`
 
 **Interfaces:**
 - `Panel(title, kind: "stat"|"timeseries"|"table"|"barchart", sql, unit=None, w=12, h=8)`, `Variable(name, label, sql, multi=True)`, `Dashboard(uid, title, description, panels, variables=(), time_from="now-30d")`.
@@ -130,8 +130,8 @@
 ### Task 6: Provisioning test (M2-38, RF5)
 
 **Files:**
-- Create: `deploy/org-local/grafana/provisioning/dashboards/agentic.yaml` (providers `agentic` and `gateway`), `deploy/org-local/grafana/provisioning/datasources/gateway.yaml` (TokenLean's `app-postgres` uid for its LITE set)
-- Test: `control-plane/tests/test_dash_provisioning.py`, helper `control-plane/tests/grafana_macros.py`
+- Create: `deploy/org-local/grafana/provisioning/dashboards/agentic.yaml` (providers `agentic` and `gateway`), `deploy/org-local/grafana/provisioning/datasources/{agentic,gateway}.yaml` (`agentic-postgres` as the tenant reader; TokenLean's `app-postgres` uid for its LITE set; values from the container environment)
+- Test: `control-plane/tests/dashboards/test_dash_provisioning.py`, helper `control-plane/tests/dashboards/grafana_macros.py`
 
 - [ ] **Step 1: Failing tests:** `test_provisioning_loads_every_dashboard` (provider paths resolve to the committed JSON; every panel's datasource uid is provisioned by `cp-init`'s datasource template or the gateway file), `test_every_panel_query_returns_rows` (seeded database, tenant reader, macros and variables expanded), `test_macro_expansion_refuses_unknown_macros`.
 - [ ] **Step 2-4:** run, implement, run.
