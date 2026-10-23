@@ -24,7 +24,10 @@ _REPLACE_TRIES = 10  # with _REPLACE_WAIT_S: a reader may hold run.json for up t
 _REPLACE_WAIT_S = 0.05
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
-RunStatus = Literal["running", "awaiting_gate", "paused", "completed", "failed", "stopped"]
+#: `killed`: a kill switch stopped the run (M2-10); like `stopped`, it never runs again.
+RunStatus = Literal[
+    "running", "awaiting_gate", "paused", "completed", "failed", "stopped", "killed"
+]
 
 
 class RunStateError(Exception):

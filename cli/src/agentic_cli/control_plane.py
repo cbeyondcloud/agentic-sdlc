@@ -33,8 +33,11 @@ from agentic.orgapi import (
     ActivePolicy,
     CheckResult,
     IngestResult,
+    KillState,
+    KillSwitchInfo,
     Me,
     RepoInfo,
+    RunPreflight,
     RunSummary,
 )
 from agentic.telemetry.sinks import SinkBehind
@@ -50,6 +53,8 @@ LOGIN_HINT = f"run `{LOGIN}`"
 LOGIN_RECORD = "control-plane.json"
 #: Seconds to connect, and to wait for an answer (a short default: the CLI waits on it).
 TIMEOUT = httpx2.Timeout(15.0, connect=5.0)
+#: The kill-switch poll waits less: a run asks before every step and turn (M2-19).
+KILL_STATE_TIMEOUT = httpx2.Timeout(5.0, connect=3.0)
 #: Serialised entries per ingest request: about half the control plane's default body
 #: cap (`max_body_bytes`, 1 MiB), leaving room for the envelope (review F6).
 MAX_BATCH_BYTES = 512 * 1024
@@ -109,7 +114,7 @@ def control_plane_url(env: Mapping[str, str], settings: Mapping[str, Any]) -> st
     return found.strip().rstrip("/") or None
 
 
-def _checked_base(url: str) -> str:
+def checked_base(url: str) -> str:
     """`url` without a trailing slash; https, or plain http to a loopback address only (a
     token never crosses a network in clear)."""
     base = url.strip().rstrip("/")
@@ -142,7 +147,7 @@ class ControlPlaneClient:
         transport: httpx2.BaseTransport | None = None,
         timeout: httpx2.Timeout = TIMEOUT,
     ) -> None:
-        self.base_url = _checked_base(base_url)
+        self.base_url = checked_base(base_url)
         self._shown = scrub_url_credentials(self.base_url)
         self._token = token
         headers = {
@@ -224,14 +229,51 @@ class ControlPlaneClient:
         """The run as the control plane holds it (its chain head included)."""
         return RunSummary.model_validate(self._json("GET", f"/runs/{run_id}"))
 
+    def register_run(self, body: Mapping[str, object]) -> RunPreflight:
+        """The org checks before a run starts (M2-21); registers it when they all pass and
+        `dry_run` is not set. An old CLI is refused (426, exit 2, the upgrade hint)."""
+        return RunPreflight.model_validate(self._json("POST", "/runs", dict(body)))
+
+    def kill_state(self, *, team: str | None, repo: str | None, pipeline: str | None) -> KillState:
+        """The switches that may apply to a run of this team, repo and pipeline (M2-19)."""
+        params = {"team": team, "repo": repo, "pipeline": pipeline}
+        found = self._json(
+            "GET",
+            "/killswitch/state",
+            params={k: v for k, v in params.items() if v},
+            timeout=KILL_STATE_TIMEOUT,
+        )
+        return KillState.model_validate(found)
+
+    def set_switch(self, body: Mapping[str, object]) -> KillSwitchInfo:
+        return KillSwitchInfo.model_validate(self._json("POST", "/killswitch", dict(body)))
+
+    def clear_switch(self, switch_id: str, reason: str | None = None) -> KillSwitchInfo:
+        params = {"reason": reason} if reason else None
+        found = self._json("DELETE", f"/killswitch/{switch_id}", params=params)
+        return KillSwitchInfo.model_validate(found)
+
+    def switches(self, *, include_cleared: bool = False) -> list[KillSwitchInfo]:
+        params = {"include_cleared": "true"} if include_cleared else None
+        found = self._json("GET", "/killswitch", params=params)
+        return [KillSwitchInfo.model_validate(item) for item in found]
+
     def run_url(self, run_id: str) -> str:
         """Where a person reads the run (ND-11: the JSON run summary until a web UI)."""
         return f"{self._shown}{API_PREFIX}/runs/{run_id}"
 
     # ── plumbing ─────────────────────────────────────────────────────────────
 
-    def _json(self, method: str, path: str, body: Any = None) -> Any:
-        response = self._send(method, path, body)
+    def _json(
+        self,
+        method: str,
+        path: str,
+        body: Any = None,
+        *,
+        params: Mapping[str, str] | None = None,
+        timeout: httpx2.Timeout | None = None,
+    ) -> Any:
+        response = self._send(method, path, body, params=params, timeout=timeout)
         try:
             return response.json()
         except ValueError:
@@ -239,9 +281,22 @@ class ControlPlaneClient:
                 f"{self._shown} answered something that is not JSON ({response.status_code})"
             ) from None
 
-    def _send(self, method: str, path: str, body: Any = None) -> httpx2.Response:
+    def _send(
+        self,
+        method: str,
+        path: str,
+        body: Any = None,
+        *,
+        params: Mapping[str, str] | None = None,
+        timeout: httpx2.Timeout | None = None,
+    ) -> httpx2.Response:
+        options: dict[str, Any] = {"json": body}
+        if params:
+            options["params"] = dict(params)
+        if timeout is not None:
+            options["timeout"] = timeout
         try:
-            response = self._http.request(method, f"{API_PREFIX}{path}", json=body)
+            response = self._http.request(method, f"{API_PREFIX}{path}", **options)
         except httpx2.HTTPError as error:
             raise ControlPlaneUnavailable(
                 f"cannot reach the control plane at {self._shown} ({type(error).__name__})",

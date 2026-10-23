@@ -23,6 +23,7 @@ from agentic_cp.db_roles import AUDIT, TENANCY, enforcement_status
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, install_problem_handlers, log
 from agentic_cp.gitops import GitRunner
 from agentic_cp.ingest.api import router as runs_router
+from agentic_cp.killswitch.api import router as killswitch_router
 from agentic_cp.logredact import install_log_redaction
 from agentic_cp.policy_sync.api import router as policy_router
 from agentic_cp.rbac.api import router as rbac_router
@@ -83,6 +84,7 @@ def create_app(
     app.include_router(policy_router)
     app.include_router(repos_router)
     app.include_router(runs_router)
+    app.include_router(killswitch_router)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:

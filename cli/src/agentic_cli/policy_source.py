@@ -53,6 +53,7 @@ from typing import Any, Literal
 
 from agentic.orgapi import Me
 from agentic.policy import OrgPolicy, PolicyError, load_policy, tree_digest
+from agentic.policy.load import pipeline_digests
 from agentic.policy.portable import portable_path_problems
 from agentic_cli import control_plane
 from agentic_cli.config import local_policy_setting
@@ -273,6 +274,8 @@ def _control_plane_policy(
         "tenant": me.tenant.slug,
         "digest": active.digest,
         "tree_digest": active.tree_digest,
+        # D33 (M2-21): the approved pipelines, hashed from the bundle the digest verified
+        "pipelines": pipeline_digests(repo),
     }
     return loaded
 
@@ -322,13 +325,24 @@ def control_plane_stamp(root: Path) -> dict | None:
 
 def check_control_plane_cache(root: Path, stamp: dict, home: Path) -> None:
     """Refuse a cached control-plane policy that was edited locally (Review Focus 3) or
-    belongs to another tenant than the one the user is signed in to."""
+    belongs to another tenant than the one the user is signed in to. An edited pipeline is
+    named with the hash of its approved version (D33)."""
     if tree_digest(root) != stamp.get("tree_digest"):
-        raise CliError(
-            "the cached org policy was changed locally",
-            ExitCode.REFUSED,
-            hint="run `agentic init`",
-        )
+        message = "the cached org policy was changed locally"
+        approved = stamp.get("pipelines")
+        if isinstance(approved, dict):
+            found = pipeline_digests(root)
+            edited = [
+                f"{rel} (approved {digest}, this copy {found.get(rel, 'deleted')})"
+                for rel, digest in sorted(approved.items())
+                if found.get(rel) != digest
+            ]
+            edited += [
+                f"{rel} (not an approved pipeline)" for rel in sorted(set(found) - set(approved))
+            ]
+            if edited:
+                message += ": pipelines differ from the approved versions - " + "; ".join(edited)
+        raise CliError(message, ExitCode.REFUSED, hint="run `agentic init`")
     record = control_plane.login_record(home) or {}
     signed_in = record.get("tenant")
     if signed_in and stamp.get("tenant") != signed_in:

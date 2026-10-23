@@ -48,6 +48,7 @@ def check(tmp_path: Path, fixtures: Path):
         type_produces: dict[str, str] | None = None,
         sandbox=None,
         available_backends=None,
+        classification=None,
     ):
         layer = tmp_path / "layer"
         for name, extra in {**AGENTS, **(extra_agents or {})}.items():
@@ -70,7 +71,7 @@ def check(tmp_path: Path, fixtures: Path):
             definitions.pipeline("test"),
             definitions,
             used,
-            ResolveContext(team="payments"),
+            ResolveContext(team="payments", repo_classification=classification),
             actions=actions,
             sandbox=sandbox,
             available_backends=available_backends,
@@ -118,6 +119,18 @@ def test_a_placeholder_tier_model_is_refused_before_any_spend(tmp_path: Path, fi
     problem = next(p for p in report.problems if p.check == "model")
     assert not report.passed and problem.step == "requirements"
     assert "change-me" in problem.detail and "tiers.yaml" in problem.detail
+
+
+def test_an_unknown_repo_classification_is_one_pipeline_problem(check):  # M2-21
+    report = check(CLEAN, classification="top-secret")
+    found = [p for p in report.problems if p.check == "classification"]
+    assert len(found) == 1 and found[0].step is None
+    assert "top-secret" in found[0].detail and found[0].policy_value
+    assert not report.passed
+
+
+def test_a_known_repo_classification_adds_nothing(check):
+    assert "classification" not in checks(check(CLEAN, classification="internal"))
 
 
 def test_unknown_agent(check):

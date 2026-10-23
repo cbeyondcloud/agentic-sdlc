@@ -39,9 +39,14 @@ from agentic.definitions import PipelineDefinition, UnknownDefinitionError
 from agentic.definitions.pipeline import ActionStep, AgentStep, GateStep, LoopStep
 from agentic.engine.engine import Engine, EngineError, StepContext
 from agentic.engine.factory import StepRunners
+from agentic.engine.gates import Authorizer, StandaloneAuthorizer
 from agentic.engine.preflight import PreflightReport, Problem, preflight
 from agentic.engine.state import RunStore
+from agentic.killswitch import KillSwitch, NoKillSwitch
+from agentic.orgapi import Me
+from agentic.orgapi.rbac import OrgAuthorizer
 from agentic.policy import ResolvedAgent
+from agentic.policy.repos import normalise_remote
 from agentic.sandbox.readiness import Readiness, SandboxDecision, decide_sandbox, readiness
 from agentic.skills.catalog import CatalogError, load_catalog
 from agentic.skills.install import log_record, sync_skills
@@ -51,10 +56,12 @@ from agentic.telemetry.logs import StepLogs
 from agentic.telemetry.sinks import EventSink, ForwardingRecorder
 from agentic.transport import CallIdentity
 from agentic_cli import control_plane
+from agentic_cli import killswitch as killswitch_port
 from agentic_cli.codeintel import codeintel_for as codeintel_factory
 from agentic_cli.codeintel import codeintel_settings, codeintel_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.repo_guard import origin_url
 from agentic_cli.standalone import PLACEHOLDER
 from agentic_cli.wiring import StepWiring, production_scanner
 from agentic_cli.workspace import RUNS, Workspace
@@ -166,10 +173,47 @@ class Runtime:
         self._recorders: dict[str, ForwardingRecorder] = {}
         self._sinks: list[EventSink] | None = None
         self.sink_problem: str | None = None  # why runs are not reported (a warning)
+        self._killswitch: KillSwitch | None = None
+        self._repo_key: str | None | bool = False  # False: not looked up yet
+        self._me: Me | None | bool = False  # False: not asked yet
 
     @property
     def user(self) -> str:
-        return self.ws.user()
+        """The person acting. In org mode with a control plane, the signed-in person
+        (`/v1/me`): the starter, the approver and whoever skips or stops a step are then one
+        identity, which four-eyes compares (review F1). Otherwise AGENTIC_USER or git
+        user.email. CliError (exit 2) when the control plane cannot say who you are."""
+        me = self.me()
+        return me.user.email if me is not None else self.ws.user()
+
+    def known_user(self) -> str:
+        """`user`, or - when the control plane cannot answer - the signed-in person last
+        verified, else the workspace's person: for records that need no check (`stop`)."""
+        try:
+            return self.user
+        except CliError:
+            record = control_plane.login_record(self.ws.home) or {}
+            return str(record.get("user") or "") or self.ws.user()
+
+    def me(self, why: str = "in org mode the control plane says who you are") -> Me | None:
+        """Who the control plane says you are (fetched once), in org mode with one; None
+        otherwise. CliError (exit 2, starting with `why`) when it is configured but cannot
+        answer."""
+        if self._me is False:
+            try:
+                client = self.control_plane()
+                if client is None:
+                    self._me = None
+                else:
+                    with client:
+                        self._me = client.me()
+            except control_plane.ControlPlaneError as error:
+                raise CliError(
+                    f"{why}: {error}",
+                    ExitCode.REFUSED,
+                    hint=error.hint,
+                ) from None
+        return self._me  # type: ignore[return-value]
 
     # ── ledgers ──────────────────────────────────────────────────────────────
 
@@ -481,6 +525,9 @@ class Runtime:
                 ),
             )
         return Engine(
+            killswitch=None if offline else self.killswitch(),  # stopping needs no switch
+            kill_poll_s=killswitch_port.POLL_S,
+            repo=self.repo_key(),
             definitions=self.ws.definitions(),
             policy=policy,
             context=self.ws.context(),
@@ -499,6 +546,50 @@ class Runtime:
             redact=self.redact(gateway),  # pause reasons and step details in run.json
             handoff_prefix=RUNS.as_posix(),  # repo-relative Agentic-Handoff trailers (DF-174)
         )
+
+    def repo_key(self) -> str | None:
+        """This repository as `host/owner/name` (its origin), or None without one."""
+        if self._repo_key is False:
+            remote = origin_url(self.ws.repo)
+            self._repo_key = normalise_remote(remote) if remote else None
+        return self._repo_key  # type: ignore[return-value]
+
+    def control_plane(self) -> control_plane.ControlPlaneClient | None:
+        """The org's control plane client: None outside org mode or without a configured
+        control plane; `ControlPlaneRefused` when one is configured but not signed in."""
+        if not self.ws.settings.get("org"):
+            return None
+        return control_plane.client_for(self.ws.env, self.ws.settings, self.ws.home)
+
+    def authorizer(self) -> tuple[Authorizer, str | None]:
+        """Who may decide at a gate, and the deciding person: in org mode with a control
+        plane, the roles `/v1/me` reports (`OrgAuthorizer`, so an org admin standing in for
+        the named role is recorded as such, DF-409) and the signed-in person; otherwise the
+        standalone authorizer (no RBAC) and None (the workspace's person decides)."""
+        me = self.me(why="gate decisions in org mode are checked by the control plane")
+        if me is None:
+            return StandaloneAuthorizer(), None
+        return OrgAuthorizer(me, self.ws.team), me.user.email
+
+    def killswitch(self) -> KillSwitch:
+        """The engine's kill-switch port (M2-19): the control plane's switches in org mode
+        with one; nothing to stop runs otherwise (standalone, or org mode without a control
+        plane, which preflight warns about). Configured but not signed in, the state can
+        never be confirmed, so every check holds the run (ruling R2)."""
+        if self._killswitch is None:
+            try:
+                client = self.control_plane()
+            except control_plane.ControlPlaneError as error:
+                self._killswitch = killswitch_port.Unconfirmable(str(error))
+            else:
+                if client is None:
+                    self._killswitch = NoKillSwitch()
+                else:
+                    user = (control_plane.login_record(self.ws.home) or {}).get("user")
+                    self._killswitch = killswitch_port.ControlPlaneKillSwitch(
+                        client, user=user, team=self.ws.team, repo=self.repo_key()
+                    )
+        return self._killswitch
 
     def identity(self, step: StepContext) -> CallIdentity:
         if step.run_id not in self._pipelines:

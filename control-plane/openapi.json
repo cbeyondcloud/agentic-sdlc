@@ -555,6 +555,190 @@
         "title": "IngestResult",
         "type": "object"
       },
+      "KillState": {
+        "description": "`GET /v1/killswitch/state`: the active switches that may apply to a run of the\ncaller's (the CLI decides per step), and how long the answer may be cached.",
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "switches": {
+            "items": {
+              "$ref": "#/components/schemas/KillSwitchInfo"
+            },
+            "title": "Switches",
+            "type": "array"
+          },
+          "ttl_seconds": {
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "checked_at",
+          "ttl_seconds"
+        ],
+        "title": "KillState",
+        "type": "object"
+      },
+      "KillSwitchInfo": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "cleared_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cleared At"
+          },
+          "cleared_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cleared By"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "kill",
+              "pause"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope_kind": {
+            "enum": [
+              "tenant",
+              "team",
+              "user",
+              "repo",
+              "pipeline",
+              "agent",
+              "model",
+              "backend"
+            ],
+            "title": "Scope Kind",
+            "type": "string"
+          },
+          "scope_value": {
+            "title": "Scope Value",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "required": [
+          "id",
+          "scope_kind",
+          "scope_value",
+          "mode",
+          "reason",
+          "created_by",
+          "created_at",
+          "active"
+        ],
+        "title": "KillSwitchInfo",
+        "type": "object"
+      },
+      "KillSwitchRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/killswitch`: stop (`kill`) or hold (`pause`) the runs a scope names.\n`scope_kind` `tenant` is the spec's global switch (no `scope_value`); `team` limits a\nswitch of any kind to that team's runs (a team lead must give their own team).",
+        "properties": {
+          "mode": {
+            "default": "kill",
+            "enum": [
+              "kill",
+              "pause"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 3,
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope_kind": {
+            "enum": [
+              "tenant",
+              "team",
+              "user",
+              "repo",
+              "pipeline",
+              "agent",
+              "model",
+              "backend"
+            ],
+            "title": "Scope Kind",
+            "type": "string"
+          },
+          "scope_value": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Scope Value",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "required": [
+          "scope_kind",
+          "reason"
+        ],
+        "title": "KillSwitchRequest",
+        "type": "object"
+      },
       "Me": {
         "description": "`GET /v1/me`: who the token belongs to, in which tenant, and what they hold.",
         "properties": {
@@ -595,6 +779,33 @@
           "token_expires_at"
         ],
         "title": "Me",
+        "type": "object"
+      },
+      "OrgCheck": {
+        "description": "One org check: `check` is rbac, killswitch, policy, pipeline, concurrency or budget.",
+        "properties": {
+          "check": {
+            "title": "Check",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "check",
+          "passed",
+          "detail"
+        ],
+        "title": "OrgCheck",
         "type": "object"
       },
       "PolicySource": {
@@ -987,6 +1198,152 @@
           "permissions"
         ],
         "title": "RoleUpdate",
+        "type": "object"
+      },
+      "RunPreflight": {
+        "description": "The org checks' report. `registered`: every check passed and the run holds a slot.\n`team_budget_remaining_usd` is None while the gateway does not measure it - never 0.",
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/OrgCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "min_cli_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Cli Version"
+          },
+          "registered": {
+            "title": "Registered",
+            "type": "boolean"
+          },
+          "team_budget_remaining_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Budget Remaining Usd"
+          }
+        },
+        "required": [
+          "registered",
+          "checks"
+        ],
+        "title": "RunPreflight",
+        "type": "object"
+      },
+      "RunRegistration": {
+        "additionalProperties": false,
+        "description": "`POST /v1/runs`: the org checks before a run starts (spec §8.2), and the run's\nconcurrency slot when they pass. `pipeline_file` is the pipeline's path in the policy\nrepo (None for a repo-layer pipeline) and `pipeline_sha256` the hash of its bytes (D33);\n`agents` (name@version), `models` and `backends` are what the run's steps resolved to.\n`dry_run` runs every check and registers nothing.",
+        "properties": {
+          "agents": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Agents",
+            "type": "array"
+          },
+          "backends": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Backends",
+            "type": "array"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Models",
+            "type": "array"
+          },
+          "pipeline": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Pipeline",
+            "type": "string"
+          },
+          "pipeline_file": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline File"
+          },
+          "pipeline_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Sha256"
+          },
+          "policy_version": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "team": {
+            "pattern": "^[a-z][a-z0-9-]{0,62}$",
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "team",
+          "pipeline",
+          "policy_version"
+        ],
+        "title": "RunRegistration",
         "type": "object"
       },
       "RunSummary": {
@@ -1506,6 +1863,259 @@
         "summary": "Verify Audit",
         "tags": [
           "audit"
+        ]
+      }
+    },
+    "/v1/killswitch": {
+      "get": {
+        "description": "The switches the caller may clear: every switch for `killswitch.global`, else the\nones limited to a team where the caller holds `killswitch.team`.",
+        "operationId": "list_switches_v1_killswitch_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_cleared",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Cleared",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/KillSwitchInfo"
+                  },
+                  "title": "Response List Switches V1 Killswitch Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Switches",
+        "tags": [
+          "killswitch"
+        ]
+      },
+      "post": {
+        "description": "Stop (`kill`) or hold (`pause`) the runs the scope names, from their next check.",
+        "operationId": "set_switch_v1_killswitch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KillSwitchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillSwitchInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Switch",
+        "tags": [
+          "killswitch"
+        ]
+      }
+    },
+    "/v1/killswitch/state": {
+      "get": {
+        "description": "The active switches that may apply to a run of the caller's with this team, repo and\npipeline: agent, model and backend switches are always included (the CLI decides per\nstep). Any authenticated user of the tenant may ask; user switches are the caller's.",
+        "operationId": "kill_state_v1_killswitch_state_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          },
+          {
+            "in": "query",
+            "name": "repo",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 300,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Repo"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pipeline",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pipeline"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Kill State",
+        "tags": [
+          "killswitch"
+        ]
+      }
+    },
+    "/v1/killswitch/{id}": {
+      "delete": {
+        "description": "Clear a switch: held runs continue on `agentic resume`, killed runs stay killed.",
+        "operationId": "clear_switch_v1_killswitch__id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "reason",
+            "required": false,
+            "schema": {
+              "default": "cleared",
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillSwitchInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clear Switch",
+        "tags": [
+          "killswitch"
         ]
       }
     },
@@ -2345,6 +2955,54 @@
         "summary": "Refresh Repo",
         "tags": [
           "repos"
+        ]
+      }
+    },
+    "/v1/runs": {
+      "post": {
+        "description": "The org checks before a run starts; the run is registered (it holds a concurrency\nslot) only when every check passes and `dry_run` is false. An old CLI is refused first\n(426 `cli.too_old`).",
+        "operationId": "register_v1_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPreflight"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Register",
+        "tags": [
+          "runs"
         ]
       }
     },

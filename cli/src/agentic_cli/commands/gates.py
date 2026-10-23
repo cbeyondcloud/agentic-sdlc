@@ -16,6 +16,7 @@ org roles); four-eyes still applies where the gate or the regime asks for it.
 import hashlib
 import re
 import shutil
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
@@ -25,7 +26,7 @@ from rich.markdown import Markdown
 from rich.syntax import Syntax
 
 from agentic.agents.models import GatewaySettings
-from agentic.engine.gates import Approve, Decision, Edit, Reject, StandaloneAuthorizer
+from agentic.engine.gates import Approve, Decision, Edit, Reject
 from agentic.engine.state import RunState, RunStateError
 from agentic.yamlio import YamlFileError, split_front_matter
 from agentic_cli.commands.runs import _all_runs, _load, sinks_reported
@@ -213,6 +214,9 @@ def _decide(
     decision: Decision,
     gateway: GatewaySettings | None = None,
 ) -> None:
+    authorizer, signed_in = rt.authorizer()
+    if signed_in is not None:  # org mode: the person is the one the control plane knows
+        decision = replace(decision, approver=signed_in)
     engine = rt.engine(regime=state.regime)
     with sinks_reported(out, rt):
         result = drive(
@@ -221,7 +225,7 @@ def _decide(
             lambda: engine.decide(
                 state.run_id,
                 decision,
-                authorizer=StandaloneAuthorizer(),
+                authorizer=authorizer,
                 self_approval=self_approval_refusal,
             ),
         )

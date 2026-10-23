@@ -88,3 +88,22 @@ def test_unreachable_control_plane_stores_nothing(fake, monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO(TOKEN + "\n"))
     assert main(["login", "--for", "control-plane", "--key-stdin"]) == ExitCode.ERROR
     assert _stored() is None
+
+
+def test_a_bad_url_is_refused_before_the_token_is_asked_for(home, monkeypatch, capsys):
+    """DF-498: an http:// URL to another machine is refused before the token is read."""
+    monkeypatch.setenv("AGENTIC_CONTROL_PLANE_URL", "http://cp.acme.example")
+    read = []
+    monkeypatch.setattr("agentic_cli.commands.login._read", lambda *a: read.append(a) or TOKEN)
+    assert main(["--json", "login", "--for", "control-plane"]) == ExitCode.REFUSED
+    assert read == [] and "https" in json.loads(capsys.readouterr().err)["error"]
+
+
+def test_a_rejected_token_at_login_says_so_instead_of_repeating_the_command(
+    fake, monkeypatch, capsys
+):
+    """DF-498: the 401 hint at login does not tell the user to run the command they ran."""
+    monkeypatch.setattr("sys.stdin", io.StringIO("acp_" + "w" * 43 + "\n"))
+    assert main(["--json", "login", "--for", "control-plane", "--key-stdin"]) == ExitCode.REFUSED
+    hint = json.loads(capsys.readouterr().err)["hint"]
+    assert "agentic login" not in hint and "token" in hint

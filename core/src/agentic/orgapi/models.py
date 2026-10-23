@@ -327,6 +327,83 @@ class RunSummary(BaseModel):
     last_event_at: datetime | None = None
 
 
+ScopeKind = Literal["tenant", "team", "user", "repo", "pipeline", "agent", "model", "backend"]
+
+
+class KillSwitchRequest(RequestModel):
+    """`POST /v1/killswitch`: stop (`kill`) or hold (`pause`) the runs a scope names.
+    `scope_kind` `tenant` is the spec's global switch (no `scope_value`); `team` limits a
+    switch of any kind to that team's runs (a team lead must give their own team)."""
+
+    scope_kind: ScopeKind
+    scope_value: str = Field(default="", max_length=300)
+    team: str | None = Field(default=None, pattern=TEAM_SLUG)
+    mode: Literal["kill", "pause"] = "kill"
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class KillSwitchInfo(BaseModel):
+    id: UUID
+    scope_kind: ScopeKind
+    scope_value: str
+    team: str | None = None
+    mode: Literal["kill", "pause"]
+    reason: str
+    created_by: str
+    created_at: datetime
+    cleared_by: str | None = None
+    cleared_at: datetime | None = None
+    active: bool
+
+
+class KillState(BaseModel):
+    """`GET /v1/killswitch/state`: the active switches that may apply to a run of the
+    caller's (the CLI decides per step), and how long the answer may be cached."""
+
+    switches: list[KillSwitchInfo] = Field(default_factory=list)
+    checked_at: datetime
+    ttl_seconds: int
+
+
+class RunRegistration(RequestModel):
+    """`POST /v1/runs`: the org checks before a run starts (spec §8.2), and the run's
+    concurrency slot when they pass. `pipeline_file` is the pipeline's path in the policy
+    repo (None for a repo-layer pipeline) and `pipeline_sha256` the hash of its bytes (D33);
+    `agents` (name@version), `models` and `backends` are what the run's steps resolved to.
+    `dry_run` runs every check and registers nothing."""
+
+    run_id: str = Field(min_length=1, max_length=128)
+    team: str = Field(pattern=TEAM_SLUG)
+    repo: str | None = Field(default=None, max_length=300)
+    pipeline: str = Field(min_length=1, max_length=128)
+    pipeline_file: str | None = Field(default=None, max_length=300)
+    pipeline_sha256: str | None = Field(default=None, max_length=80)
+    policy_version: str = Field(min_length=1, max_length=80)
+    agents: list[str] = Field(default_factory=list, max_length=200)
+    models: list[str] = Field(default_factory=list, max_length=200)
+    backends: list[str] = Field(default_factory=list, max_length=50)
+    dry_run: bool = False
+
+
+class OrgCheck(BaseModel):
+    """One org check: `check` is rbac, killswitch, policy, pipeline, concurrency or budget."""
+
+    check: str
+    passed: bool
+    detail: str
+    value: Any = None
+
+
+class RunPreflight(BaseModel):
+    """The org checks' report. `registered`: every check passed and the run holds a slot.
+    `team_budget_remaining_usd` is None while the gateway does not measure it - never 0."""
+
+    registered: bool
+    checks: list[OrgCheck]
+    team_budget_remaining_usd: str | None = None
+    min_cli_version: str | None = None
+
+
 class Problem(BaseModel):
     """An RFC 9457 problem document. `code` is a stable machine name
     (`auth.invalid_token`, ...); `hint` is a next step the CLI prints as is. A problem never

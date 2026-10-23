@@ -17,9 +17,14 @@ dry run whose preflight fails exits 3 with the report.
 
 `--extra-budget` raises the run's budget limit: it is refused (exit 2) for a run
 started without `--budget`, and for a step that reached its agent's own budget.
-`--skip` is a person's decision: it is recorded under the workspace's person, in the
-approval ledger, and in the regulated regime it may not be the person who started
+`--skip` is a person's decision: it is recorded under the workspace's person (in org mode
+with a control plane, the signed-in person, as for starting a run and approving a gate),
+in the approval ledger, and in the regulated regime it may not be the person who started
 the run (four-eyes).
+
+A live run is refused before it is registered with the control plane for anything the
+CLI can see itself (an existing run id, missing or unknown inputs): registering takes a
+concurrency slot.
 """
 
 import asyncio
@@ -34,9 +39,11 @@ from typing import Annotated
 import typer
 from rich import box
 
+from agentic.engine.engine import TERMINAL, EngineError, check_inputs
 from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
 from agentic_cli.commands.catalog import show_definition_warnings
+from agentic_cli.commands.killswitch import resume_scope
 from agentic_cli.driving import (
     drive,
     engine_errors,
@@ -47,6 +54,7 @@ from agentic_cli.driving import (
 )
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.org_preflight import org_checks, plan_section
 from agentic_cli.output import Output
 from agentic_cli.output import table as output_table
 from agentic_cli.runtime import Runtime, new_run_id
@@ -75,17 +83,32 @@ def register(app: typer.Typer) -> None:
             _check_run_id(run_id)  # before the workspace, preflight and gateway (DF-219)
         rt = Runtime(Workspace.load())
         show_definition_warnings(out, rt.ws)
+        run_id = run_id or new_run_id(pipeline)
         if dry_run:
             report = rt.preflight(pipeline, live=False)
+            if report.passed:  # the org's answer for a run that would start (M2-21)
+                answer = org_checks(rt, pipeline, report, run_id, dry_run=True)
+            else:
+                answer = None
             plan = rt.plan(pipeline, report)
+            plan["org"] = plan_section(answer)
             out.result(plan, _show_plan(plan))
             raise typer.Exit(ExitCode.OK if report.passed else ExitCode.INVALID)
         limit = _usd(budget, "--budget")
         gateway = rt.gateway()  # before anything is installed or written
         report = rt.preflight(pipeline, live=True)
-        if not report.passed:
+        engine = None
+        if report.passed:
+            # every local refusal comes first: registering takes one of the user's
+            # concurrency slots, which a run that never starts would hold (review F3)
+            _startable(rt, pipeline, given, run_id)
+            engine = rt.engine(run_budget_usd=limit, regime=rt.pipeline(pipeline).regime)
+            # registers the run (its concurrency slot) when the org agrees
+            org_checks(rt, pipeline, report, run_id, dry_run=False)
+        if not report.passed or engine is None:
             out.result({"preflight": report.text()}, lambda c: c.print(report.text(), markup=False))
             raise CliError("preflight failed: nothing was started", ExitCode.INVALID)
+        starter = rt.user  # in org mode the signed-in person, as approvers are (review F1)
         for problem in report.problems:
             out.warn(f"{problem.step or 'pipeline'}: {problem.check}: {problem.detail}")
         for agent, globs in rt.unenforced(pipeline, report).items():  # DF-64
@@ -93,8 +116,6 @@ def register(app: typer.Typer) -> None:
                 f"{agent}: deny globs checked by the file tools only, not the OS sandbox: "
                 + ", ".join(globs)
             )
-        engine = rt.engine(run_budget_usd=limit, regime=rt.pipeline(pipeline).regime)
-        run_id = run_id or new_run_id(pipeline)
         # a live run prints nothing until it stops: name it now, for a Ctrl-C (DF-221); a
         # script gets one JSON line on stderr, stdout keeps its one result (DF-352)
         out.notice(
@@ -104,14 +125,14 @@ def register(app: typer.Typer) -> None:
             state = drive(
                 rt.redact(gateway),
                 rt.store.path(run_id).parent,
-                lambda: engine.start(pipeline, given, rt.user, run_id),
+                lambda: engine.start(pipeline, given, starter, run_id),
             )
         _finish(out, state, rt)
 
     @app.command("resume")
     def resume(
         ctx: typer.Context,
-        run_id: str,
+        run_id: Annotated[str | None, typer.Argument(help="The run to continue.")] = None,
         extra_minutes: Annotated[int, typer.Option(min=0, help="More run time.")] = 0,
         extra_budget: Annotated[str | None, typer.Option(help="More run budget, USD.")] = None,
         allow: Annotated[list[str] | None, typer.Option(help="Approve a paused tool call.")] = None,
@@ -119,9 +140,28 @@ def register(app: typer.Typer) -> None:
         skip: Annotated[
             bool, typer.Option("--skip", help="Skip the step a condition pause is about.")
         ] = False,
+        scope: Annotated[
+            str | None,
+            typer.Option("--scope", help="Admins: clear the pause switches of this scope."),
+        ] = None,
+        team: Annotated[
+            str | None, typer.Option("--team", help="With --scope: the team it was limited to.")
+        ] = None,
     ) -> None:
-        """Continue a paused or interrupted run."""
+        """Continue a paused or interrupted run (or, with --scope, end a pause switch)."""
         out: Output = ctx.obj
+        granted = extra_minutes or extra_budget is not None or allow or deny or skip
+        if (run_id is None) == (scope is None) or (scope is not None and granted):
+            raise CliError(
+                "resume takes a run, or --scope (and --team) to clear a pause switch",
+                ExitCode.USAGE,
+                hint="agentic resume <run>   or   agentic resume --scope team:<slug>",
+            )
+        if scope is not None:
+            resume_scope(out, scope, team)
+            return
+        if team is not None:
+            raise CliError("--team goes with --scope", ExitCode.USAGE)
         if skip and (extra_minutes or extra_budget is not None or allow or deny):
             raise CliError(
                 "--skip goes on its own: it skips the step and grants nothing else",
@@ -134,6 +174,7 @@ def register(app: typer.Typer) -> None:
             decisions = {call: True for call in allow or []} | {call: False for call in deny or []}
         engine = rt.engine(regime=state.regime)
         extra = _usd(extra_budget, "--extra-budget") or Decimal(0)
+        who = rt.user if skip else None  # a person's decision: the signed-in one in org mode
         with sinks_reported(out, rt):
             state = drive(
                 rt.redact(rt.gateway()),
@@ -144,7 +185,7 @@ def register(app: typer.Typer) -> None:
                     extra_budget_usd=extra,
                     decisions=decisions,
                     skip=skip,
-                    who=rt.user if skip else None,
+                    who=who,
                     self_approval=self_approval_refusal,
                 ),
             )
@@ -181,7 +222,7 @@ def register(app: typer.Typer) -> None:
         state = _load(rt, run_id)
         engine = rt.engine(regime=state.regime, offline=True)
         with sinks_reported(out, rt), engine_errors():  # run_closed reaches the sinks (F5)
-            state = asyncio.run(engine.stop(run_id, rt.user, reason))
+            state = asyncio.run(engine.stop(run_id, rt.known_user(), reason))
         out.result(summary(state, rt.redact()), show_state(state, rt.redact()))
 
     @app.command("logs")
@@ -284,6 +325,14 @@ def _check_run_id(run_id: str) -> None:
         raise CliError(f"--run-id: {error}", ExitCode.USAGE) from error
 
 
+def _startable(rt: Runtime, pipeline: str, given: dict[str, str], run_id: str) -> None:
+    """The engine's own start refusals, asked before the run is registered (review F3)."""
+    with engine_errors():
+        if rt.store.exists(run_id):
+            raise EngineError(f"run {run_id} already exists - resume it instead")
+        check_inputs(rt.pipeline(pipeline), given)
+
+
 def _load(rt: Runtime, run_id: str) -> RunState:
     with engine_errors():
         return rt.store.load(run_id)
@@ -330,9 +379,7 @@ def _all_runs(rt: Runtime) -> list[RunState]:
 
 
 def _list(out: Output, rt: Runtime, *, show_all: bool, limit: int | None = None) -> None:
-    states = [
-        s for s in _all_runs(rt) if show_all or s.status not in ("completed", "failed", "stopped")
-    ][:limit]
+    states = [s for s in _all_runs(rt) if show_all or s.status not in TERMINAL][:limit]
     rows = [
         {
             "run_id": s.run_id,
@@ -446,6 +493,13 @@ def _show_plan(plan: dict):
                 f"  {p['step'] or 'pipeline'}: {p['check']}{kind}: {p['detail']}{policy}",
                 markup=False,
             )
+        if org := plan.get("org"):  # the control plane's checks (M2-21)
+            for check in org["checks"]:
+                mark = "ok" if check["passed"] else "REFUSED"
+                console.print(f"  org {check['check']}: {mark} - {check['detail']}", markup=False)
+            budget = org["team_budget_remaining_usd"]
+            shown = f"${budget}" if budget is not None else "not measured"
+            console.print(f"  team budget remaining: {shown}", markup=False)
         console.print("nothing was spent (dry run)", markup=False)
 
     return show

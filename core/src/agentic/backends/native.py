@@ -102,4 +102,5 @@ class NativeBackend:
             run_id=step.run_id,
             policy_version=self.policy_version,
             scanner=scanner,
+            turn_guard=step.turn_guard,  # the kill switch, before each request (M2-19)
         )

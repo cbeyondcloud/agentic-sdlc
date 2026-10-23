@@ -137,6 +137,7 @@ class ScriptedRunners:
             contract=ctx.contract,
             run_id=ctx.run_id,
             stuck_check=lambda messages: None,
+            turn_guard=ctx.turn_guard,  # as the native backend passes it (M2-19)
         )
 
 

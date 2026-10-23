@@ -12,7 +12,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from packaging.version import InvalidVersion, Version
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from sqlalchemy.engine import make_url
 
 PREFIX = "AGENTIC_CP_"
@@ -35,6 +36,14 @@ SCHEMA_PATTERN = r"^[a-z_][a-z0-9_]{0,62}$"
 
 class SettingsError(Exception):
     """The environment does not describe a valid deployment."""
+
+
+def _pep440(value: str) -> str:
+    try:
+        Version(value)
+    except InvalidVersion:
+        raise ValueError("not a PEP 440 version (for example 1.4.0)") from None
+    return value
 
 
 class Settings(BaseModel):
@@ -65,6 +74,14 @@ class Settings(BaseModel):
     user_token_days: Annotated[int, Field(ge=1, le=90)] = 90
     service_token_max_days: Annotated[int, Field(ge=1, le=365)] = 365
     enforcer_cache_tenants: Annotated[int, Field(ge=1)] = 256
+    kill_ttl_seconds: Annotated[int, Field(ge=1, le=30)] = 10
+    """How long a CLI may cache the kill-switch state (`KillState.ttl_seconds`, ruling R1)."""
+    min_cli_version: Annotated[str, AfterValidator(_pep440)] | None = None
+    """The deployment's minimum CLI version (M2-08); a tenant's `org.yaml: min_cli_version`
+    can only raise it (ruling R7). A value that is not a PEP 440 version refuses startup
+    rather than enforcing no minimum (review F4)."""
+    run_slot_hours: Annotated[int, Field(ge=1, le=720)] = 24
+    """A registered run holds a concurrency slot while open and active this recently (R8)."""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Settings:

@@ -98,6 +98,44 @@ async def test_policy_fetch_end_to_end(live, tmp_path, monkeypatch):
         assert (home / "policy" / "acme" / "repo" / "policy").is_dir()
 
 
+async def test_kill_switch_and_registration_end_to_end(live, tmp_path):
+    """M2-06/M2-19/M2-21: the CLI's port sees a switch the admin sets through the CLI's own
+    client, scoped to its team; registration answers every org check; tenant b sees none."""
+    from agentic.killswitch import RunScope
+    from agentic_cli.killswitch import ControlPlaneKillSwitch
+
+    base, a, b = live
+    repo = make_policy_repo(tmp_path / "policy")
+    version = _set_source(base, a.admin_token, repo)["sync"]["version"]
+    scope = RunScope(team="payments", pipeline="deliver", agent="developer@1.0.0")
+    with ControlPlaneClient(base, a.admin_token) as client:
+        port = ControlPlaneKillSwitch(
+            client, user="admin@a.example.test", team="payments", repo=None
+        )
+        assert port.check(scope).action == "run"
+        made = client.set_switch(
+            {"scope_kind": "agent", "scope_value": "developer", "reason": "bad release"}
+        )
+        fresh = ControlPlaneKillSwitch(client, user=None, team="payments", repo=None)
+        verdict = fresh.check(scope)
+        assert verdict.action == "kill" and "bad release" in verdict.describe()
+        body = {
+            "run_id": "contract-reg",
+            "team": "payments",
+            "pipeline": "deliver",
+            "policy_version": version,
+            "agents": ["developer@1.0.0"],
+            "dry_run": True,
+        }
+        answer = client.register_run(body)
+        failed = {c.check for c in answer.checks if not c.passed}
+        assert "killswitch" in failed and not answer.registered
+        assert answer.team_budget_remaining_usd is None
+        assert not client.clear_switch(str(made.id), "fixed").active
+    with ControlPlaneClient(base, b.admin_token) as client:
+        assert client.kill_state(team="payments", repo=None, pipeline="deliver").switches == []
+
+
 async def test_ledger_forward_to_control_plane_end_to_end(live, tmp_path):
     base, a, b = live
     ledger = RunLedger(tmp_path / "repo", "contract-run")
