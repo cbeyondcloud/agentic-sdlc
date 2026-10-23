@@ -47,6 +47,7 @@ from agentic_cli.driving import (
 )
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.jira import IssueRun, jira_input
 from agentic_cli.output import Output
 from agentic_cli.output import table as output_table
 from agentic_cli.runtime import Runtime, new_run_id
@@ -67,17 +68,45 @@ def register(app: typer.Typer) -> None:
         dry_run: Annotated[
             bool, typer.Option("--dry-run", help="Preflight and plan only: nothing is spent.")
         ] = False,
+        from_jira: Annotated[
+            str | None,
+            typer.Option(
+                "--from-jira",
+                help="Start from a Jira issue (PROJ-123): its text becomes the request, and "
+                "the run link is commented back on it.",
+            ),
+        ] = None,
+        jira_transition: Annotated[
+            str | None,
+            typer.Option(
+                "--jira-transition",
+                help="With --from-jira: move the issue on as the run starts (a transition "
+                "or status name, e.g. 'In Progress'; default: jira.transition in the config).",
+            ),
+        ] = None,
     ) -> None:
         """Run a pipeline (or show what it would do, with --dry-run)."""
         out: Output = ctx.obj
         given = _inputs(inputs or [])
+        if jira_transition is not None and from_jira is None:
+            raise CliError("--jira-transition goes with --from-jira", ExitCode.USAGE)
         if run_id is not None:
             _check_run_id(run_id)  # before the workspace, preflight and gateway (DF-219)
         rt = Runtime(Workspace.load())
         show_definition_warnings(out, rt.ws)
+        issue = _from_jira(rt, pipeline, from_jira, given) if from_jira is not None else None
+        try:
+            _start(out, rt, pipeline, given, budget, run_id, dry_run, issue, jira_transition)
+        finally:
+            if issue is not None:
+                issue.close()
+
+    def _start(out, rt, pipeline, given, budget, run_id, dry_run, issue, jira_transition):
         if dry_run:
             report = rt.preflight(pipeline, live=False)
             plan = rt.plan(pipeline, report)
+            if issue is not None:  # read, never changed: no comment, no transition
+                plan["jira"] = {"issue": issue.request.key, "title": issue.request.item.title}
             out.result(plan, _show_plan(plan))
             raise typer.Exit(ExitCode.OK if report.passed else ExitCode.INVALID)
         limit = _usd(budget, "--budget")
@@ -100,13 +129,19 @@ def register(app: typer.Typer) -> None:
         out.notice(
             {"started": run_id}, f"started run {run_id} (if interrupted: agentic resume {run_id})"
         )
+        if issue is not None:
+            issue.start(out, jira_transition)
         with sinks_reported(out, rt):
             state = drive(
                 rt.redact(gateway),
                 rt.store.path(run_id).parent,
                 lambda: engine.start(pipeline, given, rt.user, run_id),
             )
-        _finish(out, state, rt)
+        extra = None
+        if issue is not None:  # once the run stops running; never fails it
+            folder = rt.store.path(run_id).parent
+            extra = {"jira": issue.report(out, state, folder, rt.redact(gateway))}
+        _finish(out, state, rt, extra)
 
     @app.command("resume")
     def resume(
@@ -255,6 +290,18 @@ def _follow(
     raise typer.Exit(exit_code_for(state))
 
 
+def _from_jira(rt: Runtime, pipeline: str, key: str, given: dict[str, str]) -> IssueRun:
+    """Read the issue into the pipeline's Jira input, before anything is started."""
+    name = jira_input(rt.pipeline(pipeline))
+    if name in given:
+        raise CliError(
+            f"--from-jira fills the {name} input: leave out --input {name}=...", ExitCode.USAGE
+        )
+    issue = IssueRun.open(rt.ws, key)
+    given[name] = issue.request.text
+    return issue
+
+
 def _inputs(pairs: list[str]) -> dict[str, str]:
     given = {}
     for pair in pairs:
@@ -289,9 +336,9 @@ def _load(rt: Runtime, run_id: str) -> RunState:
         return rt.store.load(run_id)
 
 
-def _finish(out: Output, state: RunState, rt: Runtime) -> None:
+def _finish(out: Output, state: RunState, rt: Runtime, extra: dict | None = None) -> None:
     redact = rt.redact()  # the gateway key is known: the command asked for it
-    out.result(summary(state, redact), show_state(state, redact))
+    out.result({**summary(state, redact), **(extra or {})}, show_state(state, redact))
     raise typer.Exit(exit_code_for(state))
 
 
@@ -415,6 +462,8 @@ def _show_plan(plan: dict):
             f"regime {plan['regime']}, sandbox {plan['sandbox']}, policy {plan['policy_version']}",
             markup=False,
         )
+        if jira := plan.get("jira"):
+            console.print(f"  request from Jira {jira['issue']}: {jira['title']}", markup=False)
         for step in plan["steps"]:
             if step["kind"] == "agent":
                 console.print(agent_line(step, "  "), markup=False)

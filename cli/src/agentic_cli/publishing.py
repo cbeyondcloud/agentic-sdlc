@@ -287,6 +287,13 @@ def control_plane_url(ws: Workspace) -> str | None:
     return control_plane.control_plane_url(ws.env, ws.settings)
 
 
+def run_link(ws: Workspace, run_id: str) -> str | None:
+    """Where a person sees the run: the control plane's run summary until a web UI exists
+    (ND-11), or None without a control plane."""
+    base = control_plane_url(ws)
+    return f"{base}{API_PREFIX}/runs/{run_id}" if base else None
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -340,14 +347,12 @@ def _handoff_texts(folder: Path, state: RunState) -> dict[str, str]:
 
 def _body(ws: Workspace, state: RunState, found: list[tuple[str, str]]) -> str:
     folder = f"{RUNS.as_posix()}/{state.run_id}"
-    base = control_plane_url(ws)
-    # ND-11: the control plane's run summary until a web UI exists; handoff bodies and
-    # step logs are not uploaded, so they stay named in the starter's run folder
-    run_link = f"{base}{API_PREFIX}/runs/{state.run_id}" if base else None
+    # handoff bodies and step logs are not uploaded, so they stay named in the starter's
+    # run folder
     logs = f"`agentic logs {state.run_id}` in the starter's checkout"
     return pr_body(
         state,
-        run_link=run_link,
+        run_link=run_link(ws, state.run_id),
         handoff_link=lambda rel: None,
         proposals=found,
         run_folder=folder,
@@ -378,7 +383,9 @@ def _title(state: RunState, redact: Callable[[str], str]) -> str:
     """The PR title, redacted whole before it is cut: a secret straddling the limit would
     no longer be a whole value for the redactor to match (review F1)."""
     request = next((v for v in state.inputs.values() if str(v).strip()), "")
-    first = " ".join(str(request).split())
+    # its first line: a request read from a tracker carries the ticket after a header line
+    # (M2-50), and the fenced ticket text is no title
+    first = " ".join(str(request).strip().splitlines()[0].split()) if str(request).strip() else ""
     title = f"{state.pipeline}: {first}" if first else f"{state.pipeline} run {state.run_id}"
     title = redact(title)
     return title if len(title) <= TITLE_LIMIT else title[: TITLE_LIMIT - 3].rstrip() + "..."
