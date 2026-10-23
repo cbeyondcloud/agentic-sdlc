@@ -4,7 +4,6 @@ and can read no table at all. Every `dash_*` view in the schema is registered, s
 view is covered by these generated cases."""
 
 import secrets
-import uuid
 
 import anyio
 import asyncpg
@@ -14,78 +13,12 @@ from sqlalchemy import select, text
 
 from agentic_cp.__main__ import main
 from agentic_cp.audit import read_records, verify
-from agentic_cp.dashboards.readers import ReaderError, bind_reader
+from agentic_cp.dashboards.readers import ReaderError
 from agentic_cp.dashboards.views import DASH_VIEWS
 from agentic_cp.tables import tenants
 from agentic_cp.tenancy.context import tenant_tx
 
 pytestmark = pytest.mark.anyio
-
-
-def _clock():
-    from dash_seed import NOW
-
-    return NOW
-
-
-class Readers:
-    """Reader roles made for one test, connected as Grafana connects (no session setup)."""
-
-    def __init__(self, db, pg_server) -> None:
-        self.db, self.pg_server = db, pg_server
-        self.made: list[str] = []
-        self.connections: list[asyncpg.Connection] = []
-
-    def name(self, label: str) -> str:
-        role = f"dash_{label}_{uuid.uuid4().hex[:10]}"
-        self.made.append(role)
-        return role
-
-    async def bind(self, tenant, role: str, password: str | None) -> None:
-        async with tenant_tx(self.db.owner, tenant) as conn:
-            await bind_reader(
-                conn, self.db.schema, role, password, runtime_role=APP_ROLE, clock=_clock
-            )
-
-    async def connect(self, role: str, password: str) -> asyncpg.Connection:
-        dsn = self.pg_server.dsn(user=role, password=password, database=self.db.name)
-        conn = await asyncpg.connect(dsn)
-        self.connections.append(conn)
-        return conn
-
-    async def close(self) -> None:
-        for conn in self.connections:
-            await conn.close()
-        admin = await connect_admin(self.db.admin_dsn)
-        try:
-            for role in self.made:
-                if await admin.fetchval("select 1 from pg_roles where rolname = $1", role):
-                    await admin.execute(f"DROP OWNED BY {role}")
-                    await admin.execute(f"DROP ROLE {role}")
-        finally:
-            await admin.close()
-
-
-@pytest.fixture
-async def readers(linked_db, pg_server):
-    db, seeded, _ = linked_db
-    made = Readers(db, pg_server)
-    try:
-        yield db, seeded, made
-    finally:
-        await made.close()
-
-
-@pytest.fixture
-async def bound(readers):
-    """Readers bound to a and b, connected."""
-    db, seeded, made = readers
-    conns = {}
-    for label, tenant in (("a", seeded.a), ("b", seeded.b)):
-        role, password = made.name(label), secrets.token_hex(12)
-        await made.bind(tenant, role, password)
-        conns[label] = await made.connect(role, password)
-    return db, seeded, made, conns
 
 
 @pytest.mark.parametrize("view", DASH_VIEWS)

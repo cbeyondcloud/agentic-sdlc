@@ -1,0 +1,23 @@
+# The gateway's own database, for its LITE dashboard set, which reads the uid app-postgres.
+# The LITE stack is one gateway tenant on a laptop; in an org deployment these dashboards
+# are the platform team's (Grafana organisation 1), never a tenant's.
+# Values come from the container's environment (deploy/org-local/.env.org), never this file.
+apiVersion: 1
+
+datasources:
+  - name: Gateway database
+    type: grafana-postgresql-datasource
+    uid: app-postgres
+    orgId: 1
+    url: ${GATEWAY_DB_HOST}
+    user: ${GATEWAY_DB_USER}
+    secureJsonData:
+      password: ${GATEWAY_DB_PASSWORD}
+    jsonData:
+      database: ${GATEWAY_DB_NAME}
+      sslmode: disable
+      postgresVersion: 1500
+      maxOpenConns: 5
+      maxIdleConns: 2
+    isDefault: false
+    editable: false

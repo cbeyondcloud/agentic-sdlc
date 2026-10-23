@@ -3,19 +3,24 @@
 `dash_db`: two seeded tenants, no gateway linked (the contract views are empty).
 `gateway`: a gateway database on the same server (its own database and role, reached over
 `postgres_fdw` exactly as a separate server would be), filled with `dash_seed.CALLS`.
-`linked_db`: `dash_db` with that gateway linked by `link_usage`."""
+`linked_db`: `dash_db` with that gateway linked by `link_usage`.
+`readers`: tenant reader roles made for one test; `bound`: readers of a and b, connected."""
 
 from __future__ import annotations
 
 import secrets
+import uuid
 from dataclasses import dataclass
 
+import asyncpg
 import pytest
 from dash_seed import GATEWAY_DDL, Seeded, fill_gateway, make_tenants, seed_framework
-from pg import OWNER_ROLE, connect_admin, new_database_name, quote_ident
+from pg import APP_ROLE, OWNER_ROLE, connect_admin, new_database_name, quote_ident
 from pydantic import SecretStr
 
 from agentic_cp.dashboards.link import GatewayDb, link_usage
+from agentic_cp.dashboards.readers import bind_reader
+from agentic_cp.tenancy.context import tenant_tx
 
 GATEWAY_ROLE = "cp_gateway"
 
@@ -104,3 +109,69 @@ async def linked_db(dash_db, make_gateway):
         await link_usage(conn, db.schema, gateway.db)
     seeded.gateway_dsn = gateway.dsn
     return db, seeded, gateway
+
+
+def _clock():
+    from dash_seed import NOW
+
+    return NOW
+
+
+class Readers:
+    """Reader roles made for one test, connected as Grafana connects (no session setup)."""
+
+    def __init__(self, db, pg_server) -> None:
+        self.db, self.pg_server = db, pg_server
+        self.made: list[str] = []
+        self.connections: list[asyncpg.Connection] = []
+
+    def name(self, label: str) -> str:
+        role = f"dash_{label}_{uuid.uuid4().hex[:10]}"
+        self.made.append(role)
+        return role
+
+    async def bind(self, tenant, role: str, password: str | None) -> None:
+        async with tenant_tx(self.db.owner, tenant) as conn:
+            await bind_reader(
+                conn, self.db.schema, role, password, runtime_role=APP_ROLE, clock=_clock
+            )
+
+    async def connect(self, role: str, password: str) -> asyncpg.Connection:
+        dsn = self.pg_server.dsn(user=role, password=password, database=self.db.name)
+        conn = await asyncpg.connect(dsn)
+        self.connections.append(conn)
+        return conn
+
+    async def close(self) -> None:
+        for conn in self.connections:
+            await conn.close()
+        admin = await connect_admin(self.db.admin_dsn)
+        try:
+            for role in self.made:
+                if await admin.fetchval("select 1 from pg_roles where rolname = $1", role):
+                    await admin.execute(f"DROP OWNED BY {role}")
+                    await admin.execute(f"DROP ROLE {role}")
+        finally:
+            await admin.close()
+
+
+@pytest.fixture
+async def readers(linked_db, pg_server):
+    db, seeded, _ = linked_db
+    made = Readers(db, pg_server)
+    try:
+        yield db, seeded, made
+    finally:
+        await made.close()
+
+
+@pytest.fixture
+async def bound(readers):
+    """Readers bound to a and b, connected."""
+    db, seeded, made = readers
+    conns = {}
+    for label, tenant in (("a", seeded.a), ("b", seeded.b)):
+        role, password = made.name(label), secrets.token_hex(12)
+        await made.bind(tenant, role, password)
+        conns[label] = await made.connect(role, password)
+    return db, seeded, made, conns
