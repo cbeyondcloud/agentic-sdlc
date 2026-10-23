@@ -7,7 +7,8 @@
   a `Rejection` naming its check:
 
     validate  the format: skills-ref (the Agent Skills reference validator) when it is
-              installed, else our own rules (SKILL.md, name == folder, a description)
+              installed, else our own rules (SKILL.md, name == folder, a description);
+              every file name one Windows can check out (`unportable`)
     widening  personal and repo skills: front matter beyond name, description,
               license, compatibility and metadata (`allowed-tools`, `model`, ...)
     scripts   personal and repo skills are instruction-only: only Markdown or text,
@@ -63,6 +64,11 @@ _INSTRUCTION_ONLY: frozenset[str] = frozenset({"personal", "repo"})
 _AGENT_SKILLS_KEYS = frozenset(ALLOWED_FRONT_MATTER | {"allowed-tools"})
 _UNEXPECTED = "Unexpected fields in frontmatter"
 _SKILLS_LINE = re.compile(r"^skills:[ \t]*(\{[ \t]*\})?[ \t]*(#.*)?$")
+#: Names Windows reserves for devices, with or without an extension (`nul`, `aux.md`): a
+#: file or folder of such a name cannot be checked out there, so it is refused on every
+#: platform - a skill merged from a Mac must not break its Windows colleagues' checkouts.
+_DEVICE = re.compile(r"(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?", re.IGNORECASE)
+_NOT_ON_WINDOWS = re.compile(r'[<>:"|?*\\\x00-\x1f]')
 
 SKILL_TEMPLATE = """\
 ---
@@ -91,12 +97,27 @@ colleague.)
 PLACEHOLDER_DESCRIPTION = "Use when (describe the situation where an agent should apply this)."
 
 
-def check_name(name: str) -> None:
+def check_name(name: str, what: str = "a skill name") -> None:
     if not NAME.fullmatch(name) or len(name) > 64:
         raise SkillsError(
-            f"{name!r}: a skill name is lowercase letters, digits and single hyphens "
+            f"{name!r}: {what} is lowercase letters, digits and single hyphens "
             "(at most 64 characters), e.g. payments-retries"
         )
+    if _DEVICE.fullmatch(name):
+        raise SkillsError(f"{name!r} is a device name on Windows: pick another name")
+
+
+def unportable(relative: str) -> str | None:
+    """Why the POSIX relative path `relative` cannot be checked out on Windows, or None:
+    a device name (`aux.md`), a character Windows forbids, or a trailing dot or space."""
+    for part in relative.split("/"):
+        if _DEVICE.fullmatch(part):
+            return f"{part!r} is a device name on Windows"
+        if _NOT_ON_WINDOWS.search(part):
+            return f"{part!r} holds a character Windows does not allow in a file name"
+        if part.endswith((".", " ")):
+            return f"{part!r} ends with a dot or space, which Windows drops"
+    return None
 
 
 def scaffold(home: Path, name: str, description: str | None = None) -> Path:
@@ -148,6 +169,8 @@ def check_skill(
         relative = path.relative_to(folder).as_posix()
         if is_junk(relative):
             continue
+        if why := unportable(relative):
+            found.append(Rejection("validate", relative, f"{why}: rename it"))
         data = path.read_bytes()
         total += len(data)
         try:
@@ -269,8 +292,9 @@ def promotion_paths(scope: Scope, name: str, team: str | None = None) -> tuple[s
     if scope == "repo":
         return f".agentic/skills/{name}", None
     if scope == "team":
-        if not team or not NAME.fullmatch(team):
+        if not team:
             raise SkillsError("a team promotion names its team (lowercase-with-hyphens)")
+        check_name(team, "a team name")
         root = f"teams/{team}/skills"
         return f"{root}/{INTERNAL}/{name}", f"{root}/catalog.yaml"
     if scope == "org":
@@ -355,4 +379,5 @@ __all__ = [
     "scaffold",
     "skill_files_for_commit",
     "skill_sha",
+    "unportable",
 ]

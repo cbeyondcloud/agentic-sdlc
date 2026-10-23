@@ -5,10 +5,11 @@ agentic skills validate [NAME|PATH...] [--scope]  format, size, secrets, scripts
 agentic skills eval NAME --agent A [...]          the agent with and without the skill
 agentic skills submit NAME --to repo|team|org     a pull request with the eval report
 agentic skills review [--to S] [--team T]         the open submissions of a scope
-agentic skills approve N --to S                   the scope owner approves (RBAC)
+agentic skills approve N --to S                   the scope owner approves (RBAC; the
+                                                  pull request's files are checked first)
 agentic skills decline N --to S --reason R        ... or asks for changes
-agentic skills status                             your submissions; a merged one retires
-                                                  your personal copy
+agentic skills status [--retire]                  your submissions; --retire moves the
+                                                  personal copy of a merged one aside
 
 The commands join the `skills` group `catalog.py` creates (list, search).
 """
@@ -23,6 +24,7 @@ from typing import Annotated
 
 import typer
 
+from agentic.hosting.base import ListingIncomplete
 from agentic.skills import SkillsError
 from agentic.skills.authoring import SCOPES, check_skill, scaffold
 from agentic.skills.personal import load_personal, skill_block
@@ -266,11 +268,21 @@ def register(app: typer.Typer) -> None:
         _decide(ctx.obj, number, to, checkout, approve=False, reason=reason)
 
     @group.command("status")
-    def status(ctx: typer.Context) -> None:
-        """Your submissions; once one is merged, your personal copy is retired."""
+    def status(
+        ctx: typer.Context,
+        retire: Annotated[
+            bool,
+            typer.Option(
+                "--retire",
+                help="Move the personal copy of each merged skill to ~/.agentic/skills-retired/"
+                " (once its shared copy reaches your runs).",
+            ),
+        ] = False,
+    ) -> None:
+        """Your submissions; a merged one's personal copy is kept until --retire."""
         out: Output = ctx.obj
         home = agentic_home()
-        rows = promo.refresh(home, user_config(home), out.warn)
+        rows = promo.refresh(home, user_config(home), out.warn, retire_merged=retire)
         out.result({"submissions": rows}, lambda c: _show_status(c, rows))
 
 
@@ -298,8 +310,27 @@ def _decide(
                 )
             team = block.get("team") if scope == "team" else None
             with conn.errors():
-                files = host.pull_request_files(conn.repo, number)
+                try:
+                    files = host.pull_request_files(conn.repo, number)
+                except ListingIncomplete as error:
+                    raise CliError(
+                        f"#{number}: {error}; the files not listed cannot be checked",
+                        ExitCode.REFUSED,
+                        hint="review it as a normal pull request instead",
+                    ) from error
             promo.check_files(scope, team, files)  # the team checked is the files' team
+            with conn.errors():
+                if approve:  # a decline needs no proof: asking for changes is always safe
+                    limits = promo.org_limits(target) if scope != "repo" else None
+                    promo.verify_pull_request(
+                        host, conn.repo, pull, block, files, scope=scope, team=team, limits=limits
+                    )
+                if host.get_pull_request(conn.repo, number).head_sha != pull.head_sha:
+                    raise CliError(
+                        f"#{number} changed while it was being checked",
+                        ExitCode.REFUSED,
+                        hint="run the command again",
+                    )
             repo_key = promo.repo_key_of(conn) if scope == "repo" else None
             permission = promo.authorize(
                 scope, team, repo_key, settings, os.environ, home, out.warn
@@ -309,7 +340,9 @@ def _decide(
             if reason:
                 body += f"\n\n{reason}"
             with conn.errors():
-                host.review_pull_request(conn.repo, number, approve=approve, body=body)
+                host.review_pull_request(
+                    conn.repo, number, approve=approve, body=body, commit=pull.head_sha or None
+                )
     data = {"number": number, "skill": block.get("name"), "scope": scope, "decision": verb}
     out.result(data, lambda c: c.print(f"#{number} {block.get('name')}: {verb}", markup=False))
 
@@ -381,7 +414,8 @@ def _show_pending(console, rows: list[dict]) -> None:
         team = f" ({row['team']})" if row.get("team") else ""
         console.print(
             f"#{row['number']} {row['skill']} -> {row['scope']}{team} by {row['submitter']}, "
-            f"eval {row['verdict']} on {row['agent']}: {row['url']}",
+            f"eval {row['verdict']} on {row['agent']} (as submitted, unverified until "
+            f"approve checks the files): {row['url']}",
             markup=False,
         )
 
@@ -390,5 +424,9 @@ def _show_status(console, rows: list[dict]) -> None:
     if not rows:
         console.print("no submissions", markup=False)
     for row in rows:
-        retired = f", personal copy moved to {row['retired_to']}" if row.get("retired_to") else ""
-        console.print(f"{row['name']} -> {row['scope']}: {row['state']}{retired}", markup=False)
+        where = ""
+        if row.get("retired_to"):
+            where = f", personal copy moved to {row['retired_to']}"
+        elif row.get("kept"):
+            where = f", personal copy kept at {row['kept']}"
+        console.print(f"{row['name']} -> {row['scope']}: {row['state']}{where}", markup=False)

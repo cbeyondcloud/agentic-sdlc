@@ -15,20 +15,26 @@ report (`agentic skills eval` of exactly this version: the sha256 must match) an
 machine-readable submission block that `review` reads. The submitter's CLI records the
 submission in `~/.agentic/skills-submitted/<name>.json`.
 
-`review` lists the open submissions of a scope; `approve` and `decline` post a review
-after an RBAC check through the control plane (`/v1/rbac/check`, the authorizer
-`init --repo` uses): the scope's permission is
+`review` lists the open submissions of a scope (their blocks unverified: anyone can write
+one); `approve` and `decline` first check the pull request itself (`check_files`,
+`verify_pull_request`: the files it changes - a rename's old path included - its skill
+folder at the head commit against the block's sha256 and the `submit` checks, and its
+catalog change), then post a review of that head commit after an RBAC check through the
+control plane (`/v1/rbac/check`, the authorizer `init --repo` uses): the scope's
+permission is
 
     repo  agent.approve.repo     (repo maintainers, team leads of the repo's team)
     team  agent.publish.team     (that team's leads)
     org   skills.approve         (org admins)
 
 Without an org there is no RBAC (standalone mode): the command says so and proceeds, as
-gate approvals do; the host's code owners and branch protection still decide the merge.
-In org mode without a reachable control plane, approval is refused.
+gate approvals do. In org mode without a reachable control plane, approval is refused.
+The check runs on the reviewer's machine, so it is advisory: the host's code owners and
+branch protection are what decide the merge.
 
-`status` reads each recorded submission's pull request; once it is merged the shared copy
-exists, so the personal copy is retired: moved (never deleted) to
+`status` reads each recorded submission's pull request. A merged skill reaches runs only
+once its shared copy is rolled out, so the personal copy is kept (and `status` says so)
+until `status --retire` moves it (never deletes it) to
 `~/.agentic/skills-retired/<name>-<time>/`. A declined submission keeps it.
 """
 
@@ -45,10 +51,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from agentic.hosting import HostingError, RepoRef
-from agentic.hosting.base import ReviewHost
+from agentic.hosting.base import PullRequest, ReviewHost
 from agentic.hosting.git import fetch_branch, push_branch, rev_parse
 from agentic.policy import PolicyError, load_policy
 from agentic.policy.repos import normalise_remote
@@ -65,6 +71,7 @@ from agentic.skills.authoring import (
     promotion_paths,
     skill_files_for_commit,
     skill_sha,
+    unportable,
 )
 from agentic.skills.catalog import AdmissionLimits
 from agentic.yamlio import YamlFileError, load_yaml, split_front_matter
@@ -436,6 +443,8 @@ def pending(conn: Connection, scope: str | None, team: str | None) -> list[dict]
                 "sha256": block.get("sha256"),
                 "agent": block.get("agent"),
                 "verdict": block.get("verdict"),
+                # the block is the submitter's word; `approve` checks the files against it
+                "verified": False,
             }
         )
     return rows
@@ -510,24 +519,49 @@ def records(home: Path) -> list[tuple[Path, dict]]:
     return found
 
 
-def refresh(home: Path, settings: Mapping[str, Any], warn: Callable[[str], None]) -> list[dict]:
-    """Each submission's state; a merged one's personal copy is retired."""
+def refresh(
+    home: Path,
+    settings: Mapping[str, Any],
+    warn: Callable[[str], None],
+    *,
+    retire_merged: bool = False,
+) -> list[dict]:
+    """Each submission's state. A merged one's personal copy is kept (review F2): the
+    shared copy reaches runs only once it is rolled out (team and repo skills are not
+    loaded at run time yet), so the copy is retired only when the person asks
+    (`retire_merged`, `agentic skills status --retire`)."""
     shown = []
     for path, record in records(home):
         row = {k: record.get(k) for k in ("name", "scope", "team", "number", "url", "state")}
+        changed = False
         if record.get("state") == "open":
             ref = RepoRef(**record["repo"])
             with connect_to(ref, settings) as conn, conn.errors():
                 pull = review_host(conn).get_pull_request(ref, int(record["number"]))
             if pull.merged:
                 record["state"] = "merged"
-                record["retired_to"] = retire(home, record, warn)
             elif pull.state != "open":
                 record["state"] = "declined"
             if record["state"] != "open":
                 record["checked_at"] = _now()
-                _write_json(path, record)
-        row.update(state=record["state"], retired_to=record.get("retired_to"))
+                changed = True
+        kept = None
+        if record["state"] == "merged" and not record.get("retired_to"):
+            folder = home / "skills" / str(record["name"])
+            if retire_merged:
+                record["retired_to"] = retire(home, record, warn)
+                changed = True
+            elif folder.is_dir():
+                kept = str(folder)
+                warn(
+                    f"{record['name']} was merged; your personal copy {folder} is kept: the "
+                    "shared copy reaches runs only once it is rolled out. When it has, run "
+                    f"`agentic skills status --retire` (the copy is moved to "
+                    f"{home / RETIRED}, never deleted)"
+                )
+        if changed:
+            _write_json(path, record)
+        row.update(state=record["state"], retired_to=record.get("retired_to"), kept=kept)
         shown.append(row)
     return shown
 
@@ -618,8 +652,8 @@ def scope_prefix(scope: str, team: str | None) -> str:
 
 def check_files(scope: str, team: str | None, files: list[str]) -> None:
     """Refuse (exit 2) a submission that changes anything outside its scope's folder: the
-    RBAC check is bound to the files a pull request changes, never to the team its
-    (submitter-written) description names."""
+    RBAC check is bound to the files a pull request changes (a renamed file's old path
+    included), never to the team its (submitter-written) description names."""
     prefix = scope_prefix(scope, team)
     outside = [path for path in files if not path.startswith(prefix)]
     if not files or outside:
@@ -629,3 +663,116 @@ def check_files(scope: str, team: str | None, files: list[str]) -> None:
             ExitCode.REFUSED,
             hint="review it as a normal pull request instead",
         )
+
+
+def verify_pull_request(
+    host: ReviewHost,
+    repo: RepoRef,
+    pull: PullRequest,
+    block: dict,
+    files: list[str],
+    *,
+    scope: Scope,
+    team: str | None,
+    limits: AdmissionLimits | None = None,
+) -> None:
+    """Refuse (exit 2) a submission whose pull request does not hold what its block says
+    (review F3) - the block is the submitter's text, and anyone can write one:
+
+      * it changes only the skill's own folder and, for team or org, its catalog;
+      * the folder at the head commit hashes to the block's sha256 (the version the
+        eval report names) and passes the checks `submit` runs;
+      * the catalog gains exactly the entry `submit` writes for it, and nothing else
+        changes there against the commit the pull request is compared with.
+
+    The eval verdict in the block stays the submitter's word: the report itself is not
+    on the host. The host's code owners and branch protection still decide the merge."""
+    name, sha = block.get("name"), block.get("sha256")
+    if not isinstance(name, str) or not isinstance(sha, str):
+        _refuse(pull, "its submission block names no skill and version")
+    try:
+        folder_rel, catalog_rel = promotion_paths(scope, name, team)
+    except SkillsError as error:
+        _refuse(pull, str(error))
+    inside = [path for path in files if path.startswith(f"{folder_rel}/")]
+    outside = [path for path in files if path not in inside and path != catalog_rel]
+    if outside or not inside:
+        wanted = f"{folder_rel}/" + (f" and {catalog_rel}" if catalog_rel else "")
+        _refuse(pull, f"it must change only {wanted}, but it changes {outside[:5] or 'neither'}")
+    with tempfile.TemporaryDirectory(prefix="agentic-review-") as scratch:
+        folder = Path(scratch) / name
+        for path in inside:
+            relative = path[len(folder_rel) + 1 :]
+            parts = relative.split("/")
+            if any(part in ("", ".", "..") for part in parts):
+                _refuse(pull, f"{path} is not a plain path inside the skill")
+            if why := unportable(relative):
+                _refuse(pull, f"{path}: {why}")
+            data = host.file_at(repo, path, pull.head_sha)
+            if data is None:
+                _refuse(pull, f"{path} is removed or is not a file at its head commit")
+            target = folder.joinpath(*parts)
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            except OSError as error:
+                _refuse(pull, f"{path} cannot be written on this machine ({error})")
+        if skill_sha(folder) != sha:
+            _refuse(pull, f"its files are not the version its description names ({sha})")
+        problems = check_for_submission(folder, scope, limits)
+        if problems:
+            first = problems[0]
+            _refuse(pull, f"{folder_rel}/{first['path']}: {first['reason']}")
+    if catalog_rel is not None:
+        _verify_catalog(host, repo, pull, catalog_rel, name, sha, folder_rel)
+
+
+def _verify_catalog(
+    host: ReviewHost,
+    repo: RepoRef,
+    pull: PullRequest,
+    catalog_rel: str,
+    name: str,
+    sha: str,
+    folder_rel: str,
+) -> None:
+    key = f"{INTERNAL}/{name}"
+    head = _catalog_document(pull, catalog_rel, host.file_at(repo, catalog_rel, pull.head_sha))
+    ancestor = host.common_ancestor(repo, pull.base, pull.head_sha)
+    base = _catalog_document(pull, catalog_rel, host.file_at(repo, catalog_rel, ancestor))
+    skills = dict(head.get("skills") or {})
+    entry = skills.pop(key, None)
+    owner = entry.get("owner") if isinstance(entry, dict) else None
+    if not isinstance(owner, str) or entry != catalog_entry(
+        name, sha, owner=owner, path=folder_rel
+    ):
+        _refuse(pull, f"{catalog_rel} does not hold the entry submit writes for {key} ({sha})")
+    rest = {**head, "skills": skills}
+    for document in (rest, base):
+        if not document.get("skills"):
+            document.pop("skills", None)
+    if rest != base:
+        _refuse(pull, f"it changes {catalog_rel} beyond the entry of {key}")
+
+
+def _catalog_document(pull: PullRequest, catalog_rel: str, data: bytes | None) -> dict:
+    """A catalog file's YAML as plain data ({} when the file is not there)."""
+    if data is None:
+        return {}
+    try:
+        document = load_yaml(data.decode("utf-8-sig"))[0]
+    except (UnicodeDecodeError, YamlFileError) as error:
+        _refuse(pull, f"{catalog_rel} cannot be read: {error}")
+    if document is None:
+        return {}
+    if not isinstance(document, dict) or not isinstance(document.get("skills") or {}, dict):
+        _refuse(pull, f"{catalog_rel} is not a catalog")
+    return dict(document)
+
+
+def _refuse(pull: PullRequest, why: str) -> NoReturn:
+    raise CliError(
+        f"#{pull.number} is not a skill submission as `agentic skills submit` makes one: {why}",
+        ExitCode.REFUSED,
+        hint="review it as a normal pull request, or ask the submitter to submit it again",
+    )

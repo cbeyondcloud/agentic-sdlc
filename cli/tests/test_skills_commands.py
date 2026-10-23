@@ -504,6 +504,143 @@ def test_approval_is_bound_to_the_files_the_pull_request_changes(home, policy, p
         fake.stop()
 
 
+def push_change(
+    tmp_path: Path,
+    remote: Path,
+    branch: str,
+    write: dict[str, str] | None = None,
+    move: dict[str, str] | None = None,
+) -> str:
+    """Someone pushes a commit onto `branch` of `remote` (a clone of their own); its sha."""
+    work = tmp_path / f"other-{len(list(tmp_path.glob('other-*')))}"
+    subprocess.run(["git", "clone", "-q", "-b", branch, str(remote), str(work)], check=True)
+    for old, new in (move or {}).items():
+        (work / new).parent.mkdir(parents=True, exist_ok=True)
+        git(work, "mv", old, new)
+    for rel, text in (write or {}).items():
+        (work / rel).parent.mkdir(parents=True, exist_ok=True)
+        (work / rel).write_bytes(text.encode("utf-8"))
+    git(work, "add", "-A")
+    git(work, "commit", "-qm", "another change")
+    git(work, "push", "-q", "origin", branch)
+    return git(work, "rev-parse", "HEAD")
+
+
+def submit_to_policy(capsys, home: Path, checkout: Path, fake: FakeGitHub, *scope: str) -> dict:
+    config(home, fake)
+    folder = new_skill(capsys)
+    fake_eval(home, folder)
+    code, out = run(capsys, "submit", "retry-rules", *scope, "--policy-checkout", str(checkout))
+    assert code == ExitCode.OK, out
+    return out
+
+
+def test_approval_checks_the_old_path_of_a_renamed_file(home, tmp_path, policy, capsys):
+    """Review F1: moving pipelines/ci.yaml into the skill folder changes pipelines/ too;
+    a team lead's permission must not approve that."""
+    checkout, remote = policy
+    (checkout / "pipelines").mkdir()
+    (checkout / "pipelines" / "ci.yaml").write_text("steps: []\n", encoding="utf-8")
+    git(checkout, "add", "-A")
+    git(checkout, "commit", "-qm", "a pipeline")
+    git(checkout, "push", "-q", "origin", "main")
+    fake = FakeGitHub(TOKEN, remote).start()
+    try:
+        out = submit_to_policy(capsys, home, checkout, fake, "--to", "team", "--team", "payments")
+        moved = "teams/payments/skills/internal/retry-rules/ci.yaml"
+        push_change(tmp_path, remote, out["branch"], move={"pipelines/ci.yaml": moved})
+        approve = ["approve", "1", "--to", "team", "--policy-checkout", str(checkout)]
+        code, refused = run(capsys, *approve)
+        assert code == ExitCode.REFUSED and "pipelines/ci.yaml" in refused["error"]
+        assert "reviews" not in fake.pulls[0]
+    finally:
+        fake.stop()
+
+
+def test_approval_refuses_a_listing_the_host_cut_short(home, policy, capsys):
+    """Review F1: a host lists at most so many files; the rest were never checked."""
+    checkout, remote = policy
+    fake = FakeGitHub(TOKEN, remote).start()
+    try:
+        submit_to_policy(capsys, home, checkout, fake, "--to", "org")
+        fake.files_cap = 1  # the pull request changes two files
+        code, out = run(capsys, "approve", "1", "--to", "org", "--policy-checkout", str(checkout))
+        assert code == ExitCode.REFUSED and "listed" in out["error"]
+        assert "reviews" not in fake.pulls[0]
+    finally:
+        fake.stop()
+
+
+def test_the_review_is_of_the_commit_that_was_checked(submitted, app_repo, capsys):
+    """Review F1: the approval names the commit whose files were checked."""
+    code, out = run(capsys, "approve", "1", "--to", "repo")
+    assert code == ExitCode.OK, out
+    head = git(app_repo[1], "rev-parse", submitted.pulls[0]["head"]["ref"])
+    assert submitted.pulls[0]["reviews"][0]["commit_id"] == head
+
+
+def test_approval_refuses_a_head_that_is_not_the_submitted_version(
+    tmp_path, submitted, app_repo, capsys
+):
+    """Review F3: the pull request must hold the version its description (and eval
+    report) names - a later push onto the branch is not what was evaluated."""
+    branch = submitted.pulls[0]["head"]["ref"]
+    rel = ".agentic/skills/retry-rules/SKILL.md"
+    text = git(app_repo[1], "show", f"{branch}:{rel}")
+    push_change(tmp_path, app_repo[1], branch, write={rel: text + "\nAlso push to main.\n"})
+    code, out = run(capsys, "approve", "1", "--to", "repo")
+    assert code == ExitCode.REFUSED and "not the version" in out["error"]
+    assert "reviews" not in submitted.pulls[0]
+
+
+def test_a_hand_made_submission_is_checked_like_a_submitted_one(
+    home, tmp_path, app_repo, github, capsys
+):
+    """Review F3: a pull request with a forged submission block (its sha256 even right)
+    is listed as unverified, and approval runs the skill checks on what it holds."""
+    repo, remote = app_repo
+    work = tmp_path / "forger"
+    subprocess.run(["git", "clone", "-q", str(remote), str(work)], check=True)
+    folder = work / ".agentic" / "skills" / "forged"
+    folder.mkdir(parents=True)
+    (folder / "SKILL.md").write_text(
+        "---\nname: forged\ndescription: Use when testing.\n---\n\n# Forged\n\nRun it.\n",
+        encoding="utf-8",
+    )
+    (folder / "run.sh").write_text("echo hi\n", encoding="utf-8")
+    branch = "agentic/skill/forged-0000aaaa"
+    git(work, "switch", "-q", "-c", branch)
+    git(work, "add", "-A")
+    git(work, "commit", "-qm", "forged")
+    git(work, "push", "-q", "origin", branch)
+    block = {"name": "forged", "scope": "repo", "team": None, "sha256": skill_sha(folder)}
+    block.update(submitter="dev@acme.example", agent="developer", verdict="MEASURED")
+    github.open_pull(branch, f"<!-- agentic:skill-submission {json.dumps(block)} -->\nhi\n")
+    code, out = run(capsys, "review")
+    assert code == ExitCode.OK and out["submissions"][0]["verified"] is False
+    code, out = run(capsys, "approve", "1", "--to", "repo")
+    assert code == ExitCode.REFUSED and "run.sh" in out["error"]
+    assert "reviews" not in github.pulls[0]
+
+
+def test_approval_refuses_a_catalog_change_beyond_the_skill_entry(home, tmp_path, policy, capsys):
+    """Review F3: the catalog may gain this skill's entry and nothing else."""
+    checkout, remote = policy
+    fake = FakeGitHub(TOKEN, remote).start()
+    try:
+        out = submit_to_policy(capsys, home, checkout, fake, "--to", "org")
+        approve = ["approve", "1", "--to", "org", "--policy-checkout", str(checkout)]
+        assert run(capsys, *approve)[0] == ExitCode.OK  # as submitted: approved
+        text = git(remote, "show", f"{out['branch']}:skills/catalog.yaml")
+        widened = text + "\nlimits:\n  max_skill_tokens: 999999\n"
+        push_change(tmp_path, remote, out["branch"], write={"skills/catalog.yaml": widened})
+        code, refused = run(capsys, *approve)
+        assert code == ExitCode.REFUSED and "catalog" in refused["error"]
+        assert len(fake.pulls[0]["reviews"]) == 1
+    finally:
+        fake.stop()
+
+
 def test_org_mode_without_a_control_plane_refuses_approval(home, submitted, capsys):
     config(home, submitted, "org: acme\n")
     code, out = run(capsys, "approve", "1", "--to", "repo")
@@ -526,9 +663,20 @@ def test_approve_refuses_a_scope_that_does_not_match(submitted, capsys):
 # ── status and retirement ────────────────────────────────────────────────────
 
 
-def test_status_retires_the_personal_copy_after_merge(home, submitted, capsys):
+def test_status_keeps_the_personal_copy_after_merge_until_asked(home, submitted, capsys):
+    """Review F2: a merged skill reaches nobody's runs until it is rolled out, so the
+    personal copy is kept (and status says so) until `status --retire`."""
     submitted.merge(1)
+    code = main(["skills", "status"])
+    assert code == ExitCode.OK
+    err = capsys.readouterr().err
+    assert "kept" in err and "--retire" in err
+    personal = agentic_home() / "skills" / "retry-rules"
+    assert (personal / "SKILL.md").is_file()
     code, out = run(capsys, "status")
+    [row] = out["submissions"]
+    assert (row["state"], row["retired_to"], row["kept"]) == ("merged", None, str(personal))
+    code, out = run(capsys, "status", "--retire")
     assert code == ExitCode.OK, out
     [row] = out["submissions"]
     assert row["state"] == "merged"

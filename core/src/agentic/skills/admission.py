@@ -54,17 +54,31 @@ SPDX_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*$")
 
 _FETCH = r"(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)"
 _SHELL = r"(ba|z|da|k)?sh"
+#: What runs the text it is given: a shell or a script interpreter, maybe path-qualified
+#: (`/bin/sh`) and behind `sudo [-flags]` or `env` (review F6).
+_RUNNER = (
+    r"(sudo\s+(-\S+\s+)*)?(env\s+)?([\w.~-]*/)*"
+    rf"({_SHELL}|pwsh|powershell|python[0-9.]*|py|node|perl|ruby|php)(\.exe)?\b"
+)
+#: The pipes between a download and what runs it: a `tee` copy on the way is no excuse.
+_TO_RUNNER = rf"[^\n|]*(\|\s*tee\b[^\n|]*)*\|\s*{_RUNNER}"
+_SUBSTITUTED_FETCH = rf"[\"']?(\$\(|`)\s*{_FETCH}\b"
 DOWNLOAD_AND_RUN = [
-    re.compile(rf"\b{_FETCH}\b[^\n|]*\|\s*(sudo\s+)?{_SHELL}\b", re.IGNORECASE),
+    re.compile(rf"\b{_FETCH}\b{_TO_RUNNER}", re.IGNORECASE),
     re.compile(r"\|\s*(iex|Invoke-Expression)\b", re.IGNORECASE),
-    re.compile(rf"\bbase64\s+(-d|--decode)\b[^\n|]*\|\s*(sudo\s+)?{_SHELL}\b"),
-    # process and command substitution (DF-142): `bash <(curl ...)`, `sh -c "$(curl ...)"`
-    re.compile(rf"(\b{_SHELL}|\bsource|(^|\s)\.)\s+<\(\s*{_FETCH}\b", re.IGNORECASE),
-    re.compile(rf"\b{_SHELL}\s+-c\s+[\"']?\$\(\s*{_FETCH}\b", re.IGNORECASE),
+    re.compile(rf"\bbase64\s+(-d|--decode)\b{_TO_RUNNER}"),
+    # process and command substitution (DF-142): `bash <(curl ...)`, `sh -c "$(curl ...)"`,
+    # `eval "$(curl ...)"`
+    re.compile(rf"(\b{_RUNNER}|\bsource|(^|\s)\.)\s+<\(\s*{_FETCH}\b", re.IGNORECASE),
+    re.compile(rf"\b{_RUNNER}\s+-c\s+{_SUBSTITUTED_FETCH}", re.IGNORECASE),
+    re.compile(rf"\beval\s+{_SUBSTITUTED_FETCH}", re.IGNORECASE),
 ]
 INJECTION = [
     re.compile(r"\bignore\s+(all\s+)?(the\s+)?(previous|prior|above)\s+instructions\b", re.I),
     re.compile(r"\bdisregard\s+(all\s+)?(your|previous|prior|the\s+above)\s+instructions\b", re.I),
+    re.compile(
+        r"\b(ignore|disregard)\s+(all\s+)?(of\s+)?(the|your)\s+instructions\s+above\b", re.I
+    ),
     re.compile(r"\bdo\s+not\s+(tell|inform)\s+the\s+user\b", re.I),
     re.compile(
         r"\bforget\s+(everything|all(\s+of)?(\s+the)?)\s+(above|before|prior|previous)\b", re.I
@@ -146,8 +160,10 @@ def scan_text(text: str) -> list[tuple[int, str]]:
     The scan is a tripwire for careless or lazy payloads, not a proof of safety (an LLM
     scan and a person's review are the later steps, spec §11.3):
 
-      * download-and-run commands, matched on logical lines - a line ending with `\\`
-        or a PowerShell backtick continues on the next, and is reported where it starts;
+      * download-and-run commands (a fetch piped, through any `tee`, into a shell or a
+        script interpreter; or substituted into `sh -c`, `eval` or `<(...)`), matched
+        on logical lines - a line ending with `\\`, a PowerShell backtick or a pipe
+        continues on the next, and is reported where it starts;
       * prompt-injection phrases, matched on the whole text with every run of white
         space read as one space, so a phrase split across lines is still found;
       * hidden characters (`hidden_char`) and telemetry or analytics URLs, per line.
@@ -170,20 +186,28 @@ def scan_text(text: str) -> list[tuple[int, str]]:
             found.append((words[max(index, 0)][1], "reads like a prompt injection"))
     for number, line in enumerate(lines, start=1):
         if char := hidden_char(line):
-            found.append((number, f"hidden character U+{ord(char):04X}"))
+            why = (
+                f"hidden character U+{ord(char):04X}: remove it or replace it with plain text "
+                "(text pasted from a word processor or a PDF often carries one)"
+            )
+            found.append((number, why))
         for url in telemetry_urls(line):
             found.append((number, f"telemetry or analytics URL: {url}"))
     return sorted(dict.fromkeys(found), key=lambda item: item[0])
 
 
 def _logical_lines(lines: list[str]) -> list[tuple[int, str]]:
-    """(first line number, text) with continued lines joined."""
+    """(first line number, text) with continued lines joined: after a `\\` or backtick,
+    and after a trailing pipe, which a shell also reads on (a Markdown table row, which
+    starts with a pipe too, is not continued)."""
     joined: list[tuple[int, str]] = []
     current: tuple[int, str] | None = None
     for number, line in enumerate(lines, start=1):
         stripped = line.rstrip()
-        continues = stripped.endswith(("\\", "`"))
-        part = stripped[:-1] if continues else line
+        escaped = stripped.endswith(("\\", "`"))
+        piped = stripped.endswith("|") and not stripped.lstrip().startswith("|")
+        continues = escaped or piped
+        part = stripped[:-1] if escaped else line
         current = (number, part) if current is None else (current[0], f"{current[1]} {part}")
         if not continues:
             joined.append(current)

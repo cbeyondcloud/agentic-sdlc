@@ -68,6 +68,38 @@ def test_scaffold_refuses_a_bad_name(tmp_path: Path, name: str):
         scaffold(tmp_path, name)
 
 
+@pytest.mark.parametrize("name", ["con", "nul", "aux", "prn", "com1", "lpt9"])
+def test_a_windows_device_name_is_refused_on_every_platform(tmp_path: Path, name: str):
+    """Review F10: `nul` crashed `skills new` on Windows, and a team or org skill (or team)
+    of such a name, merged from a Mac, would break every Windows checkout of the repo."""
+    with pytest.raises(SkillsError, match="Windows"):
+        scaffold(tmp_path, name)
+    assert not (tmp_path / "skills").exists()
+    with pytest.raises(SkillsError, match="Windows"):
+        promotion_paths("org", name)
+    with pytest.raises(SkillsError, match="Windows"):
+        promotion_paths("team", "retry-rules", name)
+
+
+@pytest.mark.parametrize(
+    ("rel", "bad"),
+    [
+        ("aux.md", True),
+        ("notes/CON.txt", True),
+        ("lpt1/readme.md", True),
+        ("notes/what?.md", True),
+        ("notes/trailing.", True),
+        ("console.md", False),
+        ("notes/auxiliary.md", False),
+        ("references/com10.md", False),
+    ],
+)
+def test_unportable_paths_are_named(rel: str, bad: bool):
+    from agentic.skills.authoring import unportable
+
+    assert (unportable(rel) is not None) is bad
+
+
 def test_scaffold_never_overwrites(tmp_path: Path):
     scaffold(tmp_path, "notes")
     with pytest.raises(SkillsError, match="already exists"):

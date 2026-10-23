@@ -42,6 +42,11 @@ class HostingError(Exception):
         self.retry_after = retry_after
 
 
+class ListingIncomplete(HostingError):
+    """The host listed fewer of a pull request's files than it changes (a host caps its
+    listing): what was not listed cannot be checked."""
+
+
 @dataclass(frozen=True)
 class RepoRef:
     """A hosted repository: `host` (lower case, no port) and `owner/name`."""
@@ -105,11 +110,24 @@ class ReviewHost(Protocol):
 
     def get_pull_request(self, repo: RepoRef, number: int) -> PullRequest: ...
 
-    def pull_request_files(self, repo: RepoRef, number: int) -> list[str]: ...
+    def pull_request_files(self, repo: RepoRef, number: int) -> list[str]:
+        """Every path the pull request touches - a renamed file's old path as well as its
+        new one. ListingIncomplete when the host lists fewer files than it changes."""
+        ...
+
+    def file_at(self, repo: RepoRef, path: str, ref: str) -> bytes | None:
+        """The bytes of the file `path` at commit `ref`; None when no file is there."""
+        ...
+
+    def common_ancestor(self, repo: RepoRef, base: str, head: str) -> str:
+        """The commit a pull request from `head` into `base` is compared with."""
+        ...
 
     def review_pull_request(
-        self, repo: RepoRef, number: int, *, approve: bool, body: str
-    ) -> None: ...
+        self, repo: RepoRef, number: int, *, approve: bool, body: str, commit: str | None = None
+    ) -> None:
+        """Approve or request changes; with `commit`, the review is of that commit."""
+        ...
 
 
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://(.*)$", re.DOTALL)
