@@ -17,21 +17,31 @@ from agentic.orgapi import (
     InviteInfo,
     InviteRedeem,
     InviteRedeemed,
+    OffboardRequest,
+    OffboardResult,
     TenantRef,
 )
 from agentic_cp.audit import AuditEvent, append, format_at
+from agentic_cp.auth.api import assignments_of
 from agentic_cp.auth.deps import Caller
 from agentic_cp.auth.tokens import TokenContext, issue_token, token_lifetime
 from agentic_cp.auth.users import UserError, UserRow, user_by_email, user_by_id
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
 from agentic_cp.keys.api import NO_STORE, unavailable
 from agentic_cp.keys.gateway import GatewayUnavailable
-from agentic_cp.keys.store import forget_issued, issue_key
-from agentic_cp.provisioning.invites import create_invite, resolve_invite, well_formed
-from agentic_cp.rbac.authz import Org, Team, authorize, effective_permissions
-from agentic_cp.tables import assignments, invites
-from agentic_cp.tenancy.context import tenant_tx
-from agentic_cp.tenancy.tenants import current_tenant
+from agentic_cp.keys.store import forget_issued, issue_key, revoke_user_keys
+from agentic_cp.provisioning.invites import (
+    create_invite,
+    resolve_invite,
+    revoke_unused,
+    well_formed,
+)
+from agentic_cp.rbac import store as rbac_store
+from agentic_cp.rbac.authz import Org, Team, authorize, effective_permissions, require
+from agentic_cp.rbac.defaults import ORG_ADMIN
+from agentic_cp.tables import assignments, invites, kill_switches, tokens, users
+from agentic_cp.tenancy.context import require_tenant_id, tenant_tx
+from agentic_cp.tenancy.tenants import bump_rbac_revision, current_tenant, lock_rbac
 
 router = APIRouter(prefix=API_PREFIX, tags=["provisioning"], responses=PROBLEM_RESPONSES)
 
@@ -133,6 +143,118 @@ async def reinvite(email: str, request: Request, ctx: Caller) -> InviteInfo:
         )
     assert invite is not None  # a person, and a public URL
     return invite
+
+
+@router.post("/users/{email}/offboard")
+async def offboard(
+    email: str, body: OffboardRequest, request: Request, ctx: Caller
+) -> OffboardResult:
+    """End a person's access in one step (org `rbac.assign`, ruling P10): disabled (their
+    roles stop counting), every control-plane token and unused invite revoked, a `user:`
+    kill switch stopping their running work, and their gateway keys revoked - a key the
+    gateway cannot revoke now is pending and the worker finishes it."""
+    state = request.app.state
+    reason = body.reason.strip()
+    async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+        await lock_rbac(conn)
+        await require(ctx, "rbac.assign", Org(), conn=conn, cache=state.enforcers)
+        user = await _person(conn, email)
+        if user is None:
+            raise not_found("user")
+        if user.status != "active":
+            raise ApiProblem(409, "user.disabled", f"{user.email} is already offboarded")
+        held = await assignments_of(conn, user.id)
+        if any(a.role == ORG_ADMIN and a.scope == "org" for a in held):
+            if await rbac_store.org_admin_count(conn) <= 1:
+                raise ApiProblem(
+                    409,
+                    "rbac.last_admin",
+                    f"{user.email} is the tenant's last org admin",
+                    hint="assign another org admin first",
+                )
+        now = state.clock()
+        await conn.execute(update(users).where(users.c.id == user.id).values(status="disabled"))
+        revoked_tokens = await conn.execute(
+            update(tokens)
+            .where(tokens.c.user_id == user.id, tokens.c.revoked_at.is_(None))
+            .values(revoked_at=now)
+            .returning(tokens.c.id)
+        )
+        token_ids = [str(row.id) for row in revoked_tokens]
+        invites_revoked = await revoke_unused(
+            conn, user, now=now, actor=ctx.email, actor_kind=ctx.actor_kind, clock=state.clock
+        )
+        switch = (
+            await conn.execute(
+                kill_switches.insert()
+                .values(
+                    tenant_id=await require_tenant_id(conn),
+                    scope_kind="user",
+                    scope_value=user.email,
+                    mode="kill",
+                    reason=f"offboarded: {reason}"[:500],
+                    created_by=ctx.email,
+                    created_at=now,
+                )
+                .returning(kill_switches.c.id)
+            )
+        ).scalar_one()
+        await append(
+            conn,
+            AuditEvent(
+                event="killswitch.set",
+                actor=ctx.email,
+                actor_kind=ctx.actor_kind,
+                target=f"killswitch:{switch}",
+                reason=f"offboarded: {reason}"[:500],
+                after={
+                    "scope_kind": "user",
+                    "scope_value": user.email,
+                    "team": None,
+                    "mode": "kill",
+                },
+            ),
+            clock=state.clock,
+        )
+        revoked, pending = await revoke_user_keys(
+            conn,
+            state.gateway_keys,
+            user,
+            actor=ctx.email,
+            actor_kind=ctx.actor_kind,
+            clock=state.clock,
+            reason=f"offboarded: {reason}",
+        )
+        revision = await bump_rbac_revision(conn)
+        await append(
+            conn,
+            AuditEvent(
+                event="user.offboarded",
+                actor=ctx.email,
+                actor_kind=ctx.actor_kind,
+                target=f"user:{user.email}",
+                reason=reason,
+                before={"status": user.status},
+                after={
+                    "status": "disabled",
+                    "tokens_revoked": token_ids,
+                    "invites_revoked": invites_revoked,
+                    "proxy_keys_revoked": revoked,
+                    "proxy_keys_pending": pending,
+                    "kill_switch": str(switch),
+                    "rbac_revision": revision,
+                },
+            ),
+            clock=state.clock,
+        )
+    return OffboardResult(
+        email=user.email,
+        tokens_revoked=len(token_ids),
+        invites_revoked=invites_revoked,
+        proxy_keys_revoked=revoked,
+        proxy_keys_pending=pending,
+        kill_switch=switch,
+    )
 
 
 @router.post("/invites/redeem")

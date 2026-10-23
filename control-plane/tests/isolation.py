@@ -499,6 +499,13 @@ ENDPOINT_CASES += [
     EndpointCase("notify", "GET", "/v1/notifications", _notification_in_b, must_not_list=True),
     EndpointCase("proxy-keys", "DELETE", "/v1/users/{email}/proxy-keys", _user_in_b),
     EndpointCase("provisioning", "POST", "/v1/users/{email}/invite", _user_in_b),
+    EndpointCase(
+        "provisioning",
+        "POST",
+        "/v1/users/{email}/offboard",
+        _user_in_b,
+        body={"reason": "left the company"},
+    ),
     EndpointCase("killswitch", "DELETE", "/v1/killswitch/{id}", _switch_in_b),
     EndpointCase("killswitch", "GET", "/v1/killswitch", _switch_in_b, must_not_list=True),
     EndpointCase(
