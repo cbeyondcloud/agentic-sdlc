@@ -18,10 +18,10 @@ def on_claude_code(agent, **changes):
     )
 
 
-def issues(agent, policy, available=BOTH, skip=("secret_scan",)):
+def issues(agent, policy, available=BOTH, skip=("secret_scan",), honoured=None):
     # claude-code always reports its unscanned egress (DF-149); tests of other settings
     # skip it, and the secret_scan tests below look at it alone
-    found = backend_issues(agent, policy, available=available)
+    found = backend_issues(agent, policy, available=available, honoured=honoured)
     return [(i.setting, i.action) for i in found if i.setting not in skip]
 
 
@@ -172,6 +172,16 @@ def test_an_org_can_block_backends_without_shell_default_deny(resolved, policy):
     policy.unhonoured["shell_default_deny"] = "block"
     found = issues(on_codex(resolved, tools=["run_shell"]), policy, available=ALL)
     assert found == [("shell_default_deny", "block")]
+
+
+def test_a_wired_guard_hook_makes_codex_honour_shell_default_deny(resolved, policy):
+    # DF-426: with the PreToolUse guard hook wired, codex refuses unlisted commands, so the
+    # static matrix's gap is neither reported nor blocked
+    policy.unhonoured["shell_default_deny"] = "block"
+    agent = on_codex(resolved, tools=["run_shell"])
+    assert issues(agent, policy, available=ALL, honoured={"codex": {"shell_default_deny"}}) == []
+    other = {"claude-code": {"shell_default_deny"}}  # another backend's wiring changes nothing
+    assert issues(agent, policy, available=ALL, honoured=other) == [("shell_default_deny", "block")]
 
 
 def test_ignore_hides_the_shell_gap(resolved, policy):

@@ -49,6 +49,7 @@ def check(tmp_path: Path, fixtures: Path):
         sandbox=None,
         available_backends=None,
         classification=None,
+        honoured=None,
     ):
         layer = tmp_path / "layer"
         for name, extra in {**AGENTS, **(extra_agents or {})}.items():
@@ -75,6 +76,7 @@ def check(tmp_path: Path, fixtures: Path):
             actions=actions,
             sandbox=sandbox,
             available_backends=available_backends,
+            honoured=honoured,
         )
 
     return run
@@ -188,6 +190,20 @@ def test_capability_problems_reach_preflight(check):  # M1-27, Review Focus 4
     assert ("develop", "error") in found  # tools claude-code cannot offer
     assert ("develop", "warning") in found  # temperature not honoured (policy: warn)
     assert any("spawn_agent" in p.detail for p in report.problems if p.check == "backend")
+
+
+def test_settings_the_wiring_honours_are_not_reported(check):  # DF-426
+    extra = "type: developer\nconsumes: [design, review]\nbackend: codex\ntools: [run_shell]\n"
+    available = {"native", "codex"}
+    plain = check(CLEAN, extra_agents={"dev": extra}, available_backends=available)
+    wired = check(
+        CLEAN,
+        extra_agents={"dev": extra},
+        available_backends=available,
+        honoured={"codex": {"shell_default_deny"}},
+    )
+    assert any("shell_default_deny" in p.detail for p in plain.problems)
+    assert not any("shell_default_deny" in p.detail for p in wired.problems)
 
 
 def test_input_from_a_conditional_step_is_a_warning(check):  # DF-05

@@ -11,7 +11,7 @@ engine, policy and protocols stay provider-agnostic.
 """
 
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from agentic.policy import OrgPolicy, ResolvedAgent
@@ -125,10 +125,19 @@ class Issue:
 
 
 def backend_issues(
-    agent: ResolvedAgent, policy: OrgPolicy, *, available: Collection[str]
+    agent: ResolvedAgent,
+    policy: OrgPolicy,
+    *,
+    available: Collection[str],
+    honoured: Mapping[str, Collection[str]] | None = None,
 ) -> list[Issue]:
-    """Every way `agent`'s backend falls short of what the agent asks for."""
+    """Every way `agent`'s backend falls short of what the agent asks for. `honoured`
+    names, per backend, the settings the caller's wiring makes good although the static
+    matrix says otherwise (DF-426: codex with the guard hook refuses unlisted commands)."""
     caps = CAPABILITIES.get(agent.backend)
+    if caps is not None and honoured and honoured.get(agent.backend):
+        wired = {s: True for s in honoured[agent.backend] if s in _WIRABLE}
+        caps = replace(caps, **wired)
     if caps is None or agent.backend not in available:
         why = f"backend {agent.backend!r} is not available here (available: {sorted(available)})"
         return [Issue("backend", "block", why)]
@@ -162,6 +171,12 @@ def backend_issues(
             "`git -C . push` escapes it; the sandbox is the boundary)",
         )
     return found
+
+
+#: The matrix flags a wiring may make good (`backend_issues(honoured=...)`): a guard hook
+#: can add the shell's default-deny; a tool the backend lacks, a model setting it drops or
+#: a scan of calls it sends itself, no wiring adds - those are never overridden.
+_WIRABLE = frozenset({"shell_default_deny"})
 
 
 def _temperature_honoured(agent: ResolvedAgent, caps: BackendCapabilities) -> bool:
