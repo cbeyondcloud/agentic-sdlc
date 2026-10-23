@@ -320,7 +320,7 @@ def test_a_planted_custom_tool_is_never_loaded(world, agent):
 
 def test_a_project_config_naming_plugin_packages_is_refused(world, agent):
     (world.tree / "opencode.json").write_text('{"plugin": ["opencode-evil@1.0.0"]}', "utf-8")
-    with pytest.raises(RuntimeError, match="names OpenCode plugins"):
+    with pytest.raises(RuntimeError, match="loads OpenCode plugins"):
         run(world.runner(agent))
     assert world.proxy.attempts == []  # no npm install was tried
 

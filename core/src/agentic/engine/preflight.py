@@ -15,7 +15,7 @@ A warning (an input that may be missing when a step is skipped) is reported but
 does not fail preflight.
 """
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -111,7 +111,10 @@ def preflight(
     sandbox: "SandboxDecision | None" = None,
     available_backends: Collection[str] | None = None,
     skills: SkillAvailability | None = None,
+    honoured: Mapping[str, Collection[str]] | None = None,
 ) -> PreflightReport:
+    """Every check before any spend. `honoured`: per backend, the capability settings the
+    caller's wiring makes good (`backend_issues`)."""
     report = PreflightReport(pipeline=pipeline.name, problems=[])
     problems = report.problems
     backends = available() if available_backends is None else available_backends
@@ -161,7 +164,7 @@ def preflight(
                     step.id, "kind", f"{v.field}: unknown handoff kind {v.requested!r}", v.allowed
                 )
             )
-        for issue in backend_issues(agent, policy, available=backends):  # M1-27
+        for issue in backend_issues(agent, policy, available=backends, honoured=honoured):
             severity = "error" if issue.action == "block" else "warning"
             problems.append(
                 Problem(step.id, "backend", issue.detail, agent.backend, severity=severity)

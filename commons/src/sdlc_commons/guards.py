@@ -33,6 +33,7 @@ The allow-list (M1-31: an unknown program is refused) and the OS sandbox
 (M1-32/33) are the controls for those; this guard is defence in depth.
 """
 
+import fnmatch
 import itertools
 import os
 import re
@@ -321,6 +322,33 @@ class Guard:
                         why = f"{_shown(Path(raw), root)}: matches the deny rule {glob!r} ({owner})"
                         blocks.append(Block(wall, why))
         return blocks
+
+    def changes(self, paths: Sequence[Path | str]) -> list[Block]:
+        """Every reason keeping these changed files is refused: the same answer as
+        `writes`, at a cost that stays small for the thousands of files one step may leave
+        (M2-60, review F4: `writes` resolves each path once per pattern). A file is judged
+        in full only when a write-deny pattern could match it - its path as written,
+        from its tree's top or the repository's, in any case and with any part spelled
+        oddly (a trailing dot or space, a `:stream`) - or when it lies outside every tree
+        or is reached through a link."""
+        homes = self._homes()
+        could_match = _any_case(self._path_rules())
+        links: dict[Path, bool] = {}
+        suspects = []
+        for raw in paths:
+            path = Path(raw)
+            home = next((h for h in homes if path.is_relative_to(h)), None)
+            if home is None or not path.is_relative_to(self.target):
+                suspects.append(raw)
+                continue
+            names = (path.relative_to(home).as_posix(), path.relative_to(self.target).as_posix())
+            if (
+                any(could_match.match(name) for name in names)
+                or _ODD_PART.search(names[0])
+                or _through_link(path, home, links)
+            ):
+                suspects.append(raw)
+        return self.writes(suspects) if suspects else []
 
     # ── compiled for the OS sandbox and other backends (M1-31) ─────────────────
 
@@ -1021,6 +1049,34 @@ def _path_spelling(word: str) -> str:
     while path.startswith("./"):
         path = path[2:]
     return path
+
+
+#: A path part Windows would store under another name (a trailing dot or space, Zyroflo
+#: T499) or that names an NTFS stream: `Guard.changes` judges such a file in full.
+_ODD_PART = re.compile(r"[. ](?:/|$)|:")
+
+
+def _any_case(patterns: Iterable[str]) -> re.Pattern[str]:
+    """One expression matching what any of these fnmatch patterns matches, in any case,
+    with `**/x` also matching a bare `x` (Zyroflo's `matches`): never narrower than it."""
+    spelled = [str(p) for p in patterns]
+    spelled += [p[3:] for p in spelled if p.startswith("**/")]
+    if not spelled:
+        return re.compile(r"(?!)")
+    return re.compile("|".join(fnmatch.translate(p) for p in spelled), re.IGNORECASE)
+
+
+def _through_link(path: Path, home: Path, seen: dict[Path, bool]) -> bool:
+    """Whether `path`, or a folder between `home` and it, is a link (a symbolic link, or
+    a junction on Windows): each folder is looked at once (`seen`)."""
+    current = path
+    while current != home and current.is_relative_to(home):
+        if current not in seen:
+            seen[current] = current.is_symlink() or current.is_junction()
+        if seen[current]:
+            return True
+        current = current.parent
+    return False
 
 
 def _inside(path: Path, folder: Path) -> bool:

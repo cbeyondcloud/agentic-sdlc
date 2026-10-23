@@ -269,6 +269,43 @@ def test_an_agent_that_fails_to_start_a_session_names_its_stderr(world, tmp_path
         run(runner)
 
 
+def test_the_stderr_tail_never_shows_a_secret(world, tmp_path):  # DF-448
+    key = "tl-" + "very-secret-" + "value"
+    crash = tmp_path / "crash.py"
+    crash.write_text(
+        f"import sys\nsys.stderr.write('auth failed with {key}')\nsys.exit(3)\n", "utf-8"
+    )
+    profile = fake_profile(configure=lambda setup: Launch(files={"k.key": key}))
+    runner = world.runner([], profile=profile)
+    runner.command = [sys.executable, str(crash)]
+    with pytest.raises(RuntimeError, match="auth failed with") as raised:
+        run(runner)
+    assert key not in str(raised.value) and "***" in str(raised.value)
+
+
+def test_a_step_home_that_cannot_be_removed_is_retried_then_warned(world, monkeypatch, caplog):
+    # DF-448: Windows can hold a file open for a moment; the transcript must not stay
+    # behind silently
+    import agentic.backends.acp.runner as runner_module
+
+    real, tries = runner_module.shutil.rmtree, []
+
+    def locked(path, *args, **kwargs):
+        if kwargs.get("ignore_errors"):  # the clean start before the step
+            return real(path, *args, **kwargs)
+        tries.append(path)
+        raise PermissionError(13, "in use", str(path))
+
+    monkeypatch.setattr(runner_module.shutil, "rmtree", locked)
+    monkeypatch.setattr(runner_module, "REMOVE_PAUSE_S", 0.0)
+    with caplog.at_level("WARNING", logger="agentic.backends.acp"):
+        outcome = run(world.runner([[{"say": "VALID"}]]))
+    assert outcome.status == "completed"  # the step's result stands
+    assert len(tries) == 3
+    home = world.home_root / "r-1" / "develop-1" / "developer"
+    assert str(home) in caplog.text and "could not be removed" in caplog.text
+
+
 def test_an_agent_on_another_protocol_version_is_refused(world):
     with pytest.raises(RuntimeError, match="protocol"):
         run(world.runner([[{"say": "VALID"}]], protocol=2))

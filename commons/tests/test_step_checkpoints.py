@@ -105,6 +105,92 @@ def test_finish_commits_each_step_on_the_run_branch(repo):
     ]
 
 
+def test_changed_lists_what_a_step_wrote_since_its_base(estate):  # M2-60, DF-443
+    checkpoints = open_run(estate)
+    root = checkpoints.prepare()
+    checkpoints.begin(fresh=True)
+    (root / "api" / "app.py").write_text("x = 2\n", encoding="utf-8")  # changed
+    (root / "lib" / ".github" / "workflows").mkdir(parents=True)
+    (root / "lib" / ".github" / "workflows" / "ci.yml").write_text("on: push\n", "utf-8")
+    (root / "lib" / "app.py").unlink()  # deleted
+    (root / "api" / ".venv").mkdir()
+    (root / "api" / ".venv" / "ignored.txt").write_text("x", encoding="utf-8")  # git ignores it
+    (root / "api" / "with space.txt").write_text("x", encoding="utf-8")
+
+    changed = sorted(checkpoints.changed())
+
+    assert changed == sorted(
+        [
+            root / "api" / "app.py",
+            root / "api" / "with space.txt",
+            root / "lib" / ".github" / "workflows" / "ci.yml",
+            root / "lib" / "app.py",
+        ]
+    )
+
+
+def _agent_commits(tree: Path, name: str) -> None:
+    """What an agent's own `git commit` (or any tool that commits) does in the tree."""
+    (tree / name).parent.mkdir(parents=True, exist_ok=True)
+    (tree / name).write_text("planted\n", encoding="utf-8")
+    git(tree, "add", "-A")
+    git(tree, "commit", "-qm", "agent commit")
+
+
+def test_changed_lists_what_an_agent_committed_since_the_steps_base(repo):  # review F1
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    checkpoints.begin(fresh=True)
+    _agent_commits(tree, ".github/workflows/ci.yml")
+    (tree / "later.txt").write_text("x", encoding="utf-8")
+
+    assert sorted(checkpoints.changed()) == sorted(
+        [tree / ".github" / "workflows" / "ci.yml", tree / "later.txt"]
+    )
+
+
+def test_the_steps_base_outlives_the_process(repo):  # review F1: a crash, then a resume
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    base = checkpoints.begin(fresh=True)
+    _agent_commits(tree, "planted.txt")
+
+    again = StepCheckpoints(repo, RUN)
+    assert again.changed() == [tree / "planted.txt"]
+    assert again.begin(fresh=True) == base  # the retry starts from the step's real base
+    assert not (tree / "planted.txt").exists()
+
+
+def test_a_fresh_begin_undoes_an_unfinished_attempts_commits(repo):  # review F1
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    base = checkpoints.begin(fresh=True)
+    _agent_commits(tree, "planted.txt")
+
+    assert checkpoints.begin(fresh=True) == base
+    assert git(tree, "rev-parse", "HEAD") == base["repo"]
+    assert not (tree / "planted.txt").exists()
+
+
+def test_a_checkpoint_or_a_rollback_starts_the_next_step_from_there(repo):
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    first = checkpoints.begin(fresh=True)
+    (tree / "step1.py").write_text("1\n", encoding="utf-8")
+    done = checkpoints.finish("step 1")
+    assert checkpoints.begin(fresh=True) == done  # the next step starts at the checkpoint
+    assert checkpoints.changed() == []
+    checkpoints.rollback(first)
+    assert checkpoints.begin(fresh=True) == first
+
+
+def test_nothing_changed_lists_nothing(repo):
+    checkpoints = open_run(repo)
+    checkpoints.prepare()
+    checkpoints.begin(fresh=True)
+    assert checkpoints.changed() == []
+
+
 def test_finish_leaves_test_run_caches_out_of_the_checkpoint(repo):  # M1-68 finding
     """Running the tests in the tree writes bytecode and tool caches; a repository with no
     .gitignore for them must not get them committed on the run branch (and in its PR)."""

@@ -179,8 +179,25 @@ def test_a_runner_ignoring_its_time_limit_fails_the_limits_tier():
         time_case(_broken, agent=None)
 
 
+def test_a_runner_that_never_adopts_fails_the_stop_case():  # DF-545
+    stopped = _tier("containment").cases[1]
+    with pytest.raises(AssertionError, match="never adopted"):
+        stopped(_broken, agent=None)
+
+
+class _Crashing(_Runner):
+    async def run(self, task) -> AgentOutcome:
+        raise KeyError("an unrelated bug")
+
+
+def test_an_unrelated_crash_on_an_empty_answer_fails_the_output_tier():  # DF-544
+    empty_case = _tier("output").cases[-1]
+    with pytest.raises(KeyError):
+        empty_case(lambda agent, **kw: _Crashing(""), agent=None)
+
+
 def test_a_runner_that_never_adopts_fails_containment():
-    [contained] = _tier("containment").cases
+    contained = _tier("containment").cases[0]
     with pytest.raises(AssertionError, match="never adopted"):
         contained(_broken, agent=None)
 

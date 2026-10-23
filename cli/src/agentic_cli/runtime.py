@@ -10,15 +10,18 @@ drive, wired from core and commons.
   * steps         - `StepRunners` over the native backend: every model call through the
                     configured gateway (TokenLean), metered against the step's budget,
                     secret-scanned under org policy; tools from `StepWiring` (run trees,
-                    guard, sandbox, installed skills, code intelligence);
+                    guard, sandbox, installed skills, code intelligence); and over the
+                    agent-CLI backends - claude-code, codex, opencode - each locked down
+                    by `agent_backends` (M2-60);
   * step logs     - `StepLogs` through the commons redactor, the gateway key included;
                     the same redactor masks the pause reasons and step details the
                     engine stores in run.json (a provider's error can echo the key);
   * traces        - the local JSONL span exporter into the run folder, when the
                     telemetry extra is installed (`AGENTIC_TRACES=off` turns it off).
 
-The claude-code backend is not built yet (DF-74): preflight is given the configured
-backends, so a step naming another backend is refused before any spend.
+Preflight is given every configured backend; a step on an agent-CLI backend this machine
+cannot run (a missing extra or CLI, codex without srt) is refused before any spend, with
+what to install (`agent_backends.problems`).
 """
 
 import importlib.util
@@ -56,7 +59,7 @@ from agentic.skills.select import pipeline_skills
 from agentic.telemetry.logs import StepLogs
 from agentic.telemetry.sinks import EventSink, ForwardingRecorder
 from agentic.transport import CallIdentity
-from agentic_cli import control_plane
+from agentic_cli import agent_backends, control_plane
 from agentic_cli import killswitch as killswitch_port
 from agentic_cli.codeintel import codeintel_for as codeintel_factory
 from agentic_cli.codeintel import codeintel_settings, codeintel_warning
@@ -76,9 +79,8 @@ from sdlc_commons.redaction import redactor
 #: the control plane; what is left stays queued in the ledger for `agentic sync` (R20).
 SINK_GRACE_S = 5.0
 
-#: The backends this CLI builds. The claude-code backend is not wired yet (DF-74), so
-#: preflight refuses a step that names it instead of failing mid-run.
-CONFIGURED_BACKENDS: tuple[str, ...] = ("native",)
+#: The backends this CLI builds: native and the agent CLIs (M2-60, decision 89).
+CONFIGURED_BACKENDS: tuple[str, ...] = agent_backends.CONFIGURED_BACKENDS
 
 
 def _publish(kind: str | None) -> Callable[["Runtime"], Callable]:
@@ -306,15 +308,20 @@ class Runtime:
         """Every check before any spend. `live` installs the pipeline's skills first (a
         dry run writes nothing and checks them against the catalog instead)."""
         pipeline = self.pipeline(name)
+        decision = self.sandbox(pipeline)
         report = preflight(
             pipeline,
             self.ws.definitions(),
             self.ws.policy(),
             self.ws.context(),
             actions=ACTIONS,
-            sandbox=self.sandbox(pipeline),
+            sandbox=decision,
             available_backends=CONFIGURED_BACKENDS,
             skills=self._skill_check(name, live=live),
+            honoured=agent_backends.HONOURED,  # the codex guard hook (DF-426)
+        )
+        report.problems += agent_backends.problems(
+            report, decision, repo=self.ws.repo, settings=self.ws.settings
         )
         if pipeline.regime == "regulated" or any(
             isinstance(step, GateStep) and step.four_eyes for step in pipeline.steps
@@ -535,8 +542,17 @@ class Runtime:
         if gateway is None:
             runners = _no_model_calls
         else:
+            agent_clis = agent_backends.build(
+                repo=self.ws.repo,
+                policy=policy,
+                settings=self.ws.settings,
+                gateway=gateway,
+                wiring=wiring,
+                identity_for=self.identity,
+                fallback_estimate_usd=FALLBACK_ESTIMATE_USD,
+            )
             runners = StepRunners(
-                {"native": _native_backend(self, gateway)},
+                {"native": _native_backend(self, gateway), **agent_clis},
                 tools_for=wiring.tools_for,
                 state_dir_for=lambda step: (
                     self.ws.repo / STATE / step.run_id / "agents" / f"{step.step}-{step.iteration}"

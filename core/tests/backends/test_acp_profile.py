@@ -73,6 +73,21 @@ def test_only_named_variables_are_inherited_and_never_a_credential():
     assert "FAKE_PROXY" not in env and "OPENAI_API_KEY" not in env
 
 
+def test_policy_pass_env_is_passed_but_never_a_provider_key():  # DF-541
+    secret = "pa" + "55"  # built from pieces: not a real credential
+    user = {
+        "FAKE_PROXY": f"http://user:{secret}@proxy.acme.example:8080",
+        "SSH_AUTH_SOCK": "/tmp/agent.sock",
+        "OPENAI_API_KEY": "sk-" + "x" * 20,
+        "AGENTIC_TOKENLEAN_API_KEY": "x",
+    }
+    passed = ("FAKE_PROXY", "SSH_AUTH_SOCK", "OPENAI_API_KEY", "AGENTIC_TOKENLEAN_API_KEY")
+    env = launch_env(profile(), Launch(), HOME, environ=user, pass_env=passed)
+    assert env["FAKE_PROXY"] == user["FAKE_PROXY"]  # org policy said so (an auth proxy)
+    assert env["SSH_AUTH_SOCK"] == "/tmp/agent.sock"
+    assert "OPENAI_API_KEY" not in env and "AGENTIC_TOKENLEAN_API_KEY" not in env
+
+
 def test_a_dropped_credential_variable_is_logged_by_name_only(caplog):  # DF-449
     secret = "pa" + "55"  # built from pieces: not a real credential
     user = {"FAKE_PROXY": f"http://user:{secret}@proxy.acme.example:8080"}

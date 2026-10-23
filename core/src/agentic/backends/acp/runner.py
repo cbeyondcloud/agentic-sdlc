@@ -18,11 +18,12 @@ egress switches, auth, mode - is the step's `AcpProfile`. For each step:
 """
 
 import asyncio
+import logging
 import math
 import os
 import shutil
 import socket
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path, PurePosixPath
@@ -49,7 +50,10 @@ from agentic.backends.acp.profile import (
     write_files,
 )
 from agentic.backends.processes import ProcessTree, session_leader
+from agentic.backends.turns import TurnCheck, TurnGuard
+from agentic.killswitch import RunKilled, Verdict
 from agentic.policy import ResolvedAgent
+from agentic.sandbox.process import SECRET_NAME
 from agentic.transport import BudgetSlice, CallCost, CallIdentity, LimitHit, Pricer
 from agentic.transport.cost import estimate_usd
 
@@ -63,6 +67,10 @@ PROTOCOL_VERSION = 1
 STDIO_LIMIT = 16 * 1024 * 1024
 #: A conservative tokens-from-text estimate, for an agent that reports no usage at all.
 CHARS_PER_TOKEN = 4
+#: Removing a step home: tries, and the pause before each retry (grows each time).
+REMOVE_TRIES = 3
+REMOVE_PAUSE_S = 0.2
+_log = logging.getLogger("agentic.backends.acp")
 _STDERR = "agent-stderr.log"
 _SHIMS = (".cmd", ".bat")
 
@@ -73,6 +81,8 @@ class AcpSettings:
     api_key: str = field(repr=False)  # the user's TokenLean key
     home_root: Path  # per-step agent homes live here
     command: tuple[str, ...] | None = None  # the agent's command; None: the profile's
+    # variables org policy lets through (`sandbox.pass_env`, DF-541)
+    pass_env: tuple[str, ...] = ()
 
 
 def resolve_command(
@@ -148,6 +158,8 @@ class _Client:
     def __init__(self) -> None:
         self.turn = _Turn()
         self.refused: list[str] = []
+        # awaited at each tool call the agent reports: a turn boundary (the kill switch)
+        self.on_tool_call: Callable[[], Awaitable[None]] | None = None
 
     def begin(self) -> None:
         self.turn = _Turn()
@@ -161,6 +173,8 @@ class _Client:
         elif kind == "tool_call":  # what the agent said before a tool call is not its answer
             self.turn.tool_calls += 1
             self.turn.text = ""
+            if self.on_tool_call is not None:
+                await self.on_tool_call()
         elif kind == "usage_update":
             cost = update.cost
             if cost is not None and cost.currency.upper() == "USD":
@@ -226,7 +240,9 @@ def _described(tool_call) -> str:
 
 class AcpRunner:
     """Runs one agent step in one ACP session (an `AgentRunner`). It never pauses for a
-    person: every permission request is refused."""
+    person: every permission request is refused. The kill switch is asked before each
+    prompt and at each tool call the agent reports (`turn_guard`, decision 89): a kill
+    stops the session at once; a pause holds the run at the next step."""
 
     def __init__(
         self,
@@ -244,6 +260,7 @@ class AcpRunner:
         time_limit_s: float | None = None,
         wrap: Sequence[str] | None = None,
         fallback_estimate_usd: Decimal = Decimal("0.01"),
+        turn_guard: TurnGuard | None = None,
     ) -> None:
         self.agent, self.profile = agent, profile
         self.command, self.env, self.home, self.cwd = list(command), dict(env), home, cwd
@@ -262,15 +279,26 @@ class AcpRunner:
         self._tree = ProcessTree()
         self._last_text = ""
         self._cost_seen = Decimal(0)
+        self.turn_check = TurnCheck(turn_guard)
+        self._client.on_tool_call = self._tool_boundary
+        self._session_task: asyncio.Future | None = None
+        self._killed: Verdict | None = None  # a kill seen at a tool call
 
     async def run(self, task: AgentTask) -> AgentOutcome:
-        session = asyncio.ensure_future(self._session(task))
+        session = self._session_task = asyncio.ensure_future(self._session(task))
         try:
             done, _ = await asyncio.wait({session}, timeout=self.time_limit_s)
         except asyncio.CancelledError:  # the run was stopped: so is everything it started
             self._kill()
             session.cancel()
             raise
+        if self._killed is not None:  # the kill switch at a tool call cancelled the session
+            self._kill()
+            try:
+                await session
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - it was cancelled
+                pass
+            raise RunKilled(self._killed)
         if not done:  # the time limit: kill the agent and what it started, then close
             self._kill()
             session.cancel()
@@ -291,6 +319,18 @@ class AcpRunner:
     def _kill(self) -> None:
         """Kill the agent and every process it started (the shared helper)."""
         self._tree.kill()
+
+    async def _tool_boundary(self) -> None:
+        """At a tool call the agent reported: ask the kill switch. A kill stops the agent
+        and cancels the session (a notification handler cannot raise into the runner);
+        `run` then raises `RunKilled`."""
+        try:
+            await self.turn_check()
+        except RunKilled as killed:
+            self._killed = killed.verdict
+            self._kill()
+            if self._session_task is not None:
+                self._session_task.cancel()
 
     def _launch(self) -> tuple[list[str], dict[str, str]]:
         """The argv and environment the agent starts with: under `wrap` when given, as a
@@ -348,7 +388,29 @@ class AcpRunner:
                 self._remove_secrets()  # first, so a locked transcript cannot keep them
             except RuntimeError:
                 pass  # the step has ended already: what it raised stands
-            shutil.rmtree(self.home, ignore_errors=True)
+            await self._remove_home()
+
+    async def _remove_home(self) -> None:
+        """Delete the step home, retrying (Windows holds a file open for a moment after
+        its process exits); one that stays is named in a warning, never silently left
+        (DF-448). The step's result stands either way."""
+        for attempt in range(REMOVE_TRIES):
+            try:
+                shutil.rmtree(self.home)
+                return
+            except FileNotFoundError:
+                return
+            except OSError as error:
+                failure = error
+            if attempt + 1 < REMOVE_TRIES:
+                await asyncio.sleep(REMOVE_PAUSE_S * (attempt + 1))
+        _log.warning(
+            "the %s agent's step home %s could not be removed (%s): delete it by hand - it "
+            "holds the agent's transcript",
+            self.profile.name,
+            self.home,
+            failure.strerror or type(failure).__name__,
+        )
 
     async def _converse(self, conn, task: AgentTask, acp, schema) -> AgentOutcome:
         try:
@@ -408,13 +470,20 @@ class AcpRunner:
                 ) from None
 
     def _stderr_tail(self, limit: int = 2000) -> str:
+        """The end of the agent's stderr, with every secret the step gave it masked: the
+        profile's files (a key) and secret-named variables' values (DF-448)."""
         try:
             text = (self.home / _STDERR).read_bytes().decode("utf-8", errors="replace")
         except OSError:
             return "(no stderr)"
+        secrets = [*self.files.values()]
+        secrets += [value for name, value in self.env.items() if SECRET_NAME.search(name)]
+        for secret in sorted({s.strip() for s in secrets if len(s.strip()) >= 4}, key=len)[::-1]:
+            text = text.replace(secret, "***")
         return text[-limit:].strip() or "(empty)"
 
     async def _turn(self, conn, session_id: str, blocks: list) -> str:
+        await self.turn_check()  # a kill before the prompt starts any model call
         self._client.begin()
         response = await conn.prompt(session_id=session_id, prompt=blocks)
         turn = self._client.turn
@@ -593,7 +662,7 @@ class AcpBackend:
             agent,
             self.profile,
             command=self.settings.command or self.profile.command,
-            env=launch_env(self.profile, launch, home),
+            env=launch_env(self.profile, launch, home, pass_env=self.settings.pass_env),
             home=home,
             cwd=cwd,
             budget=step.budget,
@@ -603,4 +672,5 @@ class AcpBackend:
             time_limit_s=self.time_limit_s,
             wrap=self.wrap_for(step) if self.wrap_for is not None else None,
             fallback_estimate_usd=self.fallback_estimate_usd,
+            turn_guard=step.turn_guard,
         )

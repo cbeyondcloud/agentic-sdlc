@@ -22,6 +22,7 @@ Components come from the repository's Zyroflo profile (`.sdlc/profile.yml`);
 a repository without one is a single component.
 """
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -161,14 +162,19 @@ class StepCheckpoints:
 
     def begin(self, *, fresh: bool) -> dict[str, str]:
         """Where a step starts, by component. A fresh attempt first discards what an
-        earlier, unfinished attempt left (tracked edits and untracked files; files
-        git ignores, such as `.venv/`, are kept)."""
+        earlier, unfinished attempt left (tracked edits, untracked files and any commit an
+        agent made in the tree: it returns to that attempt's base; files git ignores, such
+        as `.venv/`, are kept). The step's base is kept in the run folder until the step
+        is checkpointed or rolled back, so `changed` and a retry measure from it - in
+        another process too (review F1)."""
+        kept = self._kept_base()
         heads = {}
         for name, path in self._trees().items():
             if fresh:
-                _git(path, "reset", "-q", "--hard", "HEAD")
+                _git(path, "reset", "-q", "--hard", kept.get(name, "HEAD"))
                 _git(path, "clean", "-q", "-ffd")  # -ff: nested repositories too (review I4)
             heads[name] = _git(path, "rev-parse", "HEAD")
+        self._keep_base(heads if fresh or not kept else kept)
         return heads
 
     def finish(self, message: str) -> dict[str, str]:
@@ -191,7 +197,25 @@ class StepCheckpoints:
             # trees at closure refuses any uncommitted change (review F2); ignored files stay
             _git(path, "clean", "-q", "-fd", "--", *(f":(glob){g}" for g in GENERATED))
             heads[name] = _git(path, "rev-parse", "HEAD")
+        self._keep_base(None)  # the next step starts from this checkpoint
         return heads
+
+    def changed(self) -> list[Path]:
+        """Every path a step changed since its base (`begin`; the trees' HEAD when none is
+        kept), in every component: tracked files changed, added or deleted - staged, not
+        staged or committed by the agent itself (review F1) - and untracked files git
+        does not ignore: what this step would add to the run branch (M2-60: the post-step
+        protected-path check of an agent CLI's writes)."""
+        kept = self._kept_base()
+        found: dict[Path, None] = {}
+        for name, path in self._trees().items():
+            base = kept.get(name, "HEAD")
+            tracked = _git(path, "diff", "--name-only", "--no-renames", "-z", base, "--")
+            untracked = _git(path, "ls-files", "-z", "--others", "--exclude-standard")
+            for name in f"{tracked}\0{untracked}".split("\0"):
+                if name:
+                    found[path / name] = None
+        return list(found)
 
     def rollback(self, to: Mapping[str, str]) -> None:
         """Put each named component back at `to[component]`, a commit of the run's own
@@ -206,6 +230,7 @@ class StepCheckpoints:
         for name, commit in to.items():
             _git(trees[name], "reset", "-q", "--hard", commit)
             _git(trees[name], "clean", "-q", "-ffd")
+        self._keep_base(None)  # the next step starts from where the trees were put
 
     def diff(self, base: Mapping[str, str], head: Mapping[str, str]) -> str:
         """The change from `base` to `head` in every component, as a plain unified diff
@@ -225,6 +250,30 @@ class StepCheckpoints:
             for name, tree in self.worktrees.trees().items()
             if tree.mode == "worktree"
         }
+
+    def _base_file(self) -> Path:
+        """Where the base of the step in progress is kept: the run folder, outside every
+        tree (an agent never writes it)."""
+        return state.runs_dir(self.target) / self.run_id / "step-base.json"
+
+    def _kept_base(self) -> dict[str, str]:
+        """The base of the step in progress, by component; {} when no step is in progress
+        (or the record cannot be read: then each tree's HEAD, as before)."""
+        try:
+            kept = json.loads(self._base_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(kept, dict):
+            return {}
+        return {k: v for k, v in kept.items() if isinstance(k, str) and isinstance(v, str)}
+
+    def _keep_base(self, heads: Mapping[str, str] | None) -> None:
+        where = self._base_file()
+        if heads is None:
+            where.unlink(missing_ok=True)
+            return
+        where.parent.mkdir(parents=True, exist_ok=True)
+        where.write_text(json.dumps(dict(heads)), encoding="utf-8")
 
     def _commit_config(self, path: Path) -> list[str]:
         """No hooks (an empty hooks folder), no signing, and an identity only when the

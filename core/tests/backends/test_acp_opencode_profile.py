@@ -293,6 +293,44 @@ def test_a_project_config_without_plugins_is_fine(tmp_path):
     assert code_in_tree(root) == []
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"plugin": []}',  # an empty list loads nothing
+        '{\n  // "plugin": ["opencode-evil@1.0.0"],\n  "model": "x/y"\n}',  # commented out
+        '{\n  /* "plugins": ["evil"] */\n  "model": "x/y",\n}',  # a block comment, a comma
+        '{"instructions": ["say \\"plugin\\": [x] to nobody"]}',  # inside a string value
+        '{"agent": {"build": {"plugin": ["not a top-level key"]}}}',
+    ],
+)
+def test_a_config_that_loads_no_plugin_is_fine(tmp_path, text):  # DF-446
+    root = repo(tmp_path)
+    write(root / "opencode.jsonc", text)
+    assert code_in_tree(root) == []
+
+
+@pytest.mark.parametrize("value", ['["opencode-evil@1.0.0"]', '"opencode-evil"'])
+def test_a_plugin_value_says_it_loads_plugins(tmp_path, value):  # DF-446
+    root = repo(tmp_path)
+    write(root / "opencode.json", '{\n  "plugins": ' + value + ",\n}\n")
+    (found,) = code_in_tree(root)
+    assert "loads OpenCode plugins" in found and "opencode.json" in found
+
+
+def test_a_config_that_is_not_jsonc_is_refused(tmp_path):  # DF-446: fail closed
+    root = repo(tmp_path)
+    write(root / "opencode.json", '{"plugin": ["x"')
+    (found,) = code_in_tree(root)
+    assert "cannot be read as JSONC" in found
+
+
+def test_jsonc_comments_and_trailing_commas_are_stripped():
+    from agentic.backends.acp.opencode import strip_jsonc
+
+    text = '{\n  "a": "x // not a comment", // gone\n  /* gone\n too */ "b": [1, 2,],\n}'
+    assert json.loads(strip_jsonc(text)) == {"a": "x // not a comment", "b": [1, 2]}
+
+
 def test_the_profile_refuses_such_a_tree():
     assert OPENCODE.refuse_tree is code_in_tree
 

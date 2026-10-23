@@ -4,6 +4,7 @@ and a sandbox (M1-30, DF-46; D38). Real git, real Zyroflo trees."""
 import asyncio
 import json
 import subprocess
+import time
 from decimal import Decimal
 from pathlib import Path
 
@@ -186,6 +187,65 @@ def test_an_agent_process_wrap_reaches_the_gateway_and_the_registries(repo, tmp_
     assert (tmp_path / "home" / ".ssh").as_posix() in settings["filesystem"]["denyRead"]
     folder = Path(prefix[prefix.index("--settings") + 1]).parent
     assert folder == tmp_path / "state" / RUN / "sandbox" / "developer-process"
+
+
+def test_an_agent_process_wrap_denies_what_the_caller_names(repo, tmp_path, agent):  # DF-425
+    w = wiring(repo, tmp_path, SANDBOXED)
+    w.gateway_url = "https://tokenlean.acme.example"
+    home = tmp_path / "codex-home"
+    prefix = w.process_wrap_for(step(agent), write=(home,), deny=(home / "config.toml",))
+    settings = json.loads(Path(prefix[prefix.index("--settings") + 1]).read_text("utf-8"))
+    assert home.as_posix() in settings["filesystem"]["allowWrite"]
+    assert (home / "config.toml").as_posix() in settings["filesystem"]["denyWrite"]
+
+
+def test_denied_writes_names_protected_and_denied_paths_a_step_wrote(repo, tmp_path, agent):
+    # DF-443: what srt cannot enforce (a deeper `**/x`, any other glob) and what an agent
+    # CLI writes without srt is checked on the step's change before it is checkpointed
+    w = wiring(repo, tmp_path)
+    tree = w.tools_for(step(agent)).tree
+    w.trees_for(RUN).begin(fresh=True)
+    assert w.denied_writes(step(agent)) == []
+    (tree / "src" / "ok.py").write_text("y = 1\n", encoding="utf-8")
+    (tree / "deep" / "keys").mkdir(parents=True)
+    (tree / "deep" / "keys" / "server.pem").write_text("x", encoding="utf-8")
+    (tree / ".github" / "workflows").mkdir(parents=True)
+    (tree / ".github" / "workflows" / "ci.yml").write_text("on: push\n", encoding="utf-8")
+
+    found = w.denied_writes(step(agent))
+
+    assert any("server.pem" in why and "**/*.pem" in why for why in found)
+    assert any("ci.yml" in why for why in found)
+    assert not any("ok.py" in why for why in found)
+
+
+def test_denied_writes_sees_what_the_agent_committed_itself(repo, tmp_path, agent):  # F1
+    w = wiring(repo, tmp_path)
+    tree = w.tools_for(step(agent)).tree
+    w.trees_for(RUN).begin(fresh=True)
+    (tree / ".github" / "workflows").mkdir(parents=True)
+    (tree / ".github" / "workflows" / "ci.yml").write_text("on: push\n", encoding="utf-8")
+    git(tree, "add", "-A")
+    git(tree, "commit", "-qm", "the agent's own commit")
+
+    assert any("ci.yml" in why for why in w.denied_writes(step(agent)))
+
+
+def test_denied_writes_stays_quick_for_thousands_of_files(repo, tmp_path, agent):  # F4
+    w = wiring(repo, tmp_path)
+    tree = w.tools_for(step(agent)).tree
+    w.trees_for(RUN).begin(fresh=True)
+    for n in range(2000):  # a vendored or generated tree, no .gitignore
+        (tree / "vendor" / f"pkg{n}").mkdir(parents=True)
+        (tree / "vendor" / f"pkg{n}" / "module.py").write_text("x = 1\n", encoding="utf-8")
+    (tree / "vendor" / "pkg7" / "server.pem").write_text("x", encoding="utf-8")
+
+    started = time.perf_counter()
+    found = w.denied_writes(step(agent))
+    took = time.perf_counter() - started
+
+    assert len(found) == 1 and "server.pem" in found[0]
+    assert took < 8, f"{took:.1f} s for 2000 files"
 
 
 def test_an_agent_process_wrap_needs_srt_and_a_gateway(repo, tmp_path, agent):

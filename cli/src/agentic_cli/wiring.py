@@ -131,13 +131,20 @@ class StepWiring:
         sandbox = SrtSandbox(rules, settings, pass_env=pass_env)
         return ToolContext(tree=tree, guard=guard, sandbox=sandbox, secret_scanner=self.scanner)
 
-    def process_wrap_for(self, step: StepContext, *, write: tuple[Path, ...] = ()) -> list[str]:
+    def process_wrap_for(
+        self,
+        step: StepContext,
+        *,
+        write: tuple[Path, ...] = (),
+        deny: tuple[Path, ...] = (),
+    ) -> list[str]:
         """The srt command prefix for a whole agent CLI process (claude-code, codex,
         opencode; M2-42, DF-443): it reaches the gateway and the registries and no other
         host, every request goes through srt's proxy (`proxy_everything`), it writes only
         the run's tree, policy's caches and `write` (the agent's per-step home), and the
-        guard's protected paths stay unwritable - for the agent's own shell commands too,
-        which run inside the same sandbox. Refused on a machine without srt."""
+        guard's protected paths and `deny` (the agent's own config inside that home,
+        DF-425) stay unwritable - for the agent's own shell commands too, which run inside
+        the same sandbox. Refused on a machine without srt."""
         if not self.decision.use_srt:
             raise ValueError(
                 self.decision.refusal
@@ -149,7 +156,7 @@ class StepWiring:
         tree = self._home(step.run_id)
         guard = Guard.for_agent(self.target, step.run_id, step.agent)
         hosts = egress_hosts(self.policy, self.gateway_url)
-        rules = self._rules(guard, step.run_id, tree, hosts, extra_write=write)
+        rules = self._rules(guard, step.run_id, tree, hosts, extra_write=write, extra_deny=deny)
         name = f"{step.agent.definition.name}-process"
         settings = self.state_root / step.run_id / "sandbox" / name
         sandbox = SrtSandbox(rules, settings, pass_env=tuple(self.policy.pass_env))
@@ -163,11 +170,13 @@ class StepWiring:
         hosts: tuple[str, ...],
         *,
         extra_write: tuple[Path, ...] = (),
+        extra_deny: tuple[Path, ...] = (),
     ) -> SandboxRules:
         denials = self._denials(guard, run_id)
+        denied = [*(p for d in denials for p in d.paths), *extra_deny]
         return SandboxRules(
             write=(tree, *extra_write, *expand_home(self.policy.allow_write, self.home)),
-            deny_write=tuple(dict.fromkeys(p for d in denials for p in d.paths)),
+            deny_write=tuple(dict.fromkeys(denied)),
             deny_read=expand_home(self.policy.effective_deny_read, self.home),
             allowed_domains=hosts,
         )
@@ -175,6 +184,22 @@ class StepWiring:
     def scanner_for(self, step: StepContext) -> SecretScanner:
         """The step's secret scanner (the backends' `scanner_for`)."""
         return self.scanner if self.scanner is not None else SecretScanner()
+
+    def denied_writes(self, step: StepContext, *, also: tuple[str, ...] = ()) -> list[str]:
+        """Why what the step changed in the run's trees since its base may not be kept
+        (commits the agent made itself included): each changed path the agent's guard
+        refuses (Zyroflo's protected paths, the framework floor, the agent's deny list,
+        and `also` - more deny globs, such as other agent CLIs' steering files) - matched
+        with the guard's own globs, so a deeper `**/x` and any other glob srt cannot
+        enforce are caught (DF-443). For an agent CLI, whose writes (its shell commands'
+        included) never pass the file tools' check. Names paths only, never content."""
+        agent = step.agent
+        if also:
+            deny = list(dict.fromkeys((*agent.deny_paths, *also)))
+            agent = agent.model_copy(update={"deny_paths": deny})
+        guard = Guard.for_agent(self.target, step.run_id, agent)
+        changed = self.trees_for(step.run_id).changed()
+        return list(dict.fromkeys(block.why for block in guard.changes(changed)))
 
     def unenforced(self, agent: ResolvedAgent, run_id: str) -> list[str]:
         """The deny globs `srt` cannot enforce for this agent (the file tools still do),

@@ -45,9 +45,11 @@ from agentic.agents.runner import (
 )
 from agentic.agents.tools import ToolContext
 from agentic.backends.capabilities import CAPABILITIES
+from agentic.backends.environment import withheld
 from agentic.backends.processes import ProcessTree, session_leader
+from agentic.backends.turns import TurnCheck, TurnGuard
+from agentic.killswitch import RunKilled
 from agentic.policy import ResolvedAgent
-from agentic.sandbox.process import SECRET_NAME
 from agentic.transport import BudgetSlice, CallCost, CallIdentity, LimitHit, Pricer
 from agentic.transport.cost import estimate_usd
 
@@ -70,22 +72,6 @@ QUIET = {
 }
 
 
-#: Never inherited from the user's environment (review I1): another provider's switch
-#: or credential would route Claude Code around TokenLean or leak to the agent.
-_BLANKED_PREFIXES = (
-    "ANTHROPIC_",
-    "AWS_",
-    "AZURE_",
-    "GOOGLE_",
-    "GCLOUD_",
-    "CLOUDSDK_",
-    "VERTEX_",
-    "BEDROCK_",
-    "OPENAI_",
-    "GEMINI_",
-    "CLAUDE_CODE_USE_",
-)
-_BLANKED = {"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS"}
 #: The token counts of one model call's usage, as Claude Code streams them.
 _USAGE_KEYS = (
     "input_tokens",
@@ -95,19 +81,14 @@ _USAGE_KEYS = (
 )
 
 
-def _blanked(name: str) -> bool:
-    upper = name.upper()
-    return (
-        upper.startswith(_BLANKED_PREFIXES) or upper in _BLANKED or bool(SECRET_NAME.search(upper))
-    )
-
-
 @dataclass(frozen=True)
 class ClaudeCodeSettings:
     gateway_url: str  # TokenLean's root
     api_key: str = field(repr=False)  # the user's TokenLean key
     config_root: Path  # per-step CLAUDE_CONFIG_DIR folders live here
     cli_path: Path | None = None  # None: the SDK's bundled (Anthropic-signed) binary
+    # secret-named variables org policy lets through (`sandbox.pass_env`, DF-541)
+    pass_env: tuple[str, ...] = ()
 
 
 def lock_down(
@@ -141,7 +122,7 @@ def lock_down(
         **QUIET,
     }
     for name in environ if environ is not None else os.environ:
-        if name not in env and _blanked(name):
+        if name not in env and withheld(name, settings.pass_env):
             env[name] = ""  # the SDK merges the user's environment under ours (review I1)
     options: dict = {
         "cwd": str(cwd),
@@ -176,7 +157,9 @@ class ClaudeCodeRunner:
     prices (`estimated`): never from Claude Code's own cost figure or TokenLean's
     header, so the budget means the same on every backend (S2 Q8). A charge past the
     slice raises `LimitHit` for the engine. Claude Code never pauses for a person:
-    don't-ask mode refuses whatever the rules do not allow.
+    don't-ask mode refuses whatever the rules do not allow. The kill switch is asked
+    before each prompt and at each model call Claude Code streams (`turn_guard`, decision
+    89): a kill stops the session at once; a pause holds the run at the next step.
     """
 
     def __init__(
@@ -190,6 +173,7 @@ class ClaudeCodeRunner:
         time_limit_s: float | None,
         wrap: Sequence[str] | None = None,
         fallback_estimate_usd: Decimal = Decimal("0.01"),
+        turn_guard: TurnGuard | None = None,
     ) -> None:
         self.agent, self.options, self.budget = agent, dict(options), budget
         self.price_for, self.contract = price_for, contract
@@ -204,6 +188,7 @@ class ClaudeCodeRunner:
         self._last_text = ""
         self._client = None
         self._tree = ProcessTree()
+        self.turn_check = TurnCheck(turn_guard)
 
     async def run(self, task: AgentTask) -> AgentOutcome:
         session = asyncio.ensure_future(self._session(task))
@@ -283,6 +268,9 @@ class ClaudeCodeRunner:
             async with client:
                 try:
                     return await self._converse(client, task)
+                except RunKilled:  # stopped now, not after a graceful shutdown
+                    self._kill_tree()
+                    raise
                 finally:  # its shell commands, before the SDK shuts Claude Code down
                     if not self.wrap or sys.platform == "darwin":  # (Linux srt: the PID
                         self._tree.kill_below()  # namespace ends them with the sandbox)
@@ -306,6 +294,7 @@ class ClaudeCodeRunner:
     async def _turn(self, client, prompt: str) -> str:
         from claude_agent_sdk import AssistantMessage, ResultMessage, TextBlock
 
+        await self.turn_check()  # a kill before the prompt starts any model call
         await client.query(prompt)
         text = ""
         # per model call (its message id), as streamed: one message per content block, each
@@ -316,10 +305,14 @@ class ClaudeCodeRunner:
                 said = "".join(b.text for b in message.content if isinstance(b, TextBlock))
                 if said:
                     text = self._last_text = said
-                call = streamed.setdefault(message.message_id or f"#{len(streamed)}", {})
-                for key in _USAGE_KEYS:
-                    value = int((message.usage or {}).get(key) or 0)
-                    call[key] = max(call.get(key, 0), value)
+                key = message.message_id or f"#{len(streamed)}"
+                new_call = key not in streamed
+                call = streamed.setdefault(key, {})
+                for name in _USAGE_KEYS:
+                    value = int((message.usage or {}).get(name) or 0)
+                    call[name] = max(call.get(name, 0), value)
+                if new_call:  # a turn boundary: what the model asked for has not run yet
+                    await self._turn_boundary(streamed)
             elif isinstance(message, ResultMessage):
                 usage = message.usage or {}
                 reported = int(usage.get("input_tokens") or 0) + int(
@@ -332,6 +325,20 @@ class ClaudeCodeRunner:
                     text = self._last_text = message.result
                 self._ended(message)
         return text
+
+    async def _turn_boundary(self, streamed: dict[str, dict[str, int]]) -> None:
+        """Ask the kill switch; on a kill, charge what was streamed so far (Claude Code
+        reports a turn's usage only at its end) and raise `RunKilled` - the stop wins over
+        a limit the charge crosses."""
+        try:
+            await self.turn_check()
+        except RunKilled:
+            seen = {key: sum(c.get(key, 0) for c in streamed.values()) for key in _USAGE_KEYS}
+            try:
+                self._charge(seen, calls=max(len(streamed), 1))
+            except LimitHit:
+                pass
+            raise
 
     def _ended(self, result) -> None:
         """How Claude Code ended the turn: anything but success stops the step."""
@@ -464,6 +471,7 @@ class ClaudeCodeBackend:
             time_limit_s=None,
             wrap=self.wrap_for(step),
             fallback_estimate_usd=self.fallback_estimate_usd,
+            turn_guard=step.turn_guard,
         )
 
 

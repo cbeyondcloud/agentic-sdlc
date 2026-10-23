@@ -27,6 +27,7 @@ from agentic.definitions import (
 from agentic.engine.preflight import preflight
 from agentic.policy import OrgPolicy, resolve_agent
 from agentic.skills.catalog import CatalogError, load_catalog, skill_digest, skill_folder
+from agentic_cli.agent_backends import HONOURED
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.output import Output
@@ -198,6 +199,7 @@ def _pipeline_problems(ws: Workspace, pipeline: PipelineDefinition, where: Path)
         ws.context(),
         actions=ACTIONS,
         available_backends=CONFIGURED_BACKENDS,
+        honoured=HONOURED,  # as a run checks it: the codex guard hook (DF-426)
     )
     return [
         _problem(where, p.step or pipeline.name, p.check, p.detail, p.policy_value, p.severity)
