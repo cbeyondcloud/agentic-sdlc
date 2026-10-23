@@ -17,10 +17,11 @@ included) is deleted when the step ends.
 import itertools
 import logging
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
+from agentic.backends.environment import passes
 from agentic.policy import ResolvedAgent
 from agentic.policy.model import ModelPrice
 from agentic.sandbox.process import SECRET_NAME, secret_value
@@ -148,19 +149,28 @@ def launch_env(
     launch: Launch,
     home: Path,
     environ: Mapping[str, str] | None = None,
+    *,
+    pass_env: Collection[str] = (),
 ) -> dict[str, str]:
     """The agent's environment on top of the ACP SDK's minimal one (PATH and system
     basics): the step home, the inherited variables the profile names (never one with a
-    secret name or a credential in its value), its quiet switches, then the launch."""
+    secret name or a credential in its value) and those org policy's `pass_env` lets
+    through (DF-541; never a provider key or the framework's own), its quiet switches,
+    then the launch."""
     source = os.environ if environ is None else environ
     env = home_env(home)
     dropped = []
     for name in profile.inherit:
         value = source.get(name)
-        if value and not SECRET_NAME.search(name) and not secret_value(value):
+        if value and passes(name, pass_env):
+            env[name] = value
+        elif value and not SECRET_NAME.search(name) and not secret_value(value):
             env[name] = value
         elif value:
             dropped.append(name)
+    for name, value in source.items():
+        if value and name not in env and passes(name, pass_env):
+            env[name] = value
     if dropped:  # by name only, never the value (DF-449): a proxy that needs credentials
         _log.warning(
             "not passed to the %s agent (a secret name or a credential in the value): %s",

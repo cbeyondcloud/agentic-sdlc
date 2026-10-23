@@ -51,10 +51,10 @@ from agentic.agents.runner import (
     retry_message,
 )
 from agentic.agents.tools import ToolContext
-from agentic.backends.claude_code import _blanked
 from agentic.backends.codex_catalog import model_catalog
 from agentic.backends.codex_hooks import CodexHook, hook_table
 from agentic.backends.codex_rules import ShellRules, compile_rules
+from agentic.backends.environment import withheld
 from agentic.backends.processes import ProcessTree, spawn_group
 from agentic.backends.turns import TurnCheck, TurnGuard
 from agentic.killswitch import RunKilled
@@ -104,6 +104,8 @@ class CodexSettings:
     require_sandbox: bool = True
     # model names or globs -> catalog fields to tune (context window, priority)
     catalog_overrides: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
+    # secret-named variables org policy lets through (`sandbox.pass_env`, DF-541)
+    pass_env: tuple[str, ...] = ()
 
 
 @dataclass
@@ -198,10 +200,11 @@ def lock_down(
     }
     if agent.effort is not None:
         config["model_reasoning_effort"] = agent.effort
+    passing = settings.pass_env
     env = {
         name: value
-        for name, value in safe_env(environ).items()
-        if not (_blanked(name) or name.upper().startswith("CODEX_"))
+        for name, value in safe_env(environ, pass_through=passing).items()
+        if not (withheld(name, passing) or name.upper().startswith("CODEX_"))
     }
     env.update({header_env[name]: value for name, value in headers.items()})
     env.update({"CODEX_HOME": str(home), KEY_ENV: settings.api_key})

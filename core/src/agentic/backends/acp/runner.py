@@ -75,6 +75,8 @@ class AcpSettings:
     api_key: str = field(repr=False)  # the user's TokenLean key
     home_root: Path  # per-step agent homes live here
     command: tuple[str, ...] | None = None  # the agent's command; None: the profile's
+    # variables org policy lets through (`sandbox.pass_env`, DF-541)
+    pass_env: tuple[str, ...] = ()
 
 
 def resolve_command(
@@ -626,7 +628,7 @@ class AcpBackend:
             agent,
             self.profile,
             command=self.settings.command or self.profile.command,
-            env=launch_env(self.profile, launch, home),
+            env=launch_env(self.profile, launch, home, pass_env=self.settings.pass_env),
             home=home,
             cwd=cwd,
             budget=step.budget,

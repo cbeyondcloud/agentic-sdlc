@@ -45,11 +45,11 @@ from agentic.agents.runner import (
 )
 from agentic.agents.tools import ToolContext
 from agentic.backends.capabilities import CAPABILITIES
+from agentic.backends.environment import withheld
 from agentic.backends.processes import ProcessTree, session_leader
 from agentic.backends.turns import TurnCheck, TurnGuard
 from agentic.killswitch import RunKilled
 from agentic.policy import ResolvedAgent
-from agentic.sandbox.process import SECRET_NAME
 from agentic.transport import BudgetSlice, CallCost, CallIdentity, LimitHit, Pricer
 from agentic.transport.cost import estimate_usd
 
@@ -72,22 +72,6 @@ QUIET = {
 }
 
 
-#: Never inherited from the user's environment (review I1): another provider's switch
-#: or credential would route Claude Code around TokenLean or leak to the agent.
-_BLANKED_PREFIXES = (
-    "ANTHROPIC_",
-    "AWS_",
-    "AZURE_",
-    "GOOGLE_",
-    "GCLOUD_",
-    "CLOUDSDK_",
-    "VERTEX_",
-    "BEDROCK_",
-    "OPENAI_",
-    "GEMINI_",
-    "CLAUDE_CODE_USE_",
-)
-_BLANKED = {"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS"}
 #: The token counts of one model call's usage, as Claude Code streams them.
 _USAGE_KEYS = (
     "input_tokens",
@@ -97,19 +81,14 @@ _USAGE_KEYS = (
 )
 
 
-def _blanked(name: str) -> bool:
-    upper = name.upper()
-    return (
-        upper.startswith(_BLANKED_PREFIXES) or upper in _BLANKED or bool(SECRET_NAME.search(upper))
-    )
-
-
 @dataclass(frozen=True)
 class ClaudeCodeSettings:
     gateway_url: str  # TokenLean's root
     api_key: str = field(repr=False)  # the user's TokenLean key
     config_root: Path  # per-step CLAUDE_CONFIG_DIR folders live here
     cli_path: Path | None = None  # None: the SDK's bundled (Anthropic-signed) binary
+    # secret-named variables org policy lets through (`sandbox.pass_env`, DF-541)
+    pass_env: tuple[str, ...] = ()
 
 
 def lock_down(
@@ -143,7 +122,7 @@ def lock_down(
         **QUIET,
     }
     for name in environ if environ is not None else os.environ:
-        if name not in env and _blanked(name):
+        if name not in env and withheld(name, settings.pass_env):
             env[name] = ""  # the SDK merges the user's environment under ours (review I1)
     options: dict = {
         "cwd": str(cwd),

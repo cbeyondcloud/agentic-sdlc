@@ -175,6 +175,33 @@ def test_provider_switches_and_secrets_are_blanked(resolved, tmp_path):
     assert env["LANG"] == "C.UTF-8"
 
 
+def test_policy_pass_env_reaches_codex_but_never_a_provider_switch(resolved, tmp_path):
+    # DF-541: org policy's sandbox.pass_env (an SSH agent, an authenticated proxy) reaches
+    # the agent CLI and so its shell commands; a provider switch or AGENTIC_* never does
+    agent = resolved.model_copy(update={"backend": "codex", "temperature": None})
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    environ = {
+        "PATH": "/usr/bin",
+        "SSH_AUTH_SOCK": "/tmp/agent.sock",
+        "OPENAI_API_KEY": "sk-" + "hostile",
+        "AGENTIC_TOKENLEAN_API_KEY": "x",
+    }
+    passed = ("SSH_AUTH_SOCK", "OPENAI_API_KEY", "AGENTIC_TOKENLEAN_API_KEY")
+    launch = lock_down(
+        StepContext("r-1", "develop", 2, agent, slice_(), None),
+        settings=settings_for(tmp_path, pass_env=passed),
+        identity=IDENTITY,
+        rules=RULES,
+        cwd=tree,
+        srt_boundary=True,
+        environ=environ,
+    )
+    assert launch.env["SSH_AUTH_SOCK"] == "/tmp/agent.sock"
+    assert "OPENAI_API_KEY" not in launch.env and "AGENTIC_TOKENLEAN_API_KEY" not in launch.env
+    assert "SSH_AUTH_SOCK" not in launch_for(resolved, tmp_path / "plain", environ=environ).env
+
+
 def test_command_line_matches_s3(resolved, tmp_path):
     launch = launch_for(resolved, tmp_path, contract=FakeContract())
     argv = launch.argv

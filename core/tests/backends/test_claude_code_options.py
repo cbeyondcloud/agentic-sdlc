@@ -144,6 +144,20 @@ def test_cli_path_is_passed_when_the_org_pins_an_install(coder):
     assert "cli_path" not in options(coder)
 
 
+def test_policy_pass_env_is_kept_but_never_a_provider_switch(coder):  # DF-541
+    environ = {"SSH_AUTH_SOCK": "/tmp/agent.sock", "ANTHROPIC_AUTH_TOKEN": "t", "GITHUB_TOKEN": "g"}
+    passing = ClaudeCodeSettings(
+        gateway_url="https://tokenlean.acme.internal",
+        api_key="tl-key",
+        config_root=Path("/state"),
+        pass_env=("SSH_AUTH_SOCK", "ANTHROPIC_AUTH_TOKEN", "AGENTIC_TOKENLEAN_API_KEY"),
+    )
+    env = options(coder, settings=passing, environ=environ)["env"]
+    assert "SSH_AUTH_SOCK" not in env  # not blanked: the user's own value reaches Claude Code
+    assert env["ANTHROPIC_AUTH_TOKEN"] == env["GITHUB_TOKEN"] == ""
+    assert options(coder, environ=environ)["env"]["SSH_AUTH_SOCK"] == ""  # without pass_env
+
+
 def test_provider_switches_and_credentials_are_blanked(coder):  # review I1
     environ = {
         "CLAUDE_CODE_USE_BEDROCK": "1",
