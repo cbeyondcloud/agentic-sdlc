@@ -23,12 +23,12 @@ What every agent-CLI step gets from the CLI:
 
 Sandbox, by backend (the safe default):
 
-  * `codex` runs only inside srt - no unsandboxed codex (decision 22); on native Windows
-    it is refused (run agentic inside WSL2);
-  * `claude-code` and `opencode` follow the regime's sandbox decision (D38): the whole
-    process wrapped where srt is used; where the regime lets steps run on guards only,
-    unwrapped under their compiled permission rules, with the same preflight warning a
-    native step gets.
+  * `codex` and `opencode` run only inside srt - no unsandboxed codex (decision 22), and
+    OpenCode has no sandbox of its own (decision 92); on native Windows they are refused
+    (run agentic inside WSL2);
+  * `claude-code` follows the regime's sandbox decision (D38): the whole process wrapped
+    where srt is used; where the regime lets steps run on guards only, unwrapped under its
+    compiled permission rules, with the same preflight warning a native step gets.
 
 Optional extras stay optional: a step on a backend this machine cannot run fails preflight,
 before any spend, with what to install (`missing`).
@@ -77,8 +77,9 @@ from sdlc_commons.guards import Guard
 #: The agent-CLI backends this CLI builds, and every backend it configures.
 AGENT_CLIS: tuple[str, ...] = ("claude-code", "codex", "opencode")
 CONFIGURED_BACKENDS: tuple[str, ...] = ("native", *AGENT_CLIS)
-#: Backends that never run outside srt (decision 22).
-NEEDS_SRT = frozenset({"codex"})
+#: Backends that never run outside srt: codex (decision 22) and OpenCode, which has no
+#: sandbox of its own (decision 92).
+NEEDS_SRT = frozenset({"codex", "opencode"})
 #: Capability settings the wiring makes good (`preflight(honoured=...)`): the guard hook
 #: gives codex the shell's default-deny (DF-426).
 HONOURED: dict[str, frozenset[str]] = {"codex": frozenset({"shell_default_deny"})}
@@ -438,9 +439,7 @@ def _opencode(state, gateway, wiring, command, pass_env, common):
         pass_env=pass_env,
     )
 
-    def wrap_for(step: StepContext) -> list[str] | None:
-        if not wiring.decision.use_srt:  # the regime runs on guards: its own rules only
-            return None
+    def wrap_for(step: StepContext) -> list[str]:  # always srt (decision 92)
         return wiring.process_wrap_for(step, write=(_step_home(settings.home_root, step),))
 
     return AcpBackend(

@@ -136,6 +136,11 @@ def resolve_command(
     return [found, *command[1:]]
 
 
+def native_windows() -> bool:
+    """Windows itself, not WSL2 (tests replace it)."""
+    return os.name == "nt"
+
+
 def _free_port(host: str) -> int:
     """A port free on `host` now. Inside srt the agent has a network namespace of its own,
     so nothing else can take it; unwrapped the window is a moment."""
@@ -335,7 +340,7 @@ class AcpRunner:
     def _launch(self) -> tuple[list[str], dict[str, str]]:
         """The argv and environment the agent starts with: under `wrap` when given, as a
         session leader on POSIX, its own server (if any) on a free port called directly."""
-        if self.wrap and os.name == "nt":
+        if self.wrap and native_windows():
             raise RuntimeError(
                 "wrapping an agent CLI in a sandbox needs macOS, Linux or WSL2 (D38)"
             )

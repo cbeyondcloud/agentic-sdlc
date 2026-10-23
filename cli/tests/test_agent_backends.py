@@ -182,7 +182,9 @@ def test_opencode_gets_the_guards_shell_rules_and_a_home_under_state(repo, tmp_p
     assert inner.settings.home_root == repo / ".agentic" / "local" / "state" / "opencode"
     assert inner.settings.command[0] == str(tmp_path / "bin" / "opencode")
     assert inner.settings.command[1:3] == ("acp", "--pure")
-    assert inner.wrap_for(step(agent)) is None
+    # OpenCode has no sandbox of its own: never run unwrapped (decision 92)
+    with pytest.raises(ValueError, match="srt"):
+        inner.wrap_for(step(agent))
 
 
 def test_an_agent_cli_setting_must_name_a_program(repo, tmp_path):
@@ -334,9 +336,12 @@ def report_for(resolved_agents) -> PreflightReport:
     return PreflightReport(pipeline="deliver", problems=[], resolved=resolved_agents)
 
 
-def test_codex_without_srt_is_refused_before_any_spend(agent, repo, monkeypatch):
+@pytest.mark.parametrize("backend", ["codex", "opencode"])  # decisions 22 and 92
+def test_an_agent_cli_without_its_own_sandbox_is_refused_without_srt(
+    agent, repo, monkeypatch, backend
+):
     monkeypatch.setattr(agent_backends, "missing", lambda backend, settings: None)
-    codex = agent.model_copy(update={"backend": "codex"})
+    codex = agent.model_copy(update={"backend": backend})
     found = problems(report_for({"dev": codex}), UNSANDBOXED, repo=repo, settings={})
     assert [(p.check, p.severity) for p in found] == [("backend", "error")]
     assert "srt" in found[0].detail and "dev" in found[0].detail
@@ -368,8 +373,9 @@ def test_opencode_plugins_in_the_repo_are_refused_before_any_spend(agent, repo, 
     monkeypatch.setattr(agent_backends, "missing", lambda backend, settings: None)
     (repo / ".opencode" / "plugin").mkdir(parents=True)
     (repo / ".opencode" / "plugin" / "x.js").write_text("export default {}", encoding="utf-8")
+    monkeypatch.setattr(agent_backends, "native_windows", lambda: False)
     opencode = agent.model_copy(update={"backend": "opencode"})
-    found = problems(report_for({"dev": opencode}), UNSANDBOXED, repo=repo, settings={})
+    found = problems(report_for({"dev": opencode}), SANDBOXED, repo=repo, settings={})
     assert any("x.js" in p.detail and p.severity == "error" for p in found)
 
 

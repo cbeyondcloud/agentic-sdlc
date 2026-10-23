@@ -155,8 +155,19 @@ def codex(base, tmp_path, monkeypatch):
 @pytest.fixture
 def opencode(base, tmp_path, monkeypatch):
     pytest.importorskip("acp", reason="the acp extra is not installed")
+    import agentic.backends.acp.runner as acp_runner
+    from agentic.sandbox import SrtSandbox
+
     workspace, policy_repo = base
     agent_policy(policy_repo, "opencode")
+    # opencode runs only under srt (decision 92): this machine "has" it, and a stand-in
+    # srt runs the step
+    monkeypatch.setattr(runtime, "machine_readiness", lambda: Readiness("linux", ()))
+    fake_srt = functools.partial(SrtSandbox, srt=(sys.executable, str(FAKE_SRT)))
+    monkeypatch.setattr(wiring_module, "SrtSandbox", fake_srt)
+    monkeypatch.setattr(agent_backends, "native_windows", lambda: False)
+    monkeypatch.setattr(acp_runner, "native_windows", lambda: False)
+    monkeypatch.setenv("FAKE_SRT_LOG", str(tmp_path / "srt.jsonl"))
     script_path, log = tmp_path / "acp-script.json", tmp_path / "acp.jsonl"
     command = [sys.executable, str(FAKE_ACP), str(script_path)]
     user_config(workspace, {"agent_clis": {"opencode": command}})
