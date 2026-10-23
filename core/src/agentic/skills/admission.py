@@ -31,6 +31,7 @@ from pathlib import Path
 
 from agentic.skills.catalog import (
     DEFAULT_LICENCES,
+    PLUGINS,
     AdmissionLimits,
     Catalog,
     CatalogError,
@@ -247,7 +248,7 @@ def admit_catalog(
             else []
         )
         results[key] = pin + checked
-    for source in sorted(p for p in root.iterdir() if p.is_dir()):
+    for source in sorted(p for p in root.iterdir() if p.is_dir() and p.name != PLUGINS):
         for folder in sorted(p for p in source.iterdir() if p.is_dir()):
             key = f"{source.name}/{folder.name}"
             if key not in catalog.skills:

@@ -49,6 +49,10 @@ class BackendCapabilities:
     # it starts an agent process of its own (an agent CLI), which the step's process scope
     # must contain (M2-22) - what the runner conformance `containment` tier checks (M2-41)
     own_process: bool = True
+    # it can load an org-catalog plugin into its own per-step config (M2-47): only an agent
+    # CLI with a plugin or skills folder of its own; never the native loop, whose skills
+    # come from the catalog and leave out the orchestration ones (spec §11.4)
+    plugins: bool = False
     notes: tuple[str, ...] = field(default=())
 
 
@@ -75,6 +79,7 @@ CAPABILITIES: dict[str, BackendCapabilities] = {
         stuck_check=False,
         # Claude Code calls the model itself; only TokenLean sees its egress (DF-149)
         secret_scan=False,
+        plugins=True,  # a local plugin folder, explicit even in --bare mode
         notes=("spike S2",),
     ),
     "codex": BackendCapabilities(
@@ -94,6 +99,7 @@ CAPABILITIES: dict[str, BackendCapabilities] = {
         stuck_check=False,
         secret_scan=False,  # Codex calls the model itself
         shell_default_deny=False,  # execpolicy has no default-deny (S3 Q6, decision 22)
+        plugins=True,  # the plugin's skills in the step's own CODEX_HOME (DF-118)
         notes=("spike S3",),
     ),
     "opencode": BackendCapabilities(

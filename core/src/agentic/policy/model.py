@@ -109,6 +109,9 @@ class TeamPolicy(_Strict):
     limits_max: dict[str, RoleLimits] = {}  # keyed by agent TYPE (D35)
     deny: DenyRules = DenyRules()
     skill_packs: list[str] = []  # opt-in skill packs from the org catalog (spec §11.2)
+    # agent-CLI plugins from the org catalog, for steps on a backend that loads plugins
+    # (never the native loop; M2-47, D28)
+    backend_plugins: list[str] = []
 
 
 #: Read-denied in every sandbox, whatever policy adds: where credentials live (D38).
