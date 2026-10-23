@@ -196,6 +196,19 @@ async def test_unreachable_relay_is_transient(api):
     assert (await _row(api, api.a, queued)).status == "pending"
 
 
+async def test_an_unusable_relay_stops_the_batch_instead_of_timing_out_each_mail(api):
+    """Review: with the relay down, one attempt per pass, not one per queued mail."""
+    first = await _queue(api, api.a, key="k1")
+    second = await _queue(api, api.a, key="k2")
+    with capture_relay() as relay:
+        port = relay.port
+    notifier = SmtpNotifier(host="127.0.0.1", port=port, security="starttls", timeout=2)
+    report = await deliver_due(api.db.app, api.a.id, notifier, api.clock, settings=_settings(api))
+    assert report.retried == 1
+    attempts = sorted([(await _row(api, api.a, n)).attempts for n in (first, second)])
+    assert attempts == [0, 1]
+
+
 class _Slow:
     """Wraps a notifier and waits inside each send, so two workers overlap."""
 

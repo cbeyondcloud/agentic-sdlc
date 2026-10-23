@@ -32,6 +32,11 @@ class TransientFailure(DeliveryFailure):
     """Try again later (backoff)."""
 
 
+class RelayUnusable(TransientFailure):
+    """The relay itself cannot be used now (unreachable, no STARTTLS, a refused login):
+    no other mail would get through either, so delivery stops for this pass."""
+
+
 class PermanentFailure(DeliveryFailure):
     """The relay refused this mail for good."""
 
@@ -118,7 +123,7 @@ class SmtpNotifier:
                 smtp.ehlo()
                 if self.security == "starttls":
                     if not smtp.has_extn("starttls"):
-                        raise TransientFailure(
+                        raise RelayUnusable(
                             f"the relay {self.host}:{self.port} does not offer STARTTLS; "
                             "the mail is not sent in clear"
                         )
@@ -140,11 +145,11 @@ class SmtpNotifier:
             kind = PermanentFailure if error.smtp_code >= 500 else TransientFailure
             raise kind(f"mail refused: {error.smtp_code} {_text(error.smtp_error)}") from None
         except smtplib.SMTPResponseException as error:
-            raise TransientFailure(
+            raise RelayUnusable(  # a failed login or a refused sender: the relay's set-up
                 f"the relay answered {error.smtp_code} {_text(error.smtp_error)}"
             ) from None
         except (smtplib.SMTPException, OSError) as error:
-            raise TransientFailure(
+            raise RelayUnusable(
                 f"the relay {self.host}:{self.port} could not be used ({type(error).__name__})"
             ) from None
 

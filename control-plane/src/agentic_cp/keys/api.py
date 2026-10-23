@@ -11,7 +11,13 @@ from agentic_cp.auth.deps import Caller
 from agentic_cp.auth.users import UserError, user_by_email
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
 from agentic_cp.keys.gateway import GatewayUnavailable
-from agentic_cp.keys.store import active_keys, mark_revoked, record_key, revoke_user_keys
+from agentic_cp.keys.store import (
+    active_keys,
+    forget_issued,
+    mark_revoked,
+    record_key,
+    revoke_user_keys,
+)
 from agentic_cp.rbac.authz import Org, require
 from agentic_cp.tenancy.context import tenant_tx
 
@@ -32,41 +38,54 @@ def unavailable(error: GatewayUnavailable) -> ApiProblem:
 @router.post("/proxy-keys/rotate")
 async def rotate_own_key(request: Request, response: Response, ctx: Caller) -> ProxyKeyIssued:
     """Replace the caller's newest gateway key: the old one stops working at once (within
-    the gateway's key refresh), the new one is in this response only."""
+    the gateway's key refresh), the new one is in this response only. A key whose
+    revocation is pending is never rotated back to life; a new key that cannot be recorded
+    is revoked again, so the gateway never holds a key the control plane does not know."""
     state = request.app.state
-    async with tenant_tx(state.engine, ctx.tenant_id) as conn:
-        held = await active_keys(conn, ctx.user_id)
-        if not held:
-            raise ApiProblem(
-                404,
-                "proxy_key.none",
-                "you hold no gateway key issued through the control plane",
-                hint="redeem your invite (`agentic login --invite <link>`) or ask your org "
-                "admin to invite you again",
-            )
-        old = held[0]
-        try:
-            issued = await state.gateway_keys.rotate(old.key_id)
-        except GatewayUnavailable as error:
-            raise unavailable(error) from None
-        now = state.clock()
-        await mark_revoked(conn, old.key_id, now)
-        await record_key(
-            conn, key_id=issued.key_id, user_id=ctx.user_id, team=old.team, created_by=ctx.email
-        )
-        await append(
-            conn,
-            AuditEvent(
-                event="proxy_key.rotated",
-                actor=ctx.email,
-                actor_kind=ctx.actor_kind,
-                target=f"proxy_key:{issued.key_id}",
+    issued = None
+    try:
+        async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+            held = [
+                k for k in await active_keys(conn, ctx.user_id) if k.revoke_requested_at is None
+            ]
+            if not held:
+                raise ApiProblem(
+                    404,
+                    "proxy_key.none",
+                    "you hold no gateway key issued through the control plane",
+                    hint="redeem your invite (`agentic login --invite <link>`) or ask your org "
+                    "admin to invite you again",
+                )
+            old = held[0]
+            try:
+                issued = await state.gateway_keys.rotate(old.key_id)
+            except GatewayUnavailable as error:
+                raise unavailable(error) from None
+            await mark_revoked(conn, old.key_id, state.clock())
+            await record_key(
+                conn,
+                key_id=issued.key_id,
+                user_id=ctx.user_id,
                 team=old.team,
-                before={"key_id": old.key_id},
-                after={"key_id": issued.key_id, "user": ctx.email},
-            ),
-            clock=state.clock,
-        )
+                created_by=ctx.email,
+            )
+            await append(
+                conn,
+                AuditEvent(
+                    event="proxy_key.rotated",
+                    actor=ctx.email,
+                    actor_kind=ctx.actor_kind,
+                    target=f"proxy_key:{issued.key_id}",
+                    team=old.team,
+                    before={"key_id": old.key_id},
+                    after={"key_id": issued.key_id, "user": ctx.email},
+                ),
+                clock=state.clock,
+            )
+    except BaseException:
+        if issued is not None:
+            await forget_issued(state.gateway_keys, issued)
+        raise
     response.headers["Cache-Control"] = NO_STORE
     return ProxyKeyIssued(
         key=issued.key, key_id=issued.key_id, gateway_url=state.settings.gateway_url

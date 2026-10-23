@@ -309,6 +309,13 @@ async def plan_assignment(
     exists = user is not None and (
         await store.find_assignment(conn, user.id, role.name, kind, value) is not None
     )
+    if role.name == SERVICE_ACCOUNT and not exists:  # one team, set at creation (review)
+        raise ApiProblem(
+            422,
+            SERVICE_ROLE_PROBLEM,
+            "a service account holds the service-account role in its own team only",
+            hint="create one per team with `agentic rbac service-account <name> --team <team>`",
+        )
     return AssignmentPlan(email=normal, user=user, role=role.name, team=team, exists=exists)
 
 

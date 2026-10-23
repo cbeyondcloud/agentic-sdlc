@@ -32,7 +32,7 @@ async def inviting(api):
                 update(tenants).where(tenants.c.id == tenant.id).values(gateway_tenant=name)
             )
     settings = settings_for(api.db).model_copy(
-        update={"public_url": PUBLIC, "gateway_url": GATEWAY_URL}
+        update={"public_url": PUBLIC, "gateway_url": GATEWAY_URL, "smtp_host": "127.0.0.1"}
     )
     gateway = FakeGateway()
     harness = Api(api.db, api.clock, api.a, api.b, settings=settings, gateway_keys=gateway)
@@ -122,6 +122,7 @@ async def test_a_new_invite_revokes_the_earlier_one(inviting):
     api = inviting
     await assign(api, api.a.admin_token, "dev@a.example.test", "developer", "payments")
     first = await _token_for(api, api.a, "dev@a.example.test")
+    api.clock.advance(timedelta(seconds=1))  # mails are ordered by when they were queued
     reply = await api.post("/v1/users/dev@a.example.test/invite", api.a.admin_token)
     assert reply.status_code == 201 and reply.json()["mailed"] is True
     second = await _token_for(api, api.a, "dev@a.example.test")
@@ -181,6 +182,26 @@ async def test_without_a_public_url_nothing_is_mailed(api):
     assert await _mails(api, api.a) == []
     again = await api.post("/v1/users/dev@a.example.test/invite", api.a.admin_token)
     assert again.status_code == 409 and again.json()["code"] == "invite.unconfigured"
+
+
+async def test_without_a_relay_the_invite_is_queued_not_mailed(inviting):
+    api = inviting
+    quiet = Api(
+        api.db,
+        api.clock,
+        api.a,
+        api.b,
+        settings=api.settings.model_copy(update={"smtp_host": None}),
+        gateway_keys=api.gateway,
+    )
+    try:
+        await assign(quiet, api.a.admin_token, "org@a.example.test", "auditor")
+        reply = await quiet.post("/v1/users/org@a.example.test/invite", api.a.admin_token)
+    finally:
+        await quiet.http.aclose()
+    assert reply.status_code == 201 and reply.json()["mailed"] is False
+    [*_, mail] = await _mails(api, api.a)
+    assert "auditor" in mail.body_text  # an org-scope person's own role, not a made-up one
 
 
 async def test_team_leads_reinvite_their_own_members_only(inviting):

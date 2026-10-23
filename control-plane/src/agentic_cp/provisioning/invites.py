@@ -156,4 +156,7 @@ async def create_invite(
         ),
         clock=clock,
     )
-    return InviteInfo(id=invite_id, email=user.email, expires_at=expires_at, mailed=True)
+    # queued either way; `mailed` says whether a relay will send it (review)
+    return InviteInfo(
+        id=invite_id, email=user.email, expires_at=expires_at, mailed=bool(settings.smtp_host)
+    )

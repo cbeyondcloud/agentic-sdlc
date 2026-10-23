@@ -20,6 +20,8 @@
                           one tenant's own mail sender
     admin tenant suspend|resume --tenant S --reason R
                           refuse (or again accept) one tenant's tokens and invites
+    admin user enable --tenant S --email E --reason R
+                          re-enable an offboarded person (then invite them again)
     admin issue-token --tenant S --email E
                           a recovery token for an existing user of one tenant
     openapi [--write | --check]
@@ -444,6 +446,56 @@ def _tenant_status(status: str):
     return command
 
 
+def _user_enable(args: argparse.Namespace) -> int:
+    """Re-enable an offboarded person (ruling P10): their roles count again, their old
+    tokens and keys stay revoked; an admin then sends a new invite."""
+    from sqlalchemy import update
+
+    from agentic_cp.app import utc_now
+    from agentic_cp.audit import OPERATOR, AuditEvent, append
+    from agentic_cp.auth.users import UserError, user_by_email
+    from agentic_cp.tables import users
+    from agentic_cp.tenancy.tenants import bump_rbac_revision, lock_rbac
+
+    settings = _settings()
+    _owner_dsn(settings)
+
+    async def work(conn, tenant):
+        await lock_rbac(conn)
+        try:
+            user = await user_by_email(conn, args.email)
+        except UserError as error:
+            raise CommandError(str(error), 3) from None
+        if user is None:
+            raise CommandError(f"no user {args.email!r} in tenant {tenant.slug}", 3)
+        if user.status == "active":
+            raise CommandError(f"{user.email} is already active", 2)
+        await conn.execute(update(users).where(users.c.id == user.id).values(status="active"))
+        revision = await bump_rbac_revision(conn)
+        await append(
+            conn,
+            AuditEvent(
+                event="user.enabled",
+                actor=OPERATOR,
+                actor_kind="system",
+                target=f"user:{user.email}",
+                reason=args.reason,
+                before={"status": user.status},
+                after={"status": "active", "rbac_revision": revision},
+            ),
+            clock=utc_now,
+        )
+        return user.email
+
+    email = asyncio.run(_with_tenant(settings, args.tenant, work))
+    print(f"{email} is active again in tenant {args.tenant}; old tokens and keys stay revoked")
+    print(
+        f"next: `agentic rbac invite {email}`, and `agentic killswitch off <id>` for the "
+        f"user:{email} switch set at offboarding"
+    )
+    return 0
+
+
 def _issue_token(args: argparse.Namespace) -> int:
     """Admin recovery: a token for an existing user of one named tenant."""
     from agentic_cp.app import utc_now
@@ -541,6 +593,15 @@ def build_parser() -> argparse.ArgumentParser:
         change.add_argument("--tenant", required=True, help="the tenant's slug")
         change.add_argument("--reason", required=True, help="why (in the audit chain)")
         change.set_defaults(run=_tenant_status(status))
+
+    user = admin_commands.add_parser("user", help="people").add_subparsers(
+        dest="user_command", required=True
+    )
+    enable = user.add_parser("enable", help="re-enable an offboarded person (audited)")
+    enable.add_argument("--tenant", required=True, help="the tenant's slug")
+    enable.add_argument("--email", required=True)
+    enable.add_argument("--reason", required=True, help="why (in the audit chain)")
+    enable.set_defaults(run=_user_enable)
 
     issue = admin_commands.add_parser("issue-token", help="a recovery token for one user")
     issue.add_argument("--tenant", required=True, help="the tenant's slug")

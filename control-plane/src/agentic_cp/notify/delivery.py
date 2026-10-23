@@ -21,7 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agentic_cp.audit import AuditEvent, append
 from agentic_cp.notify.outbox import SYSTEM
-from agentic_cp.notify.smtp import Notifier, Outgoing, PermanentFailure, notifier_for
+from agentic_cp.notify.smtp import (
+    Notifier,
+    Outgoing,
+    PermanentFailure,
+    RelayUnusable,
+    notifier_for,
+)
 from agentic_cp.settings import Settings
 from agentic_cp.tables import notifications
 from agentic_cp.tenancy.context import tenant_tx
@@ -88,9 +94,11 @@ async def deliver_due(
             attempts = row.attempts + 1
             values: dict = {"attempts": attempts}
             event = None
+            relay_down = False
             try:
                 await notifier.send(outgoing)
             except Exception as error:  # noqa: BLE001 - every failure is recorded on the row
+                relay_down = isinstance(error, RelayUnusable)
                 problem = str(error)[:300] or type(error).__name__
                 values["last_error"] = problem
                 if isinstance(error, PermanentFailure) or attempts >= settings.notify_max_attempts:
@@ -120,6 +128,8 @@ async def deliver_due(
                     ),
                     clock=clock,
                 )
+        if relay_down:  # no other mail would get through this pass either (review)
+            break
     return report
 
 

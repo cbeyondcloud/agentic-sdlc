@@ -16,6 +16,7 @@ is an open run active within `run_slot_hours`)."""
 from __future__ import annotations
 
 import asyncio
+import tarfile
 from collections.abc import Iterable
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -85,16 +86,20 @@ async def version_settings(conn: AsyncConnection, version: str) -> dict | None:
     row = (await conn.execute(select(policy_versions.c.settings).where(accepted))).first()
     if row is None:
         return None
-    if row.settings and set(RUN_SETTINGS_KEYS) <= set(row.settings):
-        return dict(row.settings)
+    stored = dict(row.settings or {})
+    if stored and set(RUN_SETTINGS_KEYS) <= set(stored):
+        return stored
     key = (await require_tenant_id(conn), version)
     if key not in _DERIVED:
         bundle = (await conn.execute(select(policy_versions.c.bundle).where(accepted))).scalar()
-        derived = await asyncio.to_thread(settings_from_bundle, bundle, version)
+        try:
+            derived = await asyncio.to_thread(settings_from_bundle, bundle, version)
+        except (OSError, EOFError, tarfile.TarError):  # an unreadable bundle derives nothing
+            derived = {}
         if len(_DERIVED) >= _DERIVED_MAX:
             _DERIVED.pop(next(iter(_DERIVED)))
         _DERIVED[key] = derived
-    return dict(_DERIVED[key])
+    return {**_DERIVED[key], **stored}  # what was stored wins; the bundle fills the gaps
 
 
 async def require_cli_version(

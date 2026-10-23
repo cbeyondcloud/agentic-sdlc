@@ -21,6 +21,10 @@ A gateway key is checked with the configured gateway (`GET /v1/models`) before i
 stored (DF-182): a key the gateway refuses is not stored, one that cannot be checked now is
 stored unverified with a warning. `agentic login --rotate` replaces the gateway key through
 the control plane (M2-17); the old key stops working.
+
+`agentic login --invite <link>` redeems the link from an invite mail once (M2-18): the
+control-plane token and, when the org issues them, the gateway key go straight into the
+keyring - nothing to copy and paste. The keyring is checked before the link is used up.
 """
 
 import os

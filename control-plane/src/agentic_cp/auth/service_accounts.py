@@ -11,8 +11,6 @@ refuses a service principal anything else."""
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 from fastapi import APIRouter, Query, Request
 from sqlalchemy import and_, select
 
@@ -24,7 +22,7 @@ from agentic.orgapi import (
 )
 from agentic_cp.audit import AuditEvent, append, format_at
 from agentic_cp.auth.deps import Caller
-from agentic_cp.auth.tokens import issue_token
+from agentic_cp.auth.tokens import TokenLifetimeError, issue_token, token_lifetime
 from agentic_cp.auth.users import create_user, user_by_email
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem
 from agentic_cp.policy_sync.service import active_teams
@@ -50,8 +48,11 @@ async def create_service_account(
 ) -> ServiceAccountIssued:
     """A new service account in `team` and its token (shown in this response only)."""
     state = request.app.state
-    now = state.clock()
-    expires_at = now + timedelta(days=body.days)
+    try:  # the deployment's maximum (at most 365, owner decision 75) applies
+        lifetime = token_lifetime(state.settings, "service", body.days)
+    except TokenLifetimeError as error:
+        raise ApiProblem(422, "auth.lifetime_too_long", str(error)) from None
+    expires_at = state.clock() + lifetime
     email = service_email(body.name, body.team)
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         await lock_rbac(conn)

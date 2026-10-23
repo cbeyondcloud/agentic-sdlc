@@ -69,6 +69,28 @@ async def test_expiry_is_required_and_at_most_365_days(api, days):
     assert (await _create(api, api.a.admin_token, body)).status_code == 422
 
 
+async def test_the_deployments_service_token_maximum_applies(api):
+    capped = api.with_settings(service_token_max_days=30)
+    try:
+        reply = await capped.post("/v1/service-accounts", api.a.admin_token, BODY | {"days": 31})
+        assert reply.status_code == 422 and reply.json()["code"] == "auth.lifetime_too_long"
+        assert (
+            await capped.post("/v1/service-accounts", api.a.admin_token, BODY)
+        ).status_code == 201
+    finally:
+        await capped.http.aclose()
+
+
+async def test_a_service_account_never_gets_a_second_team(api):
+    made = (await _create(api, api.a.admin_token)).json()
+    reply = await api.post(
+        "/v1/rbac/assignments",
+        api.a.admin_token,
+        {"email": made["email"], "role": "service-account", "team": "search"},
+    )
+    assert reply.status_code == 422 and reply.json()["code"] == "rbac.service_account_role"
+
+
 async def test_a_name_is_unique_within_its_team(api):
     assert (await _create(api, api.a.admin_token)).status_code == 201
     again = await _create(api, api.a.admin_token)

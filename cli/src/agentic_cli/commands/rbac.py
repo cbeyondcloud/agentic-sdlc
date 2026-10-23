@@ -244,7 +244,9 @@ def register(app: typer.Typer) -> None:
         out: Output = ctx.obj
         with _client() as client:
             made = client.invite(_email(email))
-        line = f"invite mailed to {made.email}; it works until {made.expires_at:%Y-%m-%d %H:%M} UTC"
+        sent = "mailed to" if made.mailed else "queued (no mail relay is set up yet) for"
+        until = f"{made.expires_at:%Y-%m-%d %H:%M}"
+        line = f"invite {sent} {made.email}; it works until {until} UTC"
         out.result(made.model_dump(mode="json"), lambda c: c.print(line, markup=False))
 
     @group.command("offboard")

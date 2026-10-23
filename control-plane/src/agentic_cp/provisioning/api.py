@@ -129,8 +129,13 @@ async def reinvite(email: str, request: Request, ctx: Caller) -> InviteInfo:
                 "this control plane has no public URL, so an invite has nothing to link to",
                 hint="the platform team sets AGENTIC_CP_PUBLIC_URL",
             )
+        held = await assignments_of(conn, user.id)
         teams = await team_assignments(conn, user.id)
-        role, team = teams[0] if teams else ("member", None)
+        if teams:
+            role, team = teams[0]
+        else:  # org-scope roles only: name them (review)
+            org_roles = sorted(a.role for a in held if a.scope == "org")
+            role, team = ", ".join(org_roles) or "a member (no role yet)", None
         invite = await create_invite(
             conn,
             user,

@@ -142,6 +142,33 @@ async def test_a_revocation_the_gateway_misses_is_pending_and_the_worker_finishe
     assert await retry_revocations(api.db.app, api.a.id, api.gateway, api.clock) == []
 
 
+async def test_a_key_whose_revocation_is_pending_cannot_be_rotated_back_to_life(keyed):
+    """Review: rotating a pending key would issue a live key nobody revokes."""
+    api = keyed
+    token, _ = await member(api, api.a, "dev@a.example.test", "developer", "payments")
+    await _give_key(api, api.a, "dev@a.example.test")
+    api.gateway.down = True
+    await api.delete("/v1/users/dev@a.example.test/proxy-keys", api.a.admin_token)
+    api.gateway.down = False
+    reply = await api.post("/v1/proxy-keys/rotate", token)
+    assert reply.status_code == 404 and reply.json()["code"] == "proxy_key.none"
+    assert ("rotate", next(iter(api.gateway.keys))) not in api.gateway.calls
+
+
+async def test_a_rotation_that_cannot_be_recorded_revokes_the_new_key(keyed, monkeypatch):
+    api = keyed
+    token, _ = await member(api, api.a, "dev@a.example.test", "developer", "payments")
+    await _give_key(api, api.a, "dev@a.example.test")
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError("the database went away")
+
+    monkeypatch.setattr("agentic_cp.keys.api.record_key", broken)
+    reply = await api.post("/v1/proxy-keys/rotate", token)
+    assert reply.status_code == 500
+    assert api.gateway.active_for("dev@a.example.test") == []  # no unrecorded live key
+
+
 async def test_another_tenants_person_is_unknown(keyed):
     api = keyed
     await member(api, api.b, "dev@b.example.test", "developer", "payments")
