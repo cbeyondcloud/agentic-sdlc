@@ -22,6 +22,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx2
 
@@ -31,16 +32,22 @@ from agentic.orgapi import (
     API_PREFIX,
     CLI_VERSION_HEADER,
     ActivePolicy,
+    Assignment,
     CheckResult,
     IngestResult,
+    InviteInfo,
     InviteRedeemed,
     KillState,
     KillSwitchInfo,
     Me,
+    OffboardResult,
     ProxyKeyIssued,
     RepoInfo,
+    RoleImportResult,
+    RoleInfo,
     RunPreflight,
     RunSummary,
+    ServiceAccountIssued,
 )
 from agentic.security.pii import PiiDetector
 from agentic.security.publish_scan import PublishBlocked, PublishGuard
@@ -209,10 +216,53 @@ class ControlPlaneClient:
             )
         return data
 
-    def check(self, permission: str, *, team: str | None = None, repo: str | None = None):
-        body = {"permission": permission, "team": team, "repo": repo}
+    def check(
+        self,
+        permission: str,
+        *,
+        team: str | None = None,
+        repo: str | None = None,
+        user: str | None = None,
+    ):
+        body = {"permission": permission, "team": team, "repo": repo, "user": user}
         found = self._json("POST", "/rbac/check", {k: v for k, v in body.items() if v})
         return CheckResult.model_validate(found)
+
+    # ── RBAC administration (M2-25) ──────────────────────────────────────────
+
+    def roles(self) -> list[RoleInfo]:
+        return [RoleInfo.model_validate(item) for item in self._json("GET", "/rbac/roles")]
+
+    def role(self, name: str) -> RoleInfo:
+        return RoleInfo.model_validate(self._json("GET", f"/rbac/roles/{quote(name, safe='')}"))
+
+    def assignments(self, *, team: str | None = None, user: str | None = None) -> list[Assignment]:
+        params = {k: v for k, v in {"team": team, "user": user}.items() if v}
+        found = self._json("GET", "/rbac/assignments", params=params or None)
+        return [Assignment.model_validate(item) for item in found]
+
+    def assign(self, email: str, role: str, team: str | None = None) -> Assignment:
+        body = {"email": email, "role": role, **({"team": team} if team else {})}
+        return Assignment.model_validate(self._json("POST", "/rbac/assignments", body))
+
+    def delete_assignment(self, assignment_id: str) -> None:
+        self._send("DELETE", f"/rbac/assignments/{quote(assignment_id, safe='')}")
+
+    def import_roles(self, text: str, *, dry_run: bool) -> RoleImportResult:
+        found = self._json("POST", "/rbac/import", {"csv": text, "dry_run": dry_run})
+        return RoleImportResult.model_validate(found)
+
+    def create_service_account(self, name: str, team: str, days: int) -> ServiceAccountIssued:
+        body = {"name": name, "team": team, "days": days}
+        return ServiceAccountIssued.model_validate(self._json("POST", "/service-accounts", body))
+
+    def invite(self, email: str) -> InviteInfo:
+        found = self._json("POST", f"/users/{quote(email, safe='@')}/invite")
+        return InviteInfo.model_validate(found)
+
+    def offboard(self, email: str, reason: str) -> OffboardResult:
+        found = self._json("POST", f"/users/{quote(email, safe='@')}/offboard", {"reason": reason})
+        return OffboardResult.model_validate(found)
 
     def register_repo(self, remote: str, team: str) -> RepoInfo:
         return RepoInfo.model_validate(

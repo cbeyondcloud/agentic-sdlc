@@ -59,6 +59,10 @@ class FakeControlPlane:
     proxy_key: str | None = None  # the key a rotation hands out (M2-17); None: none held
     invites: dict[str, dict] = field(default_factory=dict)  # token -> redemption (M2-18)
     used_invites: set[str] = field(default_factory=set)
+    role_assignments: list[dict] = field(default_factory=list)  # `agentic rbac` (M2-25)
+    imports: list[dict] = field(default_factory=list)  # bodies of POST /v1/rbac/import
+    import_rows: list[dict] = field(default_factory=list)  # what an import answers
+    offboarded: list[tuple[str, str]] = field(default_factory=list)
 
     def add_invite(self, token: str, *, gateway_key: str | None = None) -> dict:
         self.invites[token] = {
@@ -73,6 +77,129 @@ class FakeControlPlane:
             "notice": None if gateway_key else "no gateway key from this control plane",
         }
         return self.invites[token]
+
+    # ── RBAC administration (M2-25): enough of /v1/rbac and friends for `agentic rbac` ──
+
+    def _may_assign(self, team: str | None) -> httpx2.Response | None:
+        """None when allowed: org admins anywhere, team leads in their teams."""
+        if "rbac.assign" in self.allowed or (team is not None and team in self.lead_teams):
+            return None
+        where = f"team {team}" if team else "the org"
+        need = "rbac.assign.team" if team else "rbac.assign"
+        return _problem(403, "rbac.forbidden", f"you do not hold {need} for {where}")
+
+    def _rbac(self, request: httpx2.Request) -> httpx2.Response:
+        path, method = request.url.path, request.method
+        body = json.loads(request.content) if request.content else {}
+        roles = [
+            {"name": "developer", "permissions": ["run.trigger"], "builtin": True},
+            {"name": "team-lead", "permissions": ["rbac.assign.team"], "builtin": True},
+        ]
+        for role in roles:
+            role["team_assignable"] = role["name"] == "developer"
+        if path == "/v1/rbac/roles":
+            return httpx2.Response(200, json=roles)
+        if path.startswith("/v1/rbac/roles/"):
+            found = [r for r in roles if r["name"] == path.rsplit("/", 1)[1]]
+            return (
+                httpx2.Response(200, json=found[0])
+                if found
+                else _problem(404, "not_found", "no role")
+            )
+        if path == "/v1/rbac/assignments" and method == "GET":
+            team, user = request.url.params.get("team"), request.url.params.get("user")
+            if refused := self._may_assign(team):
+                return refused
+            shown = [
+                a
+                for a in self.role_assignments
+                if (team is None or a["team"] == team) and (user is None or a["email"] == user)
+            ]
+            return httpx2.Response(200, json=shown)
+        if path == "/v1/rbac/assignments" and method == "POST":
+            if refused := self._may_assign(body.get("team")):
+                return refused
+            made = {
+                "id": f"00000000-0000-0000-0001-{len(self.role_assignments) + 1:012d}",
+                "email": body["email"],
+                "role": body["role"],
+                "scope": "team" if body.get("team") else "org",
+                "team": body.get("team"),
+                "invited": True,
+            }
+            self.role_assignments.append(made)
+            return httpx2.Response(201, json=made)
+        if path.startswith("/v1/rbac/assignments/") and method == "DELETE":
+            wanted = path.rsplit("/", 1)[1]
+            found = [a for a in self.role_assignments if a["id"] == wanted]
+            if not found:
+                return _problem(404, "not_found", "no such assignment")
+            if refused := self._may_assign(found[0]["team"]):
+                return refused
+            self.role_assignments.remove(found[0])
+            return httpx2.Response(204)
+        if path == "/v1/rbac/import":
+            refused = self._may_assign(None)
+            if refused is not None and not self.lead_teams:
+                return refused
+            self.imports.append(body)
+            rows = self.import_rows
+            errors = [row for row in rows if row["action"] == "error"]
+            if errors and not body["dry_run"]:
+                problems = [f"line {row['line']}: {row['error']}" for row in errors]
+                return _problem(
+                    422, "rbac.import_invalid", "rows have errors", extra={"problems": problems}
+                )
+            result = {
+                "applied": not body["dry_run"],
+                "added": sum(row["action"] == "add" for row in rows),
+                "unchanged": sum(row["action"] == "unchanged" for row in rows),
+                "errors": len(errors),
+                "rows": rows,
+            }
+            return httpx2.Response(200, json=result)
+        if path == "/v1/service-accounts" and method == "POST":
+            if refused := self._may_assign(body["team"]):
+                return refused
+            return httpx2.Response(
+                201,
+                json={
+                    "id": "00000000-0000-0000-0002-000000000001",
+                    "email": f"{body['name']}@{body['team']}.service.invalid",
+                    "team": body["team"],
+                    "token": "acp_" + "s" * 43,
+                    "token_id": "00000000-0000-0000-0003-000000000001",
+                    "expires_at": (datetime.now(UTC) + timedelta(days=body["days"])).isoformat(),
+                },
+            )
+        if path.endswith("/invite") or path.endswith("/offboard"):
+            email = path.split("/")[3]
+            if refused := self._may_assign(None):
+                return refused
+            if path.endswith("/invite"):
+                expires = (datetime.now(UTC) + timedelta(hours=72)).isoformat()
+                return httpx2.Response(
+                    201,
+                    json={
+                        "id": "00000000-0000-0000-0004-000000000001",
+                        "email": email,
+                        "expires_at": expires,
+                        "mailed": True,
+                    },
+                )
+            self.offboarded.append((email, body["reason"]))
+            return httpx2.Response(
+                200,
+                json={
+                    "email": email,
+                    "tokens_revoked": 1,
+                    "invites_revoked": 0,
+                    "proxy_keys_revoked": ["0123456789abcdef"],
+                    "proxy_keys_pending": [],
+                    "kill_switch": "00000000-0000-0000-0005-000000000001",
+                },
+            )
+        return _problem(404, "not_found", "no such route or object")
 
     def _redeem(self, request: httpx2.Request) -> httpx2.Response:
         token = json.loads(request.content)["token"]
@@ -150,6 +277,8 @@ class FakeControlPlane:
             return httpx2.Response(
                 200, json={"allowed": allowed, "reason": "fake", "role": None, "scope": None}
             )
+        if path.startswith(("/v1/rbac/", "/v1/service-accounts", "/v1/users/")):
+            return self._rbac(request)
         if path == "/v1/repos":
             body = json.loads(request.content)
             self.registered.append(body)

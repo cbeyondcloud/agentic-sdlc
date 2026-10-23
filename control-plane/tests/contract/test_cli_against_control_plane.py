@@ -163,3 +163,47 @@ async def test_ledger_forward_to_control_plane_end_to_end(live, tmp_path):
     ledger.release()
     with httpx2.Client(base_url=base, headers={"Authorization": f"Bearer {b.admin_token}"}) as http:
         assert http.get(f"{API_PREFIX}/runs/contract-run").status_code == 404
+
+
+async def test_provisioning_end_to_end(db, monkeypatch):
+    """M2-14/M2-18/M2-25: the CLI's client assigns (an invite is mailed), the invitee
+    redeems it without a bearer token, an import dry run and a service account work, and
+    offboarding ends the invitee's access."""
+    from sqlalchemy import select
+
+    from agentic_cli.control_plane import ControlPlaneRefused
+    from agentic_cp.tables import notifications
+    from agentic_cp.tenancy.context import tenant_tx
+
+    clock = FakeClock()
+    a = await bootstrap(db, clock, "tenant-a", "Tenant A")
+    settings = settings_for(db).model_copy(update={"public_url": "https://cp.example.test"})
+    with LiveServer(create_app(settings)) as base:
+        with ControlPlaneClient(base, a.admin_token) as admin:
+            made = admin.assign("dev@a.example.test", "developer", "payments")
+            assert made.invited
+            async with tenant_tx(db.app, a.id) as conn:
+                body = (await conn.execute(select(notifications.c.body_text))).scalar_one()
+            token = body.split("invite#", 1)[1].split('"', 1)[0]
+            with ControlPlaneClient(base, None) as anonymous:
+                redeemed = anonymous.redeem_invite(token)
+            assert redeemed.tenant.slug == "tenant-a" and redeemed.gateway_key is None
+            with ControlPlaneClient(base, redeemed.control_plane_token) as dev:
+                assert dev.me().user.email == "dev@a.example.test"
+                with pytest.raises(ControlPlaneRefused) as caught:
+                    dev.rotate_proxy_key()
+                assert caught.value.code_name == "proxy_key.none"
+            dry = admin.import_roles(
+                "email,role,team\nann@a.example.test,developer,payments\n", dry_run=True
+            )
+            assert (dry.applied, dry.added) == (False, 1)
+            service = admin.create_service_account("nightly", "payments", 30)
+            with ControlPlaneClient(base, service.token) as bot:
+                assert bot.check("run.trigger", team="payments").allowed
+                assert not bot.check("gate.approve", team="payments").allowed
+            result = admin.offboard("dev@a.example.test", "left the company")
+            assert result.tokens_revoked == 1
+            with ControlPlaneClient(base, redeemed.control_plane_token) as dev:
+                with pytest.raises(ControlPlaneRefused) as caught:
+                    dev.me()
+                assert caught.value.status == 401

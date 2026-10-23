@@ -15,6 +15,7 @@ from agentic_cli.commands import (
     killswitch,
     login,
     pr,
+    rbac,
     runs,
     sync,
 )
@@ -31,4 +32,5 @@ COMMANDS: list[Callable[[typer.Typer], None]] = [
     pr.register,
     sync.register,
     killswitch.register,
+    rbac.register,
 ]
