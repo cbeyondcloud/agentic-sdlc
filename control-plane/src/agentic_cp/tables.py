@@ -15,7 +15,9 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Integer,
     MetaData,
+    Numeric,
     Table,
     Text,
     UniqueConstraint,
@@ -47,6 +49,9 @@ TENANT_TABLES: tuple[str, ...] = (
     "runs",
     "run_events",
     "kill_switches",
+    "notifications",
+    "invites",
+    "proxy_keys",
 )
 
 #: A tenant's slug: lower-case, starts with a letter, 2-63 characters.
@@ -65,6 +70,9 @@ tenants = Table(
     Column("gateway_tenant", Text, nullable=True),
     Column("rbac_revision", BigInteger, nullable=False, server_default="0"),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    # the tenant's own sender for mails (M2-07, ruling P1); None: the deployment's
+    Column("mail_from", Text, nullable=True),
+    Column("mail_from_name", Text, nullable=True),
     CheckConstraint(f"slug ~ '{SLUG_PATTERN}'", name="tenants_slug_format"),
     CheckConstraint("status in ('active', 'suspended')", name="tenants_status_known"),
 )
@@ -262,6 +270,9 @@ runs = Table(
     Column("head_hash", Text, nullable=False, server_default=""),
     Column("opened_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("last_event_at", DateTime(timezone=True), nullable=True),
+    # the run budget sent at registration and the spend ingested so far (M2-16)
+    Column("budget_usd", Numeric, nullable=True),
+    Column("spent_usd", Numeric, nullable=False, server_default="0"),
     ForeignKeyConstraint(["tenant_id", "started_by"], ["users.tenant_id", "users.id"]),
 )
 
@@ -311,6 +322,67 @@ kill_switches = Table(
     ),
 )
 
+#: The mail outbox (M2-07): one row per mail, created in the transaction of the event that
+#: causes it; `dedupe_key` makes a second enqueue a no-op (ruling P2). Bodies are cleared
+#: once a mail is sent or failed (P3: an invite body holds its one-time link).
+notifications = Table(
+    "notifications",
+    metadata,
+    _tenant_id(),
+    Column("id", UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()),
+    Column("kind", Text, nullable=False),
+    Column("recipient", Text, nullable=False),
+    Column("subject", Text, nullable=False),
+    Column("body_text", Text, nullable=False),
+    Column("body_html", Text, nullable=False),
+    Column("dedupe_key", Text, nullable=False),
+    Column("status", Text, nullable=False, server_default="pending"),
+    Column("attempts", Integer, nullable=False, server_default="0"),
+    Column("next_attempt_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("last_error", Text, nullable=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("sent_at", DateTime(timezone=True), nullable=True),
+    UniqueConstraint("tenant_id", "dedupe_key"),
+    CheckConstraint("status in ('pending', 'sent', 'failed')", name="notifications_status_known"),
+)
+
+#: One-time invites (M2-18): only sha256(token) is stored, unique across tenants because a
+#: redemption is resolved before the tenant is known (`resolve_invite`, a definer function).
+invites = Table(
+    "invites",
+    metadata,
+    _tenant_id(),
+    Column("id", UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()),
+    Column("user_id", UUID(as_uuid=True), nullable=False),
+    Column("token_sha256", BYTEA, nullable=False, unique=True),
+    Column("created_by", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("used_at", DateTime(timezone=True), nullable=True),
+    Column("revoked_at", DateTime(timezone=True), nullable=True),
+    ForeignKeyConstraint(["tenant_id", "user_id"], ["users.tenant_id", "users.id"]),
+)
+
+#: Which gateway (TokenLean) proxy key belongs to which user (M2-17): the key itself lives
+#: only at the gateway. `revoke_requested_at` without `revoked_at` is a revocation the
+#: gateway has not confirmed yet; the worker retries it.
+proxy_keys = Table(
+    "proxy_keys",
+    metadata,
+    _tenant_id(),
+    Column("key_id", Text, primary_key=True),
+    Column("user_id", UUID(as_uuid=True), nullable=False),
+    Column("team", Text, nullable=True),
+    Column("created_by", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("revoke_requested_at", DateTime(timezone=True), nullable=True),
+    Column("revoked_at", DateTime(timezone=True), nullable=True),
+    ForeignKeyConstraint(["tenant_id", "user_id"], ["users.tenant_id", "users.id"]),
+    CheckConstraint("key_id ~ '^[0-9a-f]{16,64}$'", name="proxy_keys_key_id_format"),
+)
+
 #: Unique constraints that deliberately span tenants: credential hashes, looked up before
 #: the tenant is known (exact match only, through a registered definer function).
-GLOBAL_UNIQUE: frozenset[tuple[str, str]] = frozenset({("tokens", "token_sha256")})
+GLOBAL_UNIQUE: frozenset[tuple[str, str]] = frozenset(
+    {("tokens", "token_sha256"), ("invites", "token_sha256")}
+)

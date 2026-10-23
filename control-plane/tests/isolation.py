@@ -302,6 +302,46 @@ async def _kill_switch_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, 
     }
 
 
+@register("notifications")
+async def _notification_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    n = next(_sequence)
+    return {
+        "tenant_id": tenant_id,
+        "id": uuid.uuid4(),
+        "kind": "invite",
+        "recipient": f"user-{n}@example.test",
+        "subject": "subject",
+        "body_text": "text",
+        "body_html": "<p>html</p>",
+        "dedupe_key": f"test:{n}",
+    }
+
+
+@register("invites")
+async def _invite_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    return {
+        "tenant_id": tenant_id,
+        "id": uuid.uuid4(),
+        "user_id": user["id"],
+        "token_sha256": uuid.uuid4().bytes + uuid.uuid4().bytes,
+        "created_by": "system:test",
+        "expires_at": datetime.now(UTC) + timedelta(hours=72),
+    }
+
+
+@register("proxy_keys")
+async def _proxy_key_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    return {
+        "tenant_id": tenant_id,
+        "key_id": uuid.uuid4().hex[:16],
+        "user_id": user["id"],
+        "team": "payments",
+        "created_by": "system:test",
+    }
+
+
 # ── endpoint cases ────────────────────────────────────────────────────────────
 
 
