@@ -304,7 +304,9 @@ class AcpRunner:
             flag, host = self.profile.own_server
             direct = f"{host}:{_free_port(host)}"
             command += [flag, direct.rsplit(":", 1)[1]]
-            given = [h.strip() for h in env.get("NO_PROXY", "").split(",") if h.strip()]
+            # both spellings, merged: Linux and macOS users often set only `no_proxy` (DF-449)
+            said = f"{env.get('NO_PROXY', '')},{env.get('no_proxy', '')}"
+            given = [h.strip() for h in said.split(",") if h.strip()]
             env["NO_PROXY"] = env["no_proxy"] = ",".join(dict.fromkeys([*given, direct]))
             if self.wrap:  # inside, the sandbox's proxy takes everything else
                 command = ["env", f"NO_PROXY={direct}", f"no_proxy={direct}", *command]

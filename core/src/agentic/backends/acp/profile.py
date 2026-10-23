@@ -15,6 +15,7 @@ included) is deleted when the step ends.
 """
 
 import itertools
+import logging
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -23,6 +24,8 @@ from pathlib import Path, PurePosixPath
 from agentic.policy import ResolvedAgent
 from agentic.policy.model import ModelPrice
 from agentic.sandbox.process import SECRET_NAME, secret_value
+
+_log = logging.getLogger("agentic.backends.acp")
 
 
 @dataclass(frozen=True)
@@ -151,10 +154,19 @@ def launch_env(
     secret name or a credential in its value), its quiet switches, then the launch."""
     source = os.environ if environ is None else environ
     env = home_env(home)
+    dropped = []
     for name in profile.inherit:
         value = source.get(name)
         if value and not SECRET_NAME.search(name) and not secret_value(value):
             env[name] = value
+        elif value:
+            dropped.append(name)
+    if dropped:  # by name only, never the value (DF-449): a proxy that needs credentials
+        _log.warning(
+            "not passed to the %s agent (a secret name or a credential in the value): %s",
+            profile.name,
+            ", ".join(dropped),
+        )
     env.update(profile.quiet)
     env.update(launch.env)
     return env

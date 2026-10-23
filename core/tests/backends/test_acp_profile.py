@@ -73,6 +73,23 @@ def test_only_named_variables_are_inherited_and_never_a_credential():
     assert "FAKE_PROXY" not in env and "OPENAI_API_KEY" not in env
 
 
+def test_a_dropped_credential_variable_is_logged_by_name_only(caplog):  # DF-449
+    secret = "pa" + "55"  # built from pieces: not a real credential
+    user = {"FAKE_PROXY": f"http://user:{secret}@proxy.acme.example:8080"}
+    with caplog.at_level("WARNING", logger="agentic.backends.acp"):
+        launch_env(profile(), Launch(), HOME, environ=user)
+    assert "FAKE_PROXY" in caplog.text and secret not in caplog.text
+
+
+def test_opencode_inherits_the_lower_case_proxy_variables():  # DF-449
+    from agentic.backends.acp.opencode import OPENCODE
+
+    user = {"https_proxy": "http://proxy.acme.example:3128", "no_proxy": "corp.example"}
+    env = launch_env(OPENCODE, Launch(), HOME, environ=user)
+    assert env["https_proxy"] == "http://proxy.acme.example:3128"
+    assert env["no_proxy"] == "corp.example"
+
+
 def test_quiet_switches_and_the_launch_win_over_inherited_values():
     user = {"FAKE_CA_BUNDLE": "/user/ca.pem"}
     launch = Launch(env={"FAKE_CA_BUNDLE": "/profile/ca.pem", "FAKE_ROUTE": "x"})

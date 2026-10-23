@@ -435,6 +435,18 @@ def test_the_agent_s_own_server_gets_a_free_port_called_directly(world, monkeypa
     assert init["env"]["no_proxy"] == init["env"]["NO_PROXY"]
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows environment names are case-blind")
+def test_a_lower_case_no_proxy_is_merged_too(world, monkeypatch):  # DF-449
+    profile = fake_profile(own_server=("--port", "127.0.0.1"), inherit=("NO_PROXY", "no_proxy"))
+    monkeypatch.setenv("NO_PROXY", "corp.example")
+    monkeypatch.setenv("no_proxy", "lab.example,corp.example")
+    run(world.runner([[{"say": "VALID"}]], profile=profile))
+    (init,) = world.events("initialize")
+    port = init["argv"][init["argv"].index("--port") + 1]
+    expected = f"corp.example,lab.example,127.0.0.1:{port}"
+    assert init["env"]["NO_PROXY"] == init["env"]["no_proxy"] == expected
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="wrapping needs macOS, Linux or WSL2")
 def test_under_a_wrap_only_the_own_server_bypasses_the_sandbox_proxy(world):
     runner = world.runner([], profile=fake_profile(own_server=("--port", "127.0.0.1")))
