@@ -47,7 +47,7 @@ from agentic.backends.acp.profile import (
     launch_env,
     write_files,
 )
-from agentic.backends.processes import kill_tree, session_leader
+from agentic.backends.processes import ProcessTree, session_leader
 from agentic.policy import ResolvedAgent
 from agentic.transport import BudgetSlice, CallCost, CallIdentity, LimitHit, Pricer
 from agentic.transport.cost import estimate_usd
@@ -258,6 +258,7 @@ class AcpRunner:
         self.usage = RunUsage()
         self._client = _Client()
         self._process = None
+        self._tree = ProcessTree()
         self._last_text = ""
         self._cost_seen = Decimal(0)
 
@@ -287,9 +288,8 @@ class AcpRunner:
         raise ResumeError(f"{self.profile.name} steps never pause for approval")
 
     def _kill(self) -> None:
-        process = self._process
-        if process is not None and process.returncode is None:
-            kill_tree(process.pid)
+        """Kill the agent and every process it started (the shared helper)."""
+        self._tree.kill()
 
     def _launch(self) -> tuple[list[str], dict[str, str]]:
         """The argv and environment the agent starts with: under `wrap` when given, as a
@@ -335,10 +335,11 @@ class AcpRunner:
                     transport_kwargs={"stderr": stderr, "limit": STDIO_LIMIT},
                 ) as (conn, process):
                     self._process = process
+                    self._tree = ProcessTree().adopt(process)
                     try:
                         return await self._converse(conn, task, acp, schema)
                     finally:  # nothing it started outlives the step, however it ends
-                        self._kill()
+                        self._tree.close()
         finally:  # its state - the transcript included - goes with the step
             try:
                 self._remove_secrets()  # first, so a locked transcript cannot keep them

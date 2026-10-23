@@ -20,7 +20,8 @@ this module adds the framework's rules on top:
               Zyroflo's CLIs write (`protected`), never a framework-protected
               file or a path on the deny list - matched relative to the tree
               (component) the path is in;
-  * diff    - small enough to review (`budget`); a caller may only tighten it;
+  * diff    - small enough to review (`budget`); a caller may only tighten it, and a
+              repository may drop budget exemptions but never add one (DF-13);
   * push    - only to the run's own branch on an approved remote (`push_target`).
 
 Zyroflo's defaults are a FLOOR: a repository's own policy file may add to its
@@ -124,6 +125,7 @@ class Guard:
         allow_shell: Iterable[str] | None = None,
         ask_shell: Iterable[str] = (),
         writes_files: bool = True,
+        budget_exempt: Iterable[str] | None = None,
     ) -> None:
         self.target = Path(target)
         self.run_id = run_id
@@ -147,6 +149,7 @@ class Guard:
         ):
             floor = _tighter(policy.DEFAULTS[key], repo[key] or None)
             self.policy[key] = _tighter(floor, _budget(key, requested))
+        self.policy["budget_exempt"] = _exemptions(repo["budget_exempt"], budget_exempt)
 
     @classmethod
     def for_agent(cls, target: Path, run_id: str, agent: object, **budget: int) -> "Guard":
@@ -456,6 +459,21 @@ def _budget(key: str, value: int | None) -> int | None:
     if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         raise GuardError(f"{key} must be a whole number of at least 1, not {value!r}")
     return value
+
+
+def _exemptions(own: list, org: Iterable[str] | None) -> list[str]:
+    """The paths the diff budget does not count (DF-13): the org's list (None: Zyroflo's
+    defaults). A repository's own list may drop entries from it, never add one - a repo
+    writing `budget_exempt: ["**"]` would otherwise switch the budget off. A repo list
+    equal to Zyroflo's defaults is read as "not set" (`policy.load` fills them in)."""
+    allowed = (
+        list(policy.DEFAULTS["budget_exempt"])
+        if org is None
+        else list(_rules("budget_exempt", org))
+    )
+    if list(own) == list(policy.DEFAULTS["budget_exempt"]):
+        return list(dict.fromkeys(allowed))
+    return list(dict.fromkeys(p for p in own if p in allowed))
 
 
 def _tighter(base: int, requested: int | None) -> int:

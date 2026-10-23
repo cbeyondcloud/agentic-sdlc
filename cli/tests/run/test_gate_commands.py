@@ -279,7 +279,7 @@ def test_show_includes_the_diff_of_the_gated_steps(workspace, policy_repo, gatew
     assert "src/new.py" in cli("show", run_id).out
 
 
-def built(policy_repo, gateway, cli, text: str) -> str:
+def built(policy_repo, gateway, cli, text: str, again: list | None = None) -> str:
     write(policy_repo / "pipelines" / "build.yaml", BUILD)
     write(
         policy_repo / "agents" / "builder.md",
@@ -289,6 +289,7 @@ def built(policy_repo, gateway, cli, text: str) -> str:
     gateway.answers["builder"] = [
         {"tool": "write_file", "args": {"path": "src/new.py", "text": text}},
         "built it",
+        *(again or []),
     ]
     result = cli("--json", "run", "build")
     assert result.code == ExitCode.PAUSED, result.err
@@ -314,7 +315,11 @@ def test_show_never_runs_a_diff_driver(workspace, policy_repo, gateway, cli, tmp
 
 
 def test_show_cuts_a_huge_diff_on_the_terminal_with_a_note(workspace, policy_repo, gateway, cli):
-    run_id = built(policy_repo, gateway, cli, "x = 1\n" * 60_000)  # about 360 KiB
+    # far over the review batch budget (M2-24): split once, then a person sees it at the
+    # diff-budget gate - the builder writes it again when asked to split
+    huge = {"tool": "write_file", "args": {"path": "src/new.py", "text": "x = 1\n" * 60_000}}
+    run_id = built(policy_repo, gateway, cli, huge["args"]["text"], again=[huge, "built it"])
+    assert cli("--json", "show", run_id).json()["gate"] == "diff-budget"
     human = cli("--no-color", "show", run_id).out
     assert "diff cut at 256 KiB" in human and "agentic --json show" in human
     assert human.count("+x = 1") < 60_000

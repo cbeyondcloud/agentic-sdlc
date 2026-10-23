@@ -207,6 +207,18 @@ class StepCheckpoints:
             _git(trees[name], "reset", "-q", "--hard", commit)
             _git(trees[name], "clean", "-q", "-ffd")
 
+    def diff(self, base: Mapping[str, str], head: Mapping[str, str]) -> str:
+        """The change from `base` to `head` in every component, as a plain unified diff
+        with `a/` and `b/` prefixes whatever the repository's diff settings say (no
+        external diff, no textconv, no colour). Each component's file names are its own
+        (`diff --git a/x b/x`)."""
+        parts = []
+        for name, path in self._trees().items():
+            start, end = base.get(name), head.get(name)
+            if start and end and start != end:
+                parts.append(_git(path, *_PLAIN_DIFF, start, end))
+        return "\n".join(part for part in parts if part)
+
     def _trees(self) -> dict[str, Path]:
         return {
             name: tree.path
@@ -223,6 +235,23 @@ class StepCheckpoints:
         if not _git(path, "config", "user.email", check=False):
             config += ["-c", "user.name=agentic", "-c", "user.email=agentic@localhost"]
         return config
+
+
+#: `git diff` as Zyroflo's budget reads it, whatever the repository configures or the
+#: agent's `.gitattributes` says (`--text`: a `-diff` or `binary` file still counts).
+_PLAIN_DIFF = (
+    "-c",
+    "diff.noprefix=false",
+    "-c",
+    "diff.mnemonicPrefix=false",
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--text",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+)
 
 
 def _git(where: Path, *args: str, check: bool = True) -> str:

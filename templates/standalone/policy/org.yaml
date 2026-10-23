@@ -21,3 +21,11 @@ secret_scan:
 
 # When a backend cannot honour a resolved setting: ignore | warn | block.
 unhonoured: { temperature: warn, effort: warn }
+
+# The diff-size budget per review batch: a Developer step whose change is larger is
+# asked to split it before review. 40 files and 1500 changed lines are the ceiling, not
+# just defaults: a limit may only tighten them, and a larger one is refused at load.
+# Lock files are not counted; an `exempt` list replaces that list rather than adding to it.
+review_batch:
+  max_files: 40
+  max_lines: 1500

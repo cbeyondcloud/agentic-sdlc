@@ -96,6 +96,7 @@ source = { editable = "core" }
 dependencies = [
     { name = "cel-python" },
     { name = "detect-secrets" },
+    { name = "filelock" },
     { name = "httpx2" },
     { name = "keyring" },
     { name = "opentelemetry-api" },
@@ -136,6 +137,7 @@ requires-dist = [
     { name = "claude-agent-sdk", marker = "extra == 'claude-code'", specifier = "==0.2.164" },
     { name = "code-review-graph", marker = "extra == 'codeintel'", specifier = "==2.3.9" },
     { name = "detect-secrets", specifier = "==1.5.0" },
+    { name = "filelock", specifier = "==4.0.12" },
     { name = "httpx2", specifier = ">=2.13.1,<2.14" },
     { name = "keyring", specifier = "==25.7.0" },
     { name = "opentelemetry-api", specifier = ">=1.45,<2" },

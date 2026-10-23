@@ -46,7 +46,10 @@ class Cursor(_Strict):
 class StepRecord(_Strict):
     step: str
     iteration: int = Field(ge=0)
-    outcome: Literal["completed", "skipped", "paused", "invalid", "stopped", "failed"]
+    # over-budget: a change larger than one review batch, undone and asked to split (M2-24)
+    outcome: Literal[
+        "completed", "skipped", "paused", "invalid", "stopped", "failed", "over-budget"
+    ]
     handoff: str | None = None  # relative to the run folder
     digest: str | None = None
     base: dict[str, str] | None = None  # the commit each component started from (M1-30)

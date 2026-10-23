@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 
+from agentic.backends.processes import run_contained
 from agentic.codeintel.index import LocalIndex
 from agentic.codeintel.interface import Candidates, CodeIntelError
 from agentic.codeintel.tools import tree_path
@@ -127,14 +128,10 @@ class CodeReviewGraph:
         self.index.ensure()  # CodeIntelError when it cannot be built or updated
         payload = json.dumps({**request, "tree": str(self.index.tree)})
         try:
-            done = subprocess.run(
+            done = run_contained(
                 [sys.executable, "-m", "agentic.codeintel._crg_query"],
                 input=payload,
                 env=self.index.env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
                 timeout=self.timeout_s,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
