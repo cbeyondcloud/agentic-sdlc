@@ -47,6 +47,10 @@ class ClassificationRule(_Strict):
     allowed_models: list[str] | None = None  # None = any model the tiers map to
     allowed_backends: list[str]
     trace_capture: bool = False  # may full prompts/responses be stored centrally?
+    # may a user's own skills and notes (~/.agentic/skills, ~/.agentic/memory) shape runs in
+    # a repo of this class? (M2-45, D30; an org turns them off for restricted repos)
+    personal_skills: bool = True
+    personal_memory: bool = True
 
 
 class CapLimits(_Strict):
