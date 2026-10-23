@@ -35,6 +35,14 @@ A pause saves the run's state to `state-<agent>.json` in `state_dir`. The state
 is bound to its run and policy version and used once; its digest is in the
 outcome so the engine can ledger it, and `resume` needs that ledgered digest -
 a state rewritten with a fresh fingerprint is refused (review I3).
+
+Kill switch (M2-19, M2-10): with a `turn_guard`, the runner asks it before each
+model request - the boundary between turns. A kill raises `RunKilled` at once. A
+pause (or switch state that cannot be confirmed) lets the turn in progress finish,
+saves the conversation as above with no pending calls, and returns `paused` with
+`held` set; `resume` with no decisions sends the saved request, so nothing is lost
+or repeated. A child agent ignores a pause - its parent holds at its own next turn
+- but obeys a kill.
 """
 
 import asyncio
@@ -42,7 +50,7 @@ import hashlib
 import json
 import os
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal, Protocol, runtime_checkable
@@ -74,6 +82,7 @@ from agentic.agents.metering import CostLog
 from agentic.agents.models import model_settings
 from agentic.agents.stuck import StuckDetector
 from agentic.agents.stuck import stuck_check as detector_check
+from agentic.killswitch import RunKilled, Verdict
 from agentic.policy import ResolvedAgent
 from agentic.security import SecretBlocked, SecretScanner
 from agentic.security.untrusted import DATA_NOTICE, HANDOFF_TAG, fence
@@ -82,6 +91,8 @@ from agentic.transport import BudgetSlice, LimitHit
 
 Stopped = Literal["budget", "turns", "time", "stuck"]
 StuckCheck = Callable[[list[ModelMessage]], str | None]
+#: Asked before each model request: the kill switch's verdict for the step (M2-19).
+TurnGuard = Callable[[], Awaitable[Verdict]]
 _USAGE = TypeAdapter(RunUsage)
 STUCK_WINDOW = 40  # messages the stuck check looks at (it scans at most 20 events)
 MODEL_OUTPUT = "model-output"  # the `where` of a scan event for what the model wrote
@@ -133,6 +144,7 @@ class AgentOutcome:
     state_digest: str | None = None  # the saved state's digest: the engine ledgers it
     detail: str | None = None  # why it stopped, in words (the stuck pattern, the limit)
     errors: list[str] = field(default_factory=list)  # why an invalid answer was refused
+    held: Verdict | None = None  # a kill-switch pause held the run at a turn (state saved)
 
 
 @runtime_checkable
@@ -161,8 +173,10 @@ class PydanticAIRunner:
         policy_version: str | None = None,
         contract: OutputContract | None = None,
         scanner: SecretScanner | None = None,  # masks what the model wrote; None = default
+        turn_guard: TurnGuard | None = None,  # the kill switch, before each request (M2-19)
     ) -> None:
         self.agent, self.model, self.budget, self.state_dir = agent, model, budget, state_dir
+        self.turn_guard = turn_guard
         self.contract = contract
         self.scanner = scanner or SecretScanner()
         self._invalid: tuple[str, list[str]] | None = None  # the last refused answer
@@ -239,12 +253,14 @@ class PydanticAIRunner:
         history = ModelMessagesTypeAdapter.validate_python(state["messages"])
         instructions = state["instructions"]
         _use_up(state_path)
+        # a held turn (no pending calls) resumes by sending the request it saved
+        deferred = DeferredToolResults(approvals=approvals) if pending else None
         return await self._drive(
             self._pydantic_agent(instructions),
             None,
             instructions,
             message_history=history,
-            deferred_tool_results=DeferredToolResults(approvals=approvals),
+            deferred_tool_results=deferred,
             usage=_USAGE.validate_python(state["usage"]),
         )
 
@@ -253,7 +269,7 @@ class PydanticAIRunner:
     async def _drive(
         self, agent: Agent, prompt: str | None, instructions: str, **run_kwargs
     ) -> AgentOutcome:
-        seen: dict = {"text": None, "run": None, "stuck": None}
+        seen: dict = {"text": None, "run": None, "stuck": None, "hold": None}
         self._invalid, self._refused = None, 0
         earlier_hit = self.costs.limit_hit  # a hit from an earlier run was already acted on
 
@@ -266,6 +282,15 @@ class PydanticAIRunner:
             ) as agent_run:
                 seen["run"] = agent_run
                 async for node in agent_run:
+                    if self.turn_guard is not None and Agent.is_model_request_node(node):
+                        verdict = await self.turn_guard()  # between turns (M2-19)
+                        if verdict.action == "kill":
+                            raise RunKilled(verdict)
+                        if verdict.action == "pause" and not self.is_child:
+                            # the request is not in the history until it is sent
+                            held = [*agent_run.all_messages(), node.request]
+                            seen["hold"] = (verdict, held)
+                            return None
                     if Agent.is_call_tools_node(node):
                         text = "".join(
                             p.content for p in node.model_response.parts if isinstance(p, TextPart)
@@ -309,6 +334,8 @@ class PydanticAIRunner:
             return self._budget(hit, seen)
         if self.costs.limit_hit is not None and self.costs.limit_hit is not earlier_hit:
             return self._budget(self.costs.limit_hit, seen)
+        if seen["hold"] is not None:
+            return self._hold(*seen["hold"], instructions, seen)
         if result is None:
             return self._stopped("stuck", seen, detail=seen["stuck"])
         if isinstance(result.output, DeferredToolRequests):
@@ -353,25 +380,8 @@ class PydanticAIRunner:
         ledgers only its digest)."""
         calls = result.output.approvals
         pending = [call.tool_call_id for call in calls]
-        payload = {
-            "run_id": self.run_id,
-            "policy_version": self.policy_version,
-            "agent": self.agent.definition.name,
-            "agent_version": self.agent.definition.version,
-            "instructions": instructions,
-            "messages": json.loads(ModelMessagesTypeAdapter.dump_json(result.all_messages())),
-            "pending": pending,
-            "pending_tools": {call.tool_call_id: call.tool_name for call in calls},
-            "contract": self.contract.digest if self.contract is not None else None,
-            "usage": _USAGE.dump_python(_usage(seen), mode="json"),
-        }
-        digest = _fingerprint(payload)
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        path = self.state_dir / f"state-{self.agent.definition.name}.json"
-        text = json.dumps({**payload, "fingerprint": digest}, indent=2, ensure_ascii=False)
-        path.write_text(text + "\n", encoding="utf-8", newline="\n")
-        if os.name != "nt":  # Windows has no owner-only mode bits; the run folder's ACL applies
-            path.chmod(0o600)
+        tools = {call.tool_call_id: call.tool_name for call in calls}
+        path, digest = self._save(result.all_messages(), pending, tools, instructions, seen)
         return AgentOutcome(
             status="paused",
             output=seen["text"],
@@ -382,6 +392,53 @@ class PydanticAIRunner:
             state_path=path,
             state_digest=digest,
         )
+
+    def _hold(
+        self, verdict: Verdict, messages: list, instructions: str, seen: dict
+    ) -> AgentOutcome:
+        """A kill-switch pause between turns: the conversation is saved like a tool-approval
+        pause with nothing pending, so `resume` sends the request it was about to send."""
+        path, digest = self._save(messages, [], {}, instructions, seen)
+        return AgentOutcome(
+            status="paused",
+            output=seen["text"],
+            stopped=None,
+            usage=_usage(seen),
+            costs=self.costs,
+            state_path=path,
+            state_digest=digest,
+            detail=verdict.describe(),
+            held=verdict,
+        )
+
+    def _save(
+        self,
+        messages: list,
+        pending: list[str],
+        tools: dict[str, str],
+        instructions: str,
+        seen: dict,
+    ) -> tuple[Path, str]:
+        payload = {
+            "run_id": self.run_id,
+            "policy_version": self.policy_version,
+            "agent": self.agent.definition.name,
+            "agent_version": self.agent.definition.version,
+            "instructions": instructions,
+            "messages": json.loads(ModelMessagesTypeAdapter.dump_json(messages)),
+            "pending": pending,
+            "pending_tools": tools,
+            "contract": self.contract.digest if self.contract is not None else None,
+            "usage": _USAGE.dump_python(_usage(seen), mode="json"),
+        }
+        digest = _fingerprint(payload)
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        path = self.state_dir / f"state-{self.agent.definition.name}.json"
+        text = json.dumps({**payload, "fingerprint": digest}, indent=2, ensure_ascii=False)
+        path.write_text(text + "\n", encoding="utf-8", newline="\n")
+        if os.name != "nt":  # Windows has no owner-only mode bits; the run folder's ACL applies
+            path.chmod(0o600)
+        return path, digest
 
     def _usage_limits(self) -> UsageLimits | None:
         turns = self.agent.limits.max_turns

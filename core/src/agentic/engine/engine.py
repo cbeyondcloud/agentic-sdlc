@@ -33,15 +33,27 @@ Every agent step runs inside a process scope (`agentic.backends.processes`, M2-2
 whatever the backend started and left running - a background shell, a code-intelligence
 build in a tool thread - is killed when the step ends, however it ends.
 
+Kill switch (M2-19, M2-10, spec §8.6): with a `KillSwitch` port, the engine asks it
+before every step (the run's team, starter, repo and pipeline, plus the step's agent,
+model and backend) and the step's runner asks it before every model request
+(`StepContext.turn_guard`). A watchdog polls it every `kill_poll_s` while an agent step
+runs, so a kill reaches a step blocked in a long tool call too. A kill cancels the step
+inside its process scope (every process tree it started is killed), closes the run as
+`killed` with who and why, and the run never resumes. A pause holds the run - between
+steps, or between turns with the runner's conversation saved - and `resume` continues
+once the switch is cleared, without losing or repeating work. Switch state the port
+cannot confirm, or a port that fails, pauses (`kill-switch-unconfirmed`): never continue.
+
 The engine imports neither `sdlc_commons` nor Zyroflo: the run ledger and the
 gate ledger are protocols, wired by the CLI (and the tests).
 """
 
+import asyncio
 import hashlib
 import json
 import logging
 import os
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -78,6 +90,7 @@ from agentic.handoffs import (
     finalise_handoff,
     parse_handoff,
 )
+from agentic.killswitch import RUN, KillSwitch, RunKilled, RunScope, Verdict, unconfirmed
 from agentic.memory.agents_md import agents_md_knowledge, nearest_agents_md
 from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
 from agentic.telemetry.logs import StepLogs
@@ -92,6 +105,8 @@ PROMPT_HEAD = "Pipeline: {pipeline} · step: {step} · iteration: {iteration}"
 FAILING_PAUSE = "failing-handoff"
 #: The gate of a step whose change is still larger than one review batch (M2-24).
 BATCH_GATE = "diff-budget"
+#: A run in one of these states never runs again.
+TERMINAL = ("completed", "failed", "stopped", "killed")
 #: The capabilities that let an agent change the tree: its steps are told the budget.
 WRITING_TOOLS = frozenset({"edit_files", "run_shell"})
 BATCH_NOTICE = (
@@ -155,6 +170,8 @@ class StepContext:
     agent: ResolvedAgent
     budget: BudgetSlice
     contract: OutputContract | None
+    # the kill switch's verdict for this step, asked before each model request (M2-19)
+    turn_guard: Callable[[], Awaitable[Verdict]] | None = None
 
 
 class StepRunnerFactory(Protocol):
@@ -205,6 +222,9 @@ class Engine:
         redact: Callable[[str], str] | None = None,
         handoff_prefix: str = "",
         batch_budget_for: Callable[[str], ReviewBatch] | None = None,
+        killswitch: KillSwitch | None = None,
+        kill_poll_s: float = 5.0,
+        repo: str | None = None,
     ) -> None:
         self.definitions, self.policy, self.context = definitions, policy, context
         self.store, self.recorder_for, self.gates_for = store, recorder_for, gates_for
@@ -223,6 +243,9 @@ class Engine:
         self.handoff_prefix = handoff_prefix.strip().strip("/")
         # the diff-size budget per review batch (M2-24); None: steps are not measured
         self.batch_budget_for = batch_budget_for
+        # the kill switch (M2-19); None: standalone, nothing can stop a run from outside.
+        # `repo` (host/owner/name) is the repo dimension of every scope it is asked about
+        self.killswitch, self.kill_poll_s, self.repo = killswitch, kill_poll_s, repo
 
     async def start(
         self, pipeline: str, inputs: dict[str, str], starter: str, run_id: str
@@ -266,7 +289,7 @@ class Engine:
         It works even when the pipeline or templates changed since the run started."""
         with self._lock(run_id):
             state = self.store.load(run_id)
-            if state.status in ("completed", "failed", "stopped"):
+            if state.status in TERMINAL:
                 raise EngineError(f"run {run_id} is already {state.status}")
             state.status, state.pending = "stopped", None
             state.ended_by, state.end_reason = who, reason
@@ -397,7 +420,7 @@ class _Run:
 
     async def go(self) -> RunState:
         state = self.state
-        if state.status in ("completed", "failed", "stopped") or state.pending is not None:
+        if state.status in TERMINAL or state.pending is not None:
             return state
         state.status = "running"
         while state.cursor.index < len(self.pipeline.steps):
@@ -432,6 +455,11 @@ class _Run:
         self, extra_minutes: int, extra_budget: Decimal, decisions: dict | None
     ) -> RunState:
         state, pending = self.state, self.state.pending
+        if state.status == "killed":
+            raise EngineError(
+                f"run {state.run_id} was killed ({state.end_reason}): a killed run is never "
+                "resumed - start a new run once the switch is cleared"
+            )
         if pending is not None and pending.kind == "gate":
             raise EngineError(
                 f"run {state.run_id} waits at {pending.id}: approve, reject or edit it"
@@ -442,6 +470,16 @@ class _Run:
                     f"run {state.run_id} waits for a decision on each of these tool calls, "
                     f"and only these: {pending.calls}"
                 )
+        saved = pending is not None and pending.state_path is not None
+        if saved:  # a saved conversation continues only once the switch lets it (M2-10)
+            verdict = await self._switch(self._step_scope(self._step_at_cursor()))
+            if verdict.action == "kill":
+                return self._kill(verdict)
+            if verdict.action == "pause":
+                if pending.kind == "pause":  # still held: the saved turn stays as it is
+                    pending.id, pending.reason = verdict.pause_id, self.e.redact(verdict.describe())
+                self.save()
+                return state
         if extra_budget > 0:
             if pending is not None and pending.id == "step-budget":
                 raise EngineError(
@@ -455,11 +493,12 @@ class _Run:
         state.extra_minutes += extra_minutes
         if extra_budget > 0:
             self.budget.run.raise_limit(self.budget.run.limit_usd + extra_budget)
-        if pending is not None and pending.kind == "approval":
+        if saved:  # a tool approval, or a turn a pause switch held
             step = self._step_at_cursor()
             iteration = state.cursor.loop_iteration or 1
             state.status = "running"  # the pause stays recorded until the step settles
-            resumed = (Path(pending.state_path), decisions, pending.state_digest)
+            answers = decisions if pending.kind == "approval" else {}
+            resumed = (Path(pending.state_path), answers, pending.state_digest)
             try:
                 finished = await self._step(step, iteration, resume=resumed)
             except ResumeError as error:
@@ -995,6 +1034,14 @@ class _Run:
         self, step: AgentStep | ActionStep, iteration: int, *, resume: tuple | None = None
     ) -> bool:
         """Run one step. True when it completed or was skipped (the caller moves on)."""
+        if resume is None:  # a resumed step was checked before its state was touched
+            verdict = await self._switch(self._step_scope(step))
+            if verdict.action == "kill":
+                self._kill(verdict)
+                return False
+            if verdict.action == "pause":
+                self._pause(verdict.pause_id, verdict.describe(), step=step.id)
+                return False
         if resume is None and step.when:
             try:
                 wanted = compile_condition(step.when).evaluate(self._context())
@@ -1130,11 +1177,15 @@ class _Run:
         attempt = self._attempt(step.id, iteration)
         if resume is None:
             self.recorder.record("step_started", step.id, attempt=attempt)
+        scope = self._scope().with_step(
+            agent=_name(agent), model=agent.model, backend=agent.backend
+        )
+        guard = self._turn_guard(scope)
         try:
             # inside the try: a runner that cannot be built (no sandbox, no tool service)
             # pauses the run and closes the step's slice, like any other step failure (DF-69)
             runner = self.e.runner_factory(
-                StepContext(self.state.run_id, step.id, iteration, agent, budget, contract)
+                StepContext(self.state.run_id, step.id, iteration, agent, budget, contract, guard)
             )
             span_for = step_span(self.state.run_id, step.id, iteration, agent)
             with span_for as span, process_scope():  # nothing it starts outlives it
@@ -1145,13 +1196,30 @@ class _Run:
                         prompt=self._prompt(step.id, iteration, agent),
                         knowledge=self._knowledge(),
                     )
-                    outcome = await runner.run(task)
+                    outcome = await self._watched(runner.run(task), scope)
                 else:
-                    outcome = await runner.resume(*resume)
+                    outcome = await self._watched(runner.resume(*resume), scope)
                 finish_step_span(span, outcome)
         except _Unusable as problem:
             self._close_slice(budget)
             self._pause(problem.pause_id, problem.reason, step=step.id)
+            return False
+        except RunKilled as killed:  # at a turn, or by the watchdog: the scope cleaned up
+            cost = budget.total_spent()
+            self._close_slice(budget)
+            self._children = _children(budget)
+            detail = f"killed: {killed.verdict.describe()}"
+            self._history(
+                step.id,
+                iteration,
+                "stopped",
+                started=started,
+                cost=cost,
+                children=self._children,
+                detail=detail,
+            )
+            self.recorder.record("step_finished", step.id, outcome="killed", cost=self._usd(cost))
+            self._kill(killed.verdict)
             return False
         except ResumeError:
             self._close_slice(budget)
@@ -1383,6 +1451,23 @@ class _Run:
             )
             self.recorder.record("step_finished", step, outcome="invalid", cost=usd)
             self._wait("invalid-output", reason, step, {rel: digest})
+            return False
+        if outcome.status == "paused" and outcome.held is not None:  # a pause switch (M2-10)
+            self._history(
+                step, iteration, "paused", started=started, cost=cost, children=self._children
+            )
+            self.recorder.record("step_finished", step, outcome="paused", cost=usd)
+            self.state.pending = Pending(
+                kind="pause",
+                id=outcome.held.pause_id,
+                step=step,
+                since=self.e.clock.now(),
+                reason=self.e.redact(outcome.held.describe()),
+                state_path=str(outcome.state_path),
+                state_digest=outcome.state_digest,
+            )
+            self.state.status = "paused"
+            self.save()
             return False
         if outcome.status == "paused":
             self._history(
@@ -1620,6 +1705,92 @@ class _Run:
             step=step,
         )
         self.state.status = "paused"
+        self.save()
+        return self.state
+
+    # ── the kill switch (M2-19, M2-10) ───────────────────────────────────────
+
+    def _scope(self) -> RunScope:
+        """The run's own dimensions: its team, starter, repo and pipeline."""
+        return RunScope(
+            team=self.e.context.team,
+            user=self.state.starter,
+            repo=self.e.repo,
+            pipeline=self.state.pipeline,
+        )
+
+    def _step_scope(self, step: AgentStep | ActionStep) -> RunScope:
+        """The run's scope plus what `step` would run on (an agent step's agent, model and
+        backend; as much as can be resolved - the step itself reports the rest)."""
+        scope = self._scope()
+        if not isinstance(step, AgentStep):
+            return scope
+        try:
+            definition = self.e.definitions.agent(step.agent)
+        except Exception:  # an unknown agent: the step reports it
+            return scope.with_step(agent=step.agent, model=None, backend=None)
+        agent, _ = resolve_agent(definition, self.e.policy, self.e.context)
+        if agent is None:
+            name = f"{definition.name}@{definition.version}"
+            return scope.with_step(agent=name, model=None, backend=None)
+        return scope.with_step(agent=_name(agent), model=agent.model, backend=agent.backend)
+
+    async def _switch(self, scope: RunScope) -> Verdict:
+        """The port's verdict, asked off the event loop (it may wait on the network); a
+        port that fails gives an unconfirmed verdict: hold, never continue."""
+        port = self.e.killswitch
+        if port is None:
+            return RUN
+        try:
+            return await asyncio.to_thread(port.check, scope)
+        except Exception as error:  # noqa: BLE001 - any failure must hold the run
+            return unconfirmed(f"the kill-switch check failed: {type(error).__name__}: {error}")
+
+    def _turn_guard(self, scope: RunScope) -> Callable[[], Awaitable[Verdict]] | None:
+        if self.e.killswitch is None:
+            return None
+
+        async def guard() -> Verdict:
+            return await self._switch(scope)
+
+        return guard
+
+    async def _watched[T](self, work: Awaitable[T], scope: RunScope) -> T:
+        """Await `work` while a watchdog polls the switch; a kill cancels the work (inside
+        the step's process scope) and raises `RunKilled`."""
+        if self.e.killswitch is None:
+            return await work
+        task = asyncio.ensure_future(work)
+        watch = asyncio.ensure_future(self._watch(scope))
+        try:
+            done, _ = await asyncio.wait({task, watch}, return_when=asyncio.FIRST_COMPLETED)
+            if task in done:
+                return task.result()
+            verdict = watch.result()
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - it was cancelled
+                pass
+            raise RunKilled(verdict)
+        finally:
+            watch.cancel()
+            if not task.done():
+                task.cancel()
+
+    async def _watch(self, scope: RunScope) -> Verdict:
+        while True:
+            await asyncio.sleep(self.e.kill_poll_s)
+            verdict = await self._switch(scope)
+            if verdict.action == "kill":
+                return verdict
+
+    def _kill(self, verdict: Verdict) -> RunState:
+        """Close the run as killed, with who set the switch and why (spec §8.6)."""
+        self.state.status, self.state.pending = "killed", None
+        self.state.ended_by = verdict.by or "kill switch"
+        self.state.end_reason = self.e.redact(verdict.describe())
+        self.recorder.record("run_closed", "", status="killed")
         self.save()
         return self.state
 

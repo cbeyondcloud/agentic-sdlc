@@ -66,6 +66,7 @@ class StepRunners:
             agent=child,
             budget=budget,
             contract=None,
+            turn_guard=parent.turn_guard,  # a child obeys a kill; its parent holds on a pause
         )
         state_dir = self.state_dir_for(parent) / "children" / child.definition.name
         return self._runner(context, spawner, state_dir, is_child=True)
