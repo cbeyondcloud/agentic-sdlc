@@ -7,14 +7,12 @@ allow_repo_pipelines: true              # standalone mode runs the repo's own pi
 # sandbox needs WSL2 (`agentic init` says what to install).
 sandbox:
   required_for: [team, regulated]
-  allowed_domains:                      # the only hosts a sandboxed command may reach: host
-    - pypi.org                          # names (*.example.org, host:port), never URLs; an
-    - files.pythonhosted.org            # agent CLI process also reaches the gateway host
+  allowed_domains:                      # package registries a sandboxed command may reach
+    - pypi.org
+    - files.pythonhosted.org
     - registry.npmjs.org
     - repo.maven.apache.org
   allow_write: []                       # writable besides the run's tree, e.g. "~/.cache/uv"
-  pass_env: []                          # variables agent commands keep although they look
-                                        # secret, e.g. [HTTPS_PROXY, SSH_AUTH_SOCK]; never AGENTIC_*
 
 # A secret found in content about to leave for a model: refuse the call (block)
 # or replace the secret with a marker (mask). Either way it is recorded.
