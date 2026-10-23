@@ -33,7 +33,7 @@ STATUS_OK = "ok"
 PRE_EXISTING_SUFFIX = " (pre-existing)"  # Zyroflo's marker for context, not gate material
 MAX_SHOWN = 50  # findings rendered per source; the rest are counted
 
-_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+_HUNK = re.compile(r"^@@ -\d+(?:,(?P<old_n>\d+))? \+(?P<new>\d+)(?:,(?P<new_n>\d+))? @@")
 _SPDX = re.compile(r"SPDX-License-Identifier:\s*(?P<expr>[^\n]+?)\s*(?:\*/|-->|$)")
 _MANIFEST = (
     re.compile(r'"license"\s*:\s*"(?P<expr>[^"]{1,200})"', re.IGNORECASE),
@@ -56,22 +56,30 @@ def added_lines(diff_text: str) -> list[AddedLine]:
     """Every line a unified diff adds, with its file and new-side line number."""
     found: list[AddedLine] = []
     path: str | None = None
-    line = 0
-    in_hunk = False
+    line = old_left = new_left = 0  # a hunk ends when both of its counts are used up
     for raw in diff_text.splitlines():
+        in_hunk = old_left > 0 or new_left > 0
         if raw.startswith("diff --git "):
-            path, in_hunk = None, False
+            path, old_left, new_left = None, 0, 0
         elif not in_hunk and raw.startswith("+++ "):
             path = _diff_path(raw[4:])
-        elif hunk := _HUNK.match(raw):
-            line, in_hunk = int(hunk.group(1)), True
-        elif in_hunk and path is not None:
+        elif not in_hunk and (hunk := _HUNK.match(raw)):
+            line = int(hunk.group("new"))
+            old_left, new_left = _count(hunk.group("old_n")), _count(hunk.group("new_n"))
+        elif in_hunk:
             if raw.startswith("+"):
-                found.append(AddedLine(path, line, raw[1:]))
-                line += 1
+                if path is not None:
+                    found.append(AddedLine(path, line, raw[1:]))
+                line, new_left = line + 1, new_left - 1
+            elif raw.startswith("-"):
+                old_left -= 1
             elif raw.startswith(" ") or raw == "":
-                line += 1
+                line, old_left, new_left = line + 1, old_left - 1, new_left - 1
     return found
+
+
+def _count(text: str | None) -> int:
+    return 1 if text is None else int(text)
 
 
 def _diff_path(text: str) -> str | None:

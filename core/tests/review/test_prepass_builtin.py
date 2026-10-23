@@ -42,6 +42,15 @@ def test_added_lines_carry_path_and_new_side_line_numbers():
     ]
 
 
+def test_a_hunk_ends_on_its_counts_so_the_next_header_is_not_content():
+    first = "--- a/x\n+++ b/x\n@@ -1 +1,2 @@\n ctx\n+one\n"
+    text = first + "--- a/y\n+++ b/y\n@@ -1 +1,2 @@\n ctx\n+two\n"
+    assert [(a.path, a.line, a.text) for a in added_lines(text)] == [
+        ("x", 2, "one"),
+        ("y", 2, "two"),
+    ]
+
+
 def test_a_new_file_and_a_deleted_file():
     new = "diff --git a/n.txt b/n.txt\nnew file mode 100644\n--- /dev/null\n+++ b/n.txt\n"
     new += "@@ -0,0 +1,2 @@\n+one\n+two\n"
