@@ -24,11 +24,13 @@ from agentic.skills.catalog import (
     CATALOG_FILE,
     PLUGINS,
     AdmissionLimits,
+    Catalog,
     CatalogError,
     SkillsError,
     load_catalog,
     skill_digest,
 )
+from agentic.skills.plugins import CheckedPlugin, telemetry_problem
 
 
 def check_policy_repo(root: Path, *, version: str | None = None) -> list[str]:
@@ -62,19 +64,31 @@ def check_policy_repo(root: Path, *, version: str | None = None) -> list[str]:
             continue
         for key, rejections in results.items():
             problems += [f"{where}/{key}: {r.check} {r.path}: {r.reason}" for r in rejections]
-        for name, entry in catalog.plugins.items():
-            folder = catalog_root / PLUGINS / name
-            try:
-                found = skill_digest(folder) if folder.is_dir() else None
-            except SkillsError as error:
-                problems.append(f"{where}/{PLUGINS}/{name}: {error}")
-                continue
-            if found is None:
-                problems.append(f"{where}/{PLUGINS}/{name}: catalogued, but the folder is missing")
-            elif found != entry.sha256:
-                problems.append(
-                    f"{where}/{PLUGINS}/{name}: pinned {entry.sha256}, folder hashes to {found}"
-                )
+        problems += [f"{where}/{problem}" for problem in plugin_problems(catalog_root, catalog)]
+    return problems
+
+
+def plugin_problems(catalog_root: Path, catalog: Catalog) -> list[str]:
+    """Each catalogued plugin's problems, relative to the catalog folder: its folder is
+    missing, holds a link, does not hash to its pin, or installs a file naming a
+    telemetry URL (checked here once, at the pull request, as well as before each step)."""
+    problems = []
+    for name, entry in catalog.plugins.items():
+        folder = catalog_root / PLUGINS / name
+        where = f"{PLUGINS}/{name}"
+        try:
+            found = skill_digest(folder) if folder.is_dir() else None
+        except SkillsError as error:
+            problems.append(f"{where}: {error}")
+            continue
+        if found is None:
+            problems.append(f"{where}: catalogued, but the folder is missing")
+        elif found != entry.sha256:
+            problems.append(f"{where}: pinned {entry.sha256}, folder hashes to {found}")
+        else:
+            plugin = CheckedPlugin(name, entry.version, entry.sha256, folder, tuple(entry.exclude))
+            if why := telemetry_problem(plugin):
+                problems.append(f"{where}: {why}")
     return problems
 
 
@@ -87,4 +101,4 @@ def _named(root: Path, error: DefinitionError) -> list[str]:
     return [f"{where}: {line}" for line in error.errors] or [f"{where}: invalid"]
 
 
-__all__ = ["check_policy_repo"]
+__all__ = ["check_policy_repo", "plugin_problems"]

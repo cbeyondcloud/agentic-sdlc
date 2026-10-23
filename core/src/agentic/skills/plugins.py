@@ -98,7 +98,7 @@ def plugins_for(
             _refused(record, name, agent.backend, why)
             continue
         plugin = CheckedPlugin(name, entry.version, entry.sha256, folder, tuple(entry.exclude))
-        if why := _telemetry(plugin):
+        if why := telemetry_problem(plugin):
             _refused(record, name, agent.backend, why)
             continue
         record(
@@ -122,7 +122,8 @@ def install_plugin(plugin: CheckedPlugin, dest_root: Path) -> Path:
     return target
 
 
-def _telemetry(plugin: CheckedPlugin) -> str | None:
+def telemetry_problem(plugin: CheckedPlugin) -> str | None:
+    """The first telemetry or analytics URL in a file the plugin installs, or None."""
     for relative, path in plugin.files():
         try:
             text = path.read_text(encoding="utf-8")
@@ -138,4 +139,4 @@ def _refused(record: Record, name: str, backend: str, reason: str) -> None:
     record("skills.plugin_refused", {"plugin": name, "backend": backend, "reason": reason})
 
 
-__all__ = ["CheckedPlugin", "excluded", "install_plugin", "plugins_for"]
+__all__ = ["CheckedPlugin", "excluded", "install_plugin", "plugins_for", "telemetry_problem"]

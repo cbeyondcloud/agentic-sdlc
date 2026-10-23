@@ -220,11 +220,12 @@ def lock_down(
     if agent.effort is not None:
         config["model_reasoning_effort"] = agent.effort
     if plugins:  # the team's opt-in (M2-47): skill instructions on, for these only
-        if found := _repo_skill_folders(Path(cwd)):
+        home_dir = (environ if environ is not None else os.environ).get("HOME")
+        if found := _skill_folders(Path(cwd), Path(home_dir) if home_dir else Path.home()):
             raise CodexError(
-                f"the worktree has repo skill folders ({', '.join(found)}): with the team's "
-                "plugin on, Codex would list them to the model too; run this step without "
-                "the plugin, or remove them from the repo"
+                f"other skill folders are in reach ({', '.join(found)}): with the team's "
+                "plugin on, Codex would list their skills to the model too, repo skills "
+                "included; run this step without the plugin, or remove them"
             )
         config["skills"] = {"include_instructions": True}
     env = {
@@ -260,12 +261,20 @@ def lock_down(
     )
 
 
-#: Where Codex finds a repository's own skills (review I2).
+#: Where Codex finds skills besides its CODEX_HOME: the worktree and every folder above it
+#: (a repository's own skills, review I2), and the user's home.
 REPO_SKILL_FOLDERS = (".agents/skills", ".codex/skills")
 
 
-def _repo_skill_folders(tree: Path) -> list[str]:
-    return [rel for rel in REPO_SKILL_FOLDERS if (tree / rel).exists()]
+def _skill_folders(tree: Path, home: Path) -> list[str]:
+    """Every skill folder Codex could list besides the step's own: in `tree` or any
+    folder above it, or in `home`."""
+    found = []
+    for folder in dict.fromkeys([tree.resolve(), *tree.resolve().parents, home]):
+        found += [
+            (folder / rel).as_posix() for rel in REPO_SKILL_FOLDERS if (folder / rel).exists()
+        ]
+    return found
 
 
 def overrides(config: Mapping[str, object]) -> list[str]:

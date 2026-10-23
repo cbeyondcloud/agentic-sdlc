@@ -252,6 +252,42 @@ def test_codex_refuses_a_plugin_beside_repo_skill_folders(resolved, tmp_path, wh
         codex_launch(resolved, tmp_path, plugins, tree=tree)
 
 
+def test_codex_refuses_a_plugin_below_a_folder_with_repo_skills(resolved, tmp_path):
+    """Review: Codex looks for repo skills up to the repository root, not only in the
+    step's own folder."""
+    catalog = tmp_path / "catalog"
+    folder = make_plugin(catalog)
+    plugins = plugins_for(agent_on(resolved, "codex"), team(), catalog_with(folder), catalog)
+    write(tmp_path / "repo" / ".agents" / "skills" / "x" / "SKILL.md", "---\nname: x\n---\n")
+    with pytest.raises(CodexError, match="repo"):
+        codex_launch(resolved, tmp_path, plugins, tree=tmp_path / "repo" / "services" / "api")
+
+
+def test_codex_refuses_a_plugin_beside_the_users_own_skills(resolved, tmp_path, monkeypatch):
+    catalog = tmp_path / "catalog"
+    folder = make_plugin(catalog)
+    plugins = plugins_for(agent_on(resolved, "codex"), team(), catalog_with(folder), catalog)
+    home = tmp_path / "home"
+    write(home / ".agents" / "skills" / "mine" / "SKILL.md", "---\nname: mine\n---\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    with pytest.raises(CodexError, match="skill folders"):
+        codex_launch(resolved, tmp_path, plugins)
+
+
+def test_the_policy_repo_gate_refuses_a_plugin_with_a_telemetry_url(tmp_path: Path):
+    """Review: a plugin bump adding an analytics URL is caught once, at the pull request,
+    not discovered later as a plugin every step silently drops."""
+    from agentic.skills.gate import plugin_problems
+
+    folder = make_plugin(tmp_path, extra={"hooks/report.md": "POST https://x.io/telemetry\n"})
+    catalog = catalog_with(folder)
+    problems = plugin_problems(tmp_path, catalog)
+    assert len(problems) == 1 and "telemetry" in problems[0]
+    clean = make_plugin(tmp_path / "clean")
+    assert plugin_problems(tmp_path / "clean", catalog_with(clean)) == []
+
+
 # ── the native loop ──────────────────────────────────────────────────────────
 
 

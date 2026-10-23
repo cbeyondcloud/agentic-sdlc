@@ -287,6 +287,14 @@ def test_scan_finds_more_hidden_characters(char: str):
     assert "hidden" in found[0][1]
 
 
+@pytest.mark.parametrize("char", ["\x0c", "\x0b", "\x1e", "\x85", " ", " "])
+def test_characters_python_treats_as_line_breaks_are_hidden(char: str):
+    """Review: only LF ends a line, as the secret scan counts lines; a form feed or a
+    Unicode line separator is a hidden character, and line numbers do not drift."""
+    found = scan_text(f"one\ntwo{char}three\nfour")
+    assert [line for line, _ in found] == [2]
+
+
 def test_tabs_and_line_ends_are_not_hidden():
     assert scan_text("one\tcolumn\r\nnext line\n") == []
 

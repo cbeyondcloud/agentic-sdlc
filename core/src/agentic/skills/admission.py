@@ -77,6 +77,8 @@ INJECTION = [
 _SMUGGLING = re.compile(r"[\U000e0100-\U000e01ef]")
 _ASCII_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _VISIBLE_CONTROLS = frozenset("\t\n\r")
+#: format, control, and the Unicode line and paragraph separators (only LF ends a line)
+_HIDDEN_CATEGORIES = frozenset({"Cf", "Cc", "Zl", "Zp"})
 
 BOM = chr(0xFEFF)
 URL = re.compile(r"https?://[^\s<>()\[\]\"'`]+", re.IGNORECASE)
@@ -133,7 +135,7 @@ def hidden_char(text: str) -> str | None:
     for char in text:
         if char in _VISIBLE_CONTROLS:
             continue
-        if unicodedata.category(char) in ("Cf", "Cc") or _SMUGGLING.match(char):
+        if unicodedata.category(char) in _HIDDEN_CATEGORIES or _SMUGGLING.match(char):
             return char
     return None
 
@@ -148,8 +150,11 @@ def scan_text(text: str) -> list[tuple[int, str]]:
         or a PowerShell backtick continues on the next, and is reported where it starts;
       * prompt-injection phrases, matched on the whole text with every run of white
         space read as one space, so a phrase split across lines is still found;
-      * hidden characters (`hidden_char`) and telemetry or analytics URLs, per line."""
-    lines = text.splitlines()
+      * hidden characters (`hidden_char`) and telemetry or analytics URLs, per line.
+
+    Only LF ends a line (a CR before it is dropped), as the secret scan counts lines: a
+    form feed or a Unicode line separator stays in its line and is reported as hidden."""
+    lines = [line.removesuffix("\r") for line in text.split("\n")]
     found: list[tuple[int, str]] = []
     for number, line in _logical_lines(lines):
         if any(p.search(line) for p in DOWNLOAD_AND_RUN):
