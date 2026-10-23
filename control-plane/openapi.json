@@ -4254,7 +4254,7 @@
         ]
       },
       "post": {
-        "description": "A new token for the caller in the caller's tenant (rotation). The value is in this\nresponse only. `revoke_current` revokes the token that made the request.",
+        "description": "A new token for the caller in the caller's tenant (rotation). The value is in this\nresponse only. `revoke_current` revokes the token that made the request. A service\ntoken never mints one that outlives it: its expiry is what limits a leaked CI token.",
         "operationId": "create_token_v1_tokens_post",
         "requestBody": {
           "content": {
@@ -4512,7 +4512,7 @@
     },
     "/v1/users/{email}/proxy-keys": {
       "delete": {
-        "description": "Revoke every gateway key of a person (org `rbac.assign`). A key the gateway cannot\nrevoke now is `pending`; the worker finishes it.",
+        "description": "Revoke every gateway key of a person (org `rbac.assign`). A key the gateway cannot\nrevoke now is `pending`; the worker finishes it. The keys are marked first and the\ngateway called after that commit, holding no tenant lock (review F2).",
         "operationId": "revoke_keys_v1_users__email__proxy_keys_delete",
         "parameters": [
           {
