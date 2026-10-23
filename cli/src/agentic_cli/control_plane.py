@@ -40,13 +40,16 @@ from agentic.orgapi import (
     KillState,
     KillSwitchInfo,
     Me,
+    NotificationInfo,
     OffboardResult,
     ProxyKeyIssued,
+    ProxyKeysRevoked,
     RepoInfo,
     RoleImportResult,
     RoleInfo,
     RunPreflight,
     RunSummary,
+    ServiceAccountInfo,
     ServiceAccountIssued,
 )
 from agentic.security.pii import PiiDetector
@@ -263,6 +266,22 @@ class ControlPlaneClient:
     def offboard(self, email: str, reason: str) -> OffboardResult:
         found = self._json("POST", f"/users/{quote(email, safe='@')}/offboard", {"reason": reason})
         return OffboardResult.model_validate(found)
+
+    def service_accounts(self, *, team: str | None = None) -> list[ServiceAccountInfo]:
+        params = {"team": team} if team else None
+        found = self._json("GET", "/service-accounts", params=params)
+        return [ServiceAccountInfo.model_validate(item) for item in found]
+
+    def revoke_proxy_keys(self, email: str) -> ProxyKeysRevoked:
+        """Revoke every gateway key of a person (M2-17), leaving the rest of their access."""
+        found = self._json("DELETE", f"/users/{quote(email, safe='@')}/proxy-keys")
+        return ProxyKeysRevoked.model_validate(found)
+
+    def notifications(self, *, status: str | None = None) -> list[NotificationInfo]:
+        """The tenant's outbox, newest first (M2-07): never a mail's body."""
+        params = {"status": status} if status else None
+        found = self._json("GET", "/notifications", params=params)
+        return [NotificationInfo.model_validate(item) for item in found]
 
     def register_repo(self, remote: str, team: str) -> RepoInfo:
         return RepoInfo.model_validate(

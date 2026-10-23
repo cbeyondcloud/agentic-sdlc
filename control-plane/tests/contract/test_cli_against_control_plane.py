@@ -201,6 +201,12 @@ async def test_provisioning_end_to_end(db, monkeypatch):
             with ControlPlaneClient(base, service.token) as bot:
                 assert bot.check("run.trigger", team="payments").allowed
                 assert not bot.check("gate.approve", team="payments").allowed
+            # review F4: the admin's list and key commands reach their routes
+            assert [s.email for s in admin.service_accounts(team="payments")] == [service.email]
+            [queued] = admin.notifications(status="pending")
+            assert (queued.kind, queued.recipient) == ("invite", "dev@a.example.test")
+            keys = admin.revoke_proxy_keys("dev@a.example.test")
+            assert (keys.email, keys.revoked, keys.pending) == ("dev@a.example.test", [], [])
             result = admin.offboard("dev@a.example.test", "left the company")
             assert result.tokens_revoked == 1
             with ControlPlaneClient(base, redeemed.control_plane_token) as dev:

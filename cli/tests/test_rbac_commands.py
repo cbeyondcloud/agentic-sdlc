@@ -240,6 +240,46 @@ def test_invite_and_offboard(plane, capsys):
     assert plane.offboarded == [("dev@acme.example", "left the company")]
 
 
+def test_revoke_keys_ends_a_persons_gateway_keys_only(plane, capsys):
+    """Review F4: a compromised key is revoked without offboarding the person."""
+    code, data, _ = agentic(capsys, "rbac", "revoke-keys", "Dev@Acme.example")
+    assert code == 0 and data == {
+        "email": "dev@acme.example",
+        "revoked": ["0123456789abcdef"],
+        "pending": ["fedcba9876543210"],
+    }
+    assert plane.keys_revoked == ["dev@acme.example"] and plane.offboarded == []
+    assert main(["rbac", "revoke-keys", "dev@acme.example"]) == 0
+    shown = capsys.readouterr().out
+    assert "fedcba9876543210" in shown and "retries" in shown
+
+
+def test_revoke_keys_refused_for_a_team_lead_exits_2(plane, capsys):
+    plane.allowed = {"run.trigger"}
+    plane.lead_teams = {"payments"}
+    code, _, err = agentic(capsys, "rbac", "revoke-keys", "dev@acme.example")
+    assert code == ExitCode.REFUSED and "rbac.assign" in json.loads(err)["error"]
+
+
+def test_service_accounts_lists_them(plane, capsys):
+    agentic(capsys, "rbac", "service-account", "nightly", "--team", "payments", "--days", "30")
+    code, data, _ = agentic(capsys, "rbac", "service-accounts", "--team", "payments")
+    assert code == 0
+    assert [a["email"] for a in data["service_accounts"]] == ["nightly@payments.service.invalid"]
+    assert [r.url.params.get("team") for r in plane.requests if r.method == "GET"] == ["payments"]
+
+
+def test_mail_lists_the_outbox_with_failures_visible(plane, capsys):
+    plane.allowed.add("audit.read.org")
+    code, data, _ = agentic(capsys, "rbac", "mail", "--status", "failed")
+    assert code == 0 and [m["status"] for m in data["mail"]] == ["failed"]
+    assert data["mail"][0]["last_error"] == "550 no such user here"
+    assert main(["rbac", "mail", "--status", "lost"]) == ExitCode.USAGE
+    capsys.readouterr()
+    assert main(["rbac", "mail"]) == 0
+    assert "550 no such user here" in capsys.readouterr().out
+
+
 def test_outside_org_mode_rbac_is_refused(plane, capsys):
     _config(org=False)
     code, _, _ = agentic(capsys, "rbac", "roles")

@@ -10,6 +10,9 @@
     agentic rbac service-account NAME --team T --days N     a CI account; its token is shown once
     agentic rbac invite EMAIL                               send a new invite
     agentic rbac offboard EMAIL --reason TEXT               end a person's access
+    agentic rbac revoke-keys EMAIL                          revoke a person's gateway keys only
+    agentic rbac service-accounts [--team T]                the CI accounts
+    agentic rbac mail [--status S]                          queued, sent and failed mail
 
 The control plane decides who may: org admins anything, team leads their own team (and only
 team-assignable roles). A refusal exits 2 with the control plane's message; a malformed
@@ -39,6 +42,7 @@ from agentic_cli.output import Output, table
 _EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 TeamOption = Annotated[str | None, typer.Option("--team", help="Within this team.")]
+MAIL_STATUSES = ("pending", "sent", "failed")
 
 
 def register(app: typer.Typer) -> None:
@@ -276,6 +280,85 @@ def register(app: typer.Typer) -> None:
                 )
 
         out.result(result.model_dump(mode="json"), show)
+
+    @group.command("revoke-keys")
+    def revoke_keys(
+        ctx: typer.Context, email: Annotated[str, typer.Argument(help="The person.")]
+    ) -> None:
+        """Revoke every gateway key of a person (a lost laptop, a leaked key) without ending
+        the rest of their access; they get a new key by redeeming a new invite (org admins)."""
+        out: Output = ctx.obj
+        with _client() as client:
+            result = client.revoke_proxy_keys(_email(email))
+
+        def show(console) -> None:
+            console.print(
+                f"{result.email}: gateway keys revoked: {', '.join(result.revoked) or 'none'}",
+                markup=False,
+            )
+            if result.pending:
+                console.print(
+                    f"the gateway could not be reached for {', '.join(result.pending)}: "
+                    "the control plane retries until they are revoked",
+                    markup=False,
+                )
+            console.print(
+                f"to give them a new key: `agentic rbac invite {result.email}`", markup=False
+            )
+
+        out.result(result.model_dump(mode="json"), show)
+
+    @group.command("service-accounts")
+    def service_accounts(ctx: typer.Context, team: TeamOption = None) -> None:
+        """The tenant's service accounts (or one team's, for its team lead)."""
+        out: Output = ctx.obj
+        with _client() as client:
+            found = client.service_accounts(team=_team(team))
+
+        def show(console) -> None:
+            if not found:
+                console.print("No service accounts.")
+                return
+            shown = table("EMAIL", "TEAM", "STATUS", "CREATED")
+            for item in found:
+                shown.add_row(item.email, item.team, item.status, f"{item.created_at:%Y-%m-%d}")
+            console.print(shown)
+
+        out.result({"service_accounts": [item.model_dump(mode="json") for item in found]}, show)
+
+    @group.command("mail")
+    def mail(
+        ctx: typer.Context,
+        status: Annotated[
+            str | None, typer.Option("--status", help="pending, sent or failed.")
+        ] = None,
+    ) -> None:
+        """The control plane's mail (invites, gates, budget alerts), newest first, with why
+        the last attempt failed - never a mail's content (org admins)."""
+        out: Output = ctx.obj
+        if status is not None and status not in MAIL_STATUSES:
+            raise CliError(
+                f"unknown mail status {status!r}",
+                ExitCode.USAGE,
+                hint=f"one of: {', '.join(MAIL_STATUSES)}",
+            )
+        with _client() as client:
+            found = client.notifications(status=status)
+
+        def show(console) -> None:
+            if not found:
+                console.print("No mail.")
+                return
+            for item in found:
+                console.print(
+                    f"{item.created_at:%Y-%m-%d %H:%M} {item.status:<7} {item.kind} to "
+                    f"{item.recipient} ({item.attempts} attempt(s)): {item.subject}",
+                    markup=False,
+                )
+                if item.last_error and item.status != "sent":
+                    console.print(f"    last error: {item.last_error}", markup=False)
+
+        out.result({"mail": [item.model_dump(mode="json") for item in found]}, show)
 
 
 def _client() -> control_plane.ControlPlaneClient:

@@ -63,6 +63,8 @@ class FakeControlPlane:
     imports: list[dict] = field(default_factory=list)  # bodies of POST /v1/rbac/import
     import_rows: list[dict] = field(default_factory=list)  # what an import answers
     offboarded: list[tuple[str, str]] = field(default_factory=list)
+    keys_revoked: list[str] = field(default_factory=list)  # DELETE /v1/users/<e>/proxy-keys
+    service_accounts: list[dict] = field(default_factory=list)
 
     def add_invite(self, token: str, *, gateway_key: str | None = None) -> dict:
         self.invites[token] = {
@@ -161,15 +163,65 @@ class FakeControlPlane:
         if path == "/v1/service-accounts" and method == "POST":
             if refused := self._may_assign(body["team"]):
                 return refused
+            made = {
+                "id": f"00000000-0000-0000-0002-{len(self.service_accounts) + 1:012d}",
+                "email": f"{body['name']}@{body['team']}.service.invalid",
+                "team": body["team"],
+            }
+            self.service_accounts.append(
+                {**made, "status": "active", "created_at": datetime.now(UTC).isoformat()}
+            )
             return httpx2.Response(
                 201,
                 json={
-                    "id": "00000000-0000-0000-0002-000000000001",
-                    "email": f"{body['name']}@{body['team']}.service.invalid",
-                    "team": body["team"],
+                    **made,
                     "token": "acp_" + "s" * 43,
                     "token_id": "00000000-0000-0000-0003-000000000001",
                     "expires_at": (datetime.now(UTC) + timedelta(days=body["days"])).isoformat(),
+                },
+            )
+        if path == "/v1/service-accounts" and method == "GET":
+            team = request.url.params.get("team")
+            if refused := self._may_assign(team):
+                return refused
+            shown = [a for a in self.service_accounts if team is None or a["team"] == team]
+            return httpx2.Response(200, json=shown)
+        if path == "/v1/notifications":
+            if "audit.read.org" not in self.allowed:
+                return _problem(403, "rbac.forbidden", "you do not hold audit.read.org")
+            status = request.url.params.get("status")
+            now = datetime.now(UTC).isoformat()
+            mails = [
+                {
+                    "id": f"00000000-0000-0000-0006-00000000000{n}",
+                    "kind": "invite",
+                    "recipient": f"p{n}@acme.example",
+                    "subject": "You are invited",
+                    "status": state,
+                    "attempts": attempts,
+                    "next_attempt_at": now,
+                    "last_error": error,
+                    "created_at": now,
+                    "sent_at": now if state == "sent" else None,
+                }
+                for n, (state, attempts, error) in enumerate(
+                    [("sent", 1, None), ("failed", 1, "550 no such user here")], start=1
+                )
+            ]
+            return httpx2.Response(
+                200, json=[m for m in mails if status is None or m["status"] == status]
+            )
+        if path.endswith("/proxy-keys") and method == "DELETE":
+            if refused := self._may_assign(None):
+                return refused
+            email = path.split("/")[3]
+            self.keys_revoked.append(email)
+            return httpx2.Response(
+                200,
+                json={
+                    "email": email,
+                    "revoked": ["0123456789abcdef"],
+                    "pending": ["fedcba9876543210"],
                 },
             )
         if path.endswith("/invite") or path.endswith("/offboard"):
@@ -277,7 +329,9 @@ class FakeControlPlane:
             return httpx2.Response(
                 200, json={"allowed": allowed, "reason": "fake", "role": None, "scope": None}
             )
-        if path.startswith(("/v1/rbac/", "/v1/service-accounts", "/v1/users/")):
+        if path.startswith(
+            ("/v1/rbac/", "/v1/service-accounts", "/v1/users/", "/v1/notifications")
+        ):
             return self._rbac(request)
         if path == "/v1/repos":
             body = json.loads(request.content)
