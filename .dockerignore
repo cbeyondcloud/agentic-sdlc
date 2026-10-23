@@ -1,0 +1,19 @@
+# Build context for control-plane/Dockerfile: the workspace's packages and lock only.
+**/.venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/tests
+.git
+.claude
+.agentic
+.superpowers
+deploy
+docs
+library
+reports
+research_notes
+scripts
+spikes
+templates
