@@ -1,7 +1,7 @@
 """Tests for the codex runner and backend (M2-40) with a stand-in `codex` (fake_codex.py),
-so they run on every OS: the backend conformance, charging from `turn.completed.usage`
-(DF-19), the contract retry in a new exec, the turn and time limits, and the refusals
-(no sandbox, native Windows, another Codex version)."""
+so they run on every OS: charging from `turn.completed.usage` (DF-19), the contract retry
+in a new exec, the turn and time limits, and the refusals (no sandbox, native Windows,
+another Codex version). The conformance tiers run on this stand-in in test_conformance.py."""
 
 import asyncio
 import json
@@ -12,7 +12,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from conformance import CASES, TASK, FakeContract, slice_
+from conformance import TASK, FakeContract, slice_
 
 import agentic.backends as backends
 from agentic.agents.runner import ResumeError
@@ -109,24 +109,6 @@ def runner_for(
 
 def run(runner):
     return asyncio.run(runner.run(TASK))
-
-
-# ── the conformance every backend passes ──────────────────────────────────────
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case.__name__)
-def test_codex_conformance(case, resolved, fake, tmp_path):
-    def make(
-        agent, *, answers, budget, contract, time_limit_s=None, delay_s=0.0, over_budget=False
-    ):
-        tokens = 10_000_000 if over_budget else 100
-        usage = {"input_tokens": tokens, "cached_input_tokens": 0, "output_tokens": 20}
-        fake.set([{"text": a, "usage": usage, "sleep": delay_s} for a in answers])
-        return runner_for(
-            agent, tmp_path, budget=budget, contract=contract, time_limit_s=time_limit_s
-        )
-
-    case(make, agent_for(resolved))
 
 
 # ── charging (DF-19) ──────────────────────────────────────────────────────────
@@ -308,9 +290,12 @@ def test_time_limit_kills_the_tree(resolved, fake, tmp_path):
 
 def test_runner_refuses_without_a_sandbox(resolved, fake, tmp_path):  # Review Focus 2
     runner = runner_for(agent_for(resolved), tmp_path, sandbox=True, wrap=None)
-    with pytest.raises(CodexError, match="sandbox"):
+    with pytest.raises(CodexError, match="sandbox") as raised:
         run(runner)
     assert fake.starts() == []
+    # DF-432: what to do, in words an engineer can act on - no internal decision ids
+    assert "agentic init" in str(raised.value)
+    assert "decision" not in str(raised.value) and "D38" not in str(raised.value)
 
 
 def test_resume_is_refused(resolved, fake, tmp_path):
@@ -347,11 +332,23 @@ def test_backend_builds_a_runner_over_the_step_tree(resolved, tmp_path, monkeypa
     assert argv[argv.index("-C") + 1] == (tmp_path / "state").resolve().as_posix()
 
 
+def test_a_step_without_the_guard_hook_is_logged(resolved, tmp_path, monkeypatch, caplog):
+    # DF-431: without the hook, deny rules miss reordered or wrapped commands - say so
+    monkeypatch.setattr("agentic.backends.codex.native_windows", lambda: False)
+    step = StepContext("r-1", "develop", 1, agent_for(resolved), slice_(), None)
+    with caplog.at_level("WARNING", logger="agentic.backends.codex"):
+        backend_for(tmp_path).runner(
+            step, tool_context=None, state_dir=tmp_path / "state", spawner=None
+        )
+    assert "without the guard hook" in caplog.text
+
+
 def test_native_windows_is_refused(resolved, tmp_path, monkeypatch):
     monkeypatch.setattr("agentic.backends.codex.native_windows", lambda: True)
     step = StepContext("r-1", "develop", 1, agent_for(resolved), slice_(), None)
-    with pytest.raises(CodexError, match="WSL2"):
+    with pytest.raises(CodexError, match="WSL2") as raised:
         backend_for(tmp_path).runner(step, tool_context=None, state_dir=tmp_path, spawner=None)
+    assert "D38" not in str(raised.value)  # DF-432
 
 
 def test_another_codex_version_is_refused(resolved, tmp_path, monkeypatch):

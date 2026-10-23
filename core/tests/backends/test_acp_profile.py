@@ -91,6 +91,12 @@ def test_profile_files_are_written_under_the_home(tmp_path):
         assert (tmp_path / "notes.txt").stat().st_mode & 0o077 == 0
 
 
+def test_a_launch_repr_never_shows_its_files():  # DF-447: the key file's text is a secret
+    secret = "tl-" + "launch-" + "secret-0123"  # gitleaks:allow - built from pieces
+    shown = repr(Launch(env={"FAKE_ROUTE": "x"}, files={"auth/key": secret}))
+    assert secret not in shown and "FAKE_ROUTE" in shown
+
+
 @pytest.mark.parametrize("name", ["../escape.txt", "/abs/escape.txt", "a/../../escape.txt"])
 def test_a_profile_file_outside_the_home_is_refused(tmp_path, name):
     with pytest.raises(ValueError, match="outside"):

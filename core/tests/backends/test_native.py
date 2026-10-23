@@ -1,5 +1,5 @@
-"""The native backend (Pydantic AI over TokenLean): conformance, dispatch and provider
-neutrality (M1-28; owner rule: provider-agnostic)."""
+"""The native backend (Pydantic AI over TokenLean): dispatch and provider neutrality (M1-28;
+owner rule: provider-agnostic). `make_runner` is its conformance harness (test_conformance.py)."""
 
 import ast
 import asyncio
@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx2
 import pytest
-from conformance import CASES, TASK, FakeContract, slice_
+from conformance import TASK, FakeContract, slice_
 from pydantic_ai import Tool
 from pydantic_ai.messages import ModelMessage, ModelResponse, TextPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
@@ -74,11 +74,6 @@ def make_runner(tmp_path):
         return runner
 
     return make
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case.__name__)
-def test_native_conformance(case, resolved, tmp_path):
-    case(make_runner(tmp_path), resolved.model_copy(update={"tools": []}))
 
 
 # ── dispatch ──────────────────────────────────────────────────────────────────

@@ -99,6 +99,7 @@ class World:
             prices=lambda model: PRICE,
             rules_for=lambda step: rules,
             time_limit_s=time_limit_s,
+            unsandboxed=True,  # the refusing proxy stands in for srt here (live srt: its own test)
         )
         step = StepContext("r-1", "develop", 1, agent, budget or slice_(), contract)
         return backend.runner(step, tool_context=None, state_dir=self.tree, spawner=None)

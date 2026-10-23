@@ -90,6 +90,7 @@ class TokenLeanStub:
     def __init__(self) -> None:
         self.requests: list[dict] = []
         self.queue: list[Reply] = []
+        self.after: Reply | None = None  # the answer once `queue` is used up (default "done")
         self.delay_s = 0.0
         stub = self
 
@@ -122,7 +123,7 @@ class TokenLeanStub:
                     self.end_headers()
                     return
                 time.sleep(stub.delay_s)
-                reply = stub.queue.pop(0) if stub.queue else Reply(text="done")
+                reply = stub.queue.pop(0) if stub.queue else (stub.after or Reply(text="done"))
                 model = data.get("model", "?")
                 if data.get("stream"):
                     return self._send(_sse(model, reply), "text/event-stream")

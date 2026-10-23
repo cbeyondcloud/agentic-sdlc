@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from anthropic_stub import MARKER, RefusingProxy, Reply, TokenLeanStub
-from conformance import CASES, TASK, FakeContract, slice_
+from conformance import TASK, FakeContract, slice_
 
 from agentic.agents.runner import ResumeError
 from agentic.backends.claude_code import ClaudeCodeRunner, ClaudeCodeSettings, lock_down
@@ -82,26 +82,6 @@ def runner_for(agent, world, tmp_path, *, budget=None, contract=None, time_limit
 
 def run(runner):
     return asyncio.run(runner.run(TASK))
-
-
-# ── the conformance every backend passes ──────────────────────────────────────
-
-
-@pytest.mark.parametrize("case", CASES, ids=lambda case: case.__name__)
-def test_claude_code_conformance(case, resolved, world, tmp_path):
-    stub = world[0]
-
-    def make(
-        agent, *, answers, budget, contract, time_limit_s=None, delay_s=0.0, over_budget=False
-    ):
-        tokens = 10_000_000 if over_budget else 100
-        stub.queue = [Reply(text=a, input_tokens=tokens) for a in answers]
-        stub.delay_s = delay_s
-        return runner_for(
-            agent, world, tmp_path, budget=budget, contract=contract, time_limit_s=time_limit_s
-        )
-
-    case(make, agent_for(resolved))
 
 
 # ── the lock-down, end to end ─────────────────────────────────────────────────

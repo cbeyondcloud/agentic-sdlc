@@ -76,7 +76,9 @@ class Launch:
     """A profile's output for one step: environment variables and files for its home."""
 
     env: Mapping[str, str] = field(default_factory=dict)
-    files: Mapping[str, str] = field(default_factory=dict)  # home-relative POSIX path -> text
+    # home-relative POSIX path -> text; never in a repr or a traceback's locals: a file can
+    # hold the gateway key (DF-447)
+    files: Mapping[str, str] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True)

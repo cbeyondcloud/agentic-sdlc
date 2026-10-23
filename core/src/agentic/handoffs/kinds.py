@@ -196,13 +196,18 @@ class TestReportData(HandoffBase):
     def a_pass_has_no_new_failures(self) -> "TestReportData":
         if self.verdict == "pass":
             named = len(self.failures)
-            # each failure named once, and as many names as failures (DF-230)
-            if named != len(set(self.failures)) or (
-                (self.tests.failed or named) and named != self.tests.failed
-            ):
+            # each failure named once, and as many names as failures (DF-230); each case
+            # has its own message, so the agent knows which to fix (DF-371)
+            if twice := sorted({n for n in self.failures if self.failures.count(n) > 1}):
                 raise ValueError(
-                    f"verdict: 'pass' but {self.tests.failed} test(s) failed; a pass with "
-                    "failures must name each one, once, in `failures`"
+                    f"verdict: 'pass' but `failures` names {', '.join(twice)} more than "
+                    "once: name each failing test once"
+                )
+            if named != self.tests.failed:
+                raise ValueError(
+                    f"verdict: 'pass' but {self.tests.failed} test(s) failed and `failures` "
+                    f"names {named}: the two must agree - name each failing test once in "
+                    "`failures`, and count each in tests.failed"
                 )
             known = {*self.baseline_failures, *self.accepted_failures}
             if new := [name for name in self.failures if name not in known]:

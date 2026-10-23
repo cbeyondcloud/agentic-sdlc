@@ -39,6 +39,7 @@ from agentic.agents.runner import (
     OutputContract,
     ResumeError,
     _instructions,
+    no_answer,
     retry_message,
 )
 from agentic.agents.tools import ToolContext
@@ -274,8 +275,9 @@ class ClaudeCodeRunner:
 
     async def _converse(self, client, task: AgentTask) -> AgentOutcome:
         text = await self._turn(client, task.prompt)
-        if self.contract is None:
-            return self._outcome("completed", text)
+        if self.contract is None:  # silence is no answer (DF-433)
+            errors = no_answer(text)
+            return self._outcome("invalid" if errors else "completed", text, errors=errors)
         accepted, errors = self.contract.check(text)
         if errors:  # one retry, in the same session (OUTPUT_RETRIES = 1)
             text = await self._turn(client, retry_message(errors))
