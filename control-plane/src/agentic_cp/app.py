@@ -6,11 +6,12 @@ environment: `__main__` builds `Settings` and passes them in."""
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -29,6 +30,7 @@ from agentic_cp.keys.api import router as keys_router
 from agentic_cp.keys.gateway import gateway_keys_for
 from agentic_cp.killswitch.api import router as killswitch_router
 from agentic_cp.logredact import install_log_redaction
+from agentic_cp.metrics import Metrics, MetricsMiddleware
 from agentic_cp.notify.api import router as notify_router
 from agentic_cp.policy_sync.api import router as policy_router
 from agentic_cp.provisioning.api import router as provisioning_router
@@ -92,6 +94,9 @@ def create_app(
     install_problem_handlers(app)
     install_log_redaction()  # the webhook token travels in the path (review F2)
     app.add_middleware(BodyLimit, max_bytes=settings.max_body_bytes)
+    metrics = Metrics(settings)
+    app.state.metrics = metrics
+    app.add_middleware(MetricsMiddleware, metrics=metrics)  # outermost: sees every status
     app.include_router(auth_router)
     app.include_router(rbac_router)
     app.include_router(rbac_import_router)
@@ -116,6 +121,28 @@ def create_app(
         """Readiness: the database answers, is migrated to this release and enforces tenant
         isolation and insert-only evidence (fail closed unless relaxed for development)."""
         return await check_ready(db, settings)
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics_endpoint(request: Request) -> Response:
+        """Prometheus metrics (M2-12): only with `AGENTIC_CP_METRICS_TOKEN` as the bearer
+        token; without a configured token the route does not exist (404)."""
+        expected = settings.metrics_token
+        if expected is None:
+            raise ApiProblem(404, "not_found", "no such route or object")
+        scheme, _, given = request.headers.get("authorization", "").partition(" ")
+        wanted = expected.get_secret_value().encode("utf-8")
+        if scheme.lower() != "bearer" or not hmac.compare_digest(
+            given.strip().encode("utf-8"), wanted
+        ):
+            raise ApiProblem(
+                401,
+                "auth.invalid_token",
+                "the metrics token is not valid",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        await metrics.refresh(db, app.state.clock)
+        body, media_type = metrics.exposition()
+        return Response(body, media_type=media_type)
 
     return app
 

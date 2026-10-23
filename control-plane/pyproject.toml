@@ -32,6 +32,9 @@ dependencies = [
     # the gateway's key admin API (TokenLean /admin/keys, M2-17), imported only by
     # agentic_cp.keys.gateway; the same range as core and the CLI (already in the lock)
     "httpx2>=2.13.1,<2.14",
+    # Prometheus exposition (M2-12); Apache-2.0 AND BSD-2-Clause, pure Python, no
+    # dependencies, released 2026-07-24; imported only by agentic_cp.metrics.
+    "prometheus-client==0.26.0",
 ]
 
 [build-system]

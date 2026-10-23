@@ -190,8 +190,10 @@ async def kill_state(
     scope = RunScope(team=team, user=ctx.email.lower(), repo=repo, pipeline=pipeline)
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         found = await store.rows(conn)
+    applying = [store.info(row) for row in found if run_level(store.as_switch(row), scope)]
+    state.metrics.observe_kill_state(bool(applying))
     return KillState(
-        switches=[store.info(row) for row in found if run_level(store.as_switch(row), scope)],
+        switches=applying,
         checked_at=state.clock(),
         ttl_seconds=state.settings.kill_ttl_seconds,
     )

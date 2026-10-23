@@ -9,6 +9,10 @@ from agentic.killswitch import Switch
 from agentic.orgapi import KillSwitchInfo
 from agentic_cp.tables import kill_switches
 
+#: `created_by` of the pause switches auto-trip sets (M2-11); every other switch is a
+#: person's (or a service account's).
+AUTO_TRIP_ACTOR = "system:auto-trip"
+
 
 def info(row) -> KillSwitchInfo:
     return KillSwitchInfo(

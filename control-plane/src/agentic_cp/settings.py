@@ -122,6 +122,12 @@ class Settings(BaseModel):
     gateway_admin_key: SecretStr | None = None
     gateway_url: Annotated[str, AfterValidator(_http_url)] | None = None
     """The gateway URL people's CLIs use; handed out with a redeemed invite."""
+    metrics_token: SecretStr | None = None
+    """The bearer token Prometheus scrapes `/metrics` with (M2-12); None: `/metrics` is 404."""
+    metrics_max_tenants: Annotated[int, Field(ge=1, le=1000)] = 100
+    """Tenants labelled by slug in the per-tenant gauges; the rest are summed as `_other`."""
+    metrics_refresh_seconds: Annotated[int, Field(ge=1, le=3600)] = 30
+    """The per-tenant gauges are read from the database at most this often."""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Settings:
