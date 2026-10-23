@@ -38,7 +38,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agentic.skills.admission import DOWNLOAD_AND_RUN, HIDDEN, INJECTION, telemetry_urls
+from agentic.skills.admission import scan_text
 from agentic.skills.catalog import SkillsError, skill_digest, skill_files
 from agentic.skills.install import Record, log_record
 from agentic.skills.loader import estimate_tokens
@@ -215,15 +215,8 @@ def _instruction_only(path: Path, where: str) -> str:
         text = data.decode("utf-8").removeprefix("﻿")
     except UnicodeDecodeError:
         raise _Refused(where, "not UTF-8 text: a personal skill is instruction-only") from None
-    for number, line in enumerate(text.splitlines(), start=1):
-        if any(p.search(line) for p in DOWNLOAD_AND_RUN):
-            raise _Refused(f"{where}:{number}", "it downloads and runs code")
-        if any(p.search(line) for p in INJECTION):
-            raise _Refused(f"{where}:{number}", "it reads like a prompt injection")
-        if char := HIDDEN.search(line):
-            raise _Refused(f"{where}:{number}", f"hidden character U+{ord(char.group(0)):04X}")
-        if urls := telemetry_urls(line):
-            raise _Refused(f"{where}:{number}", f"telemetry or analytics URL: {urls[0]}")
+    for number, reason in scan_text(text)[:1]:  # the same scan as catalog admission (DF-142)
+        raise _Refused(f"{where}:{number}", reason)
     return text
 
 

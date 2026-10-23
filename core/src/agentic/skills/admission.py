@@ -22,7 +22,9 @@ The LLM scan, the human review of scripts and the A/B promotion gate (M1-63) are
 separate steps; this module is the static part.
 """
 
+import bisect
 import re
+import unicodedata
 from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,23 +51,31 @@ SCRIPT_SUFFIXES = frozenset(
 LICENCE_FILE = re.compile(r"^(LICEN[CS]E|COPYING)(\.(txt|md))?$", re.IGNORECASE)
 SPDX_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*$")
 
+_FETCH = r"(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)"
+_SHELL = r"(ba|z|da|k)?sh"
 DOWNLOAD_AND_RUN = [
-    re.compile(
-        r"\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^\n|]*\|\s*"
-        r"(sudo\s+)?(ba|z|da|k)?sh\b",
-        re.IGNORECASE,
-    ),
+    re.compile(rf"\b{_FETCH}\b[^\n|]*\|\s*(sudo\s+)?{_SHELL}\b", re.IGNORECASE),
     re.compile(r"\|\s*(iex|Invoke-Expression)\b", re.IGNORECASE),
-    re.compile(r"\bbase64\s+(-d|--decode)\b[^\n|]*\|\s*(sudo\s+)?(ba|z)?sh\b"),
+    re.compile(rf"\bbase64\s+(-d|--decode)\b[^\n|]*\|\s*(sudo\s+)?{_SHELL}\b"),
+    # process and command substitution (DF-142): `bash <(curl ...)`, `sh -c "$(curl ...)"`
+    re.compile(rf"(\b{_SHELL}|\bsource|(^|\s)\.)\s+<\(\s*{_FETCH}\b", re.IGNORECASE),
+    re.compile(rf"\b{_SHELL}\s+-c\s+[\"']?\$\(\s*{_FETCH}\b", re.IGNORECASE),
 ]
 INJECTION = [
     re.compile(r"\bignore\s+(all\s+)?(the\s+)?(previous|prior|above)\s+instructions\b", re.I),
     re.compile(r"\bdisregard\s+(all\s+)?(your|previous|prior|the\s+above)\s+instructions\b", re.I),
     re.compile(r"\bdo\s+not\s+(tell|inform)\s+the\s+user\b", re.I),
+    re.compile(
+        r"\bforget\s+(everything|all(\s+of)?(\s+the)?)\s+(above|before|prior|previous)\b", re.I
+    ),
+    # a role header hidden in an HTML comment, which a rendered page never shows (DF-142)
+    re.compile(r"<!--\s*(system|assistant|developer)\s*:", re.I),
 ]
-HIDDEN = re.compile(
-    r"[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f]"
-)
+#: Hidden characters besides Unicode's format (Cf) and control (Cc) categories: the
+#: variation-selector supplement, which can smuggle bytes past a reader (DF-142).
+_SMUGGLING = re.compile(r"[\U000e0100-\U000e01ef]")
+_ASCII_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_VISIBLE_CONTROLS = frozenset("\t\n\r")
 
 BOM = chr(0xFEFF)
 URL = re.compile(r"https?://[^\s<>()\[\]\"'`]+", re.IGNORECASE)
@@ -110,6 +120,71 @@ def telemetry_urls(text: str) -> list[str]:
         elif TELEMETRY_WORDS.search(host_and_path.split("?", 1)[0]):
             found.append(url)
     return found
+
+
+def hidden_char(text: str) -> str | None:
+    """The first hidden character in `text`: a format (Cf: bidi controls, zero-width,
+    tag characters, the soft hyphen) or control (Cc) character other than tab, LF and
+    CR, or a supplementary variation selector. None when there is none."""
+    if text.isascii():
+        found = _ASCII_CONTROL.search(text)
+        return found.group(0) if found else None
+    for char in text:
+        if char in _VISIBLE_CONTROLS:
+            continue
+        if unicodedata.category(char) in ("Cf", "Cc") or _SMUGGLING.match(char):
+            return char
+    return None
+
+
+def scan_text(text: str) -> list[tuple[int, str]]:
+    """Every (line number, reason) the static scan finds in one file's text.
+
+    The scan is a tripwire for careless or lazy payloads, not a proof of safety (an LLM
+    scan and a person's review are the later steps, spec §11.3):
+
+      * download-and-run commands, matched on logical lines - a line ending with `\\`
+        or a PowerShell backtick continues on the next, and is reported where it starts;
+      * prompt-injection phrases, matched on the whole text with every run of white
+        space read as one space, so a phrase split across lines is still found;
+      * hidden characters (`hidden_char`) and telemetry or analytics URLs, per line."""
+    lines = text.splitlines()
+    found: list[tuple[int, str]] = []
+    for number, line in _logical_lines(lines):
+        if any(p.search(line) for p in DOWNLOAD_AND_RUN):
+            found.append((number, "downloads and runs code"))
+    words = [(m.group(0), n) for n, line in enumerate(lines, 1) for m in re.finditer(r"\S+", line)]
+    flat, starts = "", []
+    for word, _ in words:
+        starts.append(len(flat))
+        flat += word + " "
+    for pattern in INJECTION:
+        for match in pattern.finditer(flat):
+            index = bisect.bisect_right(starts, match.start()) - 1
+            found.append((words[max(index, 0)][1], "reads like a prompt injection"))
+    for number, line in enumerate(lines, start=1):
+        if char := hidden_char(line):
+            found.append((number, f"hidden character U+{ord(char):04X}"))
+        for url in telemetry_urls(line):
+            found.append((number, f"telemetry or analytics URL: {url}"))
+    return sorted(dict.fromkeys(found), key=lambda item: item[0])
+
+
+def _logical_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """(first line number, text) with continued lines joined."""
+    joined: list[tuple[int, str]] = []
+    current: tuple[int, str] | None = None
+    for number, line in enumerate(lines, start=1):
+        stripped = line.rstrip()
+        continues = stripped.endswith(("\\", "`"))
+        part = stripped[:-1] if continues else line
+        current = (number, part) if current is None else (current[0], f"{current[1]} {part}")
+        if not continues:
+            joined.append(current)
+            current = None
+    if current is not None:
+        joined.append(current)
+    return joined
 
 
 def admit(
@@ -260,19 +335,8 @@ def _scan(folder: Path, entry: SkillEntry) -> list[Rejection]:
             )
         if text is None:
             continue
-        text = text.removeprefix(BOM)
-        for number, line in enumerate(text.splitlines(), start=1):
-            where = f"{relative}:{number}"
-            if any(p.search(line) for p in DOWNLOAD_AND_RUN):
-                found.append(Rejection("scan", where, "downloads and runs code"))
-            if any(p.search(line) for p in INJECTION):
-                found.append(Rejection("scan", where, "reads like a prompt injection"))
-            if char := HIDDEN.search(line):
-                found.append(
-                    Rejection("scan", where, f"hidden character U+{ord(char.group(0)):04X}")
-                )
-            for url in telemetry_urls(line):
-                found.append(Rejection("scan", where, f"telemetry or analytics URL: {url}"))
+        for number, reason in scan_text(text.removeprefix(BOM)):
+            found.append(Rejection("scan", f"{relative}:{number}", reason))
     return found
 
 
@@ -285,4 +349,12 @@ def _front_matter(folder: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-__all__ = ["CatalogError", "Rejection", "admit", "admit_catalog", "telemetry_urls"]
+__all__ = [
+    "CatalogError",
+    "Rejection",
+    "admit",
+    "admit_catalog",
+    "hidden_char",
+    "scan_text",
+    "telemetry_urls",
+]
