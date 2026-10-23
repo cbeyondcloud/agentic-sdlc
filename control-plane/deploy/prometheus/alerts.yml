@@ -1,0 +1,121 @@
+# Prometheus alert rules for the agentic control plane (M2-12).
+#
+# Load this file into the Prometheus that scrapes the control plane's /metrics (scrape job
+# "agentic-control-plane", bearer token AGENTIC_CP_METRICS_TOKEN). The rules aggregate by
+# tenant at most: the metrics carry no run, user or token labels (spec section 14.3).
+# Checked by `promtool check rules` and `promtool test rules alerts.test.yml` in the Linux
+# check stage (scripts/check.py --linux).
+groups:
+  - name: agentic-control-plane
+    rules:
+      - alert: AgenticControlPlaneDown
+        expr: up{job="agentic-control-plane"} == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Control plane {{ $labels.instance }} is not answering scrapes"
+          description: >-
+            Prometheus has not scraped {{ $labels.instance }} for 5 minutes. CLIs fall back
+            to their cached kill-switch state and queue run events until it is back.
+
+      - alert: AgenticControlPlaneHighErrorRate
+        expr: |
+          sum(rate(agentic_cp_http_requests_total{status="5xx"}[5m]))
+            / sum(rate(agentic_cp_http_requests_total[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 5% of control-plane requests fail with a server error"
+          description: >-
+            {{ $value | humanizePercentage }} of requests answered 5xx over the last 10
+            minutes. Check the server log and GET /readyz (database, migrations).
+
+  - name: agentic-ingest
+    rules:
+      - alert: AgenticIngestLagHigh
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(agentic_cp_ingest_lag_seconds_bucket[30m])))
+            > 4 * 3600
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Run events reach the control plane hours after they happened"
+          description: >-
+            The 95th percentile ingest lag is {{ $value | humanizeDuration }}. Laptops that
+            were offline catch up on their own; a lasting lag means CLIs cannot reach the
+            control plane or their batches are refused.
+
+      - alert: AgenticIngestChainRejections
+        expr: |
+          sum(increase(agentic_cp_ingest_rejected_total{code=~"ingest.chain_broken|ingest.fork"}[15m]))
+            > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Run event batches were refused because their chain did not verify"
+          description: >-
+            {{ $value }} batches were refused as a broken or forked chain in 15 minutes. Each
+            refusal is in the tenant's audit chain (ingest.chain_rejected, ingest.fork); a
+            ledger edited on a laptop shows up here.
+
+  - name: agentic-outbox
+    rules:
+      - alert: AgenticOutboxBacklog
+        expr: sum by (tenant) (agentic_cp_outbox_pending) > 100
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tenant {{ $labels.tenant }} has {{ $value }} mails waiting"
+          description: >-
+            The mail outbox has held more than 100 pending mails for 15 minutes. Check that
+            the worker runs and that AGENTIC_CP_SMTP_HOST is reachable.
+
+      - alert: AgenticOutboxDeliveryStuck
+        expr: max by (tenant) (agentic_cp_outbox_oldest_pending_seconds) > 1800
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tenant {{ $labels.tenant }}'s oldest mail has waited over 30 minutes"
+          description: >-
+            The oldest pending mail is {{ $value | humanizeDuration }} old: invites, budget
+            alerts and auto-trip notices are not going out.
+
+      - alert: AgenticOutboxFailures
+        expr: sum by (tenant) (delta(agentic_cp_outbox_failed[1h])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tenant {{ $labels.tenant }} has mails the relay refused for good"
+          description: >-
+            {{ $value }} more mails were marked failed in the last hour (each after
+            AGENTIC_CP_NOTIFY_MAX_ATTEMPTS sends). Their last error is in the notifications
+            table.
+
+  - name: agentic-controls
+    rules:
+      - alert: AgenticAutoTripActive
+        expr: sum by (tenant) (agentic_cp_killswitches_active{source="auto-trip"}) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Auto-trip paused {{ $value }} team(s) in tenant {{ $labels.tenant }}"
+          description: >-
+            A team's spend rate or error rate passed its org.yaml auto_trip threshold and its
+            runs are paused. The team's leads were mailed; `agentic killswitch list` shows the
+            switch and its reason.
+
+      - alert: AgenticMetricsRefreshFailing
+        expr: increase(agentic_cp_metrics_refresh_errors_total[15m]) > 0
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "The control plane cannot read its per-tenant gauges"
+          description: >-
+            The outbox and switch gauges of {{ $labels.instance }} are stale: the database
+            did not answer the metrics refresh.

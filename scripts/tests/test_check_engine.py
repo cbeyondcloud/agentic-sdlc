@@ -79,6 +79,19 @@ def test_the_secret_scan_runs_before_anything_writes_into_the_tree():
     assert names.index("secret scan") < names.index("lock file up to date")
 
 
+def test_the_linux_stage_checks_the_alert_rules_with_promtool():
+    # M2-12: promtool is a native binary, so it runs only in the Linux check image
+    from check import REPO_ROOT, checks_for, linux_steps
+
+    steps = dict(linux_steps())
+    command = steps["alert rules"]
+    assert command[:3] == ["promtool", "check", "rules"]
+    assert (REPO_ROOT / command[3]).is_file()
+    assert "alert rules" not in dict(checks_for(offline=False))
+    dockerfile = (REPO_ROOT / "scripts" / "linux-check.Dockerfile").read_text(encoding="utf-8")
+    assert "promtool" in dockerfile and "sha256sum -c" in dockerfile
+
+
 def _ran(returncode):
     return lambda *args, **kwargs: type("Done", (), {"returncode": returncode})()
 
