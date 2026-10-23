@@ -34,7 +34,6 @@ def upgrade() -> None:
         sa.Column(
             "changed_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),
-        sa.Column("evaluated_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(
             ["tenant_id", "switch_id"],
             ["kill_switches.tenant_id", "kill_switches.id"],

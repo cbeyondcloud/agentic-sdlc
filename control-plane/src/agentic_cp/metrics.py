@@ -25,7 +25,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from uuid import UUID
 
 from prometheus_client import (
@@ -40,6 +40,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from agentic_cp.ingest.store import event_time
 from agentic_cp.killswitch.store import AUTO_TRIP_ACTOR
 from agentic_cp.settings import Settings
 from agentic_cp.tables import kill_switches, notifications
@@ -167,7 +168,7 @@ class Metrics:
         if duplicates:
             self.ingest_events.labels("duplicate").inc(duplicates)
         for entry in entries:
-            at = _parse_at(entry.get("at"))
+            at = event_time(entry.get("at"))
             if at is not None:
                 self.ingest_lag.observe(max(0.0, (now - at).total_seconds()))
 
@@ -208,16 +209,6 @@ class Metrics:
     def exposition(self) -> tuple[bytes, str]:
         """The text format and its content type."""
         return generate_latest(self.registry), CONTENT_TYPE_LATEST
-
-
-def _parse_at(value: object) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        moment = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
 async def _tenant_ids(engine: AsyncEngine) -> list[UUID]:

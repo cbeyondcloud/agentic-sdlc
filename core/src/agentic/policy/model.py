@@ -101,6 +101,83 @@ class RoleLimits(_Strict):
     children_max: ChildLimits | None = None
 
 
+def _exact(value: object) -> object:
+    """A YAML float as the decimal it was written as (12.1, not 12.0999...)."""
+    return str(value) if isinstance(value, float) else value
+
+
+#: A spend threshold in USD per hour: positive (0 would trip on any spend at all).
+SpendRate = Annotated[Decimal, Field(gt=0, allow_inf_nan=False)]
+#: An error-rate threshold: the share of finished steps that ended in error, in (0, 1].
+ErrorRate = Annotated[Decimal, Field(gt=0, le=1, allow_inf_nan=False)]
+
+
+class TeamAutoTrip(_Strict):
+    """A team's own auto-trip thresholds (`teams/<team>.yaml: auto_trip`): only tighter
+    than the org's (a lower value), or set where the org sets none."""
+
+    spend_usd_per_hour: SpendRate | None = None
+    error_rate: ErrorRate | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def exact_numbers(cls, data: object) -> object:
+        if isinstance(data, dict):
+            return {key: _exact(value) for key, value in data.items()}
+        return data
+
+
+class AutoTripPolicy(_Strict):
+    """Auto-trip (M2-11, `org.yaml: auto_trip`): the control plane pauses a team whose
+    measured spend rate or error rate passes a threshold. Unset thresholds are off; spend
+    with no reported cost is unmeasured and never trips.
+
+    Hysteresis: a tripped team is re-armed only once the rate is below `threshold x
+    reset_ratio`; with `auto_clear` the control plane also clears its own pause switch then,
+    but not before `hold_minutes` have passed. Without it a person clears the switch."""
+
+    spend_usd_per_hour: SpendRate | None = None
+    error_rate: ErrorRate | None = None
+    window_minutes: int = Field(default=60, ge=5, le=1440)
+    min_steps: int = Field(default=20, ge=1, le=100_000)
+    """Fewer finished steps than this in the window: the error rate is unmeasured."""
+    reset_ratio: Decimal = Field(default=Decimal("0.5"), gt=0, lt=1, allow_inf_nan=False)
+    hold_minutes: int = Field(default=30, ge=0, le=1440)
+    auto_clear: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def exact_numbers(cls, data: object) -> object:
+        if isinstance(data, dict):
+            return {key: _exact(value) for key, value in data.items()}
+        return data
+
+    def effective(self, team: TeamAutoTrip | None) -> tuple[Decimal | None, Decimal | None]:
+        """(spend, error rate) thresholds for a team: the team's where it sets one (it can
+        only be tighter), else the org's."""
+        if team is None:
+            return self.spend_usd_per_hour, self.error_rate
+        return (
+            team.spend_usd_per_hour
+            if team.spend_usd_per_hour is not None
+            else self.spend_usd_per_hour,
+            team.error_rate if team.error_rate is not None else self.error_rate,
+        )
+
+
+def _looser_auto_trip(team: str, own: TeamAutoTrip | None, org: AutoTripPolicy) -> list[str]:
+    """A team threshold above the org's would loosen org policy: each one named."""
+    problems = []
+    for name in ("spend_usd_per_hour", "error_rate"):
+        mine, theirs = getattr(own, name, None), getattr(org, name)
+        if mine is not None and theirs is not None and mine > theirs:
+            problems.append(
+                f"teams.{team}.auto_trip.{name} ({mine}) is looser than the org's ({theirs}): "
+                "a team may only tighten it"
+            )
+    return problems
+
+
 class TeamPolicy(_Strict):
     """Team narrowing: may only tighten org policy (spec §12.2)."""
 
@@ -112,6 +189,7 @@ class TeamPolicy(_Strict):
     # agent-CLI plugins from the org catalog, for steps on a backend that loads plugins
     # (never the native loop; M2-47, D28)
     backend_plugins: list[str] = []
+    auto_trip: TeamAutoTrip | None = None  # M2-11: tighter thresholds only
 
 
 #: Read-denied in every sandbox, whatever policy adds: where credentials live (D38).
@@ -498,6 +576,7 @@ class OrgPolicy(_Strict):
     review_prepass: ReviewPrepassPolicy = ReviewPrepassPolicy()  # M2-48
     review_batch: ReviewBatchPolicy = ReviewBatchPolicy()  # M2-24
     eval: EvalPolicy = EvalPolicy()  # M1-63
+    auto_trip: AutoTripPolicy = AutoTripPolicy()  # M2-11
     # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
     # (`secret_scan`: the backend calls the model itself, past the framework's scanner;
     # `shell_default_deny`: its shell runs unlisted commands, and its prefix rules miss
@@ -570,6 +649,7 @@ class OrgPolicy(_Strict):
                     problems.append(
                         f"teams.{team}.limits_max names unknown agent type '{type_name}'"
                     )
+            problems += _looser_auto_trip(team, team_policy.auto_trip, self.auto_trip)
         for team in self.team_overrides:
             if team not in self.teams:
                 problems.append(f"team_overrides names unknown team '{team}'")

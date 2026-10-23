@@ -18,6 +18,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agentic.orgapi import SyncOutcome
+from agentic_cp.alerts.autotrip import auto_trip_job
 from agentic_cp.gitops import GitRunner
 from agentic_cp.keys.store import retry_job
 from agentic_cp.notify.delivery import deliver_job
@@ -29,10 +30,11 @@ from agentic_cp.tenancy.tenants import current_tenant
 
 log = logging.getLogger("agentic_cp.worker")
 
-#: Per-tenant jobs run after the policy sync: the CODEOWNERS refresh (M2-03), the mail
-#: outbox (M2-07) and pending proxy-key revocations (M2-17).
+#: Per-tenant jobs run after the policy sync: the CODEOWNERS refresh (M2-03), auto-trip
+#: (M2-11; before the outbox, so its mail goes out in the same pass), the mail outbox
+#: (M2-07) and pending proxy-key revocations (M2-17).
 TenantJob = Callable[[AsyncEngine, GitRunner, UUID, Settings, Callable[[], datetime]], Awaitable]
-EXTRA_JOBS: list[TenantJob] = [refresh_due, deliver_job, retry_job]
+EXTRA_JOBS: list[TenantJob] = [refresh_due, auto_trip_job, deliver_job, retry_job]
 LEADER_KEY = "agentic.worker"
 
 

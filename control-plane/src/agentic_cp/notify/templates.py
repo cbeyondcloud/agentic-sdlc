@@ -13,13 +13,19 @@ from importlib import resources
 from string import Template
 
 #: Each kind and its template files' stem.
-_FILES = {"invite": "invite", "gate.waiting": "gate_waiting", "budget.threshold": "budget"}
+_FILES = {
+    "invite": "invite",
+    "gate.waiting": "gate_waiting",
+    "budget.threshold": "budget",
+    "auto_trip": "auto_trip",
+}
 KINDS = tuple(_FILES)
 
 _SUBJECTS = {
     "invite": "You are invited to $tenant_name's agentic workspace",
     "gate.waiting": "Run $run_id is waiting for approval at $gate",
     "budget.threshold": "$what has used $percent % of its budget",
+    "auto_trip": "Team $team is paused: its $what passed the auto-trip threshold",
 }
 
 

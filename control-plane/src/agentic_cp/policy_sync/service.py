@@ -346,13 +346,39 @@ RUN_SETTINGS_KEYS = (
     "allow_repo_pipelines",
     "pipelines",
     "team_budgets",
+    "auto_trip",
 )
 
 
-def run_settings(policy: OrgPolicy, pipelines: dict[str, str]) -> dict:
-    """What run registration (M2-08, M2-21) and budget alerts (M2-16) read from an accepted
-    version. Team budgets are decimal strings, never floats (DF-26)."""
+def _text(value: Decimal | None) -> str | None:
+    return None if value is None else format(value, "f")
+
+
+def auto_trip_settings(policy: OrgPolicy) -> dict:
+    """`org.yaml: auto_trip` with each policy team's effective thresholds (M2-11), decimals
+    as text."""
+    trip = policy.auto_trip
+    teams = {}
+    for team, team_policy in sorted(policy.teams.items()):
+        spend, errors = trip.effective(team_policy.auto_trip)
+        teams[team] = {"spend_usd_per_hour": _text(spend), "error_rate": _text(errors)}
     return {
+        "spend_usd_per_hour": _text(trip.spend_usd_per_hour),
+        "error_rate": _text(trip.error_rate),
+        "window_minutes": trip.window_minutes,
+        "min_steps": trip.min_steps,
+        "reset_ratio": _text(trip.reset_ratio),
+        "hold_minutes": trip.hold_minutes,
+        "auto_clear": trip.auto_clear,
+        "teams": teams,
+    }
+
+
+def run_settings(policy: OrgPolicy, pipelines: dict[str, str]) -> dict:
+    """What run registration (M2-08, M2-21), budget alerts (M2-16) and auto-trip (M2-11)
+    read from an accepted version. Team budgets are decimal strings, never floats (DF-26)."""
+    return {
+        "auto_trip": auto_trip_settings(policy),
         "min_cli_version": policy.min_cli_version,
         "concurrency": dict(policy.concurrency),
         "allow_repo_pipelines": policy.allow_repo_pipelines,

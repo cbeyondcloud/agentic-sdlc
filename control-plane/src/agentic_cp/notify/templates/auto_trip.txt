@@ -1,0 +1,8 @@
+Team $team's runs in $tenant_name are paused by auto-trip: its $what was $value over the last
+$window_minutes minutes, above the $threshold threshold in the org policy.
+
+Running steps finish; new steps wait until the pause switch is cleared. The switch stays
+until $clear_phrase, and auto-trip arms again once the $what is below $reset.
+
+`agentic killswitch list` shows the switch and its reason; `agentic killswitch off <id>`
+clears it.

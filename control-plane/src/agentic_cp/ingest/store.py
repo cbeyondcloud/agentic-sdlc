@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Callable, Mapping, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import select, update
@@ -34,6 +34,17 @@ from sdlc_commons.ledger import NAMESPACE, verify_entries
 
 #: Codes of refusals that are audited in the tenant's chain (a gap is a sink catching up).
 AUDITED = {"ingest.chain_broken": "ingest.chain_rejected", "ingest.fork": "ingest.fork"}
+
+
+def event_time(value: object) -> datetime | None:
+    """A run event's own time (`at`, ISO 8601; a time without a zone is UTC), or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
 def head_problem(code: str, detail: str, head: ChainHead) -> ApiProblem:

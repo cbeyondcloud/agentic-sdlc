@@ -400,7 +400,6 @@ auto_trips = Table(
     Column("value", Text, nullable=True),
     Column("threshold", Text, nullable=True),
     Column("changed_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
-    Column("evaluated_at", DateTime(timezone=True), nullable=True),
     ForeignKeyConstraint(
         ["tenant_id", "switch_id"], ["kill_switches.tenant_id", "kill_switches.id"]
     ),

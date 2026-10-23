@@ -4,6 +4,7 @@ from agentic.policy.load import PolicyError, load_policy, policy_version, tree_d
 from agentic.policy.model import (
     DEFAULT_DENY_READ,
     AgentType,
+    AutoTripPolicy,
     ClassificationRule,
     EvalPolicy,
     EvalTarget,
@@ -13,6 +14,7 @@ from agentic.policy.model import (
     RoleLimits,
     SandboxPolicy,
     SecretScanPolicy,
+    TeamAutoTrip,
     TeamPolicy,
     TierSpec,
     ToolArtefact,
@@ -23,6 +25,7 @@ from agentic.policy.resolve import ResolveContext, ResolvedAgent, Violation, res
 __all__ = [
     "DEFAULT_DENY_READ",
     "AgentType",
+    "AutoTripPolicy",
     "ClassificationRule",
     "EvalPolicy",
     "EvalTarget",
@@ -35,6 +38,7 @@ __all__ = [
     "SandboxPolicy",
     "ReviewBatchPolicy",
     "SecretScanPolicy",
+    "TeamAutoTrip",
     "TeamPolicy",
     "TierSpec",
     "ToolArtefact",
