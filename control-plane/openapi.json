@@ -781,6 +781,33 @@
         "title": "Me",
         "type": "object"
       },
+      "OrgCheck": {
+        "description": "One org check: `check` is rbac, killswitch, policy, pipeline, concurrency or budget.",
+        "properties": {
+          "check": {
+            "title": "Check",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "check",
+          "passed",
+          "detail"
+        ],
+        "title": "OrgCheck",
+        "type": "object"
+      },
       "PolicySource": {
         "additionalProperties": false,
         "description": "`PUT /v1/tenant/policy-source`: where the tenant's policy repo lives. A URL with\ncredentials is refused (git credentials are mounted per tenant, ND-15).",
@@ -1171,6 +1198,152 @@
           "permissions"
         ],
         "title": "RoleUpdate",
+        "type": "object"
+      },
+      "RunPreflight": {
+        "description": "The org checks' report. `registered`: every check passed and the run holds a slot.\n`team_budget_remaining_usd` is None while the gateway does not measure it - never 0.",
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/OrgCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "min_cli_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Cli Version"
+          },
+          "registered": {
+            "title": "Registered",
+            "type": "boolean"
+          },
+          "team_budget_remaining_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Budget Remaining Usd"
+          }
+        },
+        "required": [
+          "registered",
+          "checks"
+        ],
+        "title": "RunPreflight",
+        "type": "object"
+      },
+      "RunRegistration": {
+        "additionalProperties": false,
+        "description": "`POST /v1/runs`: the org checks before a run starts (spec §8.2), and the run's\nconcurrency slot when they pass. `pipeline_file` is the pipeline's path in the policy\nrepo (None for a repo-layer pipeline) and `pipeline_sha256` the hash of its bytes (D33);\n`agents` (name@version), `models` and `backends` are what the run's steps resolved to.\n`dry_run` runs every check and registers nothing.",
+        "properties": {
+          "agents": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Agents",
+            "type": "array"
+          },
+          "backends": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Backends",
+            "type": "array"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Models",
+            "type": "array"
+          },
+          "pipeline": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Pipeline",
+            "type": "string"
+          },
+          "pipeline_file": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline File"
+          },
+          "pipeline_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Sha256"
+          },
+          "policy_version": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "team": {
+            "pattern": "^[a-z][a-z0-9-]{0,62}$",
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "team",
+          "pipeline",
+          "policy_version"
+        ],
+        "title": "RunRegistration",
         "type": "object"
       },
       "RunSummary": {
@@ -2782,6 +2955,54 @@
         "summary": "Refresh Repo",
         "tags": [
           "repos"
+        ]
+      }
+    },
+    "/v1/runs": {
+      "post": {
+        "description": "The org checks before a run starts; the run is registered (it holds a concurrency\nslot) only when every check passes and `dry_run` is false. An old CLI is refused first\n(426 `cli.too_old`).",
+        "operationId": "register_v1_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPreflight"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Register",
+        "tags": [
+          "runs"
         ]
       }
     },

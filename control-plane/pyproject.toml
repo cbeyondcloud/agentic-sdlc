@@ -26,6 +26,9 @@ dependencies = [
     "simpleeval==1.0.8",
     "wcmatch==11.0.1",
     "bracex==3.0.1",
+    # PEP 440 comparison of the CLI version against the minimum (M2-08); Apache-2.0 OR
+    # BSD-2-Clause, pure Python, released 2026-08-04 (already in the lock transitively).
+    "packaging==26.3",
 ]
 
 [build-system]

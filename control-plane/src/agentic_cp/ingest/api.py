@@ -8,9 +8,19 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from sqlalchemy import select
 
-from agentic.orgapi import API_PREFIX, ChainHead, IngestRequest, IngestResult, RunSummary
+from agentic.orgapi import (
+    API_PREFIX,
+    CLI_VERSION_HEADER,
+    ChainHead,
+    IngestRequest,
+    IngestResult,
+    RunPreflight,
+    RunRegistration,
+    RunSummary,
+)
 from agentic_cp.auth.deps import Caller
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
+from agentic_cp.ingest.register import register_run, require_cli_version
 from agentic_cp.ingest.store import AUDITED, Unaudited, audit_rejection, ingest_batch
 from agentic_cp.rbac.authz import Team, authorize
 from agentic_cp.tables import run_events, runs, users
@@ -24,6 +34,28 @@ def _checked_run_id(run_id: str) -> str:
     if why := run_id_refusal(run_id):
         raise ApiProblem(422, "invalid_request", f"run_id: {why}")
     return run_id
+
+
+@router.post("")
+async def register(body: RunRegistration, request: Request, ctx: Caller) -> RunPreflight:
+    """The org checks before a run starts; the run is registered (it holds a concurrency
+    slot) only when every check passes and `dry_run` is false. An old CLI is refused first
+    (426 `cli.too_old`)."""
+    state = request.app.state
+    _checked_run_id(body.run_id)
+    async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+        minimum = await require_cli_version(
+            conn, request.headers.get(CLI_VERSION_HEADER), state.settings
+        )
+        return await register_run(
+            conn,
+            ctx,
+            body,
+            cache=state.enforcers,
+            settings=state.settings,
+            now=state.clock(),
+            minimum=minimum,
+        )
 
 
 @router.post("/{run_id}/events")

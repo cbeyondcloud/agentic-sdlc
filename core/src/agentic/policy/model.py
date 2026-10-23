@@ -346,6 +346,14 @@ class OrgPolicy(_Strict):
     tool_mirror_url: str | None = None
     tool_pins: dict[str, ToolPin] = {}  # tools `init` fetches from the mirror (M1-51)
     allow_repo_pipelines: bool = False  # D33: pipelines only from the policy repo
+    # M2-08: older CLIs are refused runs with an upgrade message (the control plane's own
+    # floor applies too; the higher wins)
+    min_cli_version: (
+        Annotated[
+            str, StringConstraints(pattern=r"^[0-9]+(\.[0-9]+){0,3}([.+-]?[A-Za-z0-9.+-]+)?$")
+        ]
+        | None
+    ) = None
     # D39: `init --repo` adds the nightly index export workflow only when this is on
     index_export_workflow: bool = False
     sandbox: SandboxPolicy = SandboxPolicy()  # D38

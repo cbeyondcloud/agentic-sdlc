@@ -53,6 +53,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "allowed_repo_patterns": "allowed_repo_patterns",
         "tool_mirror_url": "tool_mirror_url",
         "allow_repo_pipelines": "allow_repo_pipelines",
+        "min_cli_version": "min_cli_version",
         "index_export_workflow": "index_export_workflow",
         "sandbox": "sandbox",
         "unhonoured": "unhonoured",
@@ -180,6 +181,28 @@ def tree_digest(root: Path) -> str:
         digest.update(len(name).to_bytes(8, "big") + name)
         digest.update(len(data).to_bytes(8, "big") + data)
     return f"sha256:{digest.hexdigest()}"
+
+
+def pipeline_digests(root: Path) -> dict[str, str]:
+    """The approved pipelines of a policy repo tree (D33): POSIX path -> `sha256:` of the
+    file's bytes exactly as stored, for `pipelines/*.yaml` and `teams/*/pipelines/*.yaml`.
+
+    The control plane records it for each version it validates and the CLI for the bundle
+    it extracted (the same bytes on every platform, as for `tree_digest`), so a run can be
+    refused when its pipeline is not byte for byte the approved one."""
+    folders = [root / "pipelines"]
+    teams = root / "teams"
+    if teams.is_dir():
+        folders += [team / "pipelines" for team in sorted(teams.iterdir()) if team.is_dir()]
+    found = {}
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        for path in sorted(folder.iterdir()):
+            if path.is_file() and path.suffix == ".yaml":
+                rel = path.relative_to(root).as_posix()
+                found[rel] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    return found
 
 
 def _git(root: Path, *args: str) -> str:
