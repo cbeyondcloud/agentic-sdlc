@@ -6,8 +6,10 @@ model, tools, skills, limits - D35), the handoff kinds it reads and writes exist
 in the run's merged catalog (D37), its backend is available, every step receives
 the documents it needs, every `when` / `until` compiles and reads kinds that some
 earlier step produces, every gate names a role and a real `on_reject` step, and
-every action exists. Org checks (RBAC, kill switch, CLI version, budgets,
-pipeline integrity) are M2-21.
+every action exists, and the repo's classification is one the policy defines.
+The org checks only the control plane can answer (RBAC, kill switch, CLI version,
+concurrency, budget, pipeline integrity; M2-21) are added by the CLI
+(`agentic_cli.org_preflight`) as `org-<check>` problems.
 
 A warning (an input that may be missing when a step is skipped) is reported but
 does not fail preflight.
@@ -117,6 +119,17 @@ def preflight(
         problems.append(Problem(None, "sandbox", sandbox.refusal))
     elif sandbox is not None and sandbox.warning:
         problems.append(Problem(None, "sandbox", sandbox.warning, severity="warning"))
+    classification = context.repo_classification or policy.default_classification
+    if classification not in policy.classifications:  # once for the repo (M2-21)
+        problems.append(
+            Problem(
+                None,
+                "classification",
+                f"the repo's classification {classification!r} is not defined in org policy "
+                "(classification in .agentic/config.yaml)",
+                sorted(policy.classifications),
+            )
+        )
     produced: set[str] = set(pipeline.inputs)
     earlier_agent_steps: list[str] = []
 

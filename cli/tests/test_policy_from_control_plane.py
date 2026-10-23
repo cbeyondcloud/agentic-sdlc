@@ -5,6 +5,7 @@ or one of another tenant is refused."""
 from __future__ import annotations
 
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -178,6 +179,29 @@ def test_locally_edited_cached_policy_is_refused(plane, repo):
         ws.policy()
     assert caught.value.code == ExitCode.REFUSED
     assert "changed locally" in str(caught.value) and caught.value.hint == "run `agentic init`"
+
+
+PIPELINE = "name: deliver\nversion: 1.0.0\nsteps:\n  - gate: review\n    approver_role: developer\n"
+
+
+def test_a_locally_edited_pipeline_is_refused_with_the_approved_hash(plane, policy_repo, repo):
+    """D33 (M2-21): the cache records the approved pipeline hashes, so the refusal names
+    the edited pipeline and the version that was approved - even with no network."""
+    (policy_repo / "pipelines").mkdir()
+    (policy_repo / "pipelines" / "deliver.yaml").write_bytes(PIPELINE.encode())
+    approved = "sha256:" + hashlib.sha256(PIPELINE.encode()).hexdigest()
+    _init_once()
+    stamp = json.loads((_cache() / "fetched.json").read_text(encoding="utf-8"))
+    assert stamp["pipelines"] == {"pipelines/deliver.yaml": approved}
+    cached = _cache() / "repo" / "pipelines" / "deliver.yaml"
+    cached.write_bytes(PIPELINE.replace("developer", "anyone").encode())
+    plane.down = True
+    ws = Workspace.load(repo, env={}, home=agentic_home())
+    with pytest.raises(CliError) as caught:
+        ws.policy()
+    message = str(caught.value)
+    assert caught.value.code == ExitCode.REFUSED
+    assert "pipelines/deliver.yaml" in message and approved in message
 
 
 def test_not_signed_in_is_refused_with_the_login_hint(plane):

@@ -49,6 +49,7 @@ from agentic_cli.driving import (
 )
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.org_preflight import org_checks, plan_section
 from agentic_cli.output import Output
 from agentic_cli.output import table as output_table
 from agentic_cli.runtime import Runtime, new_run_id
@@ -77,14 +78,22 @@ def register(app: typer.Typer) -> None:
             _check_run_id(run_id)  # before the workspace, preflight and gateway (DF-219)
         rt = Runtime(Workspace.load())
         show_definition_warnings(out, rt.ws)
+        run_id = run_id or new_run_id(pipeline)
         if dry_run:
             report = rt.preflight(pipeline, live=False)
+            if report.passed:  # the org's answer for a run that would start (M2-21)
+                answer = org_checks(rt, pipeline, report, run_id, dry_run=True)
+            else:
+                answer = None
             plan = rt.plan(pipeline, report)
+            plan["org"] = plan_section(answer)
             out.result(plan, _show_plan(plan))
             raise typer.Exit(ExitCode.OK if report.passed else ExitCode.INVALID)
         limit = _usd(budget, "--budget")
         gateway = rt.gateway()  # before anything is installed or written
         report = rt.preflight(pipeline, live=True)
+        if report.passed:  # registers the run (its concurrency slot) when the org agrees
+            org_checks(rt, pipeline, report, run_id, dry_run=False)
         if not report.passed:
             out.result({"preflight": report.text()}, lambda c: c.print(report.text(), markup=False))
             raise CliError("preflight failed: nothing was started", ExitCode.INVALID)
@@ -96,7 +105,6 @@ def register(app: typer.Typer) -> None:
                 + ", ".join(globs)
             )
         engine = rt.engine(run_budget_usd=limit, regime=rt.pipeline(pipeline).regime)
-        run_id = run_id or new_run_id(pipeline)
         # a live run prints nothing until it stops: name it now, for a Ctrl-C (DF-221); a
         # script gets one JSON line on stderr, stdout keeps its one result (DF-352)
         out.notice(
@@ -465,6 +473,13 @@ def _show_plan(plan: dict):
                 f"  {p['step'] or 'pipeline'}: {p['check']}{kind}: {p['detail']}{policy}",
                 markup=False,
             )
+        if org := plan.get("org"):  # the control plane's checks (M2-21)
+            for check in org["checks"]:
+                mark = "ok" if check["passed"] else "REFUSED"
+                console.print(f"  org {check['check']}: {mark} - {check['detail']}", markup=False)
+            budget = org["team_budget_remaining_usd"]
+            shown = f"${budget}" if budget is not None else "not measured"
+            console.print(f"  team budget remaining: {shown}", markup=False)
         console.print("nothing was spent (dry run)", markup=False)
 
     return show
