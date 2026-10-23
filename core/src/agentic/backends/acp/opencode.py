@@ -35,7 +35,6 @@ callback is a second gate.
 
 import itertools
 import json
-import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -98,7 +97,6 @@ _OWN_FILES = (
     "*/opencode.jsonc",
 )
 _CONFIG_NAMES = ("opencode.json", "opencode.jsonc")
-_PLUGIN_KEY = re.compile(r'"plugins?"\s*:')
 
 
 def code_in_tree(tree: Path) -> list[str]:
@@ -124,9 +122,55 @@ def code_in_tree(tree: Path) -> list[str]:
                 text = config.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            if _PLUGIN_KEY.search(text):
-                found.append(f"{config}: names OpenCode plugins (npm packages)")
+            if why := _plugins_in(text):
+                found.append(f"{config}: {why}")
     return found
+
+
+def _plugins_in(text: str) -> str | None:
+    """Why a project config would make OpenCode load plugins, or None: a non-empty
+    top-level `plugin` or `plugins` value (DF-446). A config that is not JSONC is refused
+    too - what OpenCode would make of it cannot be known (fail closed)."""
+    try:
+        data = json.loads(strip_jsonc(text))
+    except ValueError:
+        return "cannot be read as JSONC, so whether it loads OpenCode plugins is unknown"
+    if not isinstance(data, dict):
+        return None
+    if any(data.get(key) not in (None, [], "") for key in ("plugin", "plugins")):
+        return "loads OpenCode plugins (npm packages)"
+    return None
+
+
+def strip_jsonc(text: str) -> str:
+    """`text` (JSON with comments, as OpenCode reads its config) as plain JSON: `//` and
+    `/* */` comments and trailing commas removed, string contents untouched."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        char = text[i]
+        if char == '"':  # a string, escapes included, copied as it is
+            end = i + 1
+            while end < n and text[end] != '"':
+                end += 2 if text[end] == "\\" else 1
+            out.append(text[i : end + 1])
+            i = end + 1
+        elif text.startswith("//", i):
+            newline = text.find("\n", i)
+            i = n if newline < 0 else newline
+        elif text.startswith("/*", i):
+            close = text.find("*/", i + 2)
+            i = n if close < 0 else close + 2
+        else:
+            if char in "}]":  # a trailing comma before it goes
+                last = len(out) - 1
+                while last >= 0 and out[last].isspace():
+                    last -= 1
+                if last >= 0 and out[last] == ",":
+                    del out[last]
+            out.append(char)
+            i += 1
+    return "".join(out)
 
 
 def _up_to_repository(tree: Path) -> list[Path]:

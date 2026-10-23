@@ -18,6 +18,7 @@ egress switches, auth, mode - is the step's `AcpProfile`. For each step:
 """
 
 import asyncio
+import logging
 import math
 import os
 import shutil
@@ -52,6 +53,7 @@ from agentic.backends.processes import ProcessTree, session_leader
 from agentic.backends.turns import TurnCheck, TurnGuard
 from agentic.killswitch import RunKilled, Verdict
 from agentic.policy import ResolvedAgent
+from agentic.sandbox.process import SECRET_NAME
 from agentic.transport import BudgetSlice, CallCost, CallIdentity, LimitHit, Pricer
 from agentic.transport.cost import estimate_usd
 
@@ -65,6 +67,10 @@ PROTOCOL_VERSION = 1
 STDIO_LIMIT = 16 * 1024 * 1024
 #: A conservative tokens-from-text estimate, for an agent that reports no usage at all.
 CHARS_PER_TOKEN = 4
+#: Removing a step home: tries, and the pause before each retry (grows each time).
+REMOVE_TRIES = 3
+REMOVE_PAUSE_S = 0.2
+_log = logging.getLogger("agentic.backends.acp")
 _STDERR = "agent-stderr.log"
 _SHIMS = (".cmd", ".bat")
 
@@ -382,7 +388,29 @@ class AcpRunner:
                 self._remove_secrets()  # first, so a locked transcript cannot keep them
             except RuntimeError:
                 pass  # the step has ended already: what it raised stands
-            shutil.rmtree(self.home, ignore_errors=True)
+            await self._remove_home()
+
+    async def _remove_home(self) -> None:
+        """Delete the step home, retrying (Windows holds a file open for a moment after
+        its process exits); one that stays is named in a warning, never silently left
+        (DF-448). The step's result stands either way."""
+        for attempt in range(REMOVE_TRIES):
+            try:
+                shutil.rmtree(self.home)
+                return
+            except FileNotFoundError:
+                return
+            except OSError as error:
+                failure = error
+            if attempt + 1 < REMOVE_TRIES:
+                await asyncio.sleep(REMOVE_PAUSE_S * (attempt + 1))
+        _log.warning(
+            "the %s agent's step home %s could not be removed (%s): delete it by hand - it "
+            "holds the agent's transcript",
+            self.profile.name,
+            self.home,
+            failure.strerror or type(failure).__name__,
+        )
 
     async def _converse(self, conn, task: AgentTask, acp, schema) -> AgentOutcome:
         try:
@@ -442,10 +470,16 @@ class AcpRunner:
                 ) from None
 
     def _stderr_tail(self, limit: int = 2000) -> str:
+        """The end of the agent's stderr, with every secret the step gave it masked: the
+        profile's files (a key) and secret-named variables' values (DF-448)."""
         try:
             text = (self.home / _STDERR).read_bytes().decode("utf-8", errors="replace")
         except OSError:
             return "(no stderr)"
+        secrets = [*self.files.values()]
+        secrets += [value for name, value in self.env.items() if SECRET_NAME.search(name)]
+        for secret in sorted({s.strip() for s in secrets if len(s.strip()) >= 4}, key=len)[::-1]:
+            text = text.replace(secret, "***")
         return text[-limit:].strip() or "(empty)"
 
     async def _turn(self, conn, session_id: str, blocks: list) -> str:
