@@ -77,7 +77,7 @@ class InstalledSkills:
             listed = "\n".join(f"- {path}" for path in files)
             text += f"\n\nBundled files (read one with activate_skill(name, file=...)):\n{listed}"
         elif inline_files:
-            text += self._inlined(name, folder)
+            text += self._inlined(name, folder, used=estimate_tokens(body))
         entry = self.catalog.skills[name]
         self.record(
             "skills.activated",
@@ -128,10 +128,13 @@ class InstalledSkills:
         except SkillsError as error:
             return None, str(error)
 
-    def _inlined(self, name: str, folder: Path) -> str:
+    def _inlined(self, name: str, folder: Path, *, used: int = 0) -> str:
         """The skill's bundled Markdown files as text, within the catalog's per-skill
-        token budget; a file that does not fit is named, not cut."""
-        budget = self.catalog.limits.max_skill_tokens
+        token budget less the `used` tokens of its SKILL.md body (DF-369: the whole skill
+        stays within the budget); a file that does not fit is named, not cut, and recorded
+        (`skills.file_left_out`)."""
+        limit = self.catalog.limits.max_skill_tokens
+        budget = limit - used
         parts: list[str] = []
         for path in self.files(name):
             if not path.lower().endswith(".md"):
@@ -143,6 +146,7 @@ class InstalledSkills:
             cost = estimate_tokens(content)
             if cost > budget:
                 parts.append(f"## Bundled file: {path}\n\n(not inlined: over the size budget)")
+                self.record("skills.file_left_out", {"skill": name, "file": path, "budget": limit})
                 continue
             budget -= cost
             parts.append(f"## Bundled file: {path}\n\n{content.strip()}")
