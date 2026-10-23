@@ -38,6 +38,20 @@ def test_a_cloud_site_with_its_user():
     assert (found.credential, found.api_version, found.transition) == (JIRA_TOKEN, "2", None)
 
 
+SECRET = "hun" + "ter2"  # built from pieces: not a real credential to a secret scanner
+
+
+@pytest.mark.parametrize("env", [False, True])
+def test_a_site_url_carrying_credentials_is_refused_without_echoing_them(env):  # review F4
+    url = f"https://bob:{SECRET}@acme.atlassian.net"
+    settings, environ = ({}, {"AGENTIC_JIRA_URL": url}) if env else ({"jira": {"url": url}}, {})
+    with pytest.raises(CliError) as refused:
+        jira_settings(settings, environ)
+    error = refused.value
+    assert error.code == ExitCode.INVALID and "jira.user" in error.hint
+    assert all(SECRET not in text and "bob" not in text for text in (str(error), error.hint))
+
+
 def test_a_data_center_site_needs_no_user_and_may_name_everything():
     found = jira_settings(
         {

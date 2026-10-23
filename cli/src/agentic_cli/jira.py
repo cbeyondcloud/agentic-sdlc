@@ -73,6 +73,14 @@ def jira_settings(settings: Mapping[str, Any], env: Mapping[str, str]) -> JiraSe
             hint=f"set jira.url in ~/.agentic/config.yaml (https://<site>.atlassian.net, or "
             f"your Data Center URL) or {URL_ENV}",
         )
+    authority = (url.partition("://")[2] or url).split("/", 1)[0]
+    if "@" in authority:  # never echoed: it holds a password
+        raise CliError(
+            "the Jira site URL may not carry a user name or password",
+            ExitCode.INVALID,
+            hint="give the site URL alone in jira.url (or "
+            f"{URL_ENV}); the account goes in jira.user, the token in `{LOGIN}`",
+        )
     user = env.get(USER_ENV, "").strip() or str(declared.get("user") or "").strip() or None
     credential = str(declared.get("credential") or JIRA_TOKEN)
     if not _CREDENTIAL.fullmatch(credential):

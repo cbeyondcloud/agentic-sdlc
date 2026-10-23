@@ -1,7 +1,9 @@
 """The Jira REST adapter (M2-50) against `httpx2.MockTransport` serving the response shapes
-Jira Cloud and Data Center document (fixtures/jira/). No live Jira is called (owner
-decision 73): Cloud and Data Center paths, both auth schemes, comments in v2 text and v3
-ADF, transitions, every error explained, and the token kept to the configured origin."""
+Jira Cloud and Data Center document (fixtures/jira/, written by hand from Atlassian's API
+docs - not captured from an instance; a live sandbox run is M3-25). No live Jira is called
+(owner decision 73): Cloud and Data Center paths, both auth schemes, comments in v2 text
+and v3 ADF, transitions, every error explained, and the token kept to the configured
+origin."""
 
 import base64
 import json
@@ -19,7 +21,7 @@ CLOUD = "https://acme.atlassian.net"
 DC = "https://jira.acme.example/jira"
 
 
-def recorded(name: str) -> dict:
+def documented_shape(name: str) -> dict:
     return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
 
 
@@ -35,7 +37,7 @@ def serving(answers: dict[tuple[str, str], httpx2.Response], seen: list | None =
             seen.append(request)
         return answers.get(
             (request.method, request.url.path),
-            httpx2.Response(404, json=recorded("error-404.json")),
+            httpx2.Response(404, json=documented_shape("error-404.json")),
         )
 
     return handler
@@ -67,7 +69,7 @@ def test_cloud_reads_an_issue_with_basic_auth_over_v2():
     handler = serving(
         {
             ("GET", "/rest/api/2/issue/PROJ-123"): httpx2.Response(
-                200, json=recorded("cloud-v2-issue.json")
+                200, json=documented_shape("cloud-v2-issue.json")
             )
         },
         seen,
@@ -86,7 +88,7 @@ def test_data_center_uses_a_bearer_token_under_its_context_path():
     handler = serving(
         {
             ("GET", "/jira/rest/api/2/issue/OPS-7"): httpx2.Response(
-                200, json=recorded("dc-v2-issue.json")
+                200, json=documented_shape("dc-v2-issue.json")
             )
         },
         seen,
@@ -102,7 +104,7 @@ def test_cloud_v3_returns_the_adf_description_as_sent():
     handler = serving(
         {
             ("GET", "/rest/api/3/issue/PROJ-123"): httpx2.Response(
-                200, json=recorded("cloud-v3-issue.json")
+                200, json=documented_shape("cloud-v3-issue.json")
             )
         }
     )
@@ -122,7 +124,9 @@ def test_the_browse_url_is_on_the_site():
 def test_a_v2_comment_is_plain_text():
     seen = []
     path = ("POST", "/rest/api/2/issue/PROJ-123/comment")
-    handler = serving({path: httpx2.Response(201, json=recorded("comment-created.json"))}, seen)
+    handler = serving(
+        {path: httpx2.Response(201, json=documented_shape("comment-created.json"))}, seen
+    )
 
     assert client(handler).comment("PROJ-123", "line one\n\nline two") == "10310"
     assert json.loads(seen[0].content) == {"body": "line one\n\nline two"}
@@ -131,7 +135,9 @@ def test_a_v2_comment_is_plain_text():
 def test_a_v3_comment_is_an_adf_document():
     seen = []
     path = ("POST", "/rest/api/3/issue/PROJ-123/comment")
-    handler = serving({path: httpx2.Response(201, json=recorded("comment-created.json"))}, seen)
+    handler = serving(
+        {path: httpx2.Response(201, json=documented_shape("comment-created.json"))}, seen
+    )
 
     client(handler, api_version="3").comment("PROJ-123", "line one\n\nline two")
     body = json.loads(seen[0].content)["body"]
@@ -147,9 +153,9 @@ def transitions_handler(seen: list, apply_status: int = 204):
     path = "/rest/api/2/issue/PROJ-123/transitions"
     return serving(
         {
-            ("GET", path): httpx2.Response(200, json=recorded("transitions.json")),
+            ("GET", path): httpx2.Response(200, json=documented_shape("transitions.json")),
             ("POST", path): httpx2.Response(
-                apply_status, json=recorded("error-400-transition.json")
+                apply_status, json=documented_shape("error-400-transition.json")
             )
             if apply_status >= 300
             else httpx2.Response(apply_status),
@@ -202,7 +208,7 @@ def test_a_transition_needing_a_screen_field_is_explained():
 def test_errors_are_explained(status, words, transient):
     def handler(request):
         return httpx2.Response(
-            status, json=recorded("error-404.json"), headers={"Retry-After": "7"}
+            status, json=documented_shape("error-404.json"), headers={"Retry-After": "7"}
         )
 
     with pytest.raises(JiraError, match=words) as raised:
@@ -252,6 +258,25 @@ def test_plain_http_is_refused_except_loopback(url):
 @pytest.mark.parametrize("url", ["http://127.0.0.1:8080", "http://localhost:9", "http://[::1]:1"])
 def test_loopback_http_is_allowed_for_local_fakes(url):
     JiraClient(url, TOKEN).close()
+
+
+SECRET = "hun" + "ter2"  # built from pieces: not a real credential to a secret scanner
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        f"https://bob:{SECRET}@jira.acme.example",
+        "https://bob@jira.acme.example",
+        f"http://bob:{SECRET}@127.0.0.1:8080",
+        f"http://bob:{SECRET}@jira.acme.example",
+        f"bob:{SECRET}@jira.acme.example",
+    ],
+)
+def test_a_url_carrying_credentials_is_refused_without_echoing_them(url):  # review F4
+    with pytest.raises(JiraError, match="jira.user") as refused:
+        JiraClient(url, TOKEN)
+    assert SECRET not in str(refused.value) and "bob" not in str(refused.value)
 
 
 def test_a_cloud_site_needs_the_account_email():

@@ -240,6 +240,13 @@ class JiraClient:
 
 def _checked_base_url(base_url: str) -> str:
     url = (base_url or "").strip().rstrip("/")
+    # a user name or password in the URL would replace the token and leak into reprs and
+    # errors, so it is refused and never echoed
+    if "@" in (url.partition("://")[2] or url).split("/", 1)[0]:
+        raise JiraError(
+            "the Jira URL may not carry a user name or password: give the site URL alone, "
+            "with the account in jira.user and the token in the credential store"
+        )
     try:
         parsed = httpx2.URL(url)
     except Exception:  # noqa: BLE001 - any unparsable URL is the same refusal

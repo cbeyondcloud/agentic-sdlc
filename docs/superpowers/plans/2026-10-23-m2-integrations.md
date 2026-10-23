@@ -33,13 +33,13 @@
 | Jira REST | our thin `httpx2` client (4 endpoints), the GitHub adapter's pattern | `jira` (pycontribs, BSD-2) and `atlassian-python-api` (Apache-2.0) are both `requests`-based: a second HTTP stack that bypasses `agentic.transport.ssl_context` (corporate CA, proxies) and pulls oauthlib/bs4 etc. for four calls |
 | Issue -> run request | Zyroflo `connect.spec_for/mapping_for/dig` via `sdlc_commons.connectors` (M2-27) | - |
 | ADF to text | a 30-line walk over text nodes | no maintained, permissively licensed ADF reader small enough to justify a dependency |
-| Recorded responses | `httpx2.MockTransport` with JSON fixtures (as the GitHub adapter) | vcrpy/pytest-recording patch `httpx`/`requests`, not `httpx2`; and no live Jira may be called (decision 73) |
+| Jira response fixtures | `httpx2.MockTransport` with JSON fixtures written from Atlassian's documented Cloud v2/v3 and Data Center v2 shapes (not captured from an instance; a live sandbox run is M3-25) | vcrpy/pytest-recording patch `httpx`/`requests`, not `httpx2`; and no live Jira may be called (decision 73) |
 | Conformance vocabulary | Zyroflo `provider_smoke.RUNNER_TIERS` through `sdlc_commons.conformance` | Zyroflo's `provider_smoke` runs its impact-review workflow, not our runners; only its tier vocabulary and ranking apply |
 | Egress enforcement | `srt` allowedDomains (already pinned, D38) | - |
 
 ## Global Constraints
 
-- **No live calls** to Jira, models or registries (owner decision 73). Jira contract tests use recorded response shapes; the CLI end-to-end uses a local fake Jira.
+- **No live calls** to Jira, models or registries (owner decision 73). Jira contract tests use documented response shapes (hand-written from Atlassian's API docs, not captured; M2-50 is done at shape level and a live sandbox run is M3-25); the CLI end-to-end uses a local fake Jira.
 - **Provider-agnostic.** No model vendor names in the engine, policy, CLI flags or protocols. Jira is an integration (spec §16), named only in the integration modules and the `--from-jira` flags.
 - **Token handling.** The Jira token comes only from `Credentials` (env, then keyring), is never logged, never in a repr, error, `jira.json` or run state, and is sent only to the configured origin.
 - **Untrusted content.** Ticket text reaches agents only inside `<untrusted-data>` (M1-42).
