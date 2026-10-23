@@ -17,11 +17,13 @@ does not fail preflight.
 
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from agentic.backends import available, backend_issues
 from agentic.definitions import AgentStep, DefinitionSet, LoopStep, PipelineDefinition
-from agentic.definitions.pipeline import ActionStep, GateStep
+from agentic.definitions.pipeline import ActionStep, GateStep, step_names
+from agentic.definitions.versions import VersionChoice, deprecation_state
 from agentic.engine.expressions import ExpressionError, cel_name, compile_condition
 from agentic.handoffs.compat import CONDITIONAL, check_compatibility
 from agentic.handoffs.kinds import HandoffBase
@@ -112,11 +114,57 @@ def preflight(
     available_backends: Collection[str] | None = None,
     skills: SkillAvailability | None = None,
     honoured: Mapping[str, Collection[str]] | None = None,
+    skill_versions: Mapping[str, str] | None = None,
 ) -> PreflightReport:
     """Every check before any spend. `honoured`: per backend, the capability settings the
-    caller's wiring makes good (`backend_issues`)."""
+    caller's wiring makes good (`backend_issues`). `skill_versions`: each catalogued
+    skill's version, for the deprecation check (M2-15)."""
     report = PreflightReport(pipeline=pipeline.name, problems=[])
     problems = report.problems
+    required = policy.required_steps.get(pipeline.name, [])
+    present = {name for step in pipeline.steps for name in step_names(step)}
+    for name in required:  # M2-23: whatever dropped it (an overlay, a team pipeline)
+        if name not in present:
+            problems.append(
+                Problem(
+                    None,
+                    "required-step",
+                    f"org policy requires {name!r} in {pipeline.name} (org.yaml "
+                    "required_steps), but the pipeline has no step, gate or loop of that name",
+                    list(required),
+                )
+            )
+    _version_problem(problems, None, definitions.versions.get(("pipeline", pipeline.name)))
+    today = definitions.rules.today if definitions.rules is not None else datetime.now(UTC).date()
+    versions_checked: set[str] = set()
+
+    def versions(step: AgentStep, agent: ResolvedAgent) -> None:
+        """The agent's version and its skills' versions: deprecated warns, past the
+        date refuses (M2-15); once per agent."""
+        if step.agent in versions_checked:
+            return
+        versions_checked.add(step.agent)
+        _version_problem(problems, step.id, definitions.versions.get(("agent", step.agent)))
+        for skill in agent.skills if skill_versions is not None else ():
+            version = skill_versions.get(skill)
+            gone, blocked = (
+                deprecation_state("skill", skill, version, policy.deprecated, today)
+                if version is not None
+                else (None, False)
+            )
+            if gone is not None:
+                when = "refused since" if blocked else "refused from"
+                note = f" - {gone.note}" if gone.note else ""
+                problems.append(
+                    Problem(
+                        step.id,
+                        "version",
+                        f"skill {skill}@{version}: deprecated, {when} "
+                        f"{gone.blocked_from.isoformat()}{note}",
+                        severity="error" if blocked else "warning",
+                    )
+                )
+
     backends = available() if available_backends is None else available_backends
     if sandbox is not None and sandbox.refusal:  # the regime needs an OS sandbox (D38)
         problems.append(Problem(None, "sandbox", sandbox.refusal))
@@ -148,6 +196,7 @@ def preflight(
         if agent is None:
             return
         report.resolved[step.agent] = agent
+        versions(step, agent)
         if PLACEHOLDER_MODEL in agent.model:  # the template's tiers were never edited
             problems.append(
                 Problem(
@@ -270,6 +319,15 @@ def preflight(
         severity = "warning" if v.field == CONDITIONAL else "error"
         problems.append(Problem(None, "compatibility", v.reason, severity=severity))
     return report
+
+
+def _version_problem(
+    problems: list[Problem], step: str | None, choice: VersionChoice | None
+) -> None:
+    """A deprecated version: a warning before its date, an error from it (M2-15)."""
+    if choice is not None and choice.deprecation is not None:
+        severity: Literal["error", "warning"] = "error" if choice.blocked else "warning"
+        problems.append(Problem(step, "version", choice.describe(), severity=severity))
 
 
 __all__ = ["PreflightReport", "Problem", "SkillAvailability", "preflight", "skill_problems"]

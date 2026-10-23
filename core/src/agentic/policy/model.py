@@ -5,12 +5,14 @@ resolver (agentic.policy.resolve, M1-04) checks every request against.
 """
 
 import re
+from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from agentic.definitions import ChildLimits, DenyRules, Limits
+from agentic.definitions.discovery import PolicyRules
 from agentic.definitions.versions import Deprecations, Pins, Rollout
 
 
@@ -536,6 +538,20 @@ class OrgPolicy(_Strict):
         lowered = model.lower()
         matches = [name for name in self.prices if name.lower() in lowered]
         return self.prices[max(matches, key=len)] if matches else None
+
+    def rules(self, *, team: str | None, repo: str | None, today: date) -> PolicyRules:
+        """What discovery needs to give `team`, in the repository whose origin key is
+        `repo`, the versions and overlay it gets on `today` (M2-15, M2-23)."""
+        team_policy = self.teams.get(team) if team else None
+        return PolicyRules(
+            team=team,
+            repo=repo,
+            today=today,
+            rollout=self.rollout,
+            deprecated=self.deprecated,
+            pins=team_policy.pins if team_policy is not None else Pins(),
+            required_steps=self.required_steps,
+        )
 
     @model_validator(mode="before")
     @classmethod
