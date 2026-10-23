@@ -57,6 +57,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "sandbox": "sandbox",
         "unhonoured": "unhonoured",
         "secret_scan": "secret_scan",
+        "publish_scan": "publish_scan",
         "review_batch": "review_batch",
     },
     "eval.yaml": {"eval": "eval"},

@@ -252,6 +252,33 @@ class SecretScanPolicy(_Strict):
         return self
 
 
+class PublishScanPolicy(_Strict):
+    """What happens to a secret or personal data in a run event before it is published to
+    the control plane (M2-49). `mask`: it is replaced by an id-shaped marker before the
+    event is chained, so the published chain still verifies; an event already chained
+    cannot change, so a hit in one is refused at the sink and stays queued. `block`:
+    nothing with a hit is published - the run's events stay local from there on. Either
+    way an audit event names kinds and counts. Secrets use `secret_scan`'s detectors and
+    allowed values."""
+
+    action: Literal["block", "mask"] = "mask"
+    pii: list[str] | None = None  # None = every entity the detector knows
+    # Fields naming the people the audit trail is about (an approver's email): never masked.
+    identity_fields: list[str] = ["approver", "owner", "actor"]
+
+    @model_validator(mode="after")
+    def entities_are_known(self) -> Self:
+        if self.pii is None:
+            return self
+        if not self.pii:
+            raise ValueError("pii may not be empty (leave it out for the default entities)")
+        from agentic.security.pii import ENTITIES  # lazy: no import cycle
+
+        if unknown := sorted(set(self.pii) - set(ENTITIES)):
+            raise ValueError(f"unknown PII entities {unknown}; known: {list(ENTITIES)}")
+        return self
+
+
 def _inside(path: str, folder: str) -> bool:
     path, folder = path.rstrip("/"), folder.rstrip("/")
     return path == folder or path.startswith(folder + "/")
@@ -350,6 +377,7 @@ class OrgPolicy(_Strict):
     index_export_workflow: bool = False
     sandbox: SandboxPolicy = SandboxPolicy()  # D38
     secret_scan: SecretScanPolicy = SecretScanPolicy()  # M1-41
+    publish_scan: PublishScanPolicy = PublishScanPolicy()  # M2-49
     review_batch: ReviewBatchPolicy = ReviewBatchPolicy()  # M2-24
     eval: EvalPolicy = EvalPolicy()  # M1-63
     # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
