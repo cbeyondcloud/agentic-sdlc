@@ -8,8 +8,11 @@ import json
 from pathlib import Path
 
 import pytest
+from cp_fakes import CP_URL, TOKEN, FakeControlPlane
 
 import sdlc_commons.ledger as ledger_module
+from agentic_cli import audit, control_plane
+from agentic_cli.config import agentic_home
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.main import main
 from sdlc_commons.gates import ZyrofloGates
@@ -173,3 +176,56 @@ def test_human_output_names_run_file_entry_and_class(home, repo, monkeypatch, ca
     assert main(["audit", "verify"]) == ExitCode.INVALID
     out = capsys.readouterr().out
     assert "r-1" in out and "events.jsonl entry 2 (seq 2): content" in out
+
+
+# ── the control plane's audit chain ───────────────────────────────────────────
+
+
+@pytest.fixture
+def plane(home, monkeypatch):
+    """A signed-in auditor of tenant acme (the token from the environment, as in CI)."""
+    fake = FakeControlPlane(allowed={"audit.read.org", "audit.export"})
+    monkeypatch.setattr(control_plane, "make_transport", lambda: fake.transport)
+    monkeypatch.setenv("AGENTIC_CONTROL_PLANE_TOKEN", TOKEN)
+    monkeypatch.delenv("AGENTIC_CONTROL_PLANE_URL", raising=False)
+    config = agentic_home()
+    config.mkdir(parents=True, exist_ok=True)
+    (config / "config.yaml").write_text(
+        f"org: acme\ncontrol_plane_url: {CP_URL}\n", encoding="utf-8"
+    )
+    return fake
+
+
+def test_control_plane_chain_over_several_pages(plane, monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(audit, "PAGE", 4)
+    plane.add_audit(10)
+    monkeypatch.chdir(tmp_path)  # no repository needed for the org chain
+    code, data = verify(capsys, "--control-plane")
+    assert code == ExitCode.OK, data
+    chain = data["control_plane"]
+    assert chain["intact"] and chain["records"] == 10 and chain["tenant"] == "acme"
+    assert chain["head"]["seq"] == 10 and data["runs"] == []
+    pages = [r for r in plane.requests if r.url.path == "/v1/audit"]
+    assert [r.url.params["after_seq"] for r in pages] == ["0", "4", "8"]
+
+
+def test_edited_control_plane_record_is_located(plane, monkeypatch, capsys, tmp_path):
+    plane.add_audit(5)
+    plane.audit[2]["reason"] = "rewritten by someone with database access"
+    monkeypatch.chdir(tmp_path)
+    code, data = verify(capsys, "--control-plane")
+    assert code == ExitCode.INVALID
+    found = [(f["seq"], f["field_class"]) for f in data["control_plane"]["findings"]]
+    assert found == [(3, "content")]
+
+
+def test_control_plane_refusal_exits_2(plane, monkeypatch, capsys, tmp_path):
+    plane.allowed = set()
+    monkeypatch.chdir(tmp_path)
+    assert main(["audit", "verify", "--control-plane"]) == ExitCode.REFUSED
+    assert "audit.read.org" in capsys.readouterr().err
+
+
+def test_control_plane_needs_org_mode(home, monkeypatch, capsys, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    assert main(["audit", "verify", "--control-plane"]) == ExitCode.REFUSED

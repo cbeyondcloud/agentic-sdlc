@@ -213,3 +213,29 @@ async def test_provisioning_end_to_end(db, monkeypatch):
                 with pytest.raises(ControlPlaneRefused) as caught:
                     dev.me()
                 assert caught.value.status == 401
+
+
+async def test_tampered_control_plane_record_is_located(live, db):
+    """M2-26: the CLI pulls tenant a's chain from the real server and checks it itself; a
+    record edited in the database (the owner role, as an attacker with database access
+    would) is named by its seq and class, and tenant b's chain stays intact."""
+    from sqlalchemy import update
+
+    from agentic_cli.audit import verify_control_plane
+    from agentic_cp.tables import audit_log
+    from agentic_cp.tenancy.context import tenant_tx
+
+    base, a, b = live
+    with ControlPlaneClient(base, a.admin_token) as client:
+        for n in range(3):
+            client.set_switch({"scope_kind": "tenant", "reason": f"drill {n}"})
+        intact = verify_control_plane(client, "tenant-a")
+        assert intact.intact and intact.records >= 4
+        async with tenant_tx(db.owner, a.id) as conn:
+            await conn.execute(
+                update(audit_log).where(audit_log.c.seq == 2).values(reason="quietly changed")
+            )
+        broken = verify_control_plane(client, "tenant-a")
+    assert [(f["seq"], f["field_class"]) for f in broken.findings] == [(2, "content")]
+    with ControlPlaneClient(base, b.admin_token) as client:
+        assert verify_control_plane(client, "tenant-b").intact

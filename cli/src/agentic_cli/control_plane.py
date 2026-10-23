@@ -33,6 +33,7 @@ from agentic.orgapi import (
     CLI_VERSION_HEADER,
     ActivePolicy,
     Assignment,
+    AuditEntry,
     CheckResult,
     IngestResult,
     InviteInfo,
@@ -282,6 +283,14 @@ class ControlPlaneClient:
         params = {"status": status} if status else None
         found = self._json("GET", "/notifications", params=params)
         return [NotificationInfo.model_validate(item) for item in found]
+
+    def audit_records(self, *, after_seq: int = 0, limit: int = 1000) -> list[AuditEntry]:
+        """The tenant's audit records after `after_seq`, oldest first (`audit.read.org`),
+        exactly as hashed, for `agentic audit verify --control-plane` (M2-26)."""
+        params = {"after_seq": str(after_seq), "limit": str(limit)}
+        return [
+            AuditEntry.model_validate(item) for item in self._json("GET", "/audit", params=params)
+        ]
 
     def register_repo(self, remote: str, team: str) -> RepoInfo:
         return RepoInfo.model_validate(
