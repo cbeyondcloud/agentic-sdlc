@@ -288,6 +288,20 @@ async def _policy_active_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str
     return {"tenant_id": tenant_id, "version": version["version"], "branch": "main"}
 
 
+@register("kill_switches")
+async def _kill_switch_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    return {
+        "tenant_id": tenant_id,
+        "id": uuid.uuid4(),
+        "scope_kind": "team",
+        "scope_value": "payments",
+        "team": "payments",
+        "mode": "kill",
+        "reason": f"incident {next(_sequence)}",
+        "created_by": "lead@example.test",
+    }
+
+
 # ── endpoint cases ────────────────────────────────────────────────────────────
 
 

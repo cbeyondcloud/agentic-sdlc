@@ -46,6 +46,7 @@ TENANT_TABLES: tuple[str, ...] = (
     "repo_maintainers",
     "runs",
     "run_events",
+    "kill_switches",
 )
 
 #: A tenant's slug: lower-case, starts with a letter, 2-63 characters.
@@ -190,6 +191,9 @@ policy_versions = Table(
     Column("commit_at", DateTime(timezone=True), nullable=True),
     Column("received_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("repo_patterns", ARRAY(Text), nullable=False, server_default="{}"),
+    # what run registration reads from this version (M2-08, M2-21): min_cli_version,
+    # concurrency, allow_repo_pipelines and pipelines (policy-repo path -> sha256)
+    Column("settings", JSONB, nullable=False, server_default="{}"),
     CheckConstraint("status in ('accepted', 'rejected')", name="policy_versions_status_known"),
     CheckConstraint(
         "(status = 'accepted') = (bundle is not null and digest is not null)",
@@ -278,6 +282,33 @@ run_events = Table(
     Column("received_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     ForeignKeyConstraint(["tenant_id", "run_id"], ["runs.tenant_id", "runs.run_id"]),
     CheckConstraint("seq > 0", name="run_events_seq_positive"),
+)
+
+#: Kill and pause switches (M2-06, M2-10). Clearing one sets `cleared_by`/`cleared_at`; the
+#: audit chain (`killswitch.set` / `.cleared`) is the evidence. `team` limits a switch of any
+#: kind to that team's runs (a team lead's switches always carry it).
+kill_switches = Table(
+    "kill_switches",
+    metadata,
+    _tenant_id(),
+    Column("id", UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()),
+    Column("scope_kind", Text, nullable=False),
+    Column("scope_value", Text, nullable=False, server_default=""),
+    Column("team", Text, nullable=True),
+    Column("mode", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("created_by", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("cleared_by", Text, nullable=True),
+    Column("cleared_at", DateTime(timezone=True), nullable=True),
+    CheckConstraint(
+        "scope_kind in ('tenant', 'team', 'user', 'repo', 'pipeline', 'agent', 'model', 'backend')",
+        name="kill_switches_scope_known",
+    ),
+    CheckConstraint("mode in ('kill', 'pause')", name="kill_switches_mode_known"),
+    CheckConstraint(
+        "(cleared_by is null) = (cleared_at is null)", name="kill_switches_cleared_pair"
+    ),
 )
 
 #: Unique constraints that deliberately span tenants: credential hashes, looked up before
