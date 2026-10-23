@@ -6,7 +6,7 @@ import pytest
 
 import sdlc_commons.ledger as ledger_module
 from sdlc_commons.gates import ZyrofloGates, regime_block_on, self_approval_refusal
-from sdlc_commons.ledger import RunIdentity, RunLedger
+from sdlc_commons.ledger import LedgerError, RunIdentity, RunLedger
 
 IDENTITY = RunIdentity(team="platform", policy_version="git:" + "a" * 40)
 DESIGN = "---\nkind: design\n---\n# Design\n"
@@ -84,6 +84,33 @@ def test_waiting_and_decisions_are_in_the_events_and_the_chain_verifies(run_ledg
     assert ("gate_waiting", "design-approval") in kinds
     assert ("gate_decided", "design-approval") in kinds
     assert run_ledger.verify() == []
+
+
+def test_waiting_names_the_approver_role_when_given(run_ledger):
+    """Review F5: the control plane mails the role's holders, so the event carries it."""
+    gates = ZyrofloGates(run_ledger)
+    gates.waiting("design-approval", "design", role="team-lead")
+    gates.waiting("batch-approval", "build")
+    waits = [e for e in run_ledger.events() if e["event"] == "gate_waiting"]
+    assert [(e["gate"], e["ext"]["agentic"].get("approver_role")) for e in waits] == [
+        ("design-approval", "team-lead"),
+        ("batch-approval", None),
+    ]
+    assert run_ledger.verify() == []
+
+
+@pytest.mark.parametrize(
+    "ext_ids",
+    [{"team": "other"}, {"policy_version": "git:" + "d" * 40}, {"note": "x"}],
+)
+def test_ext_ids_never_override_the_run_identity_or_add_undeclared_ids(run_ledger, ext_ids):
+    with pytest.raises(LedgerError):
+        run_ledger.record("gate_waiting", "g", ext_ids=ext_ids, gate="g", hard=True)
+
+
+def test_an_approver_role_must_look_like_a_role(run_ledger):
+    with pytest.raises(LedgerError):
+        ZyrofloGates(run_ledger).waiting("g", "g", role="Team Lead@x")
 
 
 def test_regime_block_on_comes_from_zyroflo():

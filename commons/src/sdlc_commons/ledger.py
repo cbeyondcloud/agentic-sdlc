@@ -45,6 +45,9 @@ FIELDS = {
     "parent": {"type": "string", "pattern": _AGENT},
     "tier": {"type": "string", "pattern": _SLUG},
     "skills": {"type": "string[]", "pattern": r"[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*"},
+    # the role a gate waits for (`gate_waiting`), so the org's control plane can mail its
+    # holders (review F5); Zyroflo's own gate_waiting fields are gate and hard only
+    "approver_role": {"type": "string", "pattern": _SLUG},
 }
 
 
@@ -249,13 +252,15 @@ class RunLedger:
         phase: str = "",
         agent: AgentIdentity | None = None,
         skills: Sequence[str] = (),
+        ext_ids: Mapping[str, str] | None = None,
         **fields: object,
     ) -> dict:
         """Append one event to the chain. Every value is an id - no free text, no
         emails - and the ledger stamps the time. `agent` adds that agent's ids to
         this event; `skills` adds the skills and notes used since the last one
-        (`<kind>/<name>/<version>/<sha256 hex>`, M2-45); the run's identity is added
-        to every event."""
+        (`<kind>/<name>/<version>/<sha256 hex>`, M2-45); `ext_ids` adds other declared
+        ids of ours (`FIELDS`, e.g. a gate's `approver_role`); the run's identity is
+        added to every event."""
         if self.run_id not in _IDENTITIES:
             raise LedgerError(
                 f"run {self.run_id} has no identity in this process - open() or resume() it first"
@@ -268,7 +273,10 @@ class RunLedger:
                 "identities - 'ext' cannot be passed"
             )
         _check_fields({"phase": phase, **fields} if phase else fields)
-        return self._append(event, phase, agent, fields, skills=tuple(skills))
+        extra = {name: value for name, value in (ext_ids or {}).items() if value}
+        if set(extra) - set(FIELDS) or set(extra) & {"team", "policy_version"}:
+            raise LedgerError("ext_ids holds only declared ids other than the run's identity")
+        return self._append(event, phase, agent, fields, skills=tuple(skills), extra=extra)
 
     def _append(
         self,
@@ -278,13 +286,15 @@ class RunLedger:
         fields: dict,
         *,
         skills: tuple[str, ...] = (),
+        extra: Mapping[str, str] | None = None,
     ) -> dict:
         ext = None
-        if agent is not None or skills:
+        if agent is not None or skills or extra:
             _install()
             block = agent.ext() if agent is not None else {}
             if skills:
                 block["skills"] = [*block.get("skills", []), *skills]
+            block.update(extra or {})
             ext = {NAMESPACE: block}
         try:
             return events.append(self.target, self.run_id, event, phase=phase, ext=ext, **fields)

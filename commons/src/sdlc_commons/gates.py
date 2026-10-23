@@ -6,7 +6,8 @@
   * `state`   - is the gate satisfied right now: an approval over bytes that have
                 not changed, with no rejection over the same bytes
                 (`approve.gate_state`)
-  * `waiting` - the `gate_waiting` event, when the run stops at the gate
+  * `waiting` - the `gate_waiting` event, when the run stops at the gate (with the
+                gate's approver role in our ext block)
 
 Plus two pure rules the engine applies: the blocking severities of a regime
 (`policy.PRESETS`) and the self-approval check (`policy.self_approval`).
@@ -57,8 +58,16 @@ class ZyrofloGates:
     def state(self, gate: str) -> tuple[bool, str]:
         return approve.gate_state(self.ledger.target, self.ledger.run_id, gate)
 
-    def waiting(self, gate: str, step: str) -> None:
-        self.ledger.record("gate_waiting", step, gate=gate, hard=True)
+    def waiting(self, gate: str, step: str, *, role: str | None = None) -> None:
+        """The `gate_waiting` event; `role` (the gate's approver role) goes in our ext
+        block, so the org's control plane can mail the people holding it."""
+        self.ledger.record(
+            "gate_waiting",
+            step,
+            ext_ids={"approver_role": role} if role else None,
+            gate=gate,
+            hard=True,
+        )
 
 
 def regime_block_on(regime: str) -> frozenset[str]:

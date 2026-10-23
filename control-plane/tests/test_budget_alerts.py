@@ -18,6 +18,7 @@ from agentic_cp.audit import read_records
 from agentic_cp.tables import notifications, runs
 from agentic_cp.tenancy.context import tenant_tx
 from sdlc_commons import ledger as ledger_module
+from sdlc_commons.gates import ZyrofloGates
 from sdlc_commons.ledger import RunIdentity, RunLedger
 
 pytestmark = pytest.mark.anyio
@@ -50,8 +51,8 @@ class Run:
     def step(self, usd: str, name: str = "build") -> None:
         self.ledger.record("step_finished", name, outcome="completed", cost={"usd": usd})
 
-    def gate(self, gate: str) -> None:
-        self.ledger.record("gate_waiting", gate, gate=gate, hard=True)
+    def gate(self, gate: str, role: str | None = None) -> None:
+        ZyrofloGates(self.ledger).waiting(gate, gate, role=role)
 
     async def ingest(self, api, token, *, replay: bool = False):
         entries = self.ledger.events()
@@ -215,9 +216,28 @@ async def test_another_tenants_spend_never_alerts_this_one(api, made_runs):
     assert await _mails(api, api.a) == [] and len(await _mails(api, api.b)) == 2
 
 
+async def test_a_gate_wait_mails_the_approver_role_holders_of_the_runs_team(api, made_runs):
+    """Review F5: the person who must act is the approver - the gate's role holders in the
+    run's team are mailed with the starter, once per wait; another team's lead is not."""
+    await member(api, api.a, "lead@a.example.test", "team-lead", "payments")
+    await member(api, api.a, "lead2@a.example.test", "team-lead", "payments")
+    await member(api, api.a, "other-lead@a.example.test", "team-lead", "search")
+    dev, _ = await member(api, api.a, "dev@a.example.test", "developer", "payments")
+    run = made_runs("run-gate-role")
+    run.gate("design-approval", role="team-lead")
+    await run.ingest(api, dev)
+    await run.ingest(api, dev, replay=True)
+    mails = await _mails(api, api.a, "gate.waiting")
+    assert sorted(m.recipient for m in mails) == [
+        "dev@a.example.test",
+        "lead2@a.example.test",
+        "lead@a.example.test",
+    ]
+    assert all("team-lead" in m.body_text for m in mails)
+
+
 async def test_a_gate_wait_mails_the_runs_starter_once(api, made_runs):
-    """The ledger's gate_waiting event names the gate, not its approver role (Zyroflo's
-    event fields), so the starter is told; mailing the role's holders is deferred."""
+    """A wait without an approver role (a batch or invalid-output pause) tells the starter."""
     await member(api, api.a, "lead@a.example.test", "team-lead", "payments")
     dev, _ = await member(api, api.a, "dev@a.example.test", "developer", "payments")
     run = made_runs("run-gate")

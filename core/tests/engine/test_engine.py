@@ -267,9 +267,10 @@ def test_a_gate_stops_the_run_and_pins_what_it_gates(make_harness):
         "design-approval",
     )
     assert state.pending.artefacts == {"handoffs/design-1.md": digest}
-    assert any(
-        e["event"] == "gate_waiting" and e.get("gate") == "design-approval" for e in events(h)
-    )
+    # the wait names the gate's approver role, whom the org's control plane mails (F5)
+    [wait] = [e for e in events(h) if e["event"] == "gate_waiting"]
+    role = wait["ext"]["agentic"].get("approver_role")
+    assert (wait["gate"], role) == ("design-approval", "team-lead")
 
 
 # ── pauses for a person ───────────────────────────────────────────────────────

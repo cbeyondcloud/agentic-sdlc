@@ -157,7 +157,10 @@ class GateLedger(Protocol):
 
     def state(self, gate: str) -> tuple[bool, str]: ...
 
-    def waiting(self, gate: str, step: str) -> None: ...
+    def waiting(self, gate: str, step: str, *, role: str | None = None) -> None:
+        """Record that the run waits at `gate`; `role` is the approver role it needs (None
+        for a pause that is not a pipeline gate)."""
+        ...
 
 
 class Clock(Protocol):
@@ -618,7 +621,8 @@ class _Run:
             step=step,
         )
         self.state.status = "awaiting_gate"
-        self.gates.waiting(gate, step)
+        gate_step = self._gate_step(gate)
+        self.gates.waiting(gate, step, role=gate_step.approver_role if gate_step else None)
         self.save()
 
     # ── decisions ────────────────────────────────────────────────────────────
