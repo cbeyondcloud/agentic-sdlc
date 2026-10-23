@@ -124,6 +124,18 @@ DEFAULT_DENY_READ = (
     "~/.agentic",
 )
 _GLOB = set("*?[")
+#: An egress host: DNS labels (an optional leading `*.` wildcard label), or an IPv4
+#: address, with an optional port - what srt's allowedDomains matches on.
+_LABEL = r"(?!-)[a-z0-9-]{1,63}(?<!-)"
+_EGRESS_HOST = re.compile(rf"(?:\*\.)?{_LABEL}(?:\.{_LABEL})*(?::[0-9]{{1,5}})?")
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+#: The framework's own credentials (gateway key, tokens): never passed to agent commands.
+FRAMEWORK_ENV_PREFIX = "AGENTIC_"
+
+
+def _port_ok(host: str) -> bool:
+    _, sep, port = host.rpartition(":")
+    return not sep or 0 < int(port) < 65536
 
 
 class SandboxPolicy(_Strict):
@@ -132,14 +144,43 @@ class SandboxPolicy(_Strict):
     # regimes that refuse to run without a sandbox; the others run on guards, with a warning.
     # Team runs too (owner decision, DF-72): guards cannot stop code an allowed program runs.
     required_for: list[Literal["solo", "team", "regulated"]] = ["team", "regulated"]
-    allowed_domains: list[str] = []  # package registries a sandboxed command may reach
+    # The hosts a sandboxed command may reach (M2-42): package registries, as host names
+    # (`pypi.org`, `*.npmjs.org`, `registry.internal:8443`); a whole agent process also
+    # reaches the TokenLean host (`agentic.sandbox.egress`). Nothing else gets out.
+    allowed_domains: list[str] = []
     deny_read: list[str] = []  # added to DEFAULT_DENY_READ, never instead of it
     allow_write: list[str] = []  # writable besides the run's tree, e.g. "~/.cache/uv"
+    # Environment variables agent commands keep although their name or value looks secret
+    # (DF-365): e.g. an authenticated HTTPS_PROXY, SSH_AUTH_SOCK. Never AGENTIC_*.
+    pass_env: list[str] = []
     srt_version: str = "0.0.78"
 
     @property
     def effective_deny_read(self) -> list[str]:
         return list(dict.fromkeys([*DEFAULT_DENY_READ, *self.deny_read]))
+
+    @model_validator(mode="after")
+    def egress_names_hosts(self) -> Self:
+        problems, hosts = [], []
+        for entry in self.allowed_domains:
+            host = str(entry).strip().lower()
+            if not _EGRESS_HOST.fullmatch(host) or not _port_ok(host):
+                problems.append(
+                    f"allowed_domains entry {entry!r} is not a host name (pypi.org, "
+                    "*.npmjs.org or registry.internal:8443; never a URL, a path or '*')"
+                )
+            hosts.append(host)
+        bad_env = [name for name in self.pass_env if not _ENV_NAME.fullmatch(str(name))]
+        bad_env += [n for n in self.pass_env if str(n).upper().startswith(FRAMEWORK_ENV_PREFIX)]
+        if bad_env:
+            problems.append(
+                f"pass_env entries {bad_env} are not environment variable names an org may "
+                f"pass through (letters, digits, '_'; never {FRAMEWORK_ENV_PREFIX}*)"
+            )
+        if problems:
+            raise ValueError("; ".join(problems))
+        self.allowed_domains = list(dict.fromkeys(hosts))
+        return self
 
     @model_validator(mode="after")
     def writes_stay_narrow(self) -> Self:

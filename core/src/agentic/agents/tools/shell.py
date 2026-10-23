@@ -12,21 +12,26 @@ caller explicitly allows it.
 call is cancelled and the sandbox kills the command and everything it started.
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic_ai import ApprovalRequired, RunContext, Tool
 
 from agentic.agents.tools.context import ShellResult, ToolContext, guarded, refused
-from agentic.sandbox.process import MAX_OUTPUT, run_process
+from agentic.sandbox.process import MAX_OUTPUT, run_process, safe_env
 
 
 class LocalProcessSandbox:
-    """A subprocess in the tree's folder - no OS isolation (`isolated = False`)."""
+    """A subprocess in the tree's folder - no OS isolation (`isolated = False`).
+    `pass_env`: the variables policy lets through anyway (`sandbox.pass_env`, DF-365)."""
 
     isolated = False
 
+    def __init__(self, pass_env: Sequence[str] = ()) -> None:
+        self.pass_env = tuple(pass_env)
+
     async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
-        return await run_process(command, cwd, timeout_s)
+        return await run_process(command, cwd, timeout_s, env=safe_env(pass_through=self.pass_env))
 
 
 def shell_tools(ctx: ToolContext) -> list[Tool]:

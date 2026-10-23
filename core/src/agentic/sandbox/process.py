@@ -14,11 +14,12 @@ import logging
 import os
 import re
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from agentic.backends.processes import KILL_WAIT_S, ProcessTree, spawn_group
+from agentic.policy.model import FRAMEWORK_ENV_PREFIX
 
 MAX_OUTPUT = 50_000
 # Environment variables a command never sees: API keys, tokens, passwords, agent sockets
@@ -68,6 +69,10 @@ def _withheld(name: str, value: str) -> bool:
     return bool(SECRET_NAME.search(name)) or secret_value(value)
 
 
+def _framework(name: str) -> bool:
+    return name.upper().startswith(FRAMEWORK_ENV_PREFIX)
+
+
 def withheld_names(environ: Mapping[str, str] | None = None) -> list[str]:
     """The variables `safe_env` leaves out of `environ` (default: this process's), by
     name only - never a value - for `doctor` and the run log (DF-334)."""
@@ -106,15 +111,28 @@ def _default_path(source: Mapping[str, str], windows: bool) -> str:
 
 
 def safe_env(
-    environ: Mapping[str, str] | None = None, *, windows: bool | None = None
+    environ: Mapping[str, str] | None = None,
+    *,
+    windows: bool | None = None,
+    pass_through: Collection[str] = (),
 ) -> dict[str, str]:
     """The environment for an agent's command: `environ` (default: this process's)
     without secret-named variables or credential-carrying values (their names are
     logged once, never their values), with no relative entry in PATH (a folder the agent
-    can write), and on Windows with the working folder never searched for a program."""
+    can write), and on Windows with the working folder never searched for a program.
+
+    `pass_through` names variables org policy lets through anyway (`sandbox.pass_env`,
+    DF-365: an authenticated proxy, an SSH agent); matched case-blind on Windows, where
+    names are. The framework's own `AGENTIC_*` credentials are never passed."""
     source = os.environ if environ is None else environ
     windows = os.name == "nt" if windows is None else windows
-    env = {k: v for k, v in source.items() if not _withheld(k, v)}
+    fold = str.upper if windows else str
+    allowed = {fold(name) for name in pass_through if not _framework(name)}
+    env = {
+        k: v
+        for k, v in source.items()
+        if not _withheld(k, v) or (fold(k) in allowed and not _framework(k))
+    }
     _report(sorted(set(source) - set(env)))
     for name in [k for k in env if k.upper() == "PATH"]:
         entries = _path_entries(env[name])
