@@ -593,7 +593,12 @@ def _issue_token(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m agentic_cp", description=__doc__)
+    # the docstring is laid out as a command table: print it as written, not reflowed
+    parser = argparse.ArgumentParser(
+        prog="python -m agentic_cp",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
     serve = commands.add_parser("serve", help="run the API")
