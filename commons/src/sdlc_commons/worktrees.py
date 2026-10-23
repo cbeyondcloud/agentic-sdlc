@@ -254,6 +254,17 @@ _PLAIN_DIFF = (
 )
 
 
+def change_since_base(target: Path, run_id: str) -> list[tuple[str, Path, str]]:
+    """Each live tree's change so far: (component, tree, plain unified diff from the commit
+    the tree was made from to its HEAD) - what a reviewer of the run reads (M2-48)."""
+    found = []
+    for name, tree in sorted(RunWorktrees(target, run_id).trees().items()):
+        if tree.mode != "worktree" or not tree.base:
+            continue
+        found.append((name, tree.path, _git(tree.path, *_PLAIN_DIFF, tree.base, "HEAD")))
+    return found
+
+
 def _git(where: Path, *args: str, check: bool = True) -> str:
     """A checkpoint git call: never runs an fsmonitor command the tree's or the
     repository's config names (agent-reachable without a sandbox, review I5)."""
