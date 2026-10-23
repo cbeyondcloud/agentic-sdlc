@@ -83,6 +83,15 @@ def test_panels_use_only_known_macros_and_their_variables():
             assert used <= names, (dashboard.uid, sql)
 
 
+def test_macro_arguments_hold_no_parentheses():
+    """Grafana's SQL macro pattern ends a macro's arguments at the first `)`, so an
+    expression such as `$__timeFilter(COALESCE(a, b))` would expand to broken SQL."""
+    for dashboard in DASHBOARDS:
+        for sql in [p.sql for p in dashboard.panels] + [v.sql for v in dashboard.variables]:
+            for match in re.finditer(r"\$__\w+\(([^)]*)\)", sql):
+                assert "(" not in match.group(1), (dashboard.uid, sql)
+
+
 def test_panels_read_dash_views_only_through_the_one_datasource():
     for dashboard in DASHBOARDS:
         rendered = render(dashboard)

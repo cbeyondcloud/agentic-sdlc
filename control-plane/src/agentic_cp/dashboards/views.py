@@ -243,7 +243,8 @@ SELECT COALESCE(c.tenant_id, r.tenant_id) AS tenant_id,
   r.started_by, r.status, r.opened_at, c.repo, c.pipeline,
   c.calls, c.input_tokens, c.output_tokens, c.gateway_usd, p.reported_usd,
   c.gateway_usd - p.reported_usd AS delta_usd,
-  c.first_call_at, c.last_call_at
+  c.first_call_at, c.last_call_at,
+  COALESCE(c.last_call_at, r.opened_at) AS last_seen_at
 FROM calls c
 FULL JOIN dash_runs r ON r.tenant_id = c.tenant_id AND r.run_id = c.run_key
 LEFT JOIN reported p ON p.tenant_id = COALESCE(r.tenant_id, c.tenant_id)

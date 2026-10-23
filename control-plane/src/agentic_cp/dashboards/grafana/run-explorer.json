@@ -36,7 +36,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT run_key, registered, team, started_by, status, pipeline, calls, gateway_usd, reported_usd, delta_usd, last_call_at FROM dash_run_cost WHERE $__timeFilter(COALESCE(last_call_at, opened_at)) ORDER BY COALESCE(last_call_at, opened_at) DESC NULLS LAST",
+          "rawSql": "SELECT run_key, registered, team, started_by, status, pipeline, calls, gateway_usd, reported_usd, delta_usd, last_call_at FROM dash_run_cost WHERE $__timeFilter(last_seen_at) ORDER BY last_seen_at DESC NULLS LAST",
           "refId": "A"
         }
       ],
@@ -195,14 +195,14 @@
           "type": "grafana-postgresql-datasource",
           "uid": "agentic-postgres"
         },
-        "definition": "SELECT run_key FROM dash_run_cost ORDER BY COALESCE(last_call_at, opened_at) DESC NULLS LAST LIMIT 500",
+        "definition": "SELECT run_key FROM dash_run_cost ORDER BY last_seen_at DESC NULLS LAST LIMIT 500",
         "hide": 0,
         "includeAll": false,
         "label": "Run",
         "multi": false,
         "name": "run",
         "options": [],
-        "query": "SELECT run_key FROM dash_run_cost ORDER BY COALESCE(last_call_at, opened_at) DESC NULLS LAST LIMIT 500",
+        "query": "SELECT run_key FROM dash_run_cost ORDER BY last_seen_at DESC NULLS LAST LIMIT 500",
         "refresh": 2,
         "sort": 1,
         "type": "query"

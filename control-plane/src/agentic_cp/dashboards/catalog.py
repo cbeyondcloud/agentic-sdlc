@@ -64,8 +64,7 @@ TEAM = Variable("team", "Team", "SELECT DISTINCT team FROM dash_team_cost ORDER 
 RUN = Variable(
     "run",
     "Run",
-    "SELECT run_key FROM dash_run_cost "
-    "ORDER BY COALESCE(last_call_at, opened_at) DESC NULLS LAST LIMIT 500",
+    "SELECT run_key FROM dash_run_cost ORDER BY last_seen_at DESC NULLS LAST LIMIT 500",
     multi=False,
 )
 EVENT = Variable("event", "Event", "SELECT DISTINCT event FROM dash_audit ORDER BY 1")
@@ -203,8 +202,7 @@ RUN_EXPLORER = Dashboard(
             "table",
             "SELECT run_key, registered, team, started_by, status, pipeline, calls, "
             "gateway_usd, reported_usd, delta_usd, last_call_at FROM dash_run_cost "
-            "WHERE $__timeFilter(COALESCE(last_call_at, opened_at)) "
-            "ORDER BY COALESCE(last_call_at, opened_at) DESC NULLS LAST",
+            "WHERE $__timeFilter(last_seen_at) ORDER BY last_seen_at DESC NULLS LAST",
             USD,
             f"{UNATTRIBUTED}: calls without a run tag. Not registered: tagged with a run the "
             "control plane does not know.",
