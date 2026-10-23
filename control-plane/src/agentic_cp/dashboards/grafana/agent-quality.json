@@ -1,0 +1,199 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Per agent version: outcomes, repeated steps, gate decisions, cost per approval.",
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "repeats: executions beyond one per run step (review loops, retries).",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT agent, executions, completed, failed, limited, repeats, approvals, rejections, rejection_rate, gateway_usd, usd_per_approval FROM dash_agent_quality ORDER BY executions DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Agent versions: outcomes, gates and cost",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "id": 2,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT agent, rejection_rate FROM dash_agent_quality WHERE rejection_rate IS NOT NULL ORDER BY rejection_rate DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Gate rejection rate by agent",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "id": 3,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(finished_at, '1d'), outcome AS metric, COUNT(*) AS value FROM dash_step_runs WHERE $__timeFilter(finished_at) GROUP BY 1, 2 ORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Step outcomes per day",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "Only decisions that recorded a wait; unrecorded waits are not zeros.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "id": 4,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT gate, COUNT(*) AS decisions, ROUND(AVG(waited_ms) / 1000.0, 1) AS avg_wait_s, ROUND(MAX(waited_ms) / 1000.0, 1) AS max_wait_s FROM dash_gates WHERE event = 'gate_decided' AND waited_ms IS NOT NULL AND $__timeFilter(at) GROUP BY gate ORDER BY avg_wait_s DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Human wait at gates",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "id": 5,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT approver, COUNT(*) FILTER (WHERE decision = 'approve') AS approvals, COUNT(*) FILTER (WHERE decision = 'reject') AS rejections, COUNT(*) FILTER (WHERE forced) AS forced FROM dash_gates WHERE event = 'gate_decided' AND $__timeFilter(at) GROUP BY approver ORDER BY 2 DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Decisions by approver",
+      "type": "table"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "agentic"
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Agentic - Agent quality",
+  "uid": "agentic-agent-quality",
+  "version": 1
+}

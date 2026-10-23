@@ -32,6 +32,8 @@
                           a recovery token for an existing user of one tenant
     openapi [--write | --check]
                           write or compare control-plane/openapi.json
+    dashboards (--write | --check)
+                          write or compare the Grafana dashboards' JSON with the catalog
 
 Settings come from AGENTIC_CP_* variables (see `agentic_cp.settings`). This is a server
 tool run by the platform team (kubectl exec, compose run), not the developers' CLI."""
@@ -79,6 +81,39 @@ def _openapi(args: argparse.Namespace) -> int:
         print("openapi.json is current")
         return 0
     sys.stdout.write(text)
+    return 0
+
+
+def _dashboards(args: argparse.Namespace) -> int:
+    """Write or compare the Grafana dashboards' JSON (M2-38) with the catalog."""
+    from agentic_cp.dashboards.catalog import GRAFANA_DIR, rendered_files
+
+    files = rendered_files()
+    if args.write:
+        GRAFANA_DIR.mkdir(exist_ok=True)
+        for stale in GRAFANA_DIR.glob("*.json"):
+            if stale.name not in files:
+                stale.unlink()
+        for name, text in files.items():
+            (GRAFANA_DIR / name).write_bytes(text.encode("utf-8"))
+        print(f"wrote {len(files)} dashboards to {GRAFANA_DIR}")
+        return 0
+    present = {path.name for path in GRAFANA_DIR.glob("*.json")}
+    stale = sorted(
+        name
+        for name in present | set(files)
+        if name not in files
+        or name not in present
+        or (GRAFANA_DIR / name).read_bytes().decode("utf-8").replace("\r\n", "\n") != files[name]
+    )
+    if stale:
+        print(
+            f"stale dashboards: {', '.join(stale)}: run "
+            "`uv run python -m agentic_cp dashboards --write`",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"{len(files)} dashboards are current")
     return 0
 
 
@@ -734,6 +769,12 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
     openapi.set_defaults(run=_openapi)
+
+    dashboards = commands.add_parser("dashboards", help="write or check the Grafana dashboards")
+    dash_mode = dashboards.add_mutually_exclusive_group(required=True)
+    dash_mode.add_argument("--write", action="store_true")
+    dash_mode.add_argument("--check", action="store_true")
+    dashboards.set_defaults(run=_dashboards)
     return parser
 
 
