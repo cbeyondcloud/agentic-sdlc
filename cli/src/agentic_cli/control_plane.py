@@ -36,6 +36,7 @@ from agentic.orgapi import (
     KillState,
     KillSwitchInfo,
     Me,
+    ProxyKeyIssued,
     RepoInfo,
     RunPreflight,
     RunSummary,
@@ -260,6 +261,10 @@ class ControlPlaneClient:
         params = {"include_cleared": "true"} if include_cleared else None
         found = self._json("GET", "/killswitch", params=params)
         return [KillSwitchInfo.model_validate(item) for item in found]
+
+    def rotate_proxy_key(self) -> ProxyKeyIssued:
+        """Replace the caller's gateway key (M2-17); the new key is in this answer only."""
+        return ProxyKeyIssued.model_validate(self._json("POST", "/proxy-keys/rotate"))
 
     def run_url(self, run_id: str) -> str:
         """Where a person reads the run (ND-11: the JSON run summary until a web UI)."""

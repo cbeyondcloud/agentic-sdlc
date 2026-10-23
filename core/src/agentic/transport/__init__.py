@@ -5,10 +5,12 @@ from agentic.transport.client import (
     BEHAVIOUR_HEADERS,
     ForbiddenHeaderError,
     ForeignHostError,
+    GatewayKeyRejected,
     IdentityHeaderError,
     make_async_client,
     make_client,
     make_network_transport,
+    verify_gateway_key,
 )
 from agentic.transport.cost import (
     CallCost,
@@ -37,8 +39,10 @@ __all__ = [
     "CallIdentity",
     "ForbiddenHeaderError",
     "ForeignHostError",
+    "GatewayKeyRejected",
     "IdentityError",
     "IdentityHeaderError",
+    "verify_gateway_key",
     "make_async_client",
     "make_network_transport",
     "make_client",

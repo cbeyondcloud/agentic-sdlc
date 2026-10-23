@@ -56,6 +56,7 @@ class FakeControlPlane:
     registrations: list[dict] = field(default_factory=list)  # POST /v1/runs bodies (M2-21)
     failing_checks: dict[str, str] = field(default_factory=dict)  # check -> why it fails
     min_cli_version: str | None = None  # registration answers 426 below it (M2-08)
+    proxy_key: str | None = None  # the key a rotation hands out (M2-17); None: none held
 
     def add_switch(
         self, kind: str, value: str = "", *, mode: str = "kill", reason: str = "r", team=None
@@ -146,6 +147,18 @@ class FakeControlPlane:
             return self._killswitch(request)
         if path == "/v1/runs" and request.method == "POST":
             return self._register(request)
+        if path == "/v1/proxy-keys/rotate" and request.method == "POST":
+            if self.proxy_key is None:
+                return _problem(
+                    404,
+                    "proxy_key.none",
+                    "you hold no gateway key issued through the control plane",
+                    extra={"hint": "redeem your invite or ask your org admin to invite you again"},
+                )
+            return httpx2.Response(
+                200,
+                json={"key": self.proxy_key, "key_id": "0123456789abcdef", "gateway_url": None},
+            )
         if path.startswith("/v1/runs/") and path.endswith("/events"):
             if self.max_body is not None and len(request.content) > self.max_body:
                 return _problem(413, "too_large", f"the body is over {self.max_body} bytes")

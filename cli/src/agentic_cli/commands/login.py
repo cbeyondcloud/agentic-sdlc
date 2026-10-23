@@ -16,17 +16,23 @@ plane accepts it; the URL, tenant and user it was verified for are recorded in
 `~/.agentic/control-plane.json` (no secret), and the token is only ever sent to that URL.
 The URL comes from `control_plane_url` in the user config or `AGENTIC_CONTROL_PLANE_URL`;
 `--url` overrides it for this command and is not written to the config (ND-13).
-Verifying the gateway key with the gateway comes with gateway key introspection (M2-17);
-until then login says that key was stored, not verified.
+
+A gateway key is checked with the configured gateway (`GET /v1/models`) before it is
+stored (DF-182): a key the gateway refuses is not stored, one that cannot be checked now is
+stored unverified with a warning. `agentic login --rotate` replaces the gateway key through
+the control plane (M2-17); the old key stops working.
 """
 
 import os
 import sys
 
+import httpx2
 import typer
 
 from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials, env_var
+from agentic.hosting.base import scrub_url_credentials
 from agentic.orgapi import Me
+from agentic.transport import verify_gateway_key
 from agentic_cli import control_plane
 from agentic_cli.config import agentic_home, user_config
 from agentic_cli.errors import CliError
@@ -55,6 +61,11 @@ def register(app: typer.Typer) -> None:
         url: str | None = typer.Option(
             None, "--url", help="With --for control-plane: the control plane's URL (this time)."
         ),
+        rotate: bool = typer.Option(
+            False,
+            "--rotate",
+            help="Replace your gateway key through the control plane (the old key stops working).",
+        ),
     ) -> None:
         """Store your gateway key (or a control-plane or git host token) in the OS keyring."""
         out: Output = ctx.obj
@@ -62,6 +73,13 @@ def register(app: typer.Typer) -> None:
         wanted = target.strip().lower()
         if url is not None and wanted != CONTROL_PLANE:
             raise CliError("--url is for --for control-plane", ExitCode.USAGE)
+        if rotate:
+            if wanted != GATEWAY or key_stdin:
+                raise CliError(
+                    "--rotate replaces the gateway key, read from no input", ExitCode.USAGE
+                )
+            _rotate(out, home)
+            return
         if wanted == CONTROL_PLANE:
             name, label = control_plane.CONTROL_PLANE_TOKEN, "Control-plane token"
             base = url or control_plane.control_plane_url(os.environ, user_config(home))
@@ -84,6 +102,9 @@ def register(app: typer.Typer) -> None:
                 hint=f"set {env_var(name)} from the CI system's secrets instead",
             )
         value = _read(key_stdin, label)
+        verified = False
+        if name == TOKENLEAN_KEY:
+            verified = _verify_gateway_key(out, home, value)
         if wanted == CONTROL_PLANE:
             with control_plane.ControlPlaneClient(
                 base, value, transport=control_plane.make_transport()
@@ -109,11 +130,11 @@ def register(app: typer.Typer) -> None:
             control_plane.record_login(home, base, me.tenant.slug, me.user.email)
             _signed_in(out, base, me)
             return
-        data = {"stored": name, "where": "keyring", "verified": False}
+        data = {"stored": name, "where": "keyring", "verified": verified}
         if name == TOKENLEAN_KEY:
+            checked = "verified with the gateway" if verified else "not verified with the gateway"
             shown = (
-                "Key stored in the OS keyring (not yet verified with the gateway). "
-                "Next: cd <repo> and run `agentic init`."
+                f"Key stored in the OS keyring ({checked}). Next: cd <repo> and run `agentic init`."
             )
         elif wanted == JIRA:
             shown = (
@@ -126,6 +147,74 @@ def register(app: typer.Typer) -> None:
                 "`agentic pr open` and `agentic init --repo` use it."
             )
         out.result(data, lambda c: c.print(shown, markup=False))
+
+
+def gateway_transport() -> httpx2.BaseTransport | None:
+    """The transport for the gateway check (None: real calls). Tests replace it."""
+    return None
+
+
+def _gateway_url(home) -> str | None:
+    found = os.environ.get("AGENTIC_GATEWAY_URL", "").strip() or str(
+        user_config(home).get("gateway_url") or ""
+    )
+    return found.strip().rstrip("/") or None
+
+
+def _verify_gateway_key(out: Output, home, value: str) -> bool:
+    """Check the key with the configured gateway before it is stored (DF-182): a key the
+    gateway refuses is not stored; one that cannot be checked now is stored unverified."""
+    url = _gateway_url(home)
+    if url is None:
+        return False
+    verdict = verify_gateway_key(url, value, transport=gateway_transport())
+    if verdict == "rejected":
+        raise CliError(
+            f"the gateway at {scrub_url_credentials(url)} did not accept this key",
+            ExitCode.REFUSED,
+            hint="paste the whole key from your invite, or ask your org admin for a new "
+            "invite (`agentic login --invite <link>`)",
+        )
+    if verdict == "unknown":
+        out.warn(
+            f"the key could not be checked with the gateway at {scrub_url_credentials(url)} "
+            "(unreachable or an unexpected answer); it is stored unverified"
+        )
+        return False
+    return True
+
+
+def _rotate(out: Output, home) -> None:
+    """`agentic login --rotate`: a new gateway key from the control plane (M2-17), stored
+    in the keyring in place of the old one, which stops working."""
+    credentials = Credentials()
+    if credentials.in_ci:
+        raise CliError(
+            f"rotation stores the new key in the OS keyring, which is not used in CI "
+            f"({credentials.ci_marker} is set)",
+            ExitCode.REFUSED,
+            hint="rotate the CI system's secret through your org admin instead",
+        )
+    client = control_plane.client_for(os.environ, user_config(home), home)
+    if client is None:
+        raise CliError(
+            "rotating the gateway key goes through the org's control plane, and none is set",
+            ExitCode.REFUSED,
+            hint=f"set control_plane_url in ~/.agentic/config.yaml, then `{control_plane.LOGIN}`",
+        )
+    with client:
+        issued = client.rotate_proxy_key()
+    try:
+        credentials.store(TOKENLEAN_KEY, issued.key)
+    except CredentialError as error:
+        raise CliError(
+            f"the key was rotated but could not be stored: {error}",
+            ExitCode.ERROR,
+            hint="run `agentic login --rotate` again (the new key is not shown anywhere else)",
+        ) from error
+    data = {"stored": TOKENLEAN_KEY, "where": "keyring", "rotated": True, "key_id": issued.key_id}
+    shown = f"Gateway key rotated (new key {issued.key_id}) and stored in the OS keyring."
+    out.result(data, lambda c: c.print(shown, markup=False))
 
 
 def _read(key_stdin: bool, label: str) -> str:
