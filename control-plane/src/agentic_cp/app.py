@@ -30,6 +30,7 @@ from agentic_cp.notify.api import router as notify_router
 from agentic_cp.policy_sync.api import router as policy_router
 from agentic_cp.rbac.api import router as rbac_router
 from agentic_cp.rbac.authz import EnforcerCache
+from agentic_cp.rbac.import_api import router as rbac_import_router
 from agentic_cp.rbac.repos_api import router as repos_router
 from agentic_cp.settings import Settings
 from agentic_cp.tenancy.api import router as tenant_router
@@ -81,6 +82,7 @@ def create_app(
     app.add_middleware(BodyLimit, max_bytes=settings.max_body_bytes)
     app.include_router(auth_router)
     app.include_router(rbac_router)
+    app.include_router(rbac_import_router)
     app.include_router(audit_router)
     app.include_router(tenant_router)
     app.include_router(policy_router)
