@@ -11,9 +11,10 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
     retention.yaml        days                      (placeholder until OR-01)
     tool-pins.yaml        tools (per-platform artefacts `init` fetches from the mirror)
     org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines,
-                          index_export_workflow, sandbox, unhonoured, secret_scan,
-                          publish_scan, review_prepass, review_batch
+                          required_steps, index_export_workflow, sandbox, unhonoured,
+                          secret_scan, publish_scan, review_prepass, review_batch
     eval.yaml             eval                      (agent evaluation defaults, M1-63)
+    rollout.yaml          rollout, deprecated       (versions team by team, M2-15)
     teams/<team>.yaml     one TeamPolicy per team
 """
 
@@ -57,6 +58,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "allowed_repo_patterns": "allowed_repo_patterns",
         "tool_mirror_url": "tool_mirror_url",
         "allow_repo_pipelines": "allow_repo_pipelines",
+        "required_steps": "required_steps",
         "min_cli_version": "min_cli_version",
         "index_export_workflow": "index_export_workflow",
         "sandbox": "sandbox",
@@ -67,6 +69,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "review_batch": "review_batch",
     },
     "eval.yaml": {"eval": "eval"},
+    "rollout.yaml": {"rollout": "rollout", "deprecated": "deprecated"},
 }
 
 

@@ -11,6 +11,7 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from agentic.definitions import ChildLimits, DenyRules, Limits
+from agentic.definitions.versions import Deprecations, Pins, Rollout
 
 
 class _Strict(BaseModel):
@@ -112,6 +113,9 @@ class TeamPolicy(_Strict):
     # agent-CLI plugins from the org catalog, for steps on a backend that loads plugins
     # (never the native loop; M2-47, D28)
     backend_plugins: list[str] = []
+    # versions this team keeps whatever the rollout says (M2-15); each must exist in the
+    # policy repo and is still refused once deprecated past its date
+    pins: Pins = Pins()
 
 
 #: Read-denied in every sandbox, whatever policy adds: where credentials live (D38).
@@ -485,6 +489,12 @@ class OrgPolicy(_Strict):
     tool_mirror_url: str | None = None
     tool_pins: dict[str, ToolPin] = {}  # tools `init` fetches from the mirror (M1-51)
     allow_repo_pipelines: bool = False  # D33: pipelines only from the policy repo
+    # M2-23 (spec §6.1): per pipeline, the steps, gates and loops no overlay may remove or
+    # weaken; preflight refuses a pipeline missing one, whatever the cause
+    required_steps: dict[str, list[str]] = {}
+    # M2-15 (spec §12.5, rollout.yaml): new versions team by team, and deprecations
+    rollout: Rollout = Rollout()
+    deprecated: Deprecations = Deprecations()
     # M2-08: older CLIs are refused runs with an upgrade message (the control plane's own
     # floor applies too; the higher wins). Release, pre-release, post and dev parts only:
     # every value this accepts is a PEP 440 version the control plane compares, so none is
@@ -573,6 +583,14 @@ class OrgPolicy(_Strict):
         for team in self.team_overrides:
             if team not in self.teams:
                 problems.append(f"team_overrides names unknown team '{team}'")
+        for kind, entries in (
+            ("agents", self.rollout.agents),
+            ("pipelines", self.rollout.pipelines),
+        ):
+            for name, entry in entries.items():
+                for team in entry.teams:
+                    if team not in self.teams:
+                        problems.append(f"rollout.{kind}.{name} names unknown team '{team}'")
         for type_name, agent_type in self.agent_types.items():
             check_tiers(f"agent_types.{type_name}", [agent_type.tier])
             for tool in agent_type.tools:
