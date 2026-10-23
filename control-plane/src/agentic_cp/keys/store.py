@@ -13,7 +13,7 @@ from collections.abc import Callable
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from agentic_cp.audit import AuditEvent, append
@@ -105,92 +105,115 @@ async def active_keys(conn: AsyncConnection, user_id: UUID) -> list:
     return list(found)
 
 
-async def mark_revoked(conn: AsyncConnection, key_id: str, now: datetime) -> None:
+async def mark_revoked(conn: AsyncConnection, key_id: str, now: datetime) -> bool:
+    """Record a key as revoked; False when it already was (another worker finished it)."""
+    marked = await conn.execute(
+        update(proxy_keys)
+        .where(proxy_keys.c.key_id == key_id, proxy_keys.c.revoked_at.is_(None))
+        .values(
+            revoked_at=now, revoke_requested_at=func.coalesce(proxy_keys.c.revoke_requested_at, now)
+        )
+        .returning(proxy_keys.c.key_id)
+    )
+    return marked.first() is not None
+
+
+async def request_revocation(conn: AsyncConnection, user_id: UUID, now: datetime) -> list:
+    """Mark every active key of the user as to be revoked and return them. The gateway is
+    called after this transaction commits (`finish_revocations`); a key it misses, or one
+    left by a crash in between, is finished by `retry_revocations`."""
+    rows = await active_keys(conn, user_id)
     await conn.execute(
         update(proxy_keys)
-        .where(proxy_keys.c.key_id == key_id)
-        .values(revoked_at=now, revoke_requested_at=now)
+        .where(
+            proxy_keys.c.user_id == user_id,
+            proxy_keys.c.revoked_at.is_(None),
+            proxy_keys.c.revoke_requested_at.is_(None),
+        )
+        .values(revoke_requested_at=now)
     )
+    return rows
 
 
-async def revoke_user_keys(
-    conn: AsyncConnection,
+async def finish_revocations(
+    engine: AsyncEngine,
+    tenant_id: UUID,
     gateway: GatewayKeys,
-    user: UserRow,
+    rows: list,
     *,
     actor: str,
     actor_kind: str,
     clock: Callable[[], datetime],
     reason: str,
+    user: str | None = None,
+    audit_pending: bool = True,
 ) -> tuple[list[str], list[str]]:
-    """Revoke every active key of `user`: (revoked, pending). A key the gateway could not
-    revoke now is left requested, for `retry_revocations`."""
-    revoked, pending = [], []
-    now = clock()
-    for row in await active_keys(conn, user.id):
+    """Revoke the keys of `rows` at the gateway, then record the outcome: (revoked, pending).
+
+    The gateway calls run with no transaction open (review F2): a slow or unreachable
+    gateway (up to the client's timeout per key) never holds the tenant's audit-chain or
+    RBAC lock, which every other audited write in the tenant would wait for. Only then one
+    short transaction marks the revoked keys and appends their audit records."""
+    if not rows:
+        return [], []
+    revoked, failed = [], {}
+    for row in rows:
         try:
             await gateway.revoke(row.key_id)
         except GatewayUnavailable as error:
-            await conn.execute(
-                update(proxy_keys)
-                .where(proxy_keys.c.key_id == row.key_id)
-                .values(revoke_requested_at=now)
-            )
-            pending.append(row.key_id)
-            event, why = "proxy_key.revoke_pending", f"{reason}; {error}"
+            failed[row.key_id] = str(error)
         else:
-            await mark_revoked(conn, row.key_id, now)
             revoked.append(row.key_id)
-            event, why = "proxy_key.revoked", reason
-        await _audit(
-            conn,
-            clock,
-            event,
-            actor,
-            actor_kind,
-            target=f"proxy_key:{row.key_id}",
-            team=row.team,
-            reason=why[:300],
-            after={"key_id": row.key_id, "user": user.email},
-        )
-    return revoked, pending
+    after_user = {"user": user} if user else {}
+    async with tenant_tx(engine, tenant_id) as conn:
+        for row in rows:
+            if row.key_id in failed:
+                if not audit_pending:
+                    continue
+                event, why = "proxy_key.revoke_pending", f"{reason}; {failed[row.key_id]}"
+            elif await mark_revoked(conn, row.key_id, clock()):
+                event, why = "proxy_key.revoked", reason
+            else:  # recorded meanwhile by another worker: audited once, there
+                continue
+            await _audit(
+                conn,
+                clock,
+                event,
+                actor,
+                actor_kind,
+                target=f"proxy_key:{row.key_id}",
+                team=row.team,
+                reason=why[:300],
+                after={"key_id": row.key_id, **after_user},
+            )
+    return revoked, list(failed)
 
 
 async def retry_revocations(
     engine: AsyncEngine, tenant_id: UUID, gateway: GatewayKeys, clock: Callable[[], datetime]
 ) -> list[str]:
     """Finish the tenant's pending revocations; the key ids revoked now."""
-    done = []
     async with tenant_tx(engine, tenant_id) as conn:
         rows = list(
             await conn.execute(
-                select(proxy_keys)
-                .where(
+                select(proxy_keys).where(
                     proxy_keys.c.revoke_requested_at.is_not(None),
                     proxy_keys.c.revoked_at.is_(None),
                 )
-                .with_for_update(skip_locked=True)
             )
         )
-        for row in rows:
-            try:
-                await gateway.revoke(row.key_id)
-            except GatewayUnavailable:
-                continue
-            await mark_revoked(conn, row.key_id, clock())
-            await _audit(
-                conn,
-                clock,
-                "proxy_key.revoked",
-                SYSTEM,
-                "system",
-                target=f"proxy_key:{row.key_id}",
-                team=row.team,
-                reason="a pending revocation, finished",
-                after={"key_id": row.key_id},
-            )
-            done.append(row.key_id)
-    return done
+    revoked, _ = await finish_revocations(
+        engine,
+        tenant_id,
+        gateway,
+        rows,
+        actor=SYSTEM,
+        actor_kind="system",
+        clock=clock,
+        reason="a pending revocation, finished",
+        audit_pending=False,
+    )
+    return revoked
 
 
 async def retry_job(engine, git, tenant_id, settings: Settings, clock) -> None:

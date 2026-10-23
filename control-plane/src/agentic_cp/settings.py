@@ -115,7 +115,8 @@ class Settings(BaseModel):
     smtp_from_name: str = "agentic"
     smtp_timeout_seconds: Annotated[int, Field(ge=1, le=300)] = 30
     notify_max_attempts: Annotated[int, Field(ge=1, le=50)] = 8
-    """Sends of one mail before it is marked failed (ruling P2)."""
+    """Sends of one mail before it is marked failed (ruling P2); a relay that cannot be used
+    at all does not count (review F3)."""
     gateway_admin_url: Annotated[str, AfterValidator(_http_url)] | None = None
     """The gateway's admin API (TokenLean `/admin/keys`, M2-17); None: no proxy keys."""
     gateway_admin_key: SecretStr | None = None

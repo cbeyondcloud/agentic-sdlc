@@ -29,7 +29,12 @@ from agentic_cp.auth.users import UserError, UserRow, user_by_email, user_by_id
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
 from agentic_cp.keys.api import NO_STORE, unavailable
 from agentic_cp.keys.gateway import GatewayUnavailable
-from agentic_cp.keys.store import forget_issued, issue_key, revoke_user_keys
+from agentic_cp.keys.store import (
+    finish_revocations,
+    forget_issued,
+    issue_key,
+    request_revocation,
+)
 from agentic_cp.provisioning.invites import (
     create_invite,
     resolve_invite,
@@ -221,15 +226,7 @@ async def offboard(
             ),
             clock=state.clock,
         )
-        revoked, pending = await revoke_user_keys(
-            conn,
-            state.gateway_keys,
-            user,
-            actor=ctx.email,
-            actor_kind=ctx.actor_kind,
-            clock=state.clock,
-            reason=f"offboarded: {reason}",
-        )
+        keys = await request_revocation(conn, user.id, now)
         revision = await bump_rbac_revision(conn)
         await append(
             conn,
@@ -244,14 +241,26 @@ async def offboard(
                     "status": "disabled",
                     "tokens_revoked": token_ids,
                     "invites_revoked": invites_revoked,
-                    "proxy_keys_revoked": revoked,
-                    "proxy_keys_pending": pending,
+                    "proxy_keys": [row.key_id for row in keys],
                     "kill_switch": str(switch),
                     "rbac_revision": revision,
                 },
             ),
             clock=state.clock,
         )
+    # The gateway only now, holding no tenant lock (review F2); each key's outcome is
+    # audited on its own, and a key the gateway misses stays pending for the worker.
+    revoked, pending = await finish_revocations(
+        state.engine,
+        ctx.tenant_id,
+        state.gateway_keys,
+        keys,
+        actor=ctx.email,
+        actor_kind=ctx.actor_kind,
+        clock=state.clock,
+        reason=f"offboarded: {reason}",
+        user=user.email,
+    )
     return OffboardResult(
         email=user.email,
         tokens_revoked=len(token_ids),
@@ -308,25 +317,9 @@ async def redeem(body: InviteRedeem, request: Request, response: Response) -> In
             token_id, value = await issue_token(
                 conn, user_id=user.id, name="invite", expires_at=expires_at, created_by=user.email
             )
-            for event, target, after in (
-                ("invite.redeemed", f"invite:{found.invite_id}", {"user": user.email}),
-                (
-                    "token.issued",
-                    f"token:{token_id}",
-                    {"name": "invite", "user": user.email, "expires_at": format_at(expires_at)},
-                ),
-            ):
-                await append(
-                    conn,
-                    AuditEvent(
-                        event=event,
-                        actor=user.email,
-                        actor_kind="human",
-                        target=target,
-                        after=after,
-                    ),
-                    clock=state.clock,
-                )
+            # The gateway before this transaction's first audit append (review F2): while
+            # it answers only the invite's row is locked, never the tenant's audit chain
+            # that every other audited write in the tenant needs.
             notice = None
             if gateway.configured and tenant.gateway_tenant:
                 teams = await team_assignments(conn, user.id)
@@ -346,6 +339,25 @@ async def redeem(body: InviteRedeem, request: Request, response: Response) -> In
                 notice = (
                     "this control plane does not issue gateway keys: ask your org admin for "
                     "your gateway key, then run `agentic login`"
+                )
+            for event, target, after in (
+                ("invite.redeemed", f"invite:{found.invite_id}", {"user": user.email}),
+                (
+                    "token.issued",
+                    f"token:{token_id}",
+                    {"name": "invite", "user": user.email, "expires_at": format_at(expires_at)},
+                ),
+            ):
+                await append(
+                    conn,
+                    AuditEvent(
+                        event=event,
+                        actor=user.email,
+                        actor_kind="human",
+                        target=target,
+                        after=after,
+                    ),
+                    clock=state.clock,
                 )
     except BaseException:
         if issued is not None:  # the redemption rolled back after the key was made

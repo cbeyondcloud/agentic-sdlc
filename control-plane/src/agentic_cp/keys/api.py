@@ -13,10 +13,11 @@ from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
 from agentic_cp.keys.gateway import GatewayUnavailable
 from agentic_cp.keys.store import (
     active_keys,
+    finish_revocations,
     forget_issued,
     mark_revoked,
     record_key,
-    revoke_user_keys,
+    request_revocation,
 )
 from agentic_cp.rbac.authz import Org, require
 from agentic_cp.tenancy.context import tenant_tx
@@ -95,7 +96,8 @@ async def rotate_own_key(request: Request, response: Response, ctx: Caller) -> P
 @router.delete("/users/{email}/proxy-keys")
 async def revoke_keys(email: str, request: Request, ctx: Caller) -> ProxyKeysRevoked:
     """Revoke every gateway key of a person (org `rbac.assign`). A key the gateway cannot
-    revoke now is `pending`; the worker finishes it."""
+    revoke now is `pending`; the worker finishes it. The keys are marked first and the
+    gateway called after that commit, holding no tenant lock (review F2)."""
     state = request.app.state
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         await require(ctx, "rbac.assign", Org(), conn=conn, cache=state.enforcers)
@@ -105,13 +107,16 @@ async def revoke_keys(email: str, request: Request, ctx: Caller) -> ProxyKeysRev
             user = None
         if user is None:
             raise not_found("user")
-        revoked, pending = await revoke_user_keys(
-            conn,
-            state.gateway_keys,
-            user,
-            actor=ctx.email,
-            actor_kind=ctx.actor_kind,
-            clock=state.clock,
-            reason="revoked by an admin",
-        )
+        rows = await request_revocation(conn, user.id, state.clock())
+    revoked, pending = await finish_revocations(
+        state.engine,
+        ctx.tenant_id,
+        state.gateway_keys,
+        rows,
+        actor=ctx.email,
+        actor_kind=ctx.actor_kind,
+        clock=state.clock,
+        reason="revoked by an admin",
+        user=user.email,
+    )
     return ProxyKeysRevoked(email=user.email, revoked=revoked, pending=pending)
