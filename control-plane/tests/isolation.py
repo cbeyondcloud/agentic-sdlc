@@ -454,7 +454,33 @@ async def _switch_in_b(api) -> dict[str, str]:
     return {"id": made.json()["id"], "reason": made.json()["reason"]}
 
 
+async def _notification_in_b(api) -> dict[str, str]:
+    """A mail queued in tenant b only (to an address only b's users table holds)."""
+    from agentic_cp.notify.outbox import enqueue
+    from agentic_cp.notify.templates import render
+    from agentic_cp.tenancy.context import tenant_tx
+
+    recipient = f"b-only-{next(_sequence)}@b.example.test"
+    rendered = render(
+        "gate.waiting",
+        {"run_id": "r", "team": "payments", "gate": "g", "role": "x"},
+        tenant_name="B",
+    )
+    async with tenant_tx(api.db.app, api.b.id) as conn:
+        made = await enqueue(
+            conn,
+            kind="gate.waiting",
+            recipient=recipient,
+            rendered=rendered,
+            dedupe_key=recipient,
+            actor="system:test",
+            clock=api.clock,
+        )
+    return {"id": str(made), "recipient": recipient}
+
+
 ENDPOINT_CASES += [
+    EndpointCase("notify", "GET", "/v1/notifications", _notification_in_b, must_not_list=True),
     EndpointCase("killswitch", "DELETE", "/v1/killswitch/{id}", _switch_in_b),
     EndpointCase("killswitch", "GET", "/v1/killswitch", _switch_in_b, must_not_list=True),
     EndpointCase(

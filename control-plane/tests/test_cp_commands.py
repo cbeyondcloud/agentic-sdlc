@@ -86,3 +86,41 @@ async def test_commands_need_the_owner_dsn(api, monkeypatch, capsys):
     monkeypatch.delenv("AGENTIC_CP_OWNER_DATABASE_URL", raising=False)
     assert await _run("admin", "tenant", "list") == 3
     assert "AGENTIC_CP_OWNER_DATABASE_URL" in capsys.readouterr().err
+
+
+async def test_set_mail_from_sets_one_tenants_sender_and_audits_it(operator_env):
+    api = operator_env
+    argv = ("admin", "tenant", "set-mail-from", "--tenant", "tenant-a")
+    assert await _run(*argv, "--address", "tools@a.example.test", "--name", "A tools") == 0
+    async with api.db.owner.begin() as conn:
+        rows = {
+            slug: (address, name)
+            for slug, address, name in await conn.execute(
+                select(tenants.c.slug, tenants.c.mail_from, tenants.c.mail_from_name)
+            )
+        }
+    assert rows == {"tenant-a": ("tools@a.example.test", "A tools"), "tenant-b": (None, None)}
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        record = (await read_records(conn))[-1]
+    assert record.event == "tenant.mail_from_changed"
+    assert record.after == {"address": "tools@a.example.test", "name": "A tools"}
+    assert await _run(*argv, "--address", "not-an-address") == 3
+    assert await _run(*argv, "--clear") == 0
+    async with api.db.owner.begin() as conn:
+        found = select(tenants.c.mail_from).where(tenants.c.slug == "tenant-a")
+        assert (await conn.execute(found)).scalar_one() is None
+
+
+async def test_suspend_refuses_a_tenants_tokens_and_resume_restores_them(operator_env):
+    """DF-408: a suspended tenant's tokens answer 401 like any invalid token."""
+    api = operator_env
+    assert await _run("admin", "tenant", "suspend", "--tenant", "tenant-a", "--reason", "x") == 0
+    assert (await api.get("/v1/me", api.a.admin_token)).status_code == 401
+    assert (await api.get("/v1/me", api.b.admin_token)).status_code == 200
+    assert await _run("admin", "tenant", "suspend", "--tenant", "tenant-a", "--reason", "x") == 2
+    assert await _run("admin", "tenant", "resume", "--tenant", "tenant-a", "--reason", "ok") == 0
+    assert (await api.get("/v1/me", api.a.admin_token)).status_code == 200
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        events = [r.event for r in await read_records(conn)]
+    assert events[-2:] == ["tenant.suspended", "tenant.resumed"]
+    assert await _run("admin", "tenant", "resume", "--tenant", "tenant-a", "--reason", "x") == 2

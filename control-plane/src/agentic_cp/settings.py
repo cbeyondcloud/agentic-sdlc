@@ -54,7 +54,8 @@ def _http_url(value: str) -> str:
     return stripped
 
 
-def _address(value: str) -> str:
+def checked_address(value: str) -> str:
+    """A mail address as a sender may use it, or ValueError."""
     stripped = value.strip()
     if not re.fullmatch(r"[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+", stripped):
         raise ValueError("not an email address")
@@ -109,7 +110,7 @@ class Settings(BaseModel):
     relay on the same host or cluster only)."""
     smtp_username: str | None = None
     smtp_password: SecretStr | None = None
-    smtp_from: Annotated[str, AfterValidator(_address)] | None = None
+    smtp_from: Annotated[str, AfterValidator(checked_address)] | None = None
     """The deployment's sender; a tenant's `mail_from` replaces it for that tenant."""
     smtp_from_name: str = "agentic"
     smtp_timeout_seconds: Annotated[int, Field(ge=1, le=300)] = 30
