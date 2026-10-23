@@ -108,6 +108,18 @@ def test_unexpected_file_in_layer_rejected(tmp_path: Path, bad: str):
     assert bad.split("/")[1] in str(error.value)
 
 
+def test_pipeline_overlays_folder_is_not_a_pipeline(tmp_path: Path):
+    """D33: per-repo overlays live in `teams/<team>/pipelines/overlays/` (loaded by M2-23);
+    discovery skips that folder, and any other folder there is still an error."""
+    team = make_layer(tmp_path / "team", agents={"developer": "team"})
+    write(team / "pipelines" / "overlays" / "app.yaml", "steps: []\n")
+    found = DefinitionSet.discover(org=None, team=team, repo=None)
+    assert "app" not in found.pipelines
+    write(team / "pipelines" / "drafts" / "x.yaml", "name: x\n")
+    with pytest.raises(DefinitionError, match="drafts"):
+        DefinitionSet.discover(org=None, team=team, repo=None)
+
+
 # ── handoff extensions per layer (D37) ────────────────────────────────────────
 
 

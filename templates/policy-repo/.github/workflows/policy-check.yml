@@ -1,0 +1,19 @@
+# The policy-repo gate: every pull request must load, and every catalogued skill must be
+# admitted, under the org's own licences and limits (agentic policy check). Make this
+# check required in the branch protection of the default branch.
+name: policy-check
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      # EDIT: install from your internal package index, at the org's pinned version
+      - run: uv tool install "agentic[skills]"
+      - run: agentic policy check .

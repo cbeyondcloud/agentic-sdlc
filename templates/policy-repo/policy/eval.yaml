@@ -1,0 +1,5 @@
+# Agent evaluation defaults (M1-63): `agentic eval run` and `agentic skills eval` use
+# them unless a flag says otherwise.
+eval:
+  repeats: 3                            # runs per case per variant
+  budget_usd: 100                       # the spend cap of one evaluation

@@ -13,6 +13,9 @@ sandbox:
     - registry.npmjs.org
     - repo.maven.apache.org
   allow_write: []                       # writable besides the run's tree, e.g. "~/.cache/uv"
+  # environment variables agent commands keep although their name looks secret, e.g. an
+  # authenticated proxy or the SSH agent socket (never AGENTIC_*)
+  pass_env: []
 
 # A secret found in content about to leave for a model: refuse the call (block)
 # or replace the secret with a marker (mask). Either way it is recorded.

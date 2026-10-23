@@ -7,6 +7,7 @@ agentic pipelines list | search <text>
 agentic pipelines new <name>               a repo pipeline from the pipeline template
 agentic skills list | search <text>        the org skills catalog, and what is installed
 agentic policy show                        tiers, classes, agent types and caps, the team
+agentic policy check [PATH]                the policy-repo pull request gate (M2-51)
 """
 
 import re
@@ -27,6 +28,7 @@ from agentic.definitions import (
 from agentic.engine.preflight import preflight
 from agentic.policy import OrgPolicy, resolve_agent
 from agentic.skills.catalog import CatalogError, load_catalog, skill_digest, skill_folder
+from agentic.skills.gate import check_policy_repo
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.output import Output
@@ -156,6 +158,27 @@ def register(app: typer.Typer) -> None:
         ws = Workspace.load()
         shown = _policy_summary(ws.policy(), ws.team)
         out.result(shown, lambda c: _show_policy(c, shown))
+
+    @policy.command("check")
+    def policy_check(
+        ctx: typer.Context,
+        path: Annotated[Path, typer.Argument(help="A policy repo checkout.")] = Path("."),
+    ) -> None:
+        """The policy-repo gate: policy, definitions and every skill catalog, admitted
+        under the org's own licences and limits (exit 3 on a problem)."""
+        out: Output = ctx.obj
+        problems = check_policy_repo(path)
+        data = {"path": str(path), "problems": problems}
+
+        def show(console) -> None:
+            for problem in problems:
+                console.print(problem, markup=False)
+            if not problems:
+                console.print(f"{path}: passes the policy-repo gate", markup=False)
+
+        out.result(data, show)
+        if problems:
+            raise CliError(f"{len(problems)} problem(s) in the policy repo", ExitCode.INVALID)
 
 
 # ── validate ─────────────────────────────────────────────────────────────────

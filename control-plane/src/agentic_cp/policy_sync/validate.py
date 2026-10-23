@@ -5,8 +5,12 @@ The tree is the policy repo at one commit, extracted from `git archive`:
 
     policy/            the org policy (`agentic.policy.load_policy`)
     agents/, pipelines/  the org layer of definitions
-    teams/<team>/      each team's layer (`DefinitionSet.discover` per team)
+    teams/<team>/      each team's layer (`DefinitionSet.discover` per team), and its own
+                       skills catalog `teams/<team>/skills/` when present (M2-51)
     skills/            the skills catalog, when present (`agentic.skills.load_catalog`)
+
+The full admission of every catalogued skill (licence, format, size, scan, pins) is the
+policy repo's pull request gate, `agentic policy check`, which needs the skill files.
 
 Each problem is one line naming the file, relative to the tree root."""
 
@@ -46,11 +50,15 @@ def validate_policy_tree(root: Path, version: str) -> tuple[list[str], OrgPolicy
             )
         except DefinitionError as error:
             problems += _named(root, error)
-    if (root / "skills").is_dir():
-        try:
-            load_catalog(root / "skills")
-        except CatalogError as error:
-            problems += _named(root, error)
+    team_dirs = sorted(p for p in teams.iterdir() if p.is_dir()) if teams.is_dir() else []
+    for catalog in [root / "skills", *(team / "skills" for team in team_dirs)]:
+        if not (catalog / "catalog.yaml").is_file() and catalog != root / "skills":
+            continue  # a team without skills of its own
+        if catalog.is_dir():
+            try:
+                load_catalog(catalog)
+            except CatalogError as error:
+                problems += _named(root, error)
     return problems[:MAX_PROBLEMS], policy
 
 
