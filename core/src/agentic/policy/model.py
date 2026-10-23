@@ -133,9 +133,32 @@ _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 FRAMEWORK_ENV_PREFIX = "AGENTIC_"
 
 
+#: Second-level labels registrars sell names under in a country code (`*.co.uk`,
+#: `*.com.au`): a wildcard straight over one is as broad as `*.com`.
+_PUBLIC_SECOND_LEVEL = frozenset(
+    "ac co com edu gob gov govt ltd mil ne net nic or org plc sch".split()
+)
+
+
 def _port_ok(host: str) -> bool:
     _, sep, port = host.rpartition(":")
     return not sep or 0 < int(port) < 65536
+
+
+def _too_broad(host: str) -> bool:
+    """A wildcard over a top-level domain, a country's public second level or an address."""
+    if not host.startswith("*."):
+        return False
+    labels = host[2:].partition(":")[0].split(".")
+    if len(labels) < 2 or all(label.isdigit() for label in labels):
+        return True
+    return len(labels) == 2 and len(labels[1]) == 2 and labels[0] in _PUBLIC_SECOND_LEVEL
+
+
+def _unpadded(host: str) -> str:
+    """`host:08080` as srt matches it: `host:8080`."""
+    name, sep, port = host.rpartition(":")
+    return f"{name}:{int(port)}" if sep else host
 
 
 class SandboxPolicy(_Strict):
@@ -169,6 +192,14 @@ class SandboxPolicy(_Strict):
                     f"allowed_domains entry {entry!r} is not a host name (pypi.org, "
                     "*.npmjs.org or registry.internal:8443; never a URL, a path or '*')"
                 )
+            elif _too_broad(host):
+                problems.append(
+                    f"allowed_domains entry {entry!r} is too broad: a wildcard must sit under "
+                    "a registered name (*.npmjs.org, *.example.co.uk), never straight over "
+                    "a top-level domain, a country's public second level or an address"
+                )
+            else:
+                host = _unpadded(host)
             hosts.append(host)
         bad_env = [name for name in self.pass_env if not _ENV_NAME.fullmatch(str(name))]
         bad_env += [n for n in self.pass_env if str(n).upper().startswith(FRAMEWORK_ENV_PREFIX)]

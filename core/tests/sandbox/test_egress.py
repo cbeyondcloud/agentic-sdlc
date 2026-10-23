@@ -57,6 +57,27 @@ def test_an_entry_that_is_not_a_host_name_is_refused(bad):
         SandboxPolicy(allowed_domains=[bad])
 
 
+@pytest.mark.parametrize(
+    "broad", ["*.com", "*.io", "*.co.uk", "*.com.au", "*.ac.uk", "*.0.0.0.0", "*.10.0.0.1"]
+)
+def test_a_wildcard_over_a_public_suffix_or_an_address_is_refused(broad):
+    with pytest.raises(ValidationError, match="too broad"):
+        SandboxPolicy(allowed_domains=[broad])
+
+
+@pytest.mark.parametrize(
+    "given, kept",
+    [
+        ("*.example.co.uk", "*.example.co.uk"),
+        ("*.pkg.dev", "*.pkg.dev"),
+        ("pypi.org:08080", "pypi.org:8080"),
+        ("nexus", "nexus"),
+    ],
+)
+def test_narrow_wildcards_short_names_and_padded_ports_are_kept(given, kept):
+    assert SandboxPolicy(allowed_domains=[given]).allowed_domains == [kept]
+
+
 def test_duplicate_hosts_are_kept_once():
     policy = SandboxPolicy(allowed_domains=["pypi.org", "PyPI.org", "files.pythonhosted.org"])
     assert policy.allowed_domains == ["pypi.org", "files.pythonhosted.org"]
