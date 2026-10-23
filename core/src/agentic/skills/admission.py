@@ -282,12 +282,21 @@ def _licence(
     return found
 
 
-def _validate(folder: Path) -> list[Rejection]:
+def skills_ref_problems(folder: Path) -> list[str] | None:
+    """`skills-ref validate`'s problems with the folder (the Agent Skills reference
+    validator), or None when skills-ref is not installed (agentic-core[skills])."""
     try:
         from skills_ref.validator import validate
     except ImportError:
+        return None
+    return list(validate(folder))
+
+
+def _validate(folder: Path) -> list[Rejection]:
+    problems = skills_ref_problems(folder)
+    if problems is None:
         return [Rejection("validate", ".", "skills-ref is not installed (agentic-core[skills])")]
-    return [Rejection("validate", "SKILL.md", problem) for problem in validate(folder)]
+    return [Rejection("validate", "SKILL.md", problem) for problem in problems]
 
 
 def _size(folder: Path, limits: AdmissionLimits) -> list[Rejection]:
@@ -356,5 +365,6 @@ __all__ = [
     "admit_catalog",
     "hidden_char",
     "scan_text",
+    "skills_ref_problems",
     "telemetry_urls",
 ]
