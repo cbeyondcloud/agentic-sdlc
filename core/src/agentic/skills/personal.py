@@ -229,6 +229,16 @@ def _note(root: Path, path: Path) -> MemoryNote:
     return MemoryNote(name, f"sha256:{hashlib.sha256(content).hexdigest()}", text.strip())
 
 
+def _skill_text(skill: PersonalSkill) -> str:
+    return f"### Personal skill: {skill.name}\n\n{skill.body}"
+
+
+def skill_block(skills: list[PersonalSkill]) -> str:
+    """The text `skills` add to an agent's instructions, exactly as a run inlines them
+    (`agentic skills eval` measures this text); "" for none. Nothing is recorded."""
+    return "\n\n".join([HEADER, *map(_skill_text, skills)]) if skills else ""
+
+
 class PersonalContext:
     """A user's personal skills and notes, as one agent's instructions see them."""
 
@@ -292,7 +302,7 @@ class PersonalContext:
         parts = []
         for skill in wanted[:MAX_PERSONAL_SKILLS]:
             self._activated(skill.key, skill.version, skill.sha256, PERSONAL)
-            parts.append(f"### Personal skill: {skill.name}\n\n{skill.body}")
+            parts.append(_skill_text(skill))
         return parts
 
     def _memory(self) -> list[str]:
@@ -324,4 +334,5 @@ __all__ = [
     "PersonalSet",
     "PersonalSkill",
     "load_personal",
+    "skill_block",
 ]
