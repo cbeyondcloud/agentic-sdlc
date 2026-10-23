@@ -24,14 +24,17 @@ from agentic.orgapi import (
 )
 from agentic.orgapi.models import ROLE_NAME
 from agentic.orgapi.rbac import PERMISSIONS, unknown_permissions
+from agentic.policy.repos import normalise_remote
 from agentic_cp.audit import AuditEvent, append
 from agentic_cp.auth.deps import Caller
 from agentic_cp.auth.tokens import TokenContext
 from agentic_cp.auth.users import UserError, create_user, normalise_email, user_by_email
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
+from agentic_cp.policy_sync.service import active_teams
 from agentic_cp.rbac import store
 from agentic_cp.rbac.authz import Org, Repo, Team, authorize, describe, require
 from agentic_cp.rbac.defaults import BUILTIN, ORG_ADMIN
+from agentic_cp.rbac.repos import get_repo
 from agentic_cp.tenancy.context import tenant_tx
 from agentic_cp.tenancy.tenants import bump_rbac_revision, lock_rbac
 
@@ -105,18 +108,22 @@ async def get_role(name: str, request: Request, ctx: Caller) -> RoleInfo:
 async def put_role(
     name: str, body: RoleUpdate, request: Request, response: Response, ctx: Caller
 ) -> RoleInfo:
-    """Create or replace a role (org `rbac.assign`). Org admins always keep `rbac.assign`."""
+    """Create or replace a role (org `rbac.assign`). Org admins always keep `rbac.assign`.
+    The caller's right is checked before the body (DF-417): without `rbac.assign` every
+    request is a 403, whatever it asks for."""
     state = request.app.state
-    if unknown := unknown_permissions(body.permissions):
-        raise ApiProblem(
-            422, "rbac.unknown_permission", f"unknown permission(s): {', '.join(unknown)}"
-        )
-    name = _checked_role_name(name, creating=True)
-    if name == ORG_ADMIN and "rbac.assign" not in body.permissions:
-        raise ApiProblem(409, "rbac.admin_needs_assign", "the org-admin role must keep rbac.assign")
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         await lock_rbac(conn)
         await require(ctx, "rbac.assign", Org(), conn=conn, cache=state.enforcers)
+        if unknown := unknown_permissions(body.permissions):
+            raise ApiProblem(
+                422, "rbac.unknown_permission", f"unknown permission(s): {', '.join(unknown)}"
+            )
+        name = _checked_role_name(name, creating=True)
+        if name == ORG_ADMIN and "rbac.assign" not in body.permissions:
+            raise ApiProblem(
+                409, "rbac.admin_needs_assign", "the org-admin role must keep rbac.assign"
+            )
         before = await store.get_role(conn, name)
         if before is not None and before.name in BUILTIN and not BUILTIN[name].assignable:
             team_assignable = before.team_assignable  # derived roles never become assignable
@@ -222,6 +229,14 @@ async def create_assignment(body: AssignmentRequest, request: Request, ctx: Call
                 "rbac.not_assignable",
                 f"a team lead may assign only team-assignable roles, not {role.name}",
             )
+        if body.team and (teams := await active_teams(conn)) is not None:
+            if body.team not in teams:  # R14, DF-404: the active policy names the teams
+                raise ApiProblem(
+                    422,
+                    "rbac.unknown_team",
+                    f"team {body.team!r} is not in the tenant's active policy",
+                    hint=f"add policy/teams/{body.team}.yaml to the policy repo first",
+                )
         try:
             user = await user_by_email(conn, body.email) or await create_user(conn, body.email)
         except UserError as error:
@@ -303,14 +318,24 @@ async def check(body: CheckRequest, request: Request, ctx: Caller) -> CheckResul
     org, a team or a repo? The authoritative answer the CLI relies on."""
     if body.permission not in PERMISSIONS:
         raise ApiProblem(422, "rbac.unknown_permission", f"unknown permission {body.permission}")
-    if body.repo:
-        resource = Repo(body.repo, team=body.team)
-    elif body.team:
-        resource = Team(body.team)
-    else:
-        resource = Org()
     state = request.app.state
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+        if body.repo:
+            key = normalise_remote(body.repo)
+            registered = await get_repo(conn, key)
+            if registered is not None and body.team and body.team != registered.team:
+                raise ApiProblem(  # DF-418: a registered repo's team is the table's
+                    422,
+                    "rbac.repo_team_mismatch",
+                    f"{key} belongs to team {registered.team}, not {body.team}",
+                )
+            # an unregistered repo takes the claimed team: registering it needs
+            # agent.edit.repo in that very team
+            resource = Repo(key, team=registered.team if registered else body.team)
+        elif body.team:
+            resource = Team(body.team)
+        else:
+            resource = Org()
         subject = ctx.user_id
         if body.user is not None:
             await require(ctx, "rbac.assign", Org(), conn=conn, cache=state.enforcers)

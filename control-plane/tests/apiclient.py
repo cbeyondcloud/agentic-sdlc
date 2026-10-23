@@ -3,8 +3,10 @@ on the app (same event loop as the test, so asyncpg connections stay on one loop
 
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -77,15 +79,28 @@ class Client:
 class Api(Client):
     """The app on a test database with tenants `a` and `b`, each with an org admin."""
 
-    def __init__(self, db, clock: FakeClock, a: TenantHandle, b: TenantHandle, **hooks) -> None:
+    def __init__(
+        self,
+        db,
+        clock: FakeClock,
+        a: TenantHandle,
+        b: TenantHandle,
+        settings: Settings | None = None,
+        **hooks,
+    ) -> None:
         self.db, self.clock, self.a, self.b = db, clock, a, b
-        self.settings = settings_for(db)
+        self.settings = settings or settings_for(db)
         super().__init__(create_app(self.settings, engine=db.app, clock=clock, **hooks))
         self.client = self
 
     def with_app(self, **hooks) -> Api:
         """The same database and tenants behind a second app (another replica)."""
         return Api(self.db, self.clock, self.a, self.b, **hooks)
+
+    def with_settings(self, **values) -> Api:
+        """The same database and tenants behind an app with other settings."""
+        settings = self.settings.model_copy(update=values)
+        return Api(self.db, self.clock, self.a, self.b, settings=settings)
 
     async def add_user(
         self, tenant: TenantHandle, email: str, *, kind: str = "human"
@@ -104,7 +119,17 @@ class Api(Client):
 
 
 def settings_for(db) -> Settings:
-    return Settings.from_env({"AGENTIC_CP_DATABASE_URL": db.app_dsn})
+    """The tests' deployment: local `file://` policy repos allowed (R12), a policy work
+    folder per test database."""
+    return Settings.from_env(
+        {
+            "AGENTIC_CP_DATABASE_URL": db.app_dsn,
+            "AGENTIC_CP_ALLOW_LOCAL_REPOS": "true",
+            "AGENTIC_CP_POLICY_WORKDIR": str(
+                Path(tempfile.gettempdir()) / "agentic-cp-tests" / db.name
+            ),
+        }
+    )
 
 
 async def bootstrap(db, clock: FakeClock, slug: str, name: str) -> TenantHandle:

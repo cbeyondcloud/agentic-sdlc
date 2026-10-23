@@ -34,7 +34,19 @@ metadata = MetaData(
 
 #: Every tenant-owned table, in creation order. A table in the schema that is neither
 #: `tenants` nor listed here fails the catalogue test and `enforcement_status`.
-TENANT_TABLES: tuple[str, ...] = ("audit_log", "users", "tokens", "roles", "assignments")
+TENANT_TABLES: tuple[str, ...] = (
+    "audit_log",
+    "users",
+    "tokens",
+    "roles",
+    "assignments",
+    "policy_versions",
+    "policy_active",
+    "repos",
+    "repo_maintainers",
+    "runs",
+    "run_events",
+)
 
 #: A tenant's slug: lower-case, starts with a letter, 2-63 characters.
 SLUG_PATTERN = "^[a-z][a-z0-9-]{1,62}$"
@@ -133,6 +145,7 @@ roles = Table(
     Column("builtin", Boolean, nullable=False, server_default="false"),
     Column("team_assignable", Boolean, nullable=False, server_default="false"),
     Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("seed_permissions", ARRAY(Text), nullable=True),
     CheckConstraint("name ~ '^[a-z][a-z0-9-]{1,62}$'", name="roles_name_format"),
 )
 
@@ -156,6 +169,115 @@ assignments = Table(
         "(scope_kind = 'org' and scope_value = '') or (scope_kind = 'team' and scope_value <> '')",
         name="assignments_scope_value",
     ),
+)
+
+#: Every policy commit a tenant's sync has seen (M2-02): insert-only for the runtime role.
+#: An accepted version carries its bundle (`git archive`, gzipped, `mtime=0`) and digests;
+#: a rejected one its problems. `teams` are the policy's teams (the assignment guard, R14).
+policy_versions = Table(
+    "policy_versions",
+    metadata,
+    _tenant_id(),
+    Column("version", Text, primary_key=True),
+    Column("commit", Text, nullable=False),
+    Column("branch", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("problems", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("teams", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("bundle", BYTEA, nullable=True),
+    Column("digest", Text, nullable=True),
+    Column("tree_digest", Text, nullable=True),
+    Column("commit_at", DateTime(timezone=True), nullable=True),
+    Column("received_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("repo_patterns", ARRAY(Text), nullable=False, server_default="{}"),
+    CheckConstraint("status in ('accepted', 'rejected')", name="policy_versions_status_known"),
+    CheckConstraint(
+        "(status = 'accepted') = (bundle is not null and digest is not null)",
+        name="policy_versions_bundle_iff_accepted",
+    ),
+)
+
+#: The tenant's active policy version: the one updatable pointer into `policy_versions`.
+policy_active = Table(
+    "policy_active",
+    metadata,
+    _tenant_id(),
+    Column("version", Text, nullable=False),
+    Column("branch", Text, nullable=False),
+    Column("activated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    ForeignKeyConstraint(
+        ["tenant_id", "version"], ["policy_versions.tenant_id", "policy_versions.version"]
+    ),
+)
+
+#: Repos registered in a tenant (M2-03): `owners` are the CODEOWNERS owners of the agentic
+#: paths (host-qualified handles and emails), `unresolved` the `@org/team` entries (ND-6).
+repos = Table(
+    "repos",
+    metadata,
+    _tenant_id(),
+    Column("repo_key", Text, primary_key=True),
+    Column("remote", Text, nullable=False),
+    Column("team", Text, nullable=False),
+    Column("owners", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("unresolved", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("codeowners_path", Text, nullable=True),
+    Column("codeowners_commit", Text, nullable=True),
+    Column("refreshed_at", DateTime(timezone=True), nullable=True),
+    Column("registered_by", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+#: Derived maintainers: users of the tenant whose handle or email CODEOWNERS names.
+repo_maintainers = Table(
+    "repo_maintainers",
+    metadata,
+    _tenant_id(),
+    Column("repo_key", Text, primary_key=True),
+    Column("user_id", UUID(as_uuid=True), primary_key=True),
+    Column("source_entry", Text, nullable=False),
+    ForeignKeyConstraint(
+        ["tenant_id", "repo_key"], ["repos.tenant_id", "repos.repo_key"], ondelete="CASCADE"
+    ),
+    ForeignKeyConstraint(["tenant_id", "user_id"], ["users.tenant_id", "users.id"]),
+)
+
+#: Runs reported by CLIs (M2-04): one row per run, holding its identity and chain head.
+#: The key includes the tenant, so one run id in two tenants is two runs.
+runs = Table(
+    "runs",
+    metadata,
+    _tenant_id(),
+    Column("run_id", Text, primary_key=True),
+    Column("team", Text, nullable=False),
+    Column("started_by", UUID(as_uuid=True), nullable=False),
+    Column("policy_version", Text, nullable=False),
+    Column("policy_known", Boolean, nullable=False),
+    Column("status", Text, nullable=False, server_default="open"),
+    Column("head_seq", BigInteger, nullable=False, server_default="0"),
+    Column("head_hash", Text, nullable=False, server_default=""),
+    Column("opened_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("last_event_at", DateTime(timezone=True), nullable=True),
+    ForeignKeyConstraint(["tenant_id", "started_by"], ["users.tenant_id", "users.id"]),
+)
+
+#: Each run's chained events exactly as received (insert-only evidence; `entry` is the
+#: whole entry, so the stored chain re-verifies with `sdlc_commons.ledger.verify_entries`).
+run_events = Table(
+    "run_events",
+    metadata,
+    _tenant_id(),
+    Column("run_id", Text, primary_key=True),
+    Column("seq", BigInteger, primary_key=True, autoincrement=False),
+    Column("hash", Text, nullable=False),
+    Column("prev", Text, nullable=False),
+    Column("event", Text, nullable=False),
+    Column("step", Text, nullable=False),
+    Column("at", Text, nullable=False),
+    Column("entry", JSONB, nullable=False),
+    Column("received_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    ForeignKeyConstraint(["tenant_id", "run_id"], ["runs.tenant_id", "runs.run_id"]),
+    CheckConstraint("seq > 0", name="run_events_seq_positive"),
 )
 
 #: Unique constraints that deliberately span tenants: credential hashes, looked up before

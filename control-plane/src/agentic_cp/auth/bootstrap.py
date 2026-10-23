@@ -8,7 +8,6 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -16,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from agentic_cp.audit import OPERATOR, AuditEvent, append, format_at
 from agentic_cp.auth.tokens import issue_token, token_lifetime
 from agentic_cp.auth.users import create_user
+from agentic_cp.gitops import RepoUrlError, check_repo_url
 from agentic_cp.rbac.defaults import ORG_ADMIN, seed_roles
 from agentic_cp.settings import Settings
 from agentic_cp.tables import assignments
@@ -34,14 +34,15 @@ class BootstrapResult:
         return f"BootstrapResult(tenant={self.tenant!r}, admin_id={self.admin_id})"
 
 
-def refuse_credentials_in_url(url: str | None) -> None:
-    """A repository URL with a user or password in it is refused (ND-15); the message never
-    repeats the URL."""
-    if url and (urlsplit(url).username or urlsplit(url).password):
-        raise TenancyError(
-            "the policy repo URL carries credentials; give the plain URL and mount git "
-            "credentials for the tenant instead"
-        )
+def checked_policy_repo(url: str | None, settings: Settings) -> str | None:
+    """A policy repo URL a tenant may use (R12, ND-15), or `TenancyError`; the message
+    never repeats the URL."""
+    if url is None:
+        return None
+    try:
+        return check_repo_url(url, allow_local=settings.allow_local_repos)
+    except RepoUrlError as error:
+        raise TenancyError(str(error)) from None
 
 
 async def bootstrap_tenant(
@@ -56,7 +57,7 @@ async def bootstrap_tenant(
     gateway_tenant: str | None = None,
     clock: Callable[[], datetime],
 ) -> BootstrapResult:
-    refuse_credentials_in_url(policy_repo)
+    policy_repo = checked_policy_repo(policy_repo, settings)
     tenant_id = uuid.uuid4()
     async with tenant_tx(owner_engine, tenant_id) as conn:
         tenant = await create_tenant(

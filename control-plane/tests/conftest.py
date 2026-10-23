@@ -7,9 +7,12 @@ of it with an owner engine and a runtime-role engine; `blank_db` is an empty dat
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
+import shutil
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import UUID
 
 import pytest
@@ -190,6 +193,19 @@ async def api(db: TestDb) -> AsyncIterator[Api]:
         yield harness
     finally:
         await harness.http.aclose()
+        remove_tree(harness.settings.policy_workdir)
+
+
+def remove_tree(path: Path) -> None:
+    """Remove a test's work folder; git makes pack files read-only (Windows needs them
+    writable first)."""
+
+    def writable(func, target, _error):
+        os.chmod(target, 0o700)
+        func(target)
+
+    if path.exists():
+        shutil.rmtree(path, onexc=writable)
 
 
 @pytest.fixture

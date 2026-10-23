@@ -218,7 +218,9 @@ async def test_checking_another_user_needs_rbac_assign(api):
 async def test_me_lists_effective_permissions(api):
     token, _ = await member(api, api.a, "dev@a.example.test", "developer", "payments")
     me = (await api.get("/v1/me", token)).json()
-    assert me["assignments"] == [{"role": "developer", "scope": "team", "team": "payments"}]
+    assert me["assignments"] == [
+        {"role": "developer", "scope": "team", "team": "payments", "repo": None, "derived": False}
+    ]
     assert "run.trigger" in me["permissions"]["teams"]["payments"]
     assert me["permissions"]["org"] == []
     admin = (await api.get("/v1/me", api.a.admin_token)).json()

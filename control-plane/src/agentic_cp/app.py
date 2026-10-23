@@ -17,12 +17,19 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from agentic_cp.audit.api import router as audit_router
 from agentic_cp.auth.api import router as auth_router
+from agentic_cp.body_limit import BodyLimit
 from agentic_cp.db import current_revision, head_revision, make_engine
 from agentic_cp.db_roles import AUDIT, TENANCY, enforcement_status
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, install_problem_handlers, log
+from agentic_cp.gitops import GitRunner
+from agentic_cp.ingest.api import router as runs_router
+from agentic_cp.logredact import install_log_redaction
+from agentic_cp.policy_sync.api import router as policy_router
 from agentic_cp.rbac.api import router as rbac_router
 from agentic_cp.rbac.authz import EnforcerCache
+from agentic_cp.rbac.repos_api import router as repos_router
 from agentic_cp.settings import Settings
+from agentic_cp.tenancy.api import router as tenant_router
 
 Clock = Callable[[], datetime]
 
@@ -63,13 +70,19 @@ def create_app(
     app.state.settings = settings
     app.state.engine = db
     app.state.clock = clock or utc_now
-    app.state.git = git
+    app.state.git = git if git is not None else GitRunner(settings)
     app.state.rate_limiter = rate_limiter
     app.state.enforcers = EnforcerCache(settings.enforcer_cache_tenants)
     install_problem_handlers(app)
+    install_log_redaction()  # the webhook token travels in the path (review F2)
+    app.add_middleware(BodyLimit, max_bytes=settings.max_body_bytes)
     app.include_router(auth_router)
     app.include_router(rbac_router)
     app.include_router(audit_router)
+    app.include_router(tenant_router)
+    app.include_router(policy_router)
+    app.include_router(repos_router)
+    app.include_router(runs_router)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:
@@ -96,7 +109,12 @@ async def serve_preflight(settings: Settings, engine: AsyncEngine | None = None)
     try:
         await check_ready(db, settings)
     except ApiProblem as problem:
-        return f"{problem.code}: {problem.detail}" + (f" ({problem.hint})" if problem.hint else "")
+        refusal = f"{problem.code}: {problem.detail}"
+        if problem.code in (AUDIT, TENANCY):  # the operator needs each reason, not a summary
+            async with db.connect() as conn:
+                status = await enforcement_status(conn, schema=settings.db_schema)
+            refusal += "".join(f"\n  - {reason}" for reason in status.reasons)
+        return refusal + (f" ({problem.hint})" if problem.hint else "")
     finally:
         if engine is None:
             await db.dispose()

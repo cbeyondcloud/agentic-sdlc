@@ -24,9 +24,7 @@ Every check only reads. Git runs with `core.fsmonitor` off and optional locks of
 repository's own config cannot run a command and `git status` writes nothing.
 """
 
-import fnmatch
 import os
-import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -34,6 +32,7 @@ from pathlib import Path
 from typing import Literal
 
 from agentic.policy import OrgPolicy
+from agentic.policy.repos import normalise_remote, repo_allowed
 from agentic.repoconfig import CONFIG_REL, RepoConfig, RepoConfigError, load_repo_config
 from agentic.yamlio import YamlFileError, read_text
 from agentic_cli.errors import CliError
@@ -92,8 +91,8 @@ def check_repo(
             hint="clone the repository into its own folder and run init there",
         )
     # 5
-    origin_url = _git(top, "remote", "get-url", "origin")
-    origin = normalise_remote(origin_url) if origin_url else None
+    remote_url = _git(top, "remote", "get-url", "origin")
+    origin = normalise_remote(remote_url) if remote_url else None
     if org_mode:
         _allowed_by_policy(origin, policy)
     # 6
@@ -122,18 +121,9 @@ def check_repo(
     )
 
 
-def normalise_remote(url: str) -> str:
-    """`host/owner/repo`, lower case, from an https, ssh or scp-style git URL. Only a
-    URL with a scheme can carry a port; in the scp form (`host:owner/repo`) the part
-    after the colon is always the path, even when the owner is a number (DF-199)."""
-    text = url.strip().lower()
-    scheme = re.match(r"^[a-z][a-z0-9+.-]*://", text)
-    text = re.sub(r"^[^@/]*@", "", text[scheme.end() :] if scheme else text)  # user@
-    if scheme:
-        text = re.sub(r"^([^/:]+):\d+(?=/)", r"\1", text)  # host:port
-    else:
-        text = re.sub(r"^([^/:]+):", r"\1/", text, count=1)  # scp form host:owner/repo
-    return text.rstrip("/").removesuffix(".git")
+def origin_url(cwd: Path) -> str | None:
+    """The `origin` remote's URL as configured (credentials and all), or None."""
+    return _git(Path(cwd), "remote", "get-url", "origin") or None
 
 
 # --- the checks ---
@@ -187,7 +177,7 @@ def _allowed_by_policy(origin: str | None, policy: OrgPolicy | None) -> None:
         )
     if origin is None:
         raise GuardRefusal(5, "Repo not approved for agentic use: it has no origin remote", hint)
-    if not any(fnmatch.fnmatchcase(origin, normalise_remote(p)) for p in patterns):
+    if not repo_allowed(patterns, origin):
         raise GuardRefusal(5, f"Repo not approved for agentic use ({origin})", hint=hint)
 
 

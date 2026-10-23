@@ -48,6 +48,7 @@ def load_yaml(text: str, first_line: int = 1) -> tuple[Any, dict[Loc, int]]:
     """
     try:
         data = YAML(typ="safe", pure=True).load(text)
+        _check_expansion(data)
         return data, _line_map(YAML(typ="rt").load(text), first_line)
     except YAMLError as error:
         raise YamlFileError(_describe_yaml_error(error, first_line)) from error
@@ -122,6 +123,42 @@ def _describe_yaml_error(error: YAMLError, first_line: int) -> str:
     if context_mark and context and "block" not in context and "duplicate" not in problem:
         message += f" (started at line {context_mark.line + first_line}: {context})"
     return message
+
+
+#: How many values aliases may add beyond the ones written out (review F2): ordinary
+#: anchors add a handful; an "alias bomb" expands a few hundred bytes into millions.
+MAX_ALIAS_EXPANSION = 10_000
+
+
+def _check_expansion(data: Any) -> None:
+    """Refuse a document whose aliases expand far beyond its own size, or refer to
+    themselves, before anything (the line map, a validator) walks the expansion.
+    Shared containers are counted once for the written size and every time for the
+    expanded size, memoised by identity, so the check itself is linear."""
+    expanded: dict[int, int] = {}
+    written = 0
+
+    def size(node: Any) -> int:
+        nonlocal written
+        if not isinstance(node, dict | list):
+            return 1
+        key = id(node)
+        if key in expanded:
+            if expanded[key] < 0:
+                raise YamlFileError("an alias refers to a value that contains it")
+            return expanded[key]
+        expanded[key] = -1  # in progress: meeting it again is a cycle
+        children = [*node.keys(), *node.values()] if isinstance(node, dict) else node
+        written += 1 + sum(not isinstance(child, dict | list) for child in children)
+        total = 1 + sum(size(child) for child in children)
+        expanded[key] = total
+        return total
+
+    if size(data) - written > MAX_ALIAS_EXPANSION:
+        raise YamlFileError(
+            f"aliases (*name) expand this file by more than {MAX_ALIAS_EXPANSION} values; "
+            "write the values out or use fewer aliases"
+        )
 
 
 def _line_map(node: Any, first_line: int, prefix: Loc = ()) -> dict[Loc, int]:

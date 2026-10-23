@@ -5,11 +5,12 @@ the CLI can depend on it without pulling the server in (import contract)."""
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 from agentic.orgapi.rbac import EffectivePermissions
 
@@ -46,11 +47,14 @@ class UserRef(BaseModel):
 
 
 class AssignmentRef(BaseModel):
-    """A role held at org scope or within one team."""
+    """A role held at org scope, within one team, or - derived from CODEOWNERS, never
+    assigned by hand - for one repo (`derived` is then true)."""
 
     role: str
-    scope: Literal["org", "team"]
+    scope: Literal["org", "team", "repo"]
     team: str | None = None
+    repo: str | None = None
+    derived: bool = False
 
 
 class Me(BaseModel):
@@ -172,6 +176,157 @@ class AuditVerification(BaseModel):
     problems: list[str]
 
 
+#: A git branch name a tenant may track (a subset of `git check-ref-format --branch`).
+BRANCH_NAME = re.compile(
+    r"(?!-)(?!.*\.\.)(?!.*//)(?!.*@\{)(?!.*\.lock$)(?!.*/\.)(?!\.)[A-Za-z0-9._/-]{1,200}(?<![./])"
+)
+
+
+def checked_branch(value: str) -> str:
+    if not BRANCH_NAME.fullmatch(value):
+        raise ValueError("not a branch name git accepts (letters, digits, '.', '_', '-', '/')")
+    return value
+
+
+class TenantInfo(BaseModel):
+    """`GET /v1/tenant`: the caller's tenant (credentials never shown)."""
+
+    slug: str
+    name: str
+    policy_repo: str | None = None
+    policy_branch: str
+    webhook_configured: bool = False
+
+
+class PolicySource(RequestModel):
+    """`PUT /v1/tenant/policy-source`: where the tenant's policy repo lives. A URL with
+    credentials is refused (git credentials are mounted per tenant, ND-15)."""
+
+    repo: str = Field(min_length=1, max_length=500)
+    branch: Annotated[str, AfterValidator(checked_branch)] = "main"
+
+
+class SyncOutcome(BaseModel):
+    """What one policy sync did. `failed`: the repo could not be fetched (`problems` says
+    why, credentials scrubbed)."""
+
+    kind: Literal["unchanged", "activated", "rejected", "busy", "unconfigured", "failed"]
+    version: str | None = None
+    problems: list[str] = Field(default_factory=list)
+
+
+class PolicySourceChanged(TenantInfo):
+    """The tenant after a policy-source change, and the sync it triggered."""
+
+    sync: SyncOutcome
+
+
+class WebhookIssued(BaseModel):
+    """The webhook path, carrying the new hook token: shown once, never again."""
+
+    path: str = Field(repr=False)
+
+
+class ActivePolicy(BaseModel):
+    """`GET /v1/policy/active`: the tenant's validated policy and where its bundle is."""
+
+    version: str
+    branch: str
+    digest: str
+    tree_digest: str
+    activated_at: datetime
+    commit_at: datetime | None = None
+    bundle_path: str
+
+
+class PolicyVersionInfo(BaseModel):
+    version: str
+    branch: str
+    status: Literal["accepted", "rejected"]
+    problems: list[str] = Field(default_factory=list)
+    digest: str | None = None
+    received_at: datetime
+    active: bool = False
+
+
+#: A host-qualified handle as CODEOWNERS names people: `github.com:alice`.
+HANDLE = r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$"
+
+
+class RepoRegistration(RequestModel):
+    """`POST /v1/repos`: register a repo for a team (`agent.edit.repo` in that team)."""
+
+    remote: str = Field(min_length=1, max_length=500)
+    team: str = Field(pattern=TEAM_SLUG)
+
+
+class RepoInfo(BaseModel):
+    """A registered repo and the maintainers its CODEOWNERS names (ND-6)."""
+
+    repo_key: str
+    remote: str
+    team: str
+    maintainers: list[str] = Field(default_factory=list)
+    unresolved: list[str] = Field(default_factory=list)
+    codeowners_path: str | None = None
+    commit: str | None = None
+    refreshed_at: datetime | None = None
+
+
+class RepoMaintainers(BaseModel):
+    users: list[str]
+    unresolved: list[str] = Field(default_factory=list)
+    commit: str | None = None
+
+
+class HandlesUpdate(RequestModel):
+    """`PUT /v1/users/{email}/handles`: the person's host-qualified handles (`rbac.assign`)."""
+
+    handles: list[Annotated[str, Field(pattern=HANDLE)]] = Field(max_length=20)
+
+
+class HandlesInfo(BaseModel):
+    email: str
+    handles: list[str]
+
+
+class ChainHead(BaseModel):
+    """The last event a chain holds: `seq` 0 and `hash` "" before the first."""
+
+    seq: int = 0
+    hash: str = ""
+
+
+class IngestRequest(RequestModel):
+    """`POST /v1/runs/{run_id}/events`: run ledger entries exactly as chained (Zyroflo's
+    format), in order; the server caps the count (`max_ingest_entries`)."""
+
+    entries: list[dict[str, Any]] = Field(min_length=1, max_length=5000)
+
+
+class IngestResult(BaseModel):
+    """What an ingest stored: new entries, replayed ones (no-ops), and the head after."""
+
+    accepted: int
+    duplicates: int
+    head: ChainHead
+
+
+class RunSummary(BaseModel):
+    """`GET /v1/runs/{run_id}`: a run as the control plane holds it (ND-11: PR links point
+    here until a web UI exists)."""
+
+    run_id: str
+    team: str
+    started_by: str
+    policy_version: str
+    policy_known: bool
+    status: str
+    head: ChainHead
+    opened_at: datetime
+    last_event_at: datetime | None = None
+
+
 class Problem(BaseModel):
     """An RFC 9457 problem document. `code` is a stable machine name
     (`auth.invalid_token`, ...); `hint` is a next step the CLI prints as is. A problem never
@@ -183,3 +338,7 @@ class Problem(BaseModel):
     detail: str
     code: str
     hint: str | None = None
+    head: ChainHead | None = None
+    """`ingest.gap` / `ingest.fork`: the chain head the server holds (resend from it)."""
+    problems: list[str] | None = None
+    """`ingest.chain_broken`: each problem, naming the event by its seq."""

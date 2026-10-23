@@ -159,13 +159,15 @@ def test_an_ssh_alias_remote_is_told_how_to_declare_it(workspace, github, monkey
 
 
 def test_the_control_plane_link_is_used_when_one_is_configured(workspace, github, monkeypatch, cli):
+    """ND-11 (DF-291): the run links to the control plane's run API; handoffs stay
+    repo-relative (their bodies are not uploaded) and logs stay in the starter's run."""
     monkeypatch.setenv("AGENTIC_CONTROL_PLANE_URL", "https://agentic.acme.example/")
     _, run_id = ship(cli)
     body = github.pulls[0]["body"]
-    link = f"https://agentic.acme.example/runs/{run_id}"
+    link = f"https://agentic.acme.example/v1/runs/{run_id}"
     assert f"[{run_id}]({link})" in body
-    assert f"[requirements]({link}/handoffs/requirements-1.md)" in body
-    assert f"- Logs: [step logs]({link}/logs)\n" in body
+    assert f".agentic/local/runs/{run_id}/handoffs/requirements-1.md" in body
+    assert f"`agentic logs {run_id}` in the starter's checkout" in body
 
 
 @pytest.mark.parametrize(

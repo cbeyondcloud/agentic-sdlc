@@ -13,10 +13,12 @@ row for its table, not yet inserted, with unique keys on every call."""
 from __future__ import annotations
 
 import itertools
+import tempfile
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -195,6 +197,97 @@ async def _assignment_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, A
     }
 
 
+def _version_row(tenant_id: UUID) -> dict[str, Any]:
+    commit = uuid.uuid4().hex + uuid.uuid4().hex[:8]
+    return {
+        "tenant_id": tenant_id,
+        "version": f"git:{commit}",
+        "commit": commit,
+        "branch": "main",
+        "status": "accepted",
+        "problems": [],
+        "teams": ["payments"],
+        "bundle": b"bundle",
+        "digest": f"sha256:{commit:0>64}",
+        "tree_digest": f"sha256:{commit:0>64}",
+    }
+
+
+@register("policy_versions")
+async def _policy_version_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    return _version_row(tenant_id)
+
+
+def _repo_row(tenant_id: UUID) -> dict[str, Any]:
+    name = f"app-{next(_sequence)}"
+    return {
+        "tenant_id": tenant_id,
+        "repo_key": f"git.example.test/acme/{name}",
+        "remote": f"https://git.example.test/acme/{name}.git",
+        "team": "payments",
+        "registered_by": "system:test",
+    }
+
+
+@register("repos")
+async def _repos_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    return _repo_row(tenant_id)
+
+
+@register("repo_maintainers")
+async def _repo_maintainer_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    repo = await _insert(conn, "repos", _repo_row(tenant_id))
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    return {
+        "tenant_id": tenant_id,
+        "repo_key": repo["repo_key"],
+        "user_id": user["id"],
+        "source_entry": "line 1: /.agentic/",
+    }
+
+
+def _run_row(tenant_id: UUID, user_id: UUID) -> dict[str, Any]:
+    return {
+        "tenant_id": tenant_id,
+        "run_id": f"run-{next(_sequence)}",
+        "team": "payments",
+        "started_by": user_id,
+        "policy_version": "git:" + "c" * 40,
+        "policy_known": False,
+        "head_seq": 1,
+        "head_hash": "sha256:" + "a" * 64,
+    }
+
+
+@register("runs")
+async def _runs_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    return _run_row(tenant_id, user["id"])
+
+
+@register("run_events")
+async def _run_event_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    run = await _insert(conn, "runs", _run_row(tenant_id, user["id"]))
+    return {
+        "tenant_id": tenant_id,
+        "run_id": run["run_id"],
+        "seq": 1,
+        "hash": "sha256:" + "a" * 64,
+        "prev": "",
+        "event": "run_opened",
+        "step": "",
+        "at": "2026-10-22T09:30:00.000+00:00",
+        "entry": {"seq": 1, "event": "run_opened"},
+    }
+
+
+@register("policy_active")
+async def _policy_active_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    version = await _insert(conn, "policy_versions", _version_row(tenant_id))
+    return {"tenant_id": tenant_id, "version": version["version"], "branch": "main"}
+
+
 # ── endpoint cases ────────────────────────────────────────────────────────────
 
 
@@ -234,6 +327,68 @@ async def _audit_record_in_b(api) -> dict[str, str]:
     return values
 
 
+async def _policy_version_in_b(api) -> dict[str, str]:
+    from policy_repos import make_policy_repo, url
+
+    repo = make_policy_repo(Path(tempfile.mkdtemp(prefix="cp-iso-")) / "policy")
+    made = await api.put(
+        "/v1/tenant/policy-source", api.b.admin_token, {"repo": url(repo), "branch": "main"}
+    )
+    assert made.status_code == 200 and made.json()["sync"]["kind"] == "activated", made.text
+    return {"version": made.json()["sync"]["version"]}
+
+
+async def _repo_in_b(api) -> dict[str, str]:
+    """A repo registered in tenant b only (its git mapped onto a local repo)."""
+    from policy_repos import (
+        APP_KEY,
+        APP_REMOTE,
+        LocalHosts,
+        make_app_repo,
+        make_org_policy_repo,
+        url,
+    )
+
+    from agentic_cp.gitops import GitRunner
+
+    class MappedGit(LocalHosts, GitRunner):
+        pass
+
+    scratch = Path(tempfile.mkdtemp(prefix="cp-iso-"))
+    policy = make_org_policy_repo(scratch / "policy")
+    app = make_app_repo(scratch / "app", "/.agentic/ @alice\n")
+    api.app.state.git = MappedGit(api.settings, {APP_REMOTE: app})
+    source = {"repo": url(policy), "branch": "main"}
+    assert (await api.put("/v1/tenant/policy-source", api.b.admin_token, source)).status_code == 200
+    made = await api.post(
+        "/v1/repos", api.b.admin_token, {"remote": APP_REMOTE, "team": "payments"}
+    )
+    assert made.status_code == 201, made.text
+    return {"repo_key": APP_KEY}
+
+
+async def _run_in_b(api) -> dict[str, str]:
+    """A run ingested in tenant b only (by b's org admin, who holds run.trigger)."""
+    from sdlc_commons import ledger as ledger_module
+    from sdlc_commons.ledger import RunIdentity, RunLedger
+
+    run_id = f"iso-run-{next(_sequence)}"
+    ledger = RunLedger(Path(tempfile.mkdtemp(prefix="cp-iso-")), run_id)
+    ledger.open(
+        identity=RunIdentity(team="payments", policy_version="git:" + "c" * 40),
+        kind="feature",
+        project="demo",
+        owner="payments",
+        criticality="low",
+    )
+    entries = ledger.events()
+    ledger.release()
+    ledger_module._IDENTITIES.pop(run_id, None)
+    made = await api.post(f"/v1/runs/{run_id}/events", api.b.admin_token, {"entries": entries})
+    assert made.status_code == 200, made.text
+    return {"run_id": run_id}
+
+
 ENDPOINT_CASES += [
     EndpointCase("tokens", "DELETE", "/v1/tokens/{id}", _token_in_b),
     EndpointCase("tokens", "GET", "/v1/tokens", _token_in_b, must_not_list=True),
@@ -258,4 +413,27 @@ ENDPOINT_CASES += [
     EndpointCase("rbac", "GET", "/v1/rbac/assignments", _assignment_in_b, must_not_list=True),
     EndpointCase("rbac", "GET", "/v1/rbac/roles", _role_in_b, must_not_list=True),
     EndpointCase("audit", "GET", "/v1/audit", _audit_record_in_b, must_not_list=True),
+    EndpointCase("policy", "GET", "/v1/policy/versions/{version}/bundle", _policy_version_in_b),
+    EndpointCase("policy", "GET", "/v1/policy/versions", _policy_version_in_b, must_not_list=True),
+    EndpointCase("repos", "GET", "/v1/repos/{repo_key}/maintainers", _repo_in_b),
+    EndpointCase("repos", "POST", "/v1/repos/{repo_key}/refresh", _repo_in_b),
+    EndpointCase(
+        "users",
+        "PUT",
+        "/v1/users/{email}/handles",
+        _user_in_b,
+        body={"handles": ["git.example.test:someone"]},
+    ),
+    EndpointCase("runs", "GET", "/v1/runs/{run_id}", _run_in_b),
+    EndpointCase("runs", "GET", "/v1/runs/{run_id}/events", _run_in_b),
+    EndpointCase(
+        # another tenant's run id is a new, unknown run here: a batch not starting at
+        # seq 1 is a gap at head 0, exactly as for a run id nobody used
+        "runs",
+        "POST",
+        "/v1/runs/{run_id}/events",
+        _run_in_b,
+        body={"entries": [{"seq": 2}]},
+        expect_status=409,
+    ),
 ]

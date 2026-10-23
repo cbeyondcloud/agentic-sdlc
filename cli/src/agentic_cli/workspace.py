@@ -37,6 +37,7 @@ from agentic.yamlio import YamlFileError, load_yaml, read_text
 from agentic_cli.config import agentic_home, local_policy_setting, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.policy_source import check_control_plane_cache, control_plane_stamp
 from agentic_cli.standalone import STANDALONE_DIR
 
 REPO_CONFIG = Path(".agentic") / "config.yaml"
@@ -163,12 +164,25 @@ class Workspace:
         return root
 
     def policy(self) -> OrgPolicy:
+        """The org policy. A policy the control plane served (`agentic init` in org mode
+        with one) is refused when edited locally or of another tenant than the one the
+        user is signed in to, and keeps the version the control plane validated."""
         if "policy" not in self._cache:
+            root = self._policy_root()
+            stamp = control_plane_stamp(root) if self._is_org_cache(root) else None
+            if stamp is not None:
+                check_control_plane_cache(root, stamp, self.home)
             try:
-                self._cache["policy"] = load_policy(self._policy_root() / "policy")
+                self._cache["policy"] = load_policy(
+                    root / "policy", version=stamp.get("version") if stamp else None
+                )
             except DefinitionError as error:
                 raise CliError(str(error), ExitCode.INVALID) from error
         return self._cache["policy"]
+
+    def _is_org_cache(self, root: Path) -> bool:
+        org = self.settings.get("org")
+        return bool(org) and root == self.home / "policy" / str(org) / "repo"
 
     def definitions(self) -> DefinitionSet:
         if "definitions" not in self._cache:

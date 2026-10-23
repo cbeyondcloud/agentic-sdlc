@@ -25,7 +25,8 @@ the run (four-eyes).
 import asyncio
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated
@@ -99,11 +100,12 @@ def register(app: typer.Typer) -> None:
         out.notice(
             {"started": run_id}, f"started run {run_id} (if interrupted: agentic resume {run_id})"
         )
-        state = drive(
-            rt.redact(gateway),
-            rt.store.path(run_id).parent,
-            lambda: engine.start(pipeline, given, rt.user, run_id),
-        )
+        with sinks_reported(out, rt):
+            state = drive(
+                rt.redact(gateway),
+                rt.store.path(run_id).parent,
+                lambda: engine.start(pipeline, given, rt.user, run_id),
+            )
         _finish(out, state, rt)
 
     @app.command("resume")
@@ -132,19 +134,20 @@ def register(app: typer.Typer) -> None:
             decisions = {call: True for call in allow or []} | {call: False for call in deny or []}
         engine = rt.engine(regime=state.regime)
         extra = _usd(extra_budget, "--extra-budget") or Decimal(0)
-        state = drive(
-            rt.redact(rt.gateway()),
-            rt.store.path(run_id).parent,
-            lambda: engine.resume(
-                run_id,
-                extra_minutes=extra_minutes,
-                extra_budget_usd=extra,
-                decisions=decisions,
-                skip=skip,
-                who=rt.user if skip else None,
-                self_approval=self_approval_refusal,
-            ),
-        )
+        with sinks_reported(out, rt):
+            state = drive(
+                rt.redact(rt.gateway()),
+                rt.store.path(run_id).parent,
+                lambda: engine.resume(
+                    run_id,
+                    extra_minutes=extra_minutes,
+                    extra_budget_usd=extra,
+                    decisions=decisions,
+                    skip=skip,
+                    who=rt.user if skip else None,
+                    self_approval=self_approval_refusal,
+                ),
+            )
         _finish(out, state, rt)
 
     @app.command("status")
@@ -177,7 +180,7 @@ def register(app: typer.Typer) -> None:
         rt = Runtime(Workspace.load())
         state = _load(rt, run_id)
         engine = rt.engine(regime=state.regime, offline=True)
-        with engine_errors():
+        with sinks_reported(out, rt), engine_errors():  # run_closed reaches the sinks (F5)
             state = asyncio.run(engine.stop(run_id, rt.user, reason))
         out.result(summary(state, rt.redact()), show_state(state, rt.redact()))
 
@@ -290,6 +293,28 @@ def _finish(out: Output, state: RunState, rt: Runtime) -> None:
     redact = rt.redact()  # the gateway key is known: the command asked for it
     out.result(summary(state, redact), show_state(state, redact))
     raise typer.Exit(exit_code_for(state))
+
+
+@contextmanager
+def sinks_reported(out: Output, rt: Runtime) -> Iterator[None]:
+    """Around every use of an engine: however it ends - a result, a refusal, an error -
+    the events it recorded get their bounded wait and report (review F5)."""
+    try:
+        yield
+    finally:
+        report_sinks(out, rt)
+
+
+def report_sinks(out: Output, rt: Runtime) -> None:
+    """After the engine stops: wait briefly for run events still on their way to the
+    control plane, and say what stays queued (or why nothing is reported)."""
+    if rt.sink_problem:
+        out.warn(rt.sink_problem)
+    for run_id, left in rt.close_sinks().items():
+        out.warn(
+            f"{left} event(s) of run {run_id} are queued for the control plane; "
+            "`agentic sync` sends them"
+        )
 
 
 def _all_runs(rt: Runtime) -> list[RunState]:

@@ -37,7 +37,18 @@ log = logging.getLogger("agentic_cp.db_roles")
 DEFINER_FUNCTIONS: dict[str, str] = {
     "active_tenant_ids": "active_tenant_ids()",
     "resolve_token": "resolve_token(bytea)",
+    "resolve_webhook": "resolve_webhook(bytea)",
 }
+
+#: The columns of its own `tenants` row the runtime role may change (the `own_tenant`
+#: policy limits it to that row): the RBAC revision and the tenant's policy source and
+#: webhook token hash, which its org admins set through `/v1/tenant` (ruling R23).
+TENANT_WRITABLE: tuple[str, ...] = (
+    "rbac_revision",
+    "policy_repo_url",
+    "policy_branch",
+    "webhook_token_sha256",
+)
 
 #: Extra policies a tenant-owned table may carry besides `tenant_isolation`: table ->
 #: policy name. Each is `FOR SELECT`, granted to the owner role only, and active only while
@@ -99,6 +110,17 @@ async def _existing_functions(conn: AsyncConnection, schema: str) -> set[str]:
     return {row[0] for row in rows}
 
 
+async def _existing_columns(conn: AsyncConnection, schema: str, table: str) -> set[str]:
+    rows = await conn.execute(
+        text(
+            "select column_name from information_schema.columns "
+            "where table_schema = :s and table_name = :t"
+        ),
+        {"s": schema, "t": table},
+    )
+    return {row[0] for row in rows}
+
+
 async def runtime_role_exists(conn: AsyncConnection, role: str) -> bool:
     found = await conn.execute(text("select 1 from pg_roles where rolname = :r"), {"r": role})
     return found.first() is not None
@@ -155,7 +177,9 @@ async def grant_runtime(
         rights = "SELECT, INSERT" if table in INSERT_ONLY else "SELECT, INSERT, UPDATE, DELETE"
         await _execute(owner_conn, f"GRANT {rights} ON {_ident(table)} TO {role}")
     await _execute(owner_conn, f"GRANT SELECT ON tenants TO {role}")
-    await _execute(owner_conn, f"GRANT UPDATE (rbac_revision) ON tenants TO {role}")
+    present = await _existing_columns(owner_conn, schema, "tenants")
+    writable = ", ".join(column for column in TENANT_WRITABLE if column in present)
+    await _execute(owner_conn, f"GRANT UPDATE ({writable}) ON tenants TO {role}")
     if "alembic_version" in existing:
         await _execute(owner_conn, f"GRANT SELECT ON alembic_version TO {role}")
 
@@ -302,12 +326,13 @@ async def _check(
     for extra in tenant_policies:
         status.fail(TENANCY, f"table tenants has an unregistered policy {extra}")
     if "tenants" in present:
-        # has_table_privilege ignores column grants: look at every column but rbac_revision
+        # has_table_privilege ignores column grants: look at every column but the writable
+        allowed = ", ".join(f"'{column}'" for column in TENANT_WRITABLE)
         writable = await _scalar(
             conn,
             "select exists (select 1 from pg_attribute a "
             f"where a.attrelid = '{schema}.tenants'::regclass and a.attnum > 0 "
-            "and not a.attisdropped and a.attname <> 'rbac_revision' "
+            f"and not a.attisdropped and a.attname not in ({allowed}) "
             "and has_column_privilege(CAST(:o AS oid), a.attrelid, a.attnum, 'UPDATE')) "
             f"or has_any_column_privilege(CAST(:o AS oid), '{schema}.tenants', 'INSERT') "
             f"or has_table_privilege(CAST(:o AS oid), '{schema}.tenants', 'DELETE') "
@@ -315,7 +340,9 @@ async def _check(
             oid,
         )
         if writable:
-            status.fail(TENANCY, f"the runtime role {name} may change tenants beyond its revision")
+            status.fail(
+                TENANCY, f"the runtime role {name} may change tenants beyond its own settings"
+            )
 
     for table in INSERT_ONLY:
         if table not in present:

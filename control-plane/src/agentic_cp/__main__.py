@@ -1,8 +1,12 @@
 """`python -m agentic_cp <command>`: the server's operator entry point.
 
-    serve                 run the API (uvicorn)
-    migrate               upgrade the database (owner role, AGENTIC_CP_OWNER_DATABASE_URL)
-                          and re-align the runtime role's grants
+    serve                 run the API (uvicorn); refuses a database that does not enforce
+                          tenant isolation and insert-only evidence
+    worker                the background worker: policy sync and CODEOWNERS refresh for
+                          every tenant (one leader at a time)
+    migrate               upgrade the database (owner role, AGENTIC_CP_OWNER_DATABASE_URL),
+                          re-align the runtime role's grants, seed every tenant's builtin
+                          roles and report the database guarantees
     db grant-runtime      create or re-align the runtime role of AGENTIC_CP_DATABASE_URL
     admin audit verify --tenant S
                           verify one tenant's audit chain
@@ -10,6 +14,8 @@
                         [--policy-branch B] [--gateway-tenant T]
                           create a tenant, its roles and first org admin; prints the token once
     admin tenant list     list tenants
+    admin tenant set-policy-repo --tenant S --repo URL [--branch B]
+                          point one tenant at its git policy repo
     admin issue-token --tenant S --email E
                           a recovery token for an existing user of one tenant
     openapi [--write | --check]
@@ -77,8 +83,39 @@ def _serve(args: argparse.Namespace) -> int:
     refusal = asyncio.run(serve_preflight(settings))
     if refusal:
         print(f"error: refusing to serve - {refusal}", file=sys.stderr)
-        return 1
+        print(
+            "hint: fix the database (python -m agentic_cp migrate re-applies the grants); "
+            "AGENTIC_CP_REQUIRE_DB_ENFORCEMENT=false is for local development only",
+            file=sys.stderr,
+        )
+        return 2
     uvicorn.run(create_app(settings), host=args.host, port=args.port, log_level="info")
+    return 0
+
+
+def _worker(args: argparse.Namespace) -> int:
+    """Run the background worker until interrupted."""
+    import logging
+
+    from agentic_cp.app import utc_now
+    from agentic_cp.db import make_engine
+    from agentic_cp.gitops import GitRunner
+    from agentic_cp.policy_sync.worker import run_forever
+
+    settings = _settings()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+
+    async def run() -> None:
+        engine = make_engine(settings)
+        try:
+            await run_forever(engine, GitRunner(settings), settings, utc_now)
+        finally:
+            await engine.dispose()
+
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        print("worker stopped")
     return 0
 
 
@@ -100,7 +137,7 @@ def _migrate(args: argparse.Namespace) -> int:
 async def _migrate_and_regrant(settings: Settings) -> str:
     from agentic_cp.app import utc_now
     from agentic_cp.db import make_owner_engine, migrate_async
-    from agentic_cp.db_roles import grant_runtime, runtime_role_exists
+    from agentic_cp.db_roles import enforcement_status, grant_runtime, runtime_role_exists
     from agentic_cp.rbac.defaults import seed_roles
     from agentic_cp.tenancy.context import tenant_tx
     from agentic_cp.tenancy.tenants import list_tenants
@@ -109,14 +146,26 @@ async def _migrate_and_regrant(settings: Settings) -> str:
     engine = make_owner_engine(settings)
     try:
         async with engine.begin() as conn:
-            if await runtime_role_exists(conn, settings.runtime_role):
+            present = await runtime_role_exists(conn, settings.runtime_role)
+            if present:
                 await grant_runtime(conn, settings.runtime_role, None, settings.db_schema)
             known = await list_tenants(conn)
         for tenant in known:  # a release's new builtin roles reach every tenant
             async with tenant_tx(engine, tenant.id) as conn:
                 added = await seed_roles(conn, clock=utc_now)
             if added:
-                print(f"tenant {tenant.slug}: added roles {', '.join(added)}")
+                print(f"tenant {tenant.slug}: seeded roles {', '.join(added)}")
+        if present:
+            async with engine.connect() as conn:
+                status = await enforcement_status(
+                    conn, settings.runtime_role, schema=settings.db_schema
+                )
+            if status.enforced:
+                print("database guarantees: enforced (tenant isolation, insert-only evidence)")
+            for reason in status.reasons:
+                print(f"database guarantee missing: {reason}")
+        else:
+            print(f"runtime role {settings.runtime_role} not found: run `db grant-runtime`")
     finally:
         await engine.dispose()
     return head
@@ -259,6 +308,48 @@ def _tenant_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def _tenant_set_policy_repo(args: argparse.Namespace) -> int:
+    """Point one tenant at its policy repo (same rules as `PUT /v1/tenant/policy-source`)."""
+    from sqlalchemy import update
+
+    from agentic.orgapi.models import checked_branch
+    from agentic_cp.app import utc_now
+    from agentic_cp.audit import OPERATOR, AuditEvent, append
+    from agentic_cp.gitops import RepoUrlError, check_repo_url
+    from agentic_cp.tables import tenants
+
+    settings = _settings()
+    _owner_dsn(settings)
+    try:
+        repo = check_repo_url(args.repo, allow_local=settings.allow_local_repos)
+        branch = checked_branch(args.branch)
+    except (RepoUrlError, ValueError) as error:
+        raise CommandError(str(error), 3) from None
+
+    async def work(conn, tenant):
+        await conn.execute(
+            update(tenants)
+            .where(tenants.c.id == tenant.id)
+            .values(policy_repo_url=repo, policy_branch=branch)
+        )
+        await append(
+            conn,
+            AuditEvent(
+                event="tenant.policy_source_changed",
+                actor=OPERATOR,
+                actor_kind="system",
+                target=f"tenant:{tenant.slug}",
+                before={"repo": tenant.policy_repo_url, "branch": tenant.policy_branch},
+                after={"repo": repo, "branch": branch},
+            ),
+            clock=utc_now,
+        )
+
+    asyncio.run(_with_tenant(settings, args.tenant, work))
+    print(f"tenant {args.tenant}: policy repo set (branch {branch}); the worker syncs it next")
+    return 0
+
+
 def _issue_token(args: argparse.Namespace) -> int:
     """Admin recovery: a token for an existing user of one named tenant."""
     from agentic_cp.app import utc_now
@@ -308,6 +399,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8080)
     serve.set_defaults(run=_serve)
 
+    commands.add_parser("worker", help="run the background worker").set_defaults(run=_worker)
+
     migrate = commands.add_parser("migrate", help="upgrade the database to this release")
     migrate.set_defaults(run=_migrate)
 
@@ -338,6 +431,11 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--gateway-tenant", default=None, help="the TokenLean tenant (ND-16)")
     create.set_defaults(run=_tenant_create)
     tenant.add_parser("list", help="list tenants").set_defaults(run=_tenant_list)
+    source = tenant.add_parser("set-policy-repo", help="point one tenant at its policy repo")
+    source.add_argument("--tenant", required=True, help="the tenant's slug")
+    source.add_argument("--repo", required=True, help="https:// or ssh:// URL, no credentials")
+    source.add_argument("--branch", default="main")
+    source.set_defaults(run=_tenant_set_policy_repo)
 
     issue = admin_commands.add_parser("issue-token", help="a recovery token for one user")
     issue.add_argument("--tenant", required=True, help="the tenant's slug")
