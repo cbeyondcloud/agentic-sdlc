@@ -80,6 +80,43 @@ def test_script_or_other_file_is_refused(tmp_path, name, content):
     assert "instruction-only" in rejected.reason and rejected.path.endswith(name)
 
 
+#: What Finder, Explorer, editors and git leave in a folder: never part of a skill.
+JUNK = [".DS_Store", "Thumbs.db", "desktop.ini", "SKILL.md~", ".SKILL.md.swp", "._SKILL.md"]
+
+
+def test_os_and_editor_files_are_ignored_not_refused(tmp_path):
+    clean = skill(tmp_path / "clean", "habits")
+    folder = skill(tmp_path, "habits")
+    for name in JUNK:
+        (folder / name).write_bytes(b"\x00\x01binary junk")
+    write(folder / ".git" / "HEAD", "ref: refs/heads/main")
+    write(tmp_path / "memory" / "team.md", "Ask about the ledger.")
+    (tmp_path / "memory" / ".DS_Store").write_bytes(b"\x00\x01")
+    (tmp_path / "memory" / "Thumbs.db").write_bytes(b"\x00\x01")
+    found = load_personal(tmp_path)
+    assert found.rejected == []
+    (loaded,) = found.skills
+    assert loaded.sha256 == skill_digest(clean)  # the junk is not part of the skill's hash
+    assert [note.name for note in found.memory] == ["team"]
+
+
+def test_a_script_beside_junk_is_still_refused(tmp_path):
+    folder = skill(tmp_path, "helper")
+    (folder / ".DS_Store").write_bytes(b"\x00")
+    write(folder / "tool.py", "print(1)")
+    found = load_personal(tmp_path)
+    assert found.skills == [] and found.rejected[0].path.endswith("tool.py")
+
+
+def test_over_cap_names_the_skills_an_agent_does_not_get(tmp_path, resolved):
+    for n in range(MAX_PERSONAL_SKILLS + 1):
+        skill(tmp_path, f"habit-{n}")
+    personal = context(tmp_path)
+    assert [s.name for s in personal.over_cap(resolved)] == [f"habit-{MAX_PERSONAL_SKILLS}"]
+    restricted = resolved.model_copy(update={"classification": "restricted"})
+    assert personal.over_cap(restricted) == []  # off there anyway: nothing is dropped
+
+
 @pytest.mark.parametrize(
     "front",
     [{"allowed-tools": "Bash"}, {"model": "big-model"}, {"tools": "[run_shell]"}],

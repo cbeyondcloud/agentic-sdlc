@@ -59,6 +59,23 @@ def test_a_new_file_and_a_deleted_file():
     assert [(a.path, a.line) for a in added_lines(new + gone)] == [("n.txt", 1), ("n.txt", 2)]
 
 
+#: Characters str.splitlines() treats as line ends that a unified diff does not.
+ODD_SEPARATORS = ["\x0c", "\x0b", "\x1c", "\x1d", "\x1e", "\x85", " ", " ", "\r"]
+
+
+@pytest.mark.parametrize("separator", ODD_SEPARATORS, ids=lambda s: f"U+{ord(s):04X}")
+def test_text_after_an_odd_line_separator_is_still_scanned(separator):
+    secret = check(diff("a.py", f"# note{separator}KEY = '{AWS}'"))
+    assert row(secret, "secret-scan")["findings"] == 1
+    licence = check(diff("b.py", f"x = 1{separator}# SPDX-License-Identifier: GPL-3.0-only"))
+    assert row(licence, "licence-check")["findings"] == 1
+
+
+def test_crlf_diff_lines_lose_only_their_line_end():
+    text = diff("w.py", "x = 1", "y = 2").replace("\n", "\r\n")
+    assert [(a.line, a.text) for a in added_lines(text)] == [(11, "x = 1"), (12, "y = 2")]
+
+
 def test_seeded_secret_is_a_finding_without_its_value():
     document = check(diff("config/settings.py", f'AWS_KEY = "{AWS}"'))
     assert row(document, "secret-scan") == {
@@ -113,6 +130,15 @@ def test_new_gitignore_rule_is_a_finding():
     assert [f["code"]["value"] for f in found] == ["new-ignore-rule", "new-ignore-rule"]
     assert "secrets/" in found[0]["message"] and found[0]["severity"] == "WARNING"
     assert row(check(diff("README.md", "secrets/")), "ignore-rules")["findings"] == 0
+
+
+@pytest.mark.parametrize(
+    "path", [".gitleaks.toml", ".gitleaksignore", "app/osv-scanner.toml", "sgconfig.yml"]
+)
+def test_a_change_to_a_scanners_own_configuration_is_a_finding(path):
+    found = diagnostics(check(diff(path, "paths = ['''.*''']")), "ignore-rules")
+    assert [f["code"]["value"] for f in found] == ["scanner-config-change"]
+    assert path in found[0]["message"] and found[0]["severity"] == "WARNING"
 
 
 def test_merge_sums_findings_and_keeps_not_run_tools_as_null():

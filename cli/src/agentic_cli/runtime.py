@@ -46,6 +46,7 @@ from agentic.sandbox.readiness import Readiness, SandboxDecision, decide_sandbox
 from agentic.skills.catalog import CatalogError, load_catalog
 from agentic.skills.install import log_record, sync_skills
 from agentic.skills.loader import InstalledSkills
+from agentic.skills.personal import MAX_PERSONAL_SKILLS, PersonalContext, load_personal
 from agentic.skills.select import pipeline_skills
 from agentic.telemetry.logs import StepLogs
 from agentic.telemetry.sinks import EventSink, ForwardingRecorder
@@ -169,6 +170,7 @@ class Runtime:
         self._stamped: dict[str, StampingRecorder] = {}
         # skill and memory activations, stamped on each step_finished in the ledger (M2-45)
         self.activity = SkillActivity()
+        self._personal: PersonalContext | None = None
         self._sinks: list[EventSink] | None = None
         self.sink_problem: str | None = None  # why runs are not reported (a warning)
 
@@ -291,6 +293,7 @@ class Runtime:
             detail = f"skill {skill} had been changed locally; it was restored as pinned"
             report.problems.append(Problem(None, "skills", detail, severity="warning"))
         report.problems += self._publish_problems(pipeline)
+        report.problems += self._personal_problems(report)
         return report
 
     def _codeintel_missing(self) -> str | None:
@@ -574,6 +577,46 @@ class Runtime:
     def skill_library(self) -> InstalledSkills | None:
         """The repo's shared skills (None without a catalog in the policy repo)."""
         return self._installed()
+
+    def personal_context(self) -> PersonalContext:
+        """This user's personal skills and notes (M2-45), loaded once per command. Each
+        refused one is named in the audit log here and as a preflight warning."""
+        if self._personal is None:
+            found = load_personal(self.ws.home)
+            for refused in found.rejected:
+                fields = {"path": refused.path, "reason": refused.reason}
+                log_record("skills.personal_rejected", fields)
+            library = self.skill_library()
+            self._personal = PersonalContext(
+                found,
+                self.ws.policy().classifications,
+                shared=list(library.catalog.skills) if library is not None else [],
+                record=self.activity.record,
+            )
+        return self._personal
+
+    def _personal_problems(self, report: PreflightReport) -> list[Problem]:
+        """A personal skill or note that will not be used, said before the run (warnings):
+        the user's only other trace is the audit log."""
+        personal = self.personal_context()
+        problems = [
+            Problem(
+                None,
+                "personal-skills",
+                f"~/.agentic/{refused.path} is not used: {refused.reason}",
+                severity="warning",
+            )
+            for refused in personal.personal.rejected
+        ]
+        for agent_name, agent in sorted(report.resolved.items()):
+            if dropped := personal.over_cap(agent):
+                names = ", ".join(skill.name for skill in dropped)
+                detail = (
+                    f"agent {agent_name} gets at most {MAX_PERSONAL_SKILLS} personal skills; "
+                    f"not used: {names}"
+                )
+                problems.append(Problem(None, "personal-skills", detail, severity="warning"))
+        return problems
 
     def _skill_check(self, pipeline: str, *, live: bool):
         library = self._installed()

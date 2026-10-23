@@ -91,7 +91,11 @@ def test_check_raises_publish_blocked_naming_seq_and_kinds_never_values():
     message = str(caught.value)
     assert isinstance(caught.value, SinkError)
     assert "event 2" in message and "credit-card" in message and CARD not in message
-    assert "nothing was sent" in message
+    assert (caught.value.seq, caught.value.index) == (2, 1)  # entry 1 is clean: sendable
+    # never reads as retryable: says a retry will not send it, and where the record stays
+    assert "a retry will not send it" in message and "local run ledger" in message
+    caught.value.delivered = 1
+    assert "the 1 event before it was sent" in str(caught.value)
     (event,) = seen
     assert (event.action, event.run_id, event.seq) == ("blocked", "r-1", 2)
     assert CARD not in repr(event.fields())

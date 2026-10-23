@@ -29,7 +29,7 @@ from agentic.policy import OrgPolicy
 from agentic.review.prepass import builtin_checks, merge, prefixed, render
 from agentic.security.secret_scan import SecretScanner
 from agentic.skills.install import log_record
-from agentic.skills.personal import PersonalContext, load_personal
+from agentic.skills.personal import PersonalContext
 from agentic_cli.errors import CliError
 from sdlc_commons.review_prepass import ToolLocator, external_checks
 from sdlc_commons.tool_fetch import ToolFetcher, ToolFetchError, current_platform
@@ -95,16 +95,7 @@ class StepExtras:
             except RunStateError:
                 return None
 
-        found = load_personal(rt.ws.home)
-        for refused in found.rejected:  # said once per process, never silently skipped
-            log_record("skills.personal_rejected", {"path": refused.path, "reason": refused.reason})
-        library = rt.skill_library()
-        context = PersonalContext(
-            found,
-            policy.classifications,
-            shared=list(library.catalog.skills) if library is not None else [],
-            record=rt.activity.record,
-        )
+        context = rt.personal_context()  # a refused one is a preflight warning
         try:
             user = rt.user
         except CliError:

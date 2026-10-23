@@ -11,8 +11,9 @@ way out. The guard therefore works at two points:
     are: the sink refuses them.
   * `check(run_id, entries)` - before the sink sends chained entries. An entry with a hit
     (written past the screen, by Zyroflo itself, or under `block`) cannot be masked any
-    more, so `PublishBlocked` is raised: nothing is sent, the cursor stays and the entry
-    stays queued in the ledger.
+    more, so `PublishBlocked` is raised: the clean entries before it may still be sent
+    (the control plane needs the chain in order), but it and every later entry stay in
+    the local run ledger only. A retry cannot change that, and the error says so.
 
 Both audit what they did as a `publish_scan` event naming kinds and counts, never a value.
 Fields naming the people the audit trail is about (`identity_fields`: an approver's
@@ -68,7 +69,39 @@ class PublishScanEvent:
 
 
 class PublishBlocked(SinkError):
-    """A chained entry holds a secret or personal data: it was not sent (see the module)."""
+    """A chained entry holds a secret or personal data: it and the entries after it are not
+    sent (see the module). `index` is its place in the batch checked, so the clean entries
+    before it can still go (`delivered` then says how many did)."""
+
+    def __init__(
+        self,
+        run_id: str,
+        seq: int,
+        event: str,
+        kinds: Sequence[str],
+        fields: Sequence[str],
+        action: str,
+        *,
+        index: int = 0,
+    ) -> None:
+        super().__init__(run_id, seq)
+        self.run_id, self.seq, self.event = run_id, seq, event
+        self.kinds, self.fields, self.action = tuple(kinds), tuple(fields), action
+        self.index = index
+
+    def __str__(self) -> str:
+        if self.delivered:
+            plural = "s before it were" if self.delivered != 1 else " before it was"
+            sent = f"the {self.delivered} event{plural} sent"
+        else:
+            sent = "nothing was sent"
+        return (
+            f"run {self.run_id} event {self.seq} ({self.event}) holds a secret or personal "
+            f"data ({', '.join(self.kinds)}) in {', '.join(self.fields)}. It is already "
+            f"chained, so it cannot be masked, and a retry will not send it: {sent}, and "
+            f"the run's events from {self.seq} on stay in the local run ledger only "
+            f"(publish_scan action: {self.action})"
+        )
 
 
 def audit_log(event: PublishScanEvent) -> None:
@@ -134,7 +167,7 @@ class PublishGuard:
 
     def check(self, run_id: str, entries: Sequence[Mapping[str, object]]) -> None:
         """Raise `PublishBlocked` (audited) at the first entry holding a hit."""
-        for entry in entries:
+        for index, entry in enumerate(entries):
             _, counts, hit = self._walk_fields(dict(entry), mask=False)
             if not counts:
                 continue
@@ -144,13 +177,9 @@ class PublishGuard:
                 "blocked", "sink", _sorted(counts), hit, run_id=run_id, seq=seq
             )
             self.on_event(found)
-            kinds = ", ".join(sorted(_kind(name) for name in counts))
-            raise PublishBlocked(
-                f"run {run_id} event {seq} ({entry.get('event')}) holds a secret or personal "
-                f"data ({kinds}) in {', '.join(hit)}; it is already chained, so it cannot be "
-                f"masked - nothing was sent and it stays queued in the run ledger "
-                f"(publish_scan action: {self.action})"
-            )
+            kinds = sorted(_kind(name) for name in counts)
+            event = str(entry.get("event"))
+            raise PublishBlocked(run_id, seq, event, kinds, hit, self.action, index=index)
 
     # ── scanning ─────────────────────────────────────────────────────────────
 

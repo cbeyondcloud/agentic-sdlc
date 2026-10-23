@@ -45,7 +45,12 @@ _LOG = logging.getLogger("agentic.telemetry.sinks")
 
 
 class SinkError(Exception):
-    """The entries cannot be forwarded: the chain does not continue from the cursor."""
+    """The entries cannot be forwarded: the chain does not continue from the cursor.
+
+    A sink that sent the first entries of a batch before refusing the rest sets
+    `delivered` to how many it sent: `forward` moves the cursor past them."""
+
+    delivered: int = 0
 
 
 class SinkBehind(SinkError):
@@ -99,17 +104,23 @@ def forward(
     if not pending:
         return 0
     try:
-        sink.deliver(run_id, pending)
-    except SinkBehind as behind:  # R21: catch the sink up from its own head, once
-        if behind.seq >= start or (
-            behind.seq and entries[behind.seq - 1].get("hash") != behind.hash
-        ):
-            raise SinkError(
-                f"{sink.name}: its head (event {behind.seq}) is not in the local chain - "
-                "the two chains forked; nothing was sent"
-            ) from None
-        pending = _following(sink, entries, behind.seq, behind.hash)
-        sink.deliver(run_id, pending)
+        try:
+            sink.deliver(run_id, pending)
+        except SinkBehind as behind:  # R21: catch the sink up from its own head, once
+            if behind.seq >= start or (
+                behind.seq and entries[behind.seq - 1].get("hash") != behind.hash
+            ):
+                raise SinkError(
+                    f"{sink.name}: its head (event {behind.seq}) is not in the local chain - "
+                    "the two chains forked; nothing was sent"
+                ) from None
+            pending = _following(sink, entries, behind.seq, behind.hash)
+            sink.deliver(run_id, pending)
+    except SinkError as error:
+        if 0 < error.delivered <= len(pending):  # it took the start of the batch
+            last = pending[error.delivered - 1]
+            _save(cursor, {"seq": _seq(last), "hash": str(last.get("hash", ""))})
+        raise
     last = pending[-1]
     _save(cursor, {"seq": _seq(last), "hash": str(last.get("hash", ""))})
     return len(pending)

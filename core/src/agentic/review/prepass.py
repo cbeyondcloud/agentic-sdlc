@@ -15,7 +15,8 @@ run on every machine:
                       forms. A licence stated only in a full licence text is not detected
                       here (that needs ScanCode).
   * `ignore-rules`  - every rule added to a `.gitignore` (DF-70, DF-329): files it matches
-                      are hidden from `git add -A` and so from the review.
+                      are hidden from `git add -A` and so from the review. Also any change
+                      to a scanner's own configuration or ignore list (`SCANNER_CONFIG`).
 
 `merge` joins documents. A tool that did not run (`status` other than `ok`) has
 `findings: null`, never 0, and is listed in `not_run`. `render` writes the block an agent
@@ -41,6 +42,20 @@ _MANIFEST = (
     re.compile(r'^\s*license\s*=\s*\{\s*text\s*=\s*"(?P<expr>[^"]{1,200})"', re.IGNORECASE),
     re.compile(r"<license>\s*<name>(?P<expr>[^<]{1,200})</name>", re.IGNORECASE),
 )
+#: Files a scanner reads its configuration or ignore list from: a change to one could
+#: hide findings, so it is a finding itself (the scanners run with the org's own).
+SCANNER_CONFIG = frozenset(
+    {
+        ".gitleaks.toml",
+        ".gitleaksignore",
+        "osv-scanner.toml",
+        ".osv-scanner.toml",
+        "sgconfig.yml",
+        "sgconfig.yaml",
+        ".ignore",
+        ".rgignore",
+    }
+)
 _LICENCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+\-]*")
 _OPERATORS = frozenset({"and", "or", "with"})
 
@@ -53,11 +68,18 @@ class AddedLine:
 
 
 def added_lines(diff_text: str) -> list[AddedLine]:
-    """Every line a unified diff adds, with its file and new-side line number."""
+    """Every line a unified diff adds, with its file and new-side line number.
+
+    Lines end at `\\n` only (a CRLF line loses its `\\r`). `str.splitlines()` would also end
+    a line at a form feed, NEL, U+2028 or a lone CR, and the text after one, not starting
+    with `+`, would never be scanned."""
     found: list[AddedLine] = []
     path: str | None = None
     line = old_left = new_left = 0  # a hunk ends when both of its counts are used up
-    for raw in diff_text.splitlines():
+    lines = diff_text.split("\n")
+    if lines[-1] == "":
+        lines.pop()  # the diff's final line end
+    for raw in (text.removesuffix("\r") for text in lines):
         in_hunk = old_left > 0 or new_left > 0
         if raw.startswith("diff --git "):
             path, old_left, new_left = None, 0, 0
@@ -170,8 +192,19 @@ def _blocked_ids(expression: str, blocked: list[str]) -> list[str]:
 
 def _ignore_rules(lines: list[AddedLine]) -> list[dict]:
     found = []
+    configs: set[str] = set()
     for added in lines:
-        if added.path.rsplit("/", 1)[-1] != ".gitignore":
+        name = added.path.rsplit("/", 1)[-1]
+        if name in SCANNER_CONFIG and added.path not in configs:
+            configs.add(added.path)  # one finding per file
+            message = (
+                f"the change edits {added.path}, a scanner's own configuration or ignore "
+                "list: the pre-pass scanned with the org's configuration, not this one - "
+                "check that it hides no finding"
+            )
+            found.append(_diagnostic(added, 1, "WARNING", "scanner-config-change", message))
+            continue
+        if name != ".gitignore":
             continue
         rule = added.text.strip()
         if not rule or rule.startswith("#"):

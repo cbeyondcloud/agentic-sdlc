@@ -38,7 +38,7 @@ from agentic.orgapi import (
     RunSummary,
 )
 from agentic.security.pii import PiiDetector
-from agentic.security.publish_scan import PublishGuard
+from agentic.security.publish_scan import PublishBlocked, PublishGuard
 from agentic.security.secret_scan import SecretScanner
 from agentic.telemetry.sinks import SinkBehind
 from agentic.transport.network import NetworkSettings, ssl_context
@@ -294,8 +294,8 @@ class ControlPlaneSink:
     no-ops on the server (duplicates), so delivery is at least once and never twice.
 
     With a `guard` (the publish scan, M2-49) every entry is checked before anything is
-    sent: one holding a secret or personal data raises `PublishBlocked` (audited), so it
-    and what follows stay queued in the ledger."""
+    sent: the clean entries before one holding a secret or personal data are sent, then
+    `PublishBlocked` is raised (audited), so it and what follows stay in the ledger."""
 
     name = "control-plane"
 
@@ -315,9 +315,21 @@ class ControlPlaneSink:
     def deliver(self, run_id: str, entries: Sequence[Mapping[str, object]]) -> None:
         """Send `entries` in batches of at most `batch` entries and about `max_bytes`;
         a 413 (the server's body or entry cap is lower) halves the batch and retries,
-        so a large offline backlog is never wedged (review F6)."""
+        so a large offline backlog is never wedged (review F6). Under the publish scan the
+        clean entries before a held-back one are sent, then `PublishBlocked` is raised
+        with `delivered` set, so the control plane has the run up to that entry."""
+        blocked: PublishBlocked | None = None
         if self.guard is not None:
-            self.guard.check(run_id, entries)
+            try:
+                self.guard.check(run_id, entries)
+            except PublishBlocked as error:
+                blocked, entries = error, entries[: error.index]
+        self._send(run_id, entries)
+        if blocked is not None:
+            blocked.delivered = len(entries)
+            raise blocked
+
+    def _send(self, run_id: str, entries: Sequence[Mapping[str, object]]) -> None:
         start, limit = 0, self.batch
         while start < len(entries):
             chunk = self._chunk(entries, start, limit)

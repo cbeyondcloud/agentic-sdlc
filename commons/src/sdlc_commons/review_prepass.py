@@ -16,12 +16,18 @@ Two things are the framework's, not Zyroflo's:
     queries the OSV service online. Unless policy opts in (`online=True`), the command
     gains `OFFLINE_FLAGS`: the scanner downloads the vulnerability databases and resolves
     nothing through a registry, so no package name is sent anywhere.
+  * **The change never configures its own scan.** Zyroflo copies the change's touched files
+    into the folder it scans, and gitleaks and osv-scanner read their configuration from
+    that folder. The change's `STEERING_FILES` are removed from it (their added lines are
+    still scanned, in the diff), gitleaks gets its default rules through
+    `GITLEAKS_CONFIG` and osv-scanner an empty `--config`.
 
-Zyroflo looks binaries up in its own vendored folder and builds the osv-scanner command
-itself, so the adapter swaps `prepass.binary` and wraps `prepass.run_tool` for the length
-of one call, under a lock, restoring both even when the call raises - a shim like those in
-`sdlc_commons.guards`, until Zyroflo takes a binary resolver and an offline switch
-(deferred: Zyroflo PR).
+Zyroflo looks binaries up in its own vendored folder and builds the scanner commands
+itself, so the adapter swaps `prepass.binary` and wraps `prepass.run_tool` and
+`prepass.diff_scope` for the length of one call, under a lock, restoring all three even
+when the call raises - a shim like those in `sdlc_commons.guards`, until Zyroflo takes a
+binary resolver, an offline switch and a trusted scanner configuration (deferred: Zyroflo
+PR).
 """
 
 import tempfile
@@ -38,6 +44,24 @@ OFFLINE_FLAGS = ("--offline-vulnerabilities", "--download-offline-databases", "-
 #: The repository's own ast-grep rules, beside Zyroflo's defaults.
 REPO_RULES = Path(".agentic") / "review-rules"
 OSV = "osv-scanner"
+#: Files the scanners read from the folder they scan, so a change could steer them: their
+#: configuration (an allow-list for every path, ignored advisories) and ignore lists.
+STEERING_FILES = frozenset(
+    {
+        ".gitleaks.toml",
+        ".gitleaksignore",
+        "osv-scanner.toml",
+        ".osv-scanner.toml",
+        ".ignore",
+        ".rgignore",
+        ".gitignore",
+        "sgconfig.yml",
+        "sgconfig.yaml",
+    }
+)
+#: gitleaks' own default rules, given as its configuration so it never loads a
+#: `.gitleaks.toml` from the scanned folder.
+GITLEAKS_CONFIG = 'title = "agentic review pre-pass"\n\n[extend]\nuseDefault = true\n'
 
 Locate = Callable[[str], tuple[Path | None, str]]
 _SHIM = threading.Lock()
@@ -79,23 +103,44 @@ class ToolLocator:
 
 @contextmanager
 def _zyroflo(locate: Locate, *, offline: bool) -> Iterator[tuple[object, object]]:
-    """Zyroflo's prepass and sca modules, with our binaries and (offline) osv-scanner
-    flags for the length of the block; both are put back whatever happens."""
+    """Zyroflo's prepass and sca modules, with our binaries, trusted scanner configuration
+    and (offline) osv-scanner flags for the length of the block; all are put back whatever
+    happens."""
     from tools.review import prepass, sca
 
-    with _SHIM:
-        binary, run_tool = prepass.binary, prepass.run_tool
+    with _SHIM, tempfile.TemporaryDirectory(prefix="agentic-scanner-config-") as folder:
+        gitleaks_config = Path(folder) / "gitleaks.toml"
+        gitleaks_config.write_text(GITLEAKS_CONFIG, encoding="utf-8")
+        osv_config = Path(folder) / "osv-scanner.toml"
+        osv_config.write_text("", encoding="utf-8")
+        binary, run_tool, diff_scope = prepass.binary, prepass.run_tool, prepass.diff_scope
 
-        def offline_run(cmd: list[str], timeout: int = 300, env=None):
-            if offline and cmd[1:3] == ["scan", "source"]:
-                cmd = [*cmd[:-1], *OFFLINE_FLAGS, cmd[-1]]  # the scan root stays last
+        def trusted_run(cmd: list[str], timeout: int = 300, env=None):
+            if cmd[1:2] == ["dir"]:  # gitleaks: the org's rules, never the change's
+                env = {**(env or {}), "GITLEAKS_CONFIG": str(gitleaks_config)}
+            elif cmd[1:3] == ["scan", "source"]:  # osv-scanner; the scan root stays last
+                flags = ["--config", str(osv_config), *(OFFLINE_FLAGS if offline else ())]
+                cmd = [*cmd[:-1], *flags, cmd[-1]]
             return run_tool(cmd, timeout=timeout, env=env)
 
-        prepass.binary, prepass.run_tool = locate, offline_run
+        def scoped(target, diff_text, scratch, exclude=None):
+            found = diff_scope(target, diff_text, scratch, exclude)
+            _drop_steering(Path(scratch))
+            return found
+
+        prepass.binary, prepass.run_tool, prepass.diff_scope = locate, trusted_run, scoped
         try:
             yield prepass, sca
         finally:
-            prepass.binary, prepass.run_tool = binary, run_tool
+            prepass.binary, prepass.run_tool, prepass.diff_scope = binary, run_tool, diff_scope
+
+
+def _drop_steering(scratch: Path) -> None:
+    """Remove the change's own scanner configuration and ignore files from the scan root
+    (their added lines are still scanned, in the diff Zyroflo keeps beside them)."""
+    for path in sorted(scratch.rglob("*")):
+        if path.name in STEERING_FILES and (path.is_file() or path.is_symlink()):
+            path.unlink()
 
 
 def external_checks(

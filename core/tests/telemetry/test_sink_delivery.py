@@ -107,6 +107,25 @@ def test_gap_rewinds_to_the_server_head(tmp_path):
     assert json.loads(cursor.read_text(encoding="utf-8"))["seq"] == 4
 
 
+def test_a_partial_delivery_moves_the_cursor_past_what_was_sent(tmp_path):
+    """A sink that sends the start of a batch and then refuses the rest (the publish scan,
+    M2-49) says how many it sent: the cursor moves past them and the error still raises."""
+    cursor = tmp_path / "c.json"
+
+    class StopsAtThree(Dedup):
+        def deliver(self, run_id, batch):
+            super().deliver(run_id, [e for e in batch if e["seq"] < 3])
+            refused = SinkError("event 3 is refused")
+            refused.delivered = sum(1 for e in batch if e["seq"] < 3)
+            raise refused
+
+    sink = StopsAtThree()
+    with pytest.raises(SinkError, match="event 3"):
+        forward("r", chain(4), sink, cursor)
+    assert json.loads(cursor.read_text(encoding="utf-8")) == {"seq": 2, "hash": "h2"}
+    assert SinkError("plain").delivered == 0
+
+
 def test_a_head_outside_the_local_chain_is_a_fork(tmp_path):
     cursor = tmp_path / "c.json"
     entries = chain(3)

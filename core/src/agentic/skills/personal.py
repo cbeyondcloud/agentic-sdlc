@@ -7,7 +7,9 @@ CLI offers them only when the person running is the run's starter). Rules:
   * **Instruction-only.** A personal skill holds Markdown or text files only. A script, a
     binary or a link anywhere in it refuses the whole skill. Its text passes the same
     static scan as a catalogued skill (M1-39): no download-and-run line, no
-    prompt-injection phrase, no hidden Unicode, no telemetry URL.
+    prompt-injection phrase, no hidden Unicode, no telemetry URL. Files the OS, an editor
+    or git leave behind (`is_junk`: `.DS_Store`, `Thumbs.db`, swap files, dot-folders) are
+    skipped, never loaded and not part of the hash.
   * **Cannot widen anything.** The front matter may hold only `name`, `description`,
     `license`, `compatibility` and `metadata`. `allowed-tools`, `model`, `tools` and any
     other key are refused. The skill's text is added to the agent's instructions and
@@ -52,6 +54,8 @@ MAX_SKILL_TOKENS = 4000
 MAX_MEMORY_TOKENS = 2000
 ALLOWED_FRONT_MATTER = frozenset({"name", "description", "license", "compatibility", "metadata"})
 TEXT_SUFFIXES = frozenset({".md", ".txt"})
+#: Files macOS and Windows write into folders by themselves (lowercase).
+OS_FILES = frozenset({"thumbs.db", "ehthumbs.db", "desktop.ini", "icon\r"})
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 HEADER = (
     "## Your own skills and notes\n\n"
@@ -113,6 +117,8 @@ def load_personal(home: Path) -> PersonalSet:
             where = f"memory/{link.relative_to(memory_root).as_posix()}"
             found.rejected.append(PersonalRejection(where, "a link: notes are files"))
         for path in files:
+            if is_junk(path.relative_to(memory_root).as_posix()):
+                continue
             try:
                 found.memory.append(_note(memory_root, path))
             except _Refused as refusal:
@@ -130,6 +136,20 @@ def _is_link(path: Path) -> bool:
     return path.is_symlink() or path.is_junction()
 
 
+def is_junk(relative: str) -> bool:
+    """A file the OS, an editor or git leaves beside a user's own (`.DS_Store`,
+    `Thumbs.db`, `desktop.ini`, a swap or backup file, anything under a dot-folder).
+    It is never loaded, so it is skipped - not a reason to refuse a whole skill."""
+    parts = relative.split("/")
+    name = parts[-1]
+    return (
+        any(part.startswith(".") for part in parts)
+        or name.lower() in OS_FILES
+        or name.endswith("~")
+        or name.lower().endswith((".swp", ".swo", ".bak", ".tmp"))
+    )
+
+
 def _skill(folder: Path) -> PersonalSkill:
     where = f"skills/{folder.name}"
     if _is_link(folder):
@@ -140,7 +160,9 @@ def _skill(folder: Path) -> PersonalSkill:
     if links:
         raise _Refused(where, "it holds a link: a personal skill is a folder of plain files")
     for path in files:
-        _instruction_only(path, f"{where}/{path.relative_to(folder).as_posix()}")
+        relative = path.relative_to(folder).as_posix()
+        if not is_junk(relative):
+            _instruction_only(path, f"{where}/{relative}")
     skill_md = folder / "SKILL.md"
     if not skill_md.is_file():
         raise _Refused(where, "no SKILL.md")
@@ -167,7 +189,7 @@ def _skill(folder: Path) -> PersonalSkill:
     metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
     agents = metadata.get("agents") or []
     try:
-        digest = skill_digest(folder)
+        digest = skill_digest(folder, ignore=is_junk)
     except SkillsError as error:
         raise _Refused(where, str(error)) from error
     return PersonalSkill(
@@ -249,13 +271,28 @@ class PersonalContext:
         fields = {"classification": agent.classification, "kind": kind}
         self.record("skills.personal_disabled", fields)
 
+    def applicable(self, agent: "ResolvedAgent") -> list[PersonalSkill]:
+        """The personal skills meant for `agent`, in order (a shadowed one left out)."""
+        names = {agent.definition.name, agent.type}
+        return [
+            skill
+            for skill in self.personal.skills
+            if skill.key not in self.shared and (not skill.agents or names & set(skill.agents))
+        ]
+
+    def over_cap(self, agent: "ResolvedAgent") -> list[PersonalSkill]:
+        """The skills meant for `agent` that it will not get: over `MAX_PERSONAL_SKILLS`
+        (none where its classification turns personal skills off)."""
+        rule = self.classifications.get(agent.classification)
+        if rule is None or not rule.personal_skills:
+            return []
+        return self.applicable(agent)[MAX_PERSONAL_SKILLS:]
+
     def _skills(self, agent: "ResolvedAgent") -> list[str]:
-        wanted = []
         for skill in self.personal.skills:
             if skill.key in self.shared:
                 self.record("skills.personal_shadowed", {"skill": skill.key})
-            elif not skill.agents or {agent.definition.name, agent.type} & set(skill.agents):
-                wanted.append(skill)
+        wanted = self.applicable(agent)
         for skill in wanted[MAX_PERSONAL_SKILLS:]:
             fields = {"skill": skill.key, "max_personal": MAX_PERSONAL_SKILLS}
             self.record("skills.personal_truncated", fields)

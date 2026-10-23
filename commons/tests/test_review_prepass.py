@@ -216,15 +216,66 @@ def test_osv_runs_offline_unless_policy_opts_in(tmp_path, tree, tools):
     assert row(document, "osv-scanner")["mode"] == "online"
 
 
+#: Files a change could add to steer a scanner: its config or ignore list.
+STEERING = {
+    ".gitleaks.toml": "[allowlist]\npaths = ['''.*''']\n",
+    ".gitleaksignore": "settings.py:aws-access-token:2\n",
+    "osv-scanner.toml": '[[IgnoredVulns]]\nid = "GHSA-462w-v97r-4m45"\n',
+    ".ignore": "*\n",
+}
+
+
+class SeeingTools(Tools):
+    """`Tools`, noting each command's environment and what its scan root holds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: list[tuple[list[str], dict, set[str]]] = []
+
+    def __call__(self, cmd, timeout=300, env=None):
+        root = Path(cmd[2] if cmd[1] == "dir" else cmd[-1])
+        held = {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
+        config = {}
+        if env and env.get("GITLEAKS_CONFIG"):
+            config["gitleaks"] = Path(env["GITLEAKS_CONFIG"]).read_text(encoding="utf-8")
+        if "--config" in cmd:
+            config["osv"] = Path(cmd[cmd.index("--config") + 1]).read_text(encoding="utf-8")
+        self.seen.append((list(cmd), {**(env or {}), **config}, held))
+        return super().__call__(cmd, timeout, env)
+
+
+def test_a_change_cannot_configure_the_scanners(tmp_path, tree, monkeypatch):
+    fake = SeeingTools()
+    monkeypatch.setattr(zyroflo_prepass, "run_tool", fake)
+    text = change()
+    for name, body in STEERING.items():
+        (tree / name).write_text(body, encoding="utf-8")
+        (tree / "sub").mkdir(exist_ok=True)
+        (tree / "sub" / name).write_text(body, encoding="utf-8")
+        text += diff_for(name, body.splitlines()[0]) + diff_for(f"sub/{name}", "x")
+    document = external_checks(tree, text, locator(tmp_path))
+    assert row(document, "gitleaks")["findings"] == 1
+    for cmd, _env, held in fake.seen:
+        steering = {h for h in held if h.rsplit("/", 1)[-1] in STEERING}
+        assert steering == set(), f"{cmd[1]} saw the change's own {sorted(steering)}"
+    gitleaks = [env for cmd, env, _ in fake.seen if cmd[1] == "dir"]
+    assert gitleaks and all("useDefault = true" in env["gitleaks"] for env in gitleaks)
+    osv = [(cmd, env) for cmd, env, _ in fake.seen if cmd[1:3] == ["scan", "source"]]
+    assert osv and all("IgnoredVulns" not in env["osv"] for _, env in osv)
+    assert all(cmd[-1] != cmd[cmd.index("--config") + 1] for cmd, _ in osv)
+
+
 def test_shim_restores_zyroflo_functions(tmp_path, tree, monkeypatch):
     def broken(cmd, timeout=300, env=None):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(zyroflo_prepass, "run_tool", broken)
     binary, run_tool = zyroflo_prepass.binary, zyroflo_prepass.run_tool
+    diff_scope = zyroflo_prepass.diff_scope
     with pytest.raises(RuntimeError):
         external_checks(tree, change(), locator(tmp_path))
     assert zyroflo_prepass.binary is binary and zyroflo_prepass.run_tool is run_tool
+    assert zyroflo_prepass.diff_scope is diff_scope
     assert zyroflo_sca.prepass is zyroflo_prepass
 
 

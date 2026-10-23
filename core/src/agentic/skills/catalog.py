@@ -26,6 +26,7 @@ import fnmatch
 import hashlib
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, Self
 
@@ -137,10 +138,11 @@ def skill_folder(root: Path, key: str) -> Path:
     return root / source / name
 
 
-def skill_digest(folder: Path) -> str:
+def skill_digest(folder: Path, ignore: Callable[[str], bool] | None = None) -> str:
     """The content hash of a skill folder: every file's POSIX relative path and bytes,
     sorted by path, each length-prefixed so two layouts can never feed the same bytes
-    (DF-140). CRLF counts as LF, so Windows and Linux checkouts agree.
+    (DF-140). CRLF counts as LF, so Windows and Linux checkouts agree. `ignore` (given a
+    file's POSIX relative path) leaves files out of the hash.
 
     A link (symlink or Windows junction) anywhere in the folder is refused: one OS
     would follow it and another skip it, and either way it reaches outside the skill."""
@@ -148,6 +150,8 @@ def skill_digest(folder: Path) -> str:
     if links:
         names = ", ".join(link.relative_to(folder).as_posix() for link in links)
         raise SkillsError(f"{folder}: skills hold plain files, not links ({names})")
+    if ignore is not None:
+        files = [p for p in files if not ignore(p.relative_to(folder).as_posix())]
     digest = hashlib.sha256()
     for path in sorted(files, key=lambda p: p.relative_to(folder).as_posix()):
         name = path.relative_to(folder).as_posix().encode("utf-8")

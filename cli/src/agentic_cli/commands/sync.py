@@ -4,12 +4,15 @@
 The run ledger (`events.jsonl`) is the queue and the sink cursor its committed offset, so
 syncing sends exactly what the control plane has not taken yet, in order; it de-duplicates
 by (run, seq, hash), so syncing twice changes nothing. A run the control plane refuses (a
-changed chain) is reported and left queued; the others still go."""
+changed chain) is reported and left queued; the others still go. A run the publish scan
+holds back (M2-49: a chained event with a secret or personal data) is sent up to that event
+and reported as held back, with who to ask: syncing again cannot send the rest."""
 
 from typing import Annotated
 
 import typer
 
+from agentic.security.publish_scan import PublishBlocked
 from agentic.telemetry.sinks import ForwardingRecorder
 from agentic_cli import control_plane
 from agentic_cli.errors import CliError
@@ -51,9 +54,13 @@ def register(app: typer.Typer) -> None:
                 console.print("No runs to sync.")
             for name, result in results.items():
                 line = f"{name}: sent {result['sent']}, queued {result['queued']}"
+                if "blocked" in result:
+                    line += f", held back from event {result['blocked']['seq']}"
                 if "error" in result:
                     line += f" ({result['error']})"
                 console.print(line, markup=False)
+                if "hint" in result:
+                    console.print(f"  hint: {result['hint']}", markup=False)
 
         out.result(data, show)
         if any("error" in result for result in results.values()):
@@ -68,18 +75,26 @@ def _run_ids(ws: Workspace) -> list[str]:
 
 
 def _sync_run(ws: Workspace, sink: control_plane.ControlPlaneSink, run_id: str) -> dict:
-    errors: list[str] = []
+    errors: list[Exception] = []
     try:
         ledger = RunLedger(ws.repo, run_id)
         if not ledger.events():
             return {"sent": 0, "queued": 0}
         recorder = ForwardingRecorder(
-            ledger, [sink], on_error=lambda name, error: errors.append(str(error))
+            ledger, [sink], on_error=lambda name, error: errors.append(error)
         )
-        sent = recorder.flush().get(sink.name, 0)
-        result = {"sent": sent, "queued": recorder.pending().get(sink.name, 0)}
+        flushed = recorder.flush().get(sink.name, 0)
+        result: dict = {"sent": flushed, "queued": recorder.pending().get(sink.name, 0)}
     except LedgerError as error:
         return {"sent": 0, "queued": 0, "error": str(error)}
     if errors:
-        result["error"] = errors[0]
+        first = errors[0]
+        result["error"] = str(first)
+        if isinstance(first, PublishBlocked):  # M2-49: held back for good, not a retry case
+            result["sent"] = first.delivered
+            result["blocked"] = {"seq": first.seq}
+            result["hint"] = (
+                f"ask your org admin how to handle a run the publish scan held back; its "
+                f"full record stays in {ledger.folder} and syncing again will not send it"
+            )
     return result
