@@ -1,0 +1,10 @@
+<!doctype html>
+<html><body style="font-family: sans-serif; line-height: 1.4">
+<p>Hello $email,</p>
+<p>$inviter added you to $tenant_name's agentic workspace as <b>$role</b>$team_phrase.</p>
+<p>To set up, install the agentic CLI and run:</p>
+<pre style="background: #f4f4f4; padding: 8px">agentic login --invite "$link"</pre>
+<p>The link works once and expires on $expires_at (UTC). It gives you your control-plane
+token and your model gateway key; both go straight into your system's keychain.</p>
+<p>If you did not expect this mail, ignore it: nothing happens until the link is used.</p>
+</body></html>
