@@ -15,6 +15,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     MetaData,
     Numeric,
@@ -52,6 +53,7 @@ TENANT_TABLES: tuple[str, ...] = (
     "notifications",
     "invites",
     "proxy_keys",
+    "auto_trips",
 )
 
 #: A tenant's slug: lower-case, starts with a letter, 2-63 characters.
@@ -293,6 +295,8 @@ run_events = Table(
     Column("received_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     ForeignKeyConstraint(["tenant_id", "run_id"], ["runs.tenant_id", "runs.run_id"]),
     CheckConstraint("seq > 0", name="run_events_seq_positive"),
+    # auto-trip reads the spend and errors received in its window (M2-11)
+    Index("run_events_tenant_id_received_at_idx", "tenant_id", "received_at"),
 )
 
 #: Kill and pause switches (M2-06, M2-10). Clearing one sets `cleared_by`/`cleared_at`; the
@@ -379,6 +383,29 @@ proxy_keys = Table(
     Column("revoked_at", DateTime(timezone=True), nullable=True),
     ForeignKeyConstraint(["tenant_id", "user_id"], ["users.tenant_id", "users.id"]),
     CheckConstraint("key_id ~ '^[0-9a-f]{16,64}$'", name="proxy_keys_key_id_format"),
+)
+
+#: Auto-trip state per team and kind (M2-11): `armed` until the team's spend or error rate
+#: passes its threshold, `tripped` while the pause switch it set (`switch_id`) holds, and
+#: `disarmed` after a person cleared that switch, until the rate falls below the reset level.
+#: `value`/`threshold` are decimal text (None: unmeasured).
+auto_trips = Table(
+    "auto_trips",
+    metadata,
+    _tenant_id(),
+    Column("team", Text, primary_key=True),
+    Column("kind", Text, primary_key=True),
+    Column("state", Text, nullable=False, server_default="armed"),
+    Column("switch_id", UUID(as_uuid=True), nullable=True),
+    Column("value", Text, nullable=True),
+    Column("threshold", Text, nullable=True),
+    Column("changed_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("evaluated_at", DateTime(timezone=True), nullable=True),
+    ForeignKeyConstraint(
+        ["tenant_id", "switch_id"], ["kill_switches.tenant_id", "kill_switches.id"]
+    ),
+    CheckConstraint("kind in ('spend', 'errors')", name="auto_trips_kind_known"),
+    CheckConstraint("state in ('armed', 'tripped', 'disarmed')", name="auto_trips_state_known"),
 )
 
 #: Unique constraints that deliberately span tenants: credential hashes, looked up before

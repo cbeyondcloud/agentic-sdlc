@@ -104,6 +104,7 @@ DEFAULT_ROLES: tuple[RoleSpec, ...] = (
             "audit.read.team",
             "audit.read.repo",
             "audit.read.org",
+            "audit.export",
             "dashboard.view.own",
             "dashboard.view.team",
             "dashboard.view.repo",
