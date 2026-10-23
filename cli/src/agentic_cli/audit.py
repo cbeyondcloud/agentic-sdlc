@@ -10,7 +10,9 @@ rests on the server's own check."""
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+import os
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -148,6 +150,40 @@ def verify_control_plane(client, tenant: str) -> ChainReport:
         seq, digest = checker.last
         report.head = (seq or 0, digest)
     return report
+
+
+def export_name(team: str | None, start: str | None, end: str | None, fmt: str) -> str:
+    """The default file name: `audit-<team|org>-<from|start>-<to|now>.<fmt>`, with every
+    character a Windows or macOS file name could choke on (':' of a time) made '-'."""
+    parts = [team or "org", start or "start", end or "now"]
+    return "audit-" + "-".join(_SAFE.sub("-", part) for part in parts) + f".{fmt}"
+
+
+_SAFE = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def download_export(client, params: Mapping[str, str], target: Path) -> ExportReport:
+    """Stream the export to `<target>.part`, flush it to disk, move it into place and
+    verify it. Nothing is left behind when the download fails; an existing file is never
+    overwritten."""
+    if target.exists():
+        raise CliError(
+            f"{target} already exists",
+            ExitCode.REFUSED,
+            hint="pass another --output, or move the old export away",
+        )
+    partial = target.with_name(target.name + ".part")
+    partial.unlink(missing_ok=True)  # our own leftover from an export that was cut off
+    try:
+        with partial.open("xb") as sink:
+            client.export_audit(params, sink)
+            sink.flush()
+            os.fsync(sink.fileno())
+        os.replace(partial, target)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
+    return verify_export(target)
 
 
 def verify_exports(paths: Sequence[Path]) -> list[ExportReport]:

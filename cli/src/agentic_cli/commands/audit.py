@@ -17,6 +17,7 @@ Local runs are checked when run ids are given, or when neither --control-plane n
 from __future__ import annotations
 
 import os
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -100,6 +101,45 @@ def register(app: typer.Typer) -> None:
         out.result(data, show)
         if not intact:
             raise typer.Exit(ExitCode.INVALID)
+
+    @group.command("export")
+    def export(
+        ctx: typer.Context,
+        team: Annotated[
+            str | None, typer.Option("--team", help="One team's records (others as links).")
+        ] = None,
+        start: Annotated[
+            str | None,
+            typer.Option("--from", help="ISO date, or date-time with a zone; inclusive."),
+        ] = None,
+        end: Annotated[
+            str | None,
+            typer.Option("--to", help="ISO date (that whole day), or date-time; exclusive."),
+        ] = None,
+        fmt: Annotated[
+            ExportFormat, typer.Option("--format", help="jsonl (with the proof) or csv.")
+        ] = ExportFormat.jsonl,
+        output: Annotated[
+            Path | None,
+            typer.Option("--output", "-o", help="Default: audit-<team>-<from>-<to>.<format>."),
+        ] = None,
+    ) -> None:
+        """Export audit records with their chain proof (auditors), and verify the file."""
+        out: Output = ctx.obj
+        params = {"format": fmt.value}
+        params.update({k: v for k, v in (("team", team), ("from", start), ("to", end)) if v})
+        target = output or Path(audit.export_name(team, start, end, fmt.value))
+        with org_client() as client:
+            report = audit.download_export(client, params, target)
+        data = report.as_dict()
+        out.result(data, lambda console: show_export(console, report))
+        if not report.ok:
+            raise typer.Exit(ExitCode.INVALID)
+
+
+class ExportFormat(StrEnum):
+    jsonl = "jsonl"
+    csv = "csv"
 
 
 def _located(finding: dict) -> str:

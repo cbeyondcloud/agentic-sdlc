@@ -239,3 +239,36 @@ async def test_tampered_control_plane_record_is_located(live, db):
     assert [(f["seq"], f["field_class"]) for f in broken.findings] == [(2, "content")]
     with ControlPlaneClient(base, b.admin_token) as client:
         assert verify_control_plane(client, "tenant-b").intact
+
+
+async def test_audit_export_end_to_end(live, tmp_path):
+    """M2-13: the CLI's client streams a team export over HTTP from the real server; the
+    auditor's copied stdlib verifier accepts it and rejects one changed byte."""
+    import shutil
+    import subprocess
+    import sys
+
+    from agentic import auditproof
+    from agentic_cli.audit import download_export
+
+    base, a, _ = live
+    with ControlPlaneClient(base, a.admin_token) as client:
+        for team in ("payments", "billing", "payments"):
+            client.set_switch(
+                {"scope_kind": "team", "scope_value": team, "mode": "pause", "reason": team}
+            )
+        report = download_export(
+            client, {"format": "jsonl", "team": "payments"}, tmp_path / "team.jsonl"
+        )
+        csv_report = download_export(client, {"format": "csv"}, tmp_path / "org.csv")
+    assert report.ok and report.team == "payments" and report.links >= 1, report.findings
+    assert csv_report.ok and csv_report.entries >= 3, csv_report.findings
+    copy = tmp_path / "verify.py"
+    shutil.copyfile(auditproof.__file__, copy)
+    check = [sys.executable, "-I", str(copy), str(tmp_path / "team.jsonl")]
+    assert subprocess.run(check, capture_output=True).returncode == 0
+    data = (tmp_path / "team.jsonl").read_bytes()
+    (tmp_path / "team.jsonl").write_bytes(
+        data.replace(b'"reason":"payments"', b'"reason":"paymentz"', 1)
+    )
+    assert subprocess.run(check, capture_output=True).returncode == 3
