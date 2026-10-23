@@ -57,6 +57,32 @@ class FakeControlPlane:
     failing_checks: dict[str, str] = field(default_factory=dict)  # check -> why it fails
     min_cli_version: str | None = None  # registration answers 426 below it (M2-08)
     proxy_key: str | None = None  # the key a rotation hands out (M2-17); None: none held
+    invites: dict[str, dict] = field(default_factory=dict)  # token -> redemption (M2-18)
+    used_invites: set[str] = field(default_factory=set)
+
+    def add_invite(self, token: str, *, gateway_key: str | None = None) -> dict:
+        self.invites[token] = {
+            "tenant": {"slug": self.tenant, "name": self.tenant.title()},
+            "email": self.email,
+            "control_plane_url": CP_URL,
+            "control_plane_token": self.token,
+            "token_expires_at": (datetime.now(UTC) + timedelta(days=90)).isoformat(),
+            "gateway_url": "https://gateway.acme.example" if gateway_key else None,
+            "gateway_key": gateway_key,
+            "gateway_key_id": "0123456789abcdef" if gateway_key else None,
+            "notice": None if gateway_key else "no gateway key from this control plane",
+        }
+        return self.invites[token]
+
+    def _redeem(self, request: httpx2.Request) -> httpx2.Response:
+        token = json.loads(request.content)["token"]
+        hint = {"hint": "ask your team lead or org admin to send you a new invite"}
+        if token in self.used_invites:
+            return _problem(409, "invite.used", "this invite link was already used", extra=hint)
+        if token not in self.invites:
+            return _problem(404, "invite.invalid", "the invite link is not valid", extra=hint)
+        self.used_invites.add(token)
+        return httpx2.Response(200, json=self.invites[token])
 
     def add_switch(
         self, kind: str, value: str = "", *, mode: str = "kill", reason: str = "r", team=None
@@ -104,6 +130,8 @@ class FakeControlPlane:
         self.requests.append(request)
         if self.down:
             raise httpx2.ConnectError("connection refused", request=request)
+        if request.url.path == "/v1/invites/redeem" and request.method == "POST":
+            return self._redeem(request)  # the one route without a bearer token
         if request.headers.get("authorization") != f"Bearer {self.token}":
             return _problem(401, "auth.invalid_token", "the token is not valid")
         path = request.url.path

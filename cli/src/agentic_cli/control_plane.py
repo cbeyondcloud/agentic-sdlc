@@ -33,6 +33,7 @@ from agentic.orgapi import (
     ActivePolicy,
     CheckResult,
     IngestResult,
+    InviteRedeemed,
     KillState,
     KillSwitchInfo,
     Me,
@@ -146,20 +147,22 @@ class ControlPlaneClient:
     def __init__(
         self,
         base_url: str,
-        token: str,
+        token: str | None,
         *,
         transport: httpx2.BaseTransport | None = None,
         timeout: httpx2.Timeout = TIMEOUT,
     ) -> None:
+        """`token` None: no bearer token is sent (only invite redemption works so)."""
         self.base_url = checked_base(base_url)
         self._shown = scrub_url_credentials(self.base_url)
         self._token = token
         headers = {
-            "Authorization": f"Bearer {token}",
             "User-Agent": f"agentic-cli/{__version__}",
             CLI_VERSION_HEADER: __version__,
             "Accept": "application/json, application/problem+json",
         }
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         options: dict[str, Any] = {
             "base_url": self.base_url,
             "headers": headers,
@@ -261,6 +264,12 @@ class ControlPlaneClient:
         params = {"include_cleared": "true"} if include_cleared else None
         found = self._json("GET", "/killswitch", params=params)
         return [KillSwitchInfo.model_validate(item) for item in found]
+
+    def redeem_invite(self, token: str) -> InviteRedeemed:
+        """Use an invite once (M2-18): the secrets it gives are in this answer only."""
+        return InviteRedeemed.model_validate(
+            self._json("POST", "/invites/redeem", {"token": token})
+        )
 
     def rotate_proxy_key(self) -> ProxyKeyIssued:
         """Replace the caller's gateway key (M2-17); the new key is in this answer only."""

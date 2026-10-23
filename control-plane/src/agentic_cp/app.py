@@ -30,6 +30,7 @@ from agentic_cp.killswitch.api import router as killswitch_router
 from agentic_cp.logredact import install_log_redaction
 from agentic_cp.notify.api import router as notify_router
 from agentic_cp.policy_sync.api import router as policy_router
+from agentic_cp.provisioning.api import router as provisioning_router
 from agentic_cp.rbac.api import router as rbac_router
 from agentic_cp.rbac.authz import EnforcerCache
 from agentic_cp.rbac.import_api import router as rbac_import_router
@@ -99,6 +100,7 @@ def create_app(
     app.include_router(notify_router)
     app.include_router(service_accounts_router)
     app.include_router(keys_router)
+    app.include_router(provisioning_router)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:

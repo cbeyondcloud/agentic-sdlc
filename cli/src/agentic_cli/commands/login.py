@@ -31,7 +31,7 @@ import typer
 
 from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials, env_var
 from agentic.hosting.base import scrub_url_credentials
-from agentic.orgapi import Me
+from agentic.orgapi import Me, parse_invite
 from agentic.transport import verify_gateway_key
 from agentic_cli import control_plane
 from agentic_cli.config import agentic_home, user_config
@@ -66,11 +66,22 @@ def register(app: typer.Typer) -> None:
             "--rotate",
             help="Replace your gateway key through the control plane (the old key stops working).",
         ),
+        invite: str | None = typer.Option(
+            None,
+            "--invite",
+            help="The link from your invite mail: stores your control-plane token and gateway "
+            "key (the link works once).",
+        ),
     ) -> None:
         """Store your gateway key (or a control-plane or git host token) in the OS keyring."""
         out: Output = ctx.obj
         home = agentic_home()
         wanted = target.strip().lower()
+        if invite is not None:
+            if rotate or key_stdin or wanted != GATEWAY:
+                raise CliError("--invite takes no other key option (only --url)", ExitCode.USAGE)
+            _redeem(out, home, invite, url)
+            return
         if url is not None and wanted != CONTROL_PLANE:
             raise CliError("--url is for --for control-plane", ExitCode.USAGE)
         if rotate:
@@ -215,6 +226,84 @@ def _rotate(out: Output, home) -> None:
     data = {"stored": TOKENLEAN_KEY, "where": "keyring", "rotated": True, "key_id": issued.key_id}
     shown = f"Gateway key rotated (new key {issued.key_id}) and stored in the OS keyring."
     out.result(data, lambda c: c.print(shown, markup=False))
+
+
+def _redeem(out: Output, home, link: str, url: str | None) -> None:
+    """`agentic login --invite <link>` (M2-18): redeem the invite once and keep what it
+    gives in the OS keyring. The keyring is checked before the link is used up."""
+    base, token = parse_invite(link)
+    base = base or url or control_plane.control_plane_url(os.environ, user_config(home))
+    if not base or not token:
+        raise CliError(
+            "the invite names no control plane",
+            ExitCode.INVALID,
+            hint="paste the whole link from the invite mail, or give --url with a bare token",
+        )
+    base = control_plane.checked_base(base)
+    credentials = Credentials()
+    if credentials.in_ci:
+        raise CliError(
+            f"an invite stores keys in the OS keyring, which is not used in CI "
+            f"({credentials.ci_marker} is set)",
+            ExitCode.REFUSED,
+            hint="redeem the invite on your own machine",
+        )
+    try:
+        credentials.find(control_plane.CONTROL_PLANE_TOKEN)  # can the keyring be used at all?
+    except CredentialError as error:
+        raise CliError(
+            str(error), ExitCode.ERROR, hint="fix the keyring first: the link works once"
+        ) from error
+    with control_plane.ControlPlaneClient(
+        base, None, transport=control_plane.make_transport()
+    ) as client:
+        got = client.redeem_invite(token)
+    stored = [control_plane.CONTROL_PLANE_TOKEN]
+    try:
+        credentials.store(control_plane.CONTROL_PLANE_TOKEN, got.control_plane_token)
+        if got.gateway_key:
+            credentials.store(TOKENLEAN_KEY, got.gateway_key)
+            stored.append(TOKENLEAN_KEY)
+    except CredentialError as error:
+        raise CliError(
+            f"the invite was used but its keys could not be stored: {error}",
+            ExitCode.ERROR,
+            hint="ask your team lead or org admin for a new invite",
+        ) from error
+    control_plane.record_login(home, base, got.tenant.slug, got.email)
+    settings = user_config(home)
+    config = {}
+    if control_plane.control_plane_url(os.environ, settings) != base:
+        config["control_plane_url"] = base
+    if got.gateway_url and (settings.get("gateway_url") or "").rstrip("/") != got.gateway_url:
+        config["gateway_url"] = got.gateway_url
+    data = {
+        "stored": stored,
+        "where": "keyring",
+        "tenant": got.tenant.slug,
+        "user": got.email,
+        "url": base,
+        "gateway_key_id": got.gateway_key_id,
+        "token_expires_at": got.token_expires_at.isoformat(),
+        "config": config,
+        "notice": got.notice,
+    }
+
+    def show(console) -> None:
+        console.print(
+            f"Signed in to {base} ({got.tenant.name}) as {got.email}; "
+            f"{' and '.join(stored)} stored in the OS keyring.",
+            markup=False,
+        )
+        if got.notice:
+            console.print(got.notice, markup=False)
+        if config:
+            console.print("Add to ~/.agentic/config.yaml:", markup=False)
+            for key, value in config.items():
+                console.print(f"  {key}: {value}", markup=False)
+        console.print("Next: cd <repo> and run `agentic init`.", markup=False)
+
+    out.result(data, show)
 
 
 def _read(key_stdin: bool, label: str) -> str:

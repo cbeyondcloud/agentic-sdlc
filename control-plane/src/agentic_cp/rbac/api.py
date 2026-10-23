@@ -38,6 +38,7 @@ from agentic_cp.auth.users import (
 )
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
 from agentic_cp.policy_sync.service import active_teams
+from agentic_cp.provisioning.invites import create_invite
 from agentic_cp.rbac import store
 from agentic_cp.rbac.authz import Org, Repo, Team, authorize, describe, require
 from agentic_cp.rbac.defaults import BUILTIN, ORG_ADMIN, SERVICE_ACCOUNT, SERVICE_PERMISSIONS
@@ -341,8 +342,25 @@ async def apply_assignment(
         ),
         clock=state.clock,
     )
+    invite = None
+    if plan.user is None:
+        invite = await create_invite(
+            conn,
+            user,
+            settings=state.settings,
+            clock=state.clock,
+            actor=ctx.email,
+            actor_kind=ctx.actor_kind,
+            role=plan.role,
+            team=plan.team,
+        )
     return Assignment(
-        id=assignment_id, email=user.email, role=plan.role, scope=kind, team=plan.team
+        id=assignment_id,
+        email=user.email,
+        role=plan.role,
+        scope=kind,
+        team=plan.team,
+        invited=invite is not None,
     )
 
 
