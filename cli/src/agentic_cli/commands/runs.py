@@ -34,6 +34,7 @@ from typing import Annotated
 import typer
 from rich import box
 
+from agentic.engine.engine import TERMINAL
 from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
 from agentic_cli.commands.catalog import show_definition_warnings
@@ -330,9 +331,7 @@ def _all_runs(rt: Runtime) -> list[RunState]:
 
 
 def _list(out: Output, rt: Runtime, *, show_all: bool, limit: int | None = None) -> None:
-    states = [
-        s for s in _all_runs(rt) if show_all or s.status not in ("completed", "failed", "stopped")
-    ][:limit]
+    states = [s for s in _all_runs(rt) if show_all or s.status not in TERMINAL][:limit]
     rows = [
         {
             "run_id": s.run_id,

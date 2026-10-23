@@ -41,7 +41,9 @@ from agentic.engine.engine import Engine, EngineError, StepContext
 from agentic.engine.factory import StepRunners
 from agentic.engine.preflight import PreflightReport, Problem, preflight
 from agentic.engine.state import RunStore
+from agentic.killswitch import KillSwitch, NoKillSwitch
 from agentic.policy import ResolvedAgent
+from agentic.policy.repos import normalise_remote
 from agentic.sandbox.readiness import Readiness, SandboxDecision, decide_sandbox, readiness
 from agentic.skills.catalog import CatalogError, load_catalog
 from agentic.skills.install import log_record, sync_skills
@@ -51,10 +53,12 @@ from agentic.telemetry.logs import StepLogs
 from agentic.telemetry.sinks import EventSink, ForwardingRecorder
 from agentic.transport import CallIdentity
 from agentic_cli import control_plane
+from agentic_cli import killswitch as killswitch_port
 from agentic_cli.codeintel import codeintel_for as codeintel_factory
 from agentic_cli.codeintel import codeintel_settings, codeintel_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.repo_guard import origin_url
 from agentic_cli.standalone import PLACEHOLDER
 from agentic_cli.wiring import StepWiring, production_scanner
 from agentic_cli.workspace import RUNS, Workspace
@@ -166,6 +170,8 @@ class Runtime:
         self._recorders: dict[str, ForwardingRecorder] = {}
         self._sinks: list[EventSink] | None = None
         self.sink_problem: str | None = None  # why runs are not reported (a warning)
+        self._killswitch: KillSwitch | None = None
+        self._repo_key: str | None | bool = False  # False: not looked up yet
 
     @property
     def user(self) -> str:
@@ -481,6 +487,9 @@ class Runtime:
                 ),
             )
         return Engine(
+            killswitch=None if offline else self.killswitch(),  # stopping needs no switch
+            kill_poll_s=killswitch_port.POLL_S,
+            repo=self.repo_key(),
             definitions=self.ws.definitions(),
             policy=policy,
             context=self.ws.context(),
@@ -499,6 +508,40 @@ class Runtime:
             redact=self.redact(gateway),  # pause reasons and step details in run.json
             handoff_prefix=RUNS.as_posix(),  # repo-relative Agentic-Handoff trailers (DF-174)
         )
+
+    def repo_key(self) -> str | None:
+        """This repository as `host/owner/name` (its origin), or None without one."""
+        if self._repo_key is False:
+            remote = origin_url(self.ws.repo)
+            self._repo_key = normalise_remote(remote) if remote else None
+        return self._repo_key  # type: ignore[return-value]
+
+    def control_plane(self) -> control_plane.ControlPlaneClient | None:
+        """The org's control plane client: None outside org mode or without a configured
+        control plane; `ControlPlaneRefused` when one is configured but not signed in."""
+        if not self.ws.settings.get("org"):
+            return None
+        return control_plane.client_for(self.ws.env, self.ws.settings, self.ws.home)
+
+    def killswitch(self) -> KillSwitch:
+        """The engine's kill-switch port (M2-19): the control plane's switches in org mode
+        with one; nothing to stop runs otherwise (standalone, or org mode without a control
+        plane, which preflight warns about). Configured but not signed in, the state can
+        never be confirmed, so every check holds the run (ruling R2)."""
+        if self._killswitch is None:
+            try:
+                client = self.control_plane()
+            except control_plane.ControlPlaneError as error:
+                self._killswitch = killswitch_port.Unconfirmable(str(error))
+            else:
+                if client is None:
+                    self._killswitch = NoKillSwitch()
+                else:
+                    user = (control_plane.login_record(self.ws.home) or {}).get("user")
+                    self._killswitch = killswitch_port.ControlPlaneKillSwitch(
+                        client, user=user, team=self.ws.team, repo=self.repo_key()
+                    )
+        return self._killswitch
 
     def identity(self, step: StepContext) -> CallIdentity:
         if step.run_id not in self._pipelines:

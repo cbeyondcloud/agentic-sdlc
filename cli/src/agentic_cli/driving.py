@@ -4,7 +4,7 @@
                    (DF-175) and the run's spans into its folder (DF-165);
 * `engine_errors` - the engine's error families as messages and exit codes (DF-54);
 * `exit_code_for` - the run's state as the command's exit code: completed 0, waiting
-                   for a person 4, stopped or paused at a limit 5, failed 1;
+                   for a person 4, stopped, killed or paused at a limit 5, failed 1;
 * `summary` / `show_state` - the run as JSON, and as text with what to do next; the
                    free text in them (pause reasons, step details, why it ended) goes
                    through the redactor once more, for runs recorded before the engine
@@ -19,10 +19,11 @@ from pathlib import Path
 
 from agentic.agents.runner import ResumeError
 from agentic.definitions import DefinitionError, UnknownDefinitionError
-from agentic.engine.engine import FAILING_PAUSE, EngineError
+from agentic.engine.engine import FAILING_PAUSE, TERMINAL, EngineError
 from agentic.engine.expressions import ExpressionError
 from agentic.engine.gates import GateRefused
 from agentic.engine.state import RunState, RunStateError
+from agentic.killswitch import HOLD_PAUSE, UNCONFIRMED_PAUSE
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.logsetup import console_logging
@@ -77,7 +78,7 @@ def exit_code_for(state: RunState) -> ExitCode:
         return ExitCode.OK
     if state.status == "failed":
         return ExitCode.ERROR
-    if state.status == "stopped":
+    if state.status in ("stopped", "killed"):
         return ExitCode.STOPPED
     if state.pending is not None and state.pending.id in LIMIT_PAUSES:
         return ExitCode.STOPPED
@@ -142,7 +143,7 @@ def _as_is(text: str) -> str:
 
 def next_steps(state: RunState) -> list[str]:
     pending, run = state.pending, state.run_id
-    if state.status in ("completed", "failed", "stopped"):
+    if state.status in TERMINAL:
         return []
     if pending is None:
         return [f"agentic resume {run}"]
@@ -176,6 +177,17 @@ def next_steps(state: RunState) -> list[str]:
         return [f"agentic resume {run} --extra-minutes <N>", f"agentic stop {run} --reason ..."]
     if pending.id == "condition":
         return [f"agentic resume {run} --skip", f"agentic stop {run} --reason ..."]
+    if pending.id == HOLD_PAUSE:  # a pause switch: resume continues once it is cleared
+        return [
+            f"agentic resume {run}   (once the pause is cleared; `agentic killswitch list` "
+            "shows it)",
+            f"agentic stop {run} --reason ...",
+        ]
+    if pending.id == UNCONFIRMED_PAUSE:  # the control plane could not be reached
+        return [
+            f"agentic resume {run}   (once the control plane is reachable again)",
+            f"agentic stop {run} --reason ...",
+        ]
     if pending.id == FAILING_PAUSE:  # resume would only pause again (DF-238)
         return [f"agentic show {run}", f"agentic stop {run} --reason ..."]
     return [f"agentic resume {run}", f"agentic stop {run} --reason ..."]
@@ -201,7 +213,8 @@ def show_state(state: RunState, redact: Callable[[str], str] | None = None):
             reason = data["pending"]["reason"]
             console.print(f"  {where} {pending.id}: {reason}", markup=False)
         if state.end_reason:
-            console.print(f"  stopped by {state.ended_by}: {data['end_reason']}", markup=False)
+            verb = "killed" if state.status == "killed" else "stopped"
+            console.print(f"  {verb} by {state.ended_by}: {data['end_reason']}", markup=False)
         console.print(f"  spent ${data['cost_usd']}", markup=False)
         for line in next_steps(state):
             console.print(f"  next: {line}", markup=False)

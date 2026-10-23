@@ -51,6 +51,30 @@ class FakeControlPlane:
     refuse_ingest: dict | None = None
     max_body: int | None = None  # bytes: a larger request body is answered 413 too_large
     max_entries: int | None = None  # entries per ingest: more is 413 ingest.too_large
+    switches: list[dict] = field(default_factory=list)  # kill and pause switches (M2-06)
+    lead_teams: set[str] = field(default_factory=set)  # teams the user holds killswitch.team in
+    registrations: list[dict] = field(default_factory=list)  # POST /v1/runs bodies (M2-21)
+    failing_checks: dict[str, str] = field(default_factory=dict)  # check -> why it fails
+    min_cli_version: str | None = None  # registration answers 426 below it (M2-08)
+
+    def add_switch(
+        self, kind: str, value: str = "", *, mode: str = "kill", reason: str = "r", team=None
+    ) -> dict:
+        switch = {
+            "id": f"00000000-0000-0000-0000-{len(self.switches) + 1:012d}",
+            "scope_kind": kind,
+            "scope_value": value,
+            "team": value if kind == "team" else team,
+            "mode": mode,
+            "reason": reason,
+            "created_by": "admin@acme.example",
+            "created_at": datetime.now(UTC).isoformat(),
+            "cleared_by": None,
+            "cleared_at": None,
+            "active": True,
+        }
+        self.switches.append(switch)
+        return switch
 
     @property
     def transport(self) -> httpx2.MockTransport:
@@ -108,11 +132,102 @@ class FakeControlPlane:
                     "team": body["team"],
                 },
             )
+        if path == "/v1/killswitch/state":
+            active = [s for s in self.switches if s["active"]]
+            return httpx2.Response(
+                200,
+                json={
+                    "switches": active,
+                    "checked_at": datetime.now(UTC).isoformat(),
+                    "ttl_seconds": 10,
+                },
+            )
+        if path == "/v1/killswitch" or path.startswith("/v1/killswitch/"):
+            return self._killswitch(request)
+        if path == "/v1/runs" and request.method == "POST":
+            return self._register(request)
         if path.startswith("/v1/runs/") and path.endswith("/events"):
             if self.max_body is not None and len(request.content) > self.max_body:
                 return _problem(413, "too_large", f"the body is over {self.max_body} bytes")
             return self._ingest(path.split("/")[3], json.loads(request.content)["entries"])
         return _problem(404, "not_found", "no such route or object")
+
+    def _may_switch(self, team: str | None) -> bool:
+        if "killswitch.global" in self.allowed:
+            return True
+        return team is not None and team in self.lead_teams
+
+    def _killswitch(self, request: httpx2.Request) -> httpx2.Response:
+        forbidden = _problem(403, "rbac.forbidden", "you do not hold killswitch.team for that")
+        if request.method == "POST":
+            body = json.loads(request.content)
+            team = body.get("team") or (
+                body.get("scope_value") if body["scope_kind"] == "team" else None
+            )
+            if not self._may_switch(team):
+                return forbidden
+            made = self.add_switch(
+                body["scope_kind"],
+                body.get("scope_value", ""),
+                mode=body.get("mode", "kill"),
+                reason=body["reason"],
+                team=team,
+            )
+            return httpx2.Response(201, json=made)
+        if request.method == "DELETE":
+            wanted = request.url.path.rsplit("/", 1)[1]
+            found = next((s for s in self.switches if s["id"] == wanted), None)
+            if found is None:
+                return _problem(404, "not_found", "no such switch")
+            if not self._may_switch(found["team"]):
+                return forbidden
+            found.update(active=False, cleared_by=self.email, cleared_at=found["created_at"])
+            return httpx2.Response(200, json=found)
+        if not self._may_switch(None) and not self.lead_teams:
+            return _problem(403, "rbac.forbidden", "you do not hold killswitch.team")
+        include = request.url.params.get("include_cleared") == "true"
+        shown = [
+            s for s in self.switches if (include or s["active"]) and self._may_switch(s["team"])
+        ]
+        return httpx2.Response(200, json=shown)
+
+    def _register(self, request: httpx2.Request) -> httpx2.Response:
+        sent = request.headers.get("x-agentic-cli-version", "")
+        if self.min_cli_version and sent < self.min_cli_version:
+            body = {
+                "title": "x",
+                "status": 426,
+                "code": "cli.too_old",
+                "detail": f"agentic-cli {sent} is older than the minimum version "
+                f"{self.min_cli_version}",
+                "hint": f"upgrade the agentic CLI to {self.min_cli_version} or later",
+            }
+            return httpx2.Response(
+                426, json=body, headers={"content-type": "application/problem+json"}
+            )
+        body = json.loads(request.content)
+        names = ("rbac", "killswitch", "policy", "pipeline", "concurrency", "budget")
+        checks = [
+            {
+                "check": name,
+                "passed": name not in self.failing_checks,
+                "detail": self.failing_checks.get(name, "ok"),
+                "value": None,
+            }
+            for name in names
+        ]
+        registered = not self.failing_checks and not body.get("dry_run")
+        if registered:
+            self.registrations.append(body)
+        return httpx2.Response(
+            200,
+            json={
+                "registered": registered,
+                "checks": checks,
+                "team_budget_remaining_usd": None,
+                "min_cli_version": self.min_cli_version,
+            },
+        )
 
     def me(self) -> dict:
         return {
