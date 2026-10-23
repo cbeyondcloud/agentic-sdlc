@@ -96,6 +96,7 @@ def test_a_writing_step_is_told_the_budget(make_harness):
     assert start(h).status == "completed"
     assert "Review batch budget" in h.runners.prompts["dev"][0]
     assert LIMITS in h.runners.prompts["dev"][0]
+    assert "within at most" not in h.runners.prompts["dev"][0]  # DF-480
 
 
 def test_the_reviewer_sees_only_batches_within_budget(make_harness):  # Review Focus 6

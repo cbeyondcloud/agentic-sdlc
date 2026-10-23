@@ -48,6 +48,7 @@ def test_exit_codes_command_prints_the_table(capsys):
     assert main(["--json", "exit-codes"]) == ExitCode.OK
     table = json.loads(capsys.readouterr().out)
     assert table["2"].startswith("Refused") and len(table) == len(ExitCode)
+    assert "SIGTERM" in table["130"] and "agentic resume" in table["130"]  # DF-480
 
 
 def test_a_usage_error_exits_64_not_click_s_2(capsys):

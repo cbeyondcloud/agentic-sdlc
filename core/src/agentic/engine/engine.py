@@ -95,7 +95,7 @@ BATCH_GATE = "diff-budget"
 #: The capabilities that let an agent change the tree: its steps are told the budget.
 WRITING_TOOLS = frozenset({"edit_files", "run_shell"})
 BATCH_NOTICE = (
-    "Review batch budget: keep this step's change within {limits}, so one person can "
+    "Review batch budget: this step's change may have {limits}, so one person can "
     "review it. If the work is larger, deliver a first self-contained part within the "
     "budget now and list what remains in your report; it comes in a later pass."
 )
