@@ -120,6 +120,25 @@ def test_login_for_something_unknown_is_a_usage_error(ring, monkeypatch, capsys)
     assert ring.stored == {} and "gateway" in capsys.readouterr().err
 
 
+def test_login_for_jira_stores_the_jira_token(ring, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO(GITHUB_TOKEN + "\n"))
+    assert main(["--json", "login", "--for", "jira", "--key-stdin"]) == ExitCode.OK
+    assert ring.stored == {(SERVICE, "jira_token"): GITHUB_TOKEN}
+    shown = capsys.readouterr()
+    assert GITHUB_TOKEN not in shown.out + shown.err
+    assert json.loads(shown.out)["stored"] == "jira_token"
+
+
+def test_login_for_jira_stores_a_configured_credential_name(ring, home, monkeypatch):
+    (home / ".agentic").mkdir()
+    (home / ".agentic" / "config.yaml").write_text(
+        "jira:\n  url: https://jira.acme.example\n  credential: jira_dc\n", encoding="utf-8"
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(GITHUB_TOKEN + "\n"))
+    assert main(["login", "--for", "jira", "--key-stdin"]) == ExitCode.OK
+    assert ring.stored == {(SERVICE, "jira_dc"): GITHUB_TOKEN}
+
+
 def test_login_for_github_in_ci_names_its_variable(ring, monkeypatch, capsys):
     monkeypatch.setenv("CI", "true")
     assert main(["--json", "login", "--for", "github", "--key-stdin"]) == ExitCode.REFUSED
