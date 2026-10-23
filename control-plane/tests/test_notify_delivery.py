@@ -4,6 +4,7 @@ HTML, retries with backoff, permanent refusals, the last attempt, and one send p
 with two workers at once."""
 
 import asyncio
+import logging
 from datetime import timedelta
 
 import pytest
@@ -13,7 +14,7 @@ from sqlalchemy import select, update
 from agentic_cp.audit import read_records
 from agentic_cp.notify.delivery import backoff, deliver_due
 from agentic_cp.notify.outbox import enqueue
-from agentic_cp.notify.smtp import SmtpNotifier
+from agentic_cp.notify.smtp import RelayUnusable, SmtpNotifier
 from agentic_cp.notify.templates import render
 from agentic_cp.tables import notifications, tenants
 from agentic_cp.tenancy.context import tenant_tx
@@ -114,7 +115,7 @@ async def test_relay_without_starttls_is_never_used_in_clear(api):
         assert relay.capture.received == []
     assert report.retried == 1
     row = await _row(api, api.a, queued)
-    assert row.status == "pending" and row.attempts == 1 and "STARTTLS" in row.last_error
+    assert row.status == "pending" and row.attempts == 0 and "STARTTLS" in row.last_error
     assert row.body_text  # kept for the next attempt
 
 
@@ -205,8 +206,36 @@ async def test_an_unusable_relay_stops_the_batch_instead_of_timing_out_each_mail
     notifier = SmtpNotifier(host="127.0.0.1", port=port, security="starttls", timeout=2)
     report = await deliver_due(api.db.app, api.a.id, notifier, api.clock, settings=_settings(api))
     assert report.retried == 1
-    attempts = sorted([(await _row(api, api.a, n)).attempts for n in (first, second)])
-    assert attempts == [0, 1]
+    tried = [(await _row(api, api.a, n)).last_error is not None for n in (first, second)]
+    assert sorted(tried) == [False, True]
+
+
+class _RelayDown:
+    """A relay that cannot be used at all (unreachable, no STARTTLS, a refused login)."""
+
+    async def send(self, message) -> None:
+        raise RelayUnusable("the relay at 127.0.0.1 cannot be reached")
+
+
+async def test_a_relay_outage_never_uses_up_a_mails_attempts(api, caplog):
+    """Review F3: the relay's failure is not the mail's - an outage longer than the retry
+    schedule leaves every mail queued, body kept, and says so in the log."""
+    queued = await _queue(api, api.a)
+    settings = _settings(api, notify_max_attempts=2)
+    with caplog.at_level(logging.WARNING, logger="agentic_cp.notify"):
+        for _ in range(10):
+            await deliver_due(api.db.app, api.a.id, _RelayDown(), api.clock, settings=settings)
+            api.clock.advance(timedelta(minutes=61))
+    row = await _row(api, api.a, queued)
+    assert (row.status, row.attempts) == ("pending", 0)
+    assert row.body_text and "cannot be reached" in row.last_error
+    assert "cannot be reached" in caplog.text
+    assert await _events(api, api.a, "notification.failed") == []
+    with capture_relay() as relay:
+        report = await deliver_due(
+            api.db.app, api.a.id, _notifier(relay), api.clock, settings=settings
+        )
+    assert report.sent == 1 and len(relay.capture.received) == 1
 
 
 class _Slow:

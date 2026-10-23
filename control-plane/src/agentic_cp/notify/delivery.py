@@ -4,7 +4,9 @@ One mail per transaction: the due row is locked (`FOR UPDATE SKIP LOCKED`), sent
 lock is held, and updated in the same transaction - so two workers never send one row, and
 a row whose send succeeded is marked sent unless the process dies before the commit (the
 resend then carries the same Message-ID). A transient failure reschedules the row with
-exponential backoff; a permanent one, or the last attempt, marks it failed. Sent and
+exponential backoff; a permanent one, or the last attempt, marks it failed. A relay that
+cannot be used at all (`RelayUnusable`) stops the pass and uses up no attempt, so an outage
+of any length loses no mail. Sent and
 failed rows lose their bodies (P3). `notification.sent` / `.failed` go on the tenant's
 audit chain."""
 
@@ -37,6 +39,9 @@ log = logging.getLogger("agentic_cp.notify")
 
 #: The longest wait between two attempts.
 MAX_BACKOFF = timedelta(minutes=60)
+#: When a mail is tried again after the relay could not be used (it goes behind other due
+#: mails, so each pass probes the relay with one mail).
+RELAY_RETRY = timedelta(minutes=1)
 
 
 @dataclass
@@ -101,7 +106,17 @@ async def deliver_due(
                 relay_down = isinstance(error, RelayUnusable)
                 problem = str(error)[:300] or type(error).__name__
                 values["last_error"] = problem
-                if isinstance(error, PermanentFailure) or attempts >= settings.notify_max_attempts:
+                if relay_down:
+                    # The relay's failure, not this mail's: no attempt is used up and the
+                    # body is kept, however long the outage lasts (review F3).
+                    log.warning(
+                        "tenant %s: the mail relay cannot be used: %s", tenant.slug, problem
+                    )
+                    values = {"last_error": problem, "next_attempt_at": now + RELAY_RETRY}
+                    report.retried += 1
+                elif (
+                    isinstance(error, PermanentFailure) or attempts >= settings.notify_max_attempts
+                ):
                     values.update(status="failed", body_text="", body_html="")
                     event = ("notification.failed", problem)
                     report.failed += 1
