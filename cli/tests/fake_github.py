@@ -24,6 +24,7 @@ class FakeGitHub:
         self.token = token
         self.bare = bare
         self.default_branch = default_branch
+        self.login = "dev"  # who opens pull requests
         self.pulls: list[dict] = []
         self.check_runs: list[list[dict]] = [[]]  # one list per read; the last one repeats
         self.statuses: list[dict] = []
@@ -77,10 +78,21 @@ class FakeGitHub:
         if re.fullmatch(_REPO + "/pulls", path):
             if method == "GET":
                 owner = re.fullmatch(_REPO + "/pulls", path).group("owner")
-                head = query.get("head", [""])[0].removeprefix(f"{owner}:")
-                return 200, [p for p in self.pulls if p["head"]["ref"] == head]
+                state = query.get("state", ["open"])[0]
+                pulls = [p for p in self.pulls if state == "all" or p["state"] == state]
+                if "head" not in query:  # a listing (M2-46): every pull in that state
+                    return 200, pulls
+                head = query["head"][0].removeprefix(f"{owner}:")
+                return 200, [p for p in pulls if p["head"]["ref"] == head]
             if method == "POST":
                 return self._create(body)
+        reviews = re.fullmatch(_REPO + r"/pulls/(?P<n>\d+)/reviews", path)
+        if reviews and method == "POST":
+            pull = next((p for p in self.pulls if p["number"] == int(reviews["n"])), None)
+            if pull is None:
+                return 404, {"message": "Not Found"}
+            pull.setdefault("reviews", []).append(body)
+            return 200, {"id": len(pull["reviews"]), "state": body.get("event")}
         found = re.fullmatch(_REPO + r"/pulls/(?P<n>\d+)", path)
         if found and method in ("GET", "PATCH"):  # an update reads the body first (DF-296)
             pull = next((p for p in self.pulls if p["number"] == int(found["n"])), None)
@@ -115,9 +127,21 @@ class FakeGitHub:
             "body": body.get("body", ""),
             "head": {"ref": head, "sha": sha},
             "base": {"ref": body.get("base", "")},
+            "user": {"login": self.login},
+            "merged": False,
         }
         self.pulls.append(pull)
         return 201, pull
+
+    def merge(self, number: int) -> None:
+        """A person merged the pull request on the host."""
+        pull = next(p for p in self.pulls if p["number"] == number)
+        pull.update(state="closed", merged=True)
+
+    def close(self, number: int) -> None:
+        """A person closed the pull request without merging it."""
+        pull = next(p for p in self.pulls if p["number"] == number)
+        pull.update(state="closed", merged=False)
 
     def _head(self, branch: str) -> str | None:
         if self.bare is None:

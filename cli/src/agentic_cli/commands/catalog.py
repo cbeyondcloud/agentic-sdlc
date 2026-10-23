@@ -40,7 +40,10 @@ _SLUG = re.compile(r"[a-z][a-z0-9-]{0,63}")
 def register(app: typer.Typer) -> None:
     agents = typer.Typer(help="List, search and create agents.", no_args_is_help=True)
     pipelines = typer.Typer(help="List, search and create pipelines.", no_args_is_help=True)
-    skills = typer.Typer(help="List and search the org skills catalog.", no_args_is_help=True)
+    skills = typer.Typer(
+        help="The org skills catalog, and your own skills: author, evaluate, submit, review.",
+        no_args_is_help=True,
+    )
     policy = typer.Typer(help="Show the org policy that applies here.", no_args_is_help=True)
     app.add_typer(agents, name="agents")
     app.add_typer(pipelines, name="pipelines")

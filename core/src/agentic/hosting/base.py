@@ -23,7 +23,7 @@ There is deliberately no merge operation: a person merges.
 
 import re
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 
 class HostingError(Exception):
@@ -64,6 +64,9 @@ class PullRequest:
     head_sha: str  # the commit CI checks
     state: str = "open"
     body: str | None = None  # its description as it is now; None when the host did not say
+    title: str = ""
+    author: str = ""  # the host's login of whoever opened it
+    merged: bool = False  # closed by merging (only a single read says so reliably)
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,21 @@ class HostingProvider(Protocol):
     def update_pull_request(self, repo: RepoRef, number: int, *, body: str) -> PullRequest: ...
 
     def checks(self, repo: RepoRef, sha: str) -> list[CheckRun]: ...
+
+
+@runtime_checkable
+class ReviewHost(Protocol):
+    """Reading and reviewing pull requests (M2-46: skill submissions). Separate from
+    `HostingProvider`, so publishing a run needs none of it. Still no merge: a person
+    merges, through the host's own branch protection and code owners."""
+
+    def list_pull_requests(self, repo: RepoRef, *, head_prefix: str = "") -> list[PullRequest]: ...
+
+    def get_pull_request(self, repo: RepoRef, number: int) -> PullRequest: ...
+
+    def review_pull_request(
+        self, repo: RepoRef, number: int, *, approve: bool, body: str
+    ) -> None: ...
 
 
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://(.*)$", re.DOTALL)

@@ -151,16 +151,20 @@ def agents_md(repo: Path) -> str:
     )
 
 
-def commit_on_branch(repo: Path, files: dict[str, str], message: str) -> tuple[str, str]:
-    """Commit `files` on top of HEAD on a new branch; returns (branch, commit). In a
-    repository with no commit yet, the branch starts with them (a root commit)."""
+def commit_on_branch(
+    repo: Path, files: dict[str, str | bytes], message: str, *, branch: str = BRANCH
+) -> tuple[str, str]:
+    """Commit `files` on top of HEAD on a new branch, `branch` or `branch-<n>` when that
+    one exists; returns (branch, commit). In a repository with no commit yet, the branch
+    starts with them (a root commit). Bytes are committed as they are."""
     parent = ["-p", "HEAD"] if _git_out(repo, "rev-parse", "--verify", "-q", "HEAD") else []
     with tempfile.TemporaryDirectory(prefix="agentic-init-") as scratch:
         env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
         if parent:
             _git_run(repo, env, "read-tree", "HEAD")
         for path, text in sorted(files.items()):
-            data = text.encode("utf-8", "surrogateescape")  # the repo's own bytes round-trip
+            # the repo's own bytes round-trip (surrogateescape)
+            data = text if isinstance(text, bytes) else text.encode("utf-8", "surrogateescape")
             blob = _git_run(repo, env, "hash-object", "-w", "--stdin", data=data)
             _git_run(repo, env, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}")
         tree = _git_run(repo, env, "write-tree")
@@ -168,12 +172,12 @@ def commit_on_branch(repo: Path, files: dict[str, str], message: str) -> tuple[s
         sign = ["-S"] if _signs_commits(repo) else []
         commit = _git_run(repo, env, "commit-tree", tree, *parent, *sign, "-m", message)
     for n in range(1, 100):
-        branch = BRANCH if n == 1 else f"{BRANCH}-{n}"
-        if not _git_out(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
+        name = branch if n == 1 else f"{branch}-{n}"
+        if not _git_out(repo, "rev-parse", "--verify", "-q", f"refs/heads/{name}"):
             # an empty old value: create only, never move an existing branch (any hash)
-            _git_run(repo, None, "update-ref", f"refs/heads/{branch}", commit, "")
-            return branch, commit
-    raise CliError(f"too many {BRANCH}-<n> branches already exist", ExitCode.ERROR)
+            _git_run(repo, None, "update-ref", f"refs/heads/{name}", commit, "")
+            return name, commit
+    raise CliError(f"too many {branch}-<n> branches already exist", ExitCode.ERROR)
 
 
 PR_TITLE = "Set up agentic for this repository"

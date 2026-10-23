@@ -177,6 +177,30 @@ class GitHubHost:
                 )
         return runs
 
+    # ── reviews (ReviewHost, M2-46) ──────────────────────────────────────────
+
+    def list_pull_requests(self, repo: RepoRef, *, head_prefix: str = "") -> list[PullRequest]:
+        """The open pull requests whose branch starts with `head_prefix` (the newest 100)."""
+        params = {"state": "open", "per_page": "100", "sort": "created", "direction": "desc"}
+        rows = self._json("GET", f"{self._repo_path(repo)}/pulls", params=params)
+        found = []
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict) and str(row.get("head", {}).get("ref", "")).startswith(
+                head_prefix
+            ):
+                found.append(_pull_request(row))
+        return found
+
+    def get_pull_request(self, repo: RepoRef, number: int) -> PullRequest:
+        return _pull_request(self._json("GET", f"{self._repo_path(repo)}/pulls/{int(number)}"))
+
+    def review_pull_request(self, repo: RepoRef, number: int, *, approve: bool, body: str) -> None:
+        """Approve, or request changes with `body` saying why. A host refuses a review of
+        one's own pull request; that refusal is a HostingApiError like any other."""
+        event = "APPROVE" if approve else "REQUEST_CHANGES"
+        path = f"{self._repo_path(repo)}/pulls/{int(number)}/reviews"
+        self._json("POST", path, json={"event": event, "body": body})
+
     # ── HTTP ─────────────────────────────────────────────────────────────────
 
     def _repo_path(self, repo: RepoRef) -> str:
@@ -340,4 +364,7 @@ def _pull_request(data: Any) -> PullRequest:
         state=str(data.get("state") or "open"),
         # null is an empty description; no `body` key at all: not known (None)
         body=str(data["body"] or "") if "body" in data else None,
+        title=str(data.get("title") or ""),
+        author=str((data.get("user") or {}).get("login") or ""),
+        merged=bool(data.get("merged") or data.get("merged_at")),
     )
