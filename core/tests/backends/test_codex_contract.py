@@ -110,7 +110,9 @@ def agent_for(resolved, tools=("read_files", "run_shell"), **changes):
     return resolved.model_copy(update={**update, **changes})
 
 
-def runner_for(agent, world, tmp_path, *, budget=None, contract=None, time_limit_s=120, hook=None):
+def runner_for(
+    agent, world, tmp_path, *, budget=None, contract=None, time_limit_s=120, hook=None, rules=RULES
+):
     stub, proxy, tree = world
     budget = budget or slice_()
     settings = CodexSettings(
@@ -134,7 +136,7 @@ def runner_for(agent, world, tmp_path, *, budget=None, contract=None, time_limit
         step,
         settings=settings,
         identity=IDENTITY,
-        rules=RULES,
+        rules=rules,
         cwd=tree,
         srt_boundary=True,  # emit allow rules as production does under srt
         hook=hook,
@@ -258,6 +260,25 @@ def test_a_tree_path_with_dots_or_spaces_runs_untrusted(resolved, servers, tmp_p
     assert not any(MARKER in call["text"] for call in stub.model_calls())
 
 
+def test_a_symlinked_tree_and_home_still_run_untrusted(resolved, servers, tmp_path):  # DF-434
+    # Codex matches the trust entry against the real path: lock_down resolves both
+    stub, proxy = servers
+    real = make_repo(tmp_path / "real" / "tree")
+    (real / ".codex").mkdir()
+    (real / ".codex" / "config.toml").write_text(
+        f'developer_instructions = "{MARKER}"\n', encoding="utf-8"
+    )
+    link = tmp_path / "linked-tree"
+    link.symlink_to(real, target_is_directory=True)
+    homes = tmp_path / "real-homes"
+    homes.mkdir()
+    (tmp_path / "linked-homes").symlink_to(homes, target_is_directory=True)
+    stub.queue = [Reply(text="VALID")]
+    runner = runner_for(agent_for(resolved), (stub, proxy, link), tmp_path / "linked-homes")
+    assert run(runner).status == "completed"
+    assert not any(MARKER in call["text"] for call in stub.model_calls())
+
+
 def test_the_hook_guard_refuses_a_patch_to_a_denied_path(resolved, servers, tmp_path):
     # review I1: an indented hunk header, which Codex's parser trims, is still a write
     # the guard checks. The tree is the default layout (`.sdlc-worktrees`, C1 too).
@@ -298,6 +319,22 @@ def test_an_ask_command_is_refused(resolved, world, tmp_path):
     run(runner_for(agent_for(resolved), world, tmp_path))
     [output] = tool_outputs(stub.model_calls()[1])
     assert "approval required by policy" in output and "Never" in output
+
+
+def test_rules_with_alternatives_and_asks_load_and_hold(resolved, world, tmp_path):  # DF-434
+    # the compiled `a|b` alternatives become a pattern list, which the real binary loads
+    # (it validates each rule's example at start) and enforces for every alternative
+    stub = world[0]
+    rules = ShellRules(
+        allow=("echo",), ask=("npm publish|pack",), deny=("git push|fetch", "git rebase -x|--exec")
+    )
+    stub.queue = [Reply(shell="git fetch origin"), Reply(shell="npm pack"), Reply(text="VALID")]
+    outcome = run(runner_for(agent_for(resolved), world, tmp_path, rules=rules))
+    assert outcome.status == "completed"
+    calls = stub.model_calls()
+    fetched, packed = (tool_outputs(call)[-1] for call in calls[1:3])
+    assert "is denied" in fetched and "git push|fetch" in fetched
+    assert "approval required by policy" in packed
 
 
 def test_an_unlisted_command_runs(resolved, world, tmp_path):

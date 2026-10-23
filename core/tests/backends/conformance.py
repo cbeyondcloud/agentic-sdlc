@@ -6,8 +6,9 @@
                     an empty answer is never a completed step (DF-433);
   * `limits`      - the step's budget slice and time limit reach the engine;
   * `containment` - the agent process is adopted into the step's process scope and is
-                    gone when the scope closes (DF-472); it applies to backends whose
-                    capability entry says they start one (`own_process`).
+                    gone when the scope closes (DF-472), also when the run is stopped
+                    while the agent is still working (DF-545); it applies to backends
+                    whose capability entry says they start one (`own_process`).
 
 Which tiers apply to a backend is read from the capability matrix
 (`agentic.backends.capabilities.CAPABILITIES`), never from a list here.
@@ -29,10 +30,11 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 import pytest
-from _process_support import gone
+from _process_support import alive, gone
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 from agentic.agents.runner import AgentTask
-from agentic.backends.capabilities import BackendCapabilities
+from agentic.backends.capabilities import CAPABILITIES, BackendCapabilities
 from agentic.backends.processes import process_scope
 from agentic.transport import BudgetLedger, LimitHit
 
@@ -93,13 +95,17 @@ def without_a_contract_the_text_is_the_output(make_runner, agent):
     assert (outcome.status, outcome.output) == ("completed", "any text")
 
 
-def an_empty_answer_is_not_a_completed_step(make_runner, agent):  # DF-433
+def an_empty_answer_is_not_a_completed_step(make_runner, agent):  # DF-433, DF-544
     """Silence never completes a step: the runner ends it `invalid` (the agent-CLI
-    backends) or fails it loudly (native, DF-36: an empty response is the step's failure)."""
+    backends) or fails it loudly (native, DF-36: an empty response is the step's failure,
+    raised as `UnexpectedModelBehavior`). Any other exception is a bug, not a pass."""
     runner = make_runner(agent, answers=[""], budget=slice_(), contract=None)
     try:
         outcome = run(runner)
-    except Exception:  # noqa: BLE001 - a failed step is not a completed one
+    except UnexpectedModelBehavior:
+        caps = CAPABILITIES.get(getattr(agent, "backend", None))
+        said = f"the {agent.backend} backend must end a silent step invalid, not raise"
+        assert caps is None or not caps.own_process, said
         return
     said = f"an agent that said nothing completed its step (output {outcome.output!r})"
     assert outcome.status != "completed", said
@@ -145,6 +151,42 @@ def the_agent_process_is_contained_in_the_step_scope(make_runner, agent):  # DF-
     assert all(gone(pid) for pid in adopted if pid), "an adopted process outlived the scope"
 
 
+def a_stopped_agent_is_gone_when_its_scope_closes(make_runner, agent):  # DF-545
+    """A run stopped while its agent is still working (a kill, Ctrl-C): the runner is
+    cancelled with the agent alive, and nothing it started outlives the step's scope."""
+    adopted: list[int] = []
+
+    async def go() -> None:
+        loop = asyncio.get_running_loop()
+        with process_scope() as scope:
+            add = scope.add
+
+            def spy(tree) -> None:
+                adopted.append(tree.pid)
+                add(tree)
+
+            scope.add = spy
+            runner = make_runner(
+                agent, answers=["VALID late"], budget=slice_(), contract=None, delay_s=10
+            )
+            task = asyncio.ensure_future(runner.run(TASK))
+            deadline = loop.time() + 30
+            while not [p for p in adopted if p] and not task.done() and loop.time() < deadline:
+                await asyncio.sleep(0.05)
+            assert [p for p in adopted if p], "the runner never adopted its agent process"
+            await asyncio.sleep(0.5)  # well inside the slow answer
+            pids = [p for p in adopted if p]
+            assert any(alive(p) for p in pids), "the agent had already exited: nothing to stop"
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - it was stopped
+                pass
+
+    asyncio.run(go())
+    assert all(gone(pid) for pid in adopted if pid), "a stopped agent outlived its scope"
+
+
 @dataclass(frozen=True)
 class Tier:
     name: str
@@ -173,7 +215,10 @@ TIERS = (
     Tier(
         "containment",
         "the agent process lives and dies inside the step's process scope",
-        (the_agent_process_is_contained_in_the_step_scope,),
+        (
+            the_agent_process_is_contained_in_the_step_scope,
+            a_stopped_agent_is_gone_when_its_scope_closes,
+        ),
         applies=lambda caps: caps.own_process,
     ),
 )
