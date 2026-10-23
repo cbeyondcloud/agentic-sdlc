@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from agentic.orgapi.rbac import PERMISSIONS, EffectivePermissions
 from agentic_cp.auth.tokens import TokenContext
 from agentic_cp.errors import ApiProblem
+from agentic_cp.rbac.defaults import SERVICE_PERMISSIONS
 from agentic_cp.rbac.store import PolicyRows, load_rows
 
 MODEL_TEXT = Path(__file__).with_name("model.conf").read_text(encoding="utf-8")
@@ -174,10 +175,16 @@ async def authorize(
     conn: AsyncConnection,
     cache: EnforcerCache,
     user_id: UUID | None = None,
+    subject_kind: str | None = None,
 ) -> AuthzDecision:
-    """May the caller (or `user_id`, another user of the caller's tenant) do `permission`
-    on `resource`? `conn` must be a transaction in the caller's tenant."""
+    """May the caller (or `user_id`, another user of the caller's tenant, of
+    `subject_kind`) do `permission` on `resource`? `conn` must be a transaction in the
+    caller's tenant. A service principal never gets more than `SERVICE_PERMISSIONS`,
+    whatever its grants say (M2-14: defence in depth)."""
     candidate_scopes(permission, resource)  # an unknown permission fails before any query
+    kind = ctx.kind if user_id is None else subject_kind
+    if kind == "service" and permission not in SERVICE_PERMISSIONS:
+        return AuthzDecision(False)
     enforcer = await cache.get(ctx.tenant_id, ctx.rbac_revision, conn)
     return decide(enforcer, ctx.tenant_id, user_id or ctx.user_id, permission, resource)
 
@@ -248,4 +255,8 @@ async def effective_permissions(
                 and decide(enforcer, ctx.tenant_id, ctx.user_id, p, Repo(key)).allowed
             )
     shown = {key: team for key, team in repo_teams.items() if key in repos}
+    if ctx.kind == "service":  # as `authorize` decides for a service principal
+        org = org & SERVICE_PERMISSIONS
+        teams = {slug: held & SERVICE_PERMISSIONS for slug, held in teams.items()}
+        repos = {key: held & SERVICE_PERMISSIONS for key, held in repos.items()}
     return EffectivePermissions(org=org, teams=teams, repos=repos, repo_teams=shown)

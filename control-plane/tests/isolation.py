@@ -479,7 +479,23 @@ async def _notification_in_b(api) -> dict[str, str]:
     return {"id": str(made), "recipient": recipient}
 
 
+async def _service_account_in_b(api) -> dict[str, str]:
+    name = f"bonly{next(_sequence)}"
+    made = await api.post(
+        "/v1/service-accounts", api.b.admin_token, {"name": name, "team": "payments", "days": 5}
+    )
+    assert made.status_code == 201, made.text
+    return {"id": made.json()["id"], "email": made.json()["email"]}
+
+
 ENDPOINT_CASES += [
+    EndpointCase(
+        "service-accounts",
+        "GET",
+        "/v1/service-accounts",
+        _service_account_in_b,
+        must_not_list=True,
+    ),
     EndpointCase("notify", "GET", "/v1/notifications", _notification_in_b, must_not_list=True),
     EndpointCase("killswitch", "DELETE", "/v1/killswitch/{id}", _switch_in_b),
     EndpointCase("killswitch", "GET", "/v1/killswitch", _switch_in_b, must_not_list=True),

@@ -9,6 +9,7 @@ cache sees a committed change on its next request."""
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request, Response
@@ -28,17 +29,25 @@ from agentic.policy.repos import normalise_remote
 from agentic_cp.audit import AuditEvent, append
 from agentic_cp.auth.deps import Caller
 from agentic_cp.auth.tokens import TokenContext
-from agentic_cp.auth.users import UserError, create_user, normalise_email, user_by_email
+from agentic_cp.auth.users import (
+    UserError,
+    UserRow,
+    create_user,
+    normalise_email,
+    user_by_email,
+)
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
 from agentic_cp.policy_sync.service import active_teams
 from agentic_cp.rbac import store
 from agentic_cp.rbac.authz import Org, Repo, Team, authorize, describe, require
-from agentic_cp.rbac.defaults import BUILTIN, ORG_ADMIN
+from agentic_cp.rbac.defaults import BUILTIN, ORG_ADMIN, SERVICE_ACCOUNT, SERVICE_PERMISSIONS
 from agentic_cp.rbac.repos import get_repo
 from agentic_cp.tenancy.context import tenant_tx
 from agentic_cp.tenancy.tenants import bump_rbac_revision, lock_rbac
 
 router = APIRouter(prefix=f"{API_PREFIX}/rbac", tags=["rbac"], responses=PROBLEM_RESPONSES)
+
+SERVICE_ROLE_PROBLEM = "rbac.service_account_role"
 
 
 def _role_info(role: store.RoleRow) -> RoleInfo:
@@ -124,6 +133,14 @@ async def put_role(
             raise ApiProblem(
                 409, "rbac.admin_needs_assign", "the org-admin role must keep rbac.assign"
             )
+        if name == SERVICE_ACCOUNT and set(body.permissions) - SERVICE_PERMISSIONS:
+            raise ApiProblem(
+                409,
+                SERVICE_ROLE_PROBLEM,
+                "the service-account role may hold only "
+                f"{', '.join(sorted(SERVICE_PERMISSIONS))} (service accounts never approve "
+                "gates or change roles)",
+            )
         before = await store.get_role(conn, name)
         if before is not None and before.name in BUILTIN and not BUILTIN[name].assignable:
             team_assignable = before.team_assignable  # derived roles never become assignable
@@ -177,7 +194,7 @@ async def delete_role(name: str, request: Request, ctx: Caller) -> Response:
 # ── assignments ───────────────────────────────────────────────────────────────
 
 
-async def _may_assign_in(ctx, conn, cache, team: str | None) -> bool:
+async def may_assign_in(ctx, conn, cache, team: str | None) -> bool:
     """True with org `rbac.assign`; False with `rbac.assign.team` for `team` (team-lead
     rules apply); 403 otherwise."""
     if (await authorize(ctx, "rbac.assign", Org(), conn=conn, cache=cache)).allowed:
@@ -198,7 +215,7 @@ async def list_assignments(
     """Assignments in the tenant (org `rbac.assign`), or in one team (`rbac.assign.team`)."""
     state = request.app.state
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
-        await _may_assign_in(ctx, conn, state.enforcers, team)
+        await may_assign_in(ctx, conn, state.enforcers, team)
         try:
             email = normalise_email(user) if user else None
         except UserError:
@@ -212,58 +229,120 @@ async def create_assignment(body: AssignmentRequest, request: Request, ctx: Call
     """Give a person a role at org scope or in a team; the person is created in the
     caller's tenant when new. Team leads assign only team-assignable roles in their team."""
     state = request.app.state
-    kind, value = ("team", body.team) if body.team else ("org", "")
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         await lock_rbac(conn)
-        org_wide = await _may_assign_in(ctx, conn, state.enforcers, body.team)
-        role = await store.get_role(conn, body.role)
-        if role is None:
-            raise ApiProblem(422, "rbac.unknown_role", f"no role {body.role!r} in this tenant")
-        if role.name in BUILTIN and not BUILTIN[role.name].assignable:
-            raise ApiProblem(
-                422, "rbac.not_assignable", f"{role.name} is derived (CODEOWNERS), never assigned"
-            )
-        if not org_wide and not role.team_assignable:
-            raise ApiProblem(
-                403,
-                "rbac.not_assignable",
-                f"a team lead may assign only team-assignable roles, not {role.name}",
-            )
-        if body.team and (teams := await active_teams(conn)) is not None:
-            if body.team not in teams:  # R14, DF-404: the active policy names the teams
-                raise ApiProblem(
-                    422,
-                    "rbac.unknown_team",
-                    f"team {body.team!r} is not in the tenant's active policy",
-                    hint=f"add policy/teams/{body.team}.yaml to the policy repo first",
-                )
-        try:
-            user = await user_by_email(conn, body.email) or await create_user(conn, body.email)
-        except UserError as error:
-            raise ApiProblem(422, "invalid_request", f"email: {error}") from None
-        if await store.find_assignment(conn, user.id, role.name, kind, value):
+        plan = await plan_assignment(conn, ctx, state.enforcers, body.email, body.role, body.team)
+        if plan.exists:
             raise ApiProblem(409, "rbac.already_assigned", "that assignment already exists")
-        assignment_id = await store.create_assignment(
-            conn, user_id=user.id, role=role.name, kind=kind, value=value, created_by=ctx.email
-        )
         revision = await bump_rbac_revision(conn)
-        await _audit(
-            conn,
-            request,
-            ctx,
-            "role.assigned",
+        made = await apply_assignment(conn, ctx, state, plan, revision=revision)
+    return made
+
+
+@dataclass(frozen=True)
+class AssignmentPlan:
+    """An assignment that passed every check (`plan_assignment`); `user` is None for a
+    person new to the tenant, `exists` when they already hold exactly this."""
+
+    email: str
+    user: UserRow | None
+    role: str
+    team: str | None
+    exists: bool
+
+    @property
+    def scope(self) -> tuple[str, str]:
+        return ("team", self.team) if self.team else ("org", "")
+
+
+_UNSET = object()
+
+
+async def plan_assignment(
+    conn, ctx: TokenContext, cache, email: str, role_name: str, team: str | None, *, teams=_UNSET
+) -> AssignmentPlan:
+    """Every check an assignment needs, in order, as an `ApiProblem` naming the first that
+    fails: the caller's right (org `rbac.assign`, or a team lead in `team` for a
+    team-assignable role), the role, the team in the active policy, the email, and the
+    service-account rules (M2-14). `teams` is the active policy's teams, when known."""
+    org_wide = await may_assign_in(ctx, conn, cache, team)
+    role = await store.get_role(conn, role_name)
+    if role is None:
+        raise ApiProblem(422, "rbac.unknown_role", f"no role {role_name!r} in this tenant")
+    if role.name in BUILTIN and not BUILTIN[role.name].assignable:
+        raise ApiProblem(
+            422, "rbac.not_assignable", f"{role.name} is derived (CODEOWNERS), never assigned"
+        )
+    if not org_wide and not role.team_assignable:
+        raise ApiProblem(
+            403,
+            "rbac.not_assignable",
+            f"a team lead may assign only team-assignable roles, not {role.name}",
+        )
+    if team:
+        known = await active_teams(conn) if teams is _UNSET else teams
+        if known is not None and team not in known:  # R14, DF-404
+            raise ApiProblem(
+                422,
+                "rbac.unknown_team",
+                f"team {team!r} is not in the tenant's active policy",
+                hint=f"add policy/teams/{team}.yaml to the policy repo first",
+            )
+    try:
+        normal = normalise_email(email)
+    except UserError as error:
+        raise ApiProblem(422, "invalid_request", f"email: {error}") from None
+    user = await user_by_email(conn, normal)
+    if user is not None and user.kind == "service" and role.name != SERVICE_ACCOUNT:
+        raise ApiProblem(
+            422, SERVICE_ROLE_PROBLEM, "a service account holds only the service-account role"
+        )
+    if role.name == SERVICE_ACCOUNT and (user is None or user.kind != "service" or not team):
+        raise ApiProblem(
+            422,
+            SERVICE_ROLE_PROBLEM,
+            "the service-account role is held only by service accounts, in their team",
+            hint="create one with `agentic rbac service-account <name> --team <team>`",
+        )
+    kind, value = ("team", team) if team else ("org", "")
+    exists = user is not None and (
+        await store.find_assignment(conn, user.id, role.name, kind, value) is not None
+    )
+    return AssignmentPlan(email=normal, user=user, role=role.name, team=team, exists=exists)
+
+
+async def apply_assignment(
+    conn, ctx: TokenContext, state, plan: AssignmentPlan, *, revision: int, reason: str = ""
+) -> Assignment:
+    """Write a planned assignment (creating the person when new) and its `role.assigned`
+    record; the caller holds the RBAC lock and bumped the revision to `revision`. A person
+    new to the tenant is sent an invite (M2-18)."""
+    user = plan.user or await create_user(conn, plan.email)
+    kind, value = plan.scope
+    assignment_id = await store.create_assignment(
+        conn, user_id=user.id, role=plan.role, kind=kind, value=value, created_by=ctx.email
+    )
+    await append(
+        conn,
+        AuditEvent(
+            event="role.assigned",
+            actor=ctx.email,
+            actor_kind=ctx.actor_kind,
             target=f"user:{user.email}",
-            team=body.team,
+            team=plan.team,
+            reason=reason,
             after={
                 "user": user.email,
-                "role": role.name,
+                "role": plan.role,
                 "scope": kind,
-                "team": body.team,
+                "team": plan.team,
                 "rbac_revision": revision,
             },
-        )
+        ),
+        clock=state.clock,
+    )
     return Assignment(
-        id=assignment_id, email=user.email, role=role.name, scope=kind, team=body.team
+        id=assignment_id, email=user.email, role=plan.role, scope=kind, team=plan.team
     )
 
 
@@ -276,7 +355,7 @@ async def delete_assignment(id: UUID, request: Request, ctx: Caller) -> Response
         row = await store.get_assignment(conn, id)
         if row is None:
             raise not_found("assignment")
-        org_wide = await _may_assign_in(ctx, conn, state.enforcers, row.team)
+        org_wide = await may_assign_in(ctx, conn, state.enforcers, row.team)
         if not org_wide:
             role = await store.get_role(conn, row.role)
             if role is None or not role.team_assignable or row.scope_kind != "team":
@@ -336,7 +415,7 @@ async def check(body: CheckRequest, request: Request, ctx: Caller) -> CheckResul
             resource = Team(body.team)
         else:
             resource = Org()
-        subject = ctx.user_id
+        subject, subject_kind = ctx.user_id, None
         if body.user is not None:
             await require(ctx, "rbac.assign", Org(), conn=conn, cache=state.enforcers)
             try:
@@ -345,9 +424,15 @@ async def check(body: CheckRequest, request: Request, ctx: Caller) -> CheckResul
                 other = None
             if other is None or other.status != "active":
                 raise not_found("user")
-            subject = other.id
+            subject, subject_kind = other.id, other.kind
         decision = await authorize(
-            ctx, body.permission, resource, conn=conn, cache=state.enforcers, user_id=subject
+            ctx,
+            body.permission,
+            resource,
+            conn=conn,
+            cache=state.enforcers,
+            user_id=subject if body.user is not None else None,
+            subject_kind=subject_kind,
         )
     where = describe(resource)
     if decision.allowed:
