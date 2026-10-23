@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from agentic_cp.alerts.sinks import default_sinks
 from agentic_cp.audit.api import router as audit_router
 from agentic_cp.auth.api import router as auth_router
 from agentic_cp.auth.service_accounts import router as service_accounts_router
@@ -53,6 +54,7 @@ def create_app(
     git: object | None = None,
     rate_limiter: object | None = None,
     gateway_keys: object | None = None,
+    alert_webhook: object | None = None,
 ) -> FastAPI:
     """The control-plane app. An `engine` passed in stays the caller's to dispose; one the
     app makes (lazily connecting, so health works without a database) it disposes at
@@ -84,6 +86,8 @@ def create_app(
     app.state.gateway_keys = (
         gateway_keys if gateway_keys is not None else gateway_keys_for(settings)
     )
+    # where budget alerts go (M2-16): the mail outbox and the webhook seam
+    app.state.alert_sinks = default_sinks(alert_webhook)
     app.state.enforcers = EnforcerCache(settings.enforcer_cache_tenants)
     install_problem_handlers(app)
     install_log_redaction()  # the webhook token travels in the path (review F2)

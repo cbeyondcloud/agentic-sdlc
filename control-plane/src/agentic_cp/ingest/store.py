@@ -13,14 +13,17 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from decimal import Decimal
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from agentic.orgapi import ChainHead, IngestResult
+from agentic_cp.alerts.budget import check_run, check_team, step_spend
+from agentic_cp.alerts.gates import gate_waiting
 from agentic_cp.audit import AuditEvent, append
 from agentic_cp.auth.tokens import TokenContext
 from agentic_cp.errors import ApiProblem
@@ -126,7 +129,9 @@ async def ingest_batch(
     *,
     cache: EnforcerCache,
     clock: Callable[[], datetime],
+    alerts: Sequence = (),
 ) -> IngestResult:
+    """`alerts` are the sinks budget threshold alerts go to (M2-16)."""
     tenant_id = await require_tenant_id(conn)
     entries = _checked(entries)
     first = entries[0]
@@ -222,6 +227,10 @@ async def ingest_batch(
     )
     last = rest[-1]
     values: dict = {"head_seq": last["seq"], "head_hash": last["hash"], "last_event_at": clock()}
+    spent_before = Decimal(row.spent_usd)
+    added = step_spend(rest)  # new entries only: a replay is never counted twice (M2-16)
+    if added:
+        values["spent_usd"] = spent_before + added
     closing = [entry for entry in rest if entry["event"] == "run_closed"]
     if closing:
         values["status"] = str(closing[-1].get("status") or "closed")[:32]
@@ -245,6 +254,10 @@ async def ingest_batch(
             ),
             clock=clock,
         )
+    if added:
+        await check_run(conn, row, spent_before, spent_before + added, sinks=alerts, clock=clock)
+        await check_team(conn, row, added, sinks=alerts, clock=clock)
+    await gate_waiting(conn, row, rest, clock=clock)
     return IngestResult(
         accepted=len(rest), duplicates=len(old), head=ChainHead(seq=last["seq"], hash=last["hash"])
     )

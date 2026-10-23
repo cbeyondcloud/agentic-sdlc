@@ -293,3 +293,15 @@ async def test_a_registered_run_then_ingests(api, version, tmp_path):
     made = await api.post("/v1/runs/led-1/events", api.a.admin_token, {"entries": entries})
     assert made.status_code == 200, made.text
     assert made.json()["accepted"] == len(entries)
+
+
+async def test_a_registered_run_keeps_its_budget_for_alerts(api, version):
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    await _register(api, api.a.admin_token, _body(version, "b-1", budget_usd="12.50"))
+    await _register(api, api.a.admin_token, _body(version, "b-2"))
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        found = dict((await conn.execute(select(runs.c.run_id, runs.c.budget_usd))).all())
+    assert found == {"b-1": Decimal("12.50"), "b-2": None}
