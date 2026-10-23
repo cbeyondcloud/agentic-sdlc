@@ -264,7 +264,13 @@ def test_a_kill_at_a_turn_stops_the_run_killed(backend, request, cli, monkeypatc
     shown = _status(cli, run_id)
     assert shown["status"] == "killed"
     assert "incident 7" in (shown.get("end_reason") or "")
-    assert [row["step"] for row in shown["history"]] == ["requirements"]  # never the next
+    # the turn hook stopped the requirements step itself: it never completed, and the
+    # next step's own check (which would kill the run too) was never asked (review F2)
+    history = [(row["step"], row["outcome"]) for row in shown["history"]]
+    assert history == [("requirements", "stopped")]
+    assert shown["history"][0]["detail"].startswith("killed")
+    assert switch.seen["ba@1.0.0"] >= 2  # the engine's pre-step check, then a turn
+    assert "architect@2.1.0" not in switch.seen
 
 
 @pytest.mark.parametrize("backend", ["claude_code", "codex", "opencode"])

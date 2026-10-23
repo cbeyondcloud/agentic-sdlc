@@ -16,9 +16,10 @@ What every agent-CLI step gets from the CLI:
     guard hook's spec (DF-425), never the guard's protected paths;
   * the kill switch at each turn the backend reports; a pause holds the run at the next
     step boundary (decision 89) and the engine's watchdog still kills a step at once;
-  * after the step, a protected-path check of what it changed (`ProtectedWrites`): an
-    agent CLI's writes, its shell commands' included, never pass the file tools' check,
-    and srt enforces literal paths only (DF-443).
+  * after the step, a protected-path check of what it changed since its base, commits
+    it made itself included (`ProtectedWrites`), with every agent CLI's steering files
+    (`AGENT_STEERING`) refused too: an agent CLI's writes, its shell commands' included,
+    never pass the file tools' check, and srt enforces literal paths only (DF-443).
 
 Sandbox, by backend (the safe default):
 
@@ -45,6 +46,7 @@ its arguments), and OpenCode's bash tool needs Git for Windows' bash
 (`OPENCODE_GIT_BASH_PATH`, passed through to it).
 """
 
+import asyncio
 import importlib.util
 import os
 import subprocess
@@ -87,6 +89,27 @@ _INSTALL_EXTRA = (
     "install the {extra} extra of agentic-core into agentic's environment: "
     '`uv tool install agentic-cli --with "agentic-core[{extra}]"` '
     '(or `pip install "agentic-core[{extra}]"`)'
+)
+#: agentic-core's extra each backend needs, when not named after the backend (core's
+#: pyproject: OpenCode runs on the shared ACP backend).
+_EXTRAS = {"opencode": "acp"}
+#: Files in a tree that steer an agent CLI, or that it runs as code, beyond the guard's
+#: framework floor (`.claude/**`, `CLAUDE.md`, `AGENTS.md`): no agent-CLI step may leave
+#: one, whichever agent CLI it runs - a planted file acts when a developer opens the
+#: branch with that agent CLI (review F5). Checked after each step (`ProtectedWrites`).
+AGENT_STEERING: tuple[str, ...] = (
+    # OpenCode: its config, plugins, agents and commands
+    "**/.opencode/**",
+    "**/opencode.json",
+    "**/opencode.jsonc",
+    # Codex: a project's config and rules, the override of AGENTS.md
+    "**/.codex/**",
+    "**/AGENTS.override.md",
+    # skills several agent CLIs load (Codex, OpenCode)
+    "**/.agents/**",
+    # Claude Code: project MCP servers, local instructions
+    "**/.mcp.json",
+    "**/CLAUDE.local.md",
 )
 #: What one agent CLI's codex home holds that its shell commands must never rewrite.
 _CODEX_OWN_FILES = ("config.toml", "rules", "models.json", "schema.json")
@@ -139,7 +162,7 @@ def missing(backend: str, settings: Mapping[str, Any]) -> str | None:
             "(agentic init says how)"
         )
     if importlib.util.find_spec(OPTIONAL[backend]) is None:
-        return _INSTALL_EXTRA.format(extra=backend)
+        return _INSTALL_EXTRA.format(extra=_EXTRAS.get(backend, backend))
     command = cli_command(settings, backend)
     if backend == "claude-code":
         return _claude_code_missing(command)
@@ -257,20 +280,23 @@ class ProtectedWrites:
     """A step's runner whose answer is kept only when what the step changed passes the
     guard (`StepWiring.denied_writes`). A refused change raises `ProtectedWriteError`
     before the engine checkpoints the step: the step fails, a person decides, and a retry
-    starts from the step's base."""
+    starts from the step's base (`StepCheckpoints.begin`), undoing any commit the agent
+    made. The check runs in a worker thread: it reads git and the file system, and the
+    event loop also drives the kill-switch watchdog (review F4)."""
 
     def __init__(self, runner: AgentRunner, check: Callable[[], list[str]], backend: str):
         self.runner, self.check, self.backend = runner, check, backend
 
     async def run(self, task: AgentTask) -> AgentOutcome:
-        return self._checked(await self.runner.run(task))
+        return await self._checked(await self.runner.run(task))
 
     async def resume(self, state_path, decisions, expected_digest) -> AgentOutcome:
-        return self._checked(await self.runner.resume(state_path, decisions, expected_digest))
+        outcome = await self.runner.resume(state_path, decisions, expected_digest)
+        return await self._checked(outcome)
 
-    def _checked(self, outcome: AgentOutcome) -> AgentOutcome:
+    async def _checked(self, outcome: AgentOutcome) -> AgentOutcome:
         if outcome.status in ("completed", "invalid"):  # what the engine would checkpoint
-            refused = self.check()
+            refused = await asyncio.to_thread(self.check)
             if refused:
                 raise ProtectedWriteError(self.backend, refused)
         return outcome
@@ -286,7 +312,10 @@ class ProtectedBackend:
         return self.wrap(self.inner.runner(step, **kwargs), step)
 
     def wrap(self, runner: AgentRunner, step: StepContext) -> ProtectedWrites:
-        return ProtectedWrites(runner, lambda: self.wiring.denied_writes(step), self.name)
+        def check() -> list[str]:
+            return self.wiring.denied_writes(step, also=AGENT_STEERING)
+
+        return ProtectedWrites(runner, check, self.name)
 
 
 # ── building them ─────────────────────────────────────────────────────────────

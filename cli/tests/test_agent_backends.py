@@ -5,7 +5,10 @@ preflight says when one cannot run here. Real git and Zyroflo trees; no agent CL
 
 import asyncio
 import json
+import re
 import sys
+import threading
+import tomllib
 from decimal import Decimal
 from pathlib import Path
 
@@ -220,6 +223,17 @@ def test_a_clean_or_stopped_step_passes_through():
     assert asyncio.run(stopped.run(None)).status == "stopped"  # never checkpointed anyway
 
 
+def test_the_check_runs_off_the_event_loop():  # review F4: the watchdog keeps polling
+    threads = []
+
+    def check() -> list[str]:
+        threads.append(threading.get_ident())
+        return []
+
+    asyncio.run(ProtectedWrites(_Runner(), check, "codex").run(None))
+    assert threads and threads[0] != threading.get_ident()
+
+
 def test_the_built_backend_checks_the_steps_trees(repo, tmp_path, agent):
     built, w = backends(repo, tmp_path)
     tree = w.tools_for(step(agent)).tree
@@ -229,6 +243,35 @@ def test_the_built_backend_checks_the_steps_trees(repo, tmp_path, agent):
     runner = built["opencode"].wrap(_Runner(), step(agent))
     with pytest.raises(ProtectedWriteError, match="ci.yml"):
         asyncio.run(runner.run(None))
+
+
+STEERING = (
+    ".opencode/plugin/x.js",
+    "opencode.json",
+    "sub/opencode.jsonc",
+    ".codex/config.toml",
+    ".agents/skills/x/SKILL.md",
+    "AGENTS.override.md",
+    ".mcp.json",
+    "CLAUDE.local.md",
+)
+
+
+@pytest.mark.parametrize("backend", AGENT_CLIS)
+def test_no_agent_cli_may_plant_an_agent_clis_steering_files(backend, repo, tmp_path, agent):
+    # review F5: these steer (or run code in) the next agent CLI a developer opens on the
+    # branch; the framework floor names Claude Code's own, not every agent CLI's
+    built, w = backends(repo, tmp_path)
+    tree = w.tools_for(step(agent)).tree
+    w.trees_for(RUN).begin(fresh=True)
+    for name in STEERING:
+        (tree / name).parent.mkdir(parents=True, exist_ok=True)
+        (tree / name).write_text("{}\n", encoding="utf-8")
+    runner = built[backend].wrap(_Runner(), step(agent))
+    with pytest.raises(ProtectedWriteError) as raised:
+        asyncio.run(runner.run(None))
+    refused = " ".join(raised.value.refused)
+    assert all(Path(name).name in refused for name in STEERING), refused
 
 
 # ── what this machine lacks ───────────────────────────────────────────────────
@@ -243,6 +286,21 @@ def test_a_missing_extra_says_exactly_what_to_install(monkeypatch):
     )
     why = missing("claude-code", {})
     assert "agentic-core[claude-code]" in why and "uv tool install" in why
+
+
+CORE_EXTRAS = tomllib.loads(
+    (Path(__file__).resolve().parents[2] / "core" / "pyproject.toml").read_text("utf-8")
+)["project"]["optional-dependencies"]
+
+
+@pytest.mark.parametrize("backend", AGENT_CLIS)
+def test_each_missing_extras_hint_names_an_extra_core_has(backend, monkeypatch):  # review F3
+    monkeypatch.setattr(agent_backends, "native_windows", lambda: False)
+    monkeypatch.setattr(agent_backends.importlib.util, "find_spec", lambda name: None)
+    why = missing(backend, {})
+    named = re.findall(r"agentic-core\[([^\]]+)\]", why)
+    assert named and all(extra in CORE_EXTRAS for extra in named), why
+    assert f"the {named[0]} extra" in why
 
 
 def test_codex_on_native_windows_points_to_wsl2(monkeypatch):

@@ -185,16 +185,21 @@ class StepWiring:
         """The step's secret scanner (the backends' `scanner_for`)."""
         return self.scanner if self.scanner is not None else SecretScanner()
 
-    def denied_writes(self, step: StepContext) -> list[str]:
-        """Why what the step changed in the run's trees may not be kept: each changed path
-        the agent's guard refuses (Zyroflo's protected paths, the framework floor, the
-        agent's deny list) - matched with the guard's own globs, so a deeper `**/x` and
-        any other glob srt cannot enforce are caught (DF-443). For an agent CLI, whose
-        writes (its shell commands' included) never pass the file tools' check. Names
-        paths only, never content."""
-        guard = Guard.for_agent(self.target, step.run_id, step.agent)
+    def denied_writes(self, step: StepContext, *, also: tuple[str, ...] = ()) -> list[str]:
+        """Why what the step changed in the run's trees since its base may not be kept
+        (commits the agent made itself included): each changed path the agent's guard
+        refuses (Zyroflo's protected paths, the framework floor, the agent's deny list,
+        and `also` - more deny globs, such as other agent CLIs' steering files) - matched
+        with the guard's own globs, so a deeper `**/x` and any other glob srt cannot
+        enforce are caught (DF-443). For an agent CLI, whose writes (its shell commands'
+        included) never pass the file tools' check. Names paths only, never content."""
+        agent = step.agent
+        if also:
+            deny = list(dict.fromkeys((*agent.deny_paths, *also)))
+            agent = agent.model_copy(update={"deny_paths": deny})
+        guard = Guard.for_agent(self.target, step.run_id, agent)
         changed = self.trees_for(step.run_id).changed()
-        return list(dict.fromkeys(block.why for block in guard.writes(changed)))
+        return list(dict.fromkeys(block.why for block in guard.changes(changed)))
 
     def unenforced(self, agent: ResolvedAgent, run_id: str) -> list[str]:
         """The deny globs `srt` cannot enforce for this agent (the file tools still do),
