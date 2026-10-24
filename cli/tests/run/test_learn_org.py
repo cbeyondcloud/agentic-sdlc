@@ -37,15 +37,27 @@ def test_feedback_is_forwarded_to_the_control_plane(org, cli):
     org.assignments = [{"role": "team-lead", "scope": "team", "team": "payments"}]
     result = cli("--json", "reject", run_id, "--feedback", "Name every CSV column.")
     assert result.code == ExitCode.PAUSED, result.err
-    if f"feedback:{run_id}" not in org.events:  # the run's events arrived after the reject
-        synced = cli("--json", "sync", run_id)  # `agentic sync` sends it after the events
-        assert synced.json()["runs"][run_id]["feedback"] == {"sent": 1}
-    (entry,) = org.events[f"feedback:{run_id}"]
+    (entry,) = org.events[f"feedback:{run_id}"]  # sent as the command ended, after the events
     assert entry["event"] == "learning.feedback_captured"
     assert entry["signal"] == "gate-rejection" and entry["text"] == "Name every CSV column."
     assert entry["actor"] == "dev@example.invalid"  # an identity field: never masked
     assert entry["repo"] == "github.com/acme/app"
     assert cli("--json", "learn", "sync", run_id).json()["sent"] == {run_id: 0}  # once only
+
+
+def test_feedback_refused_now_is_sent_by_agentic_sync(org, cli):
+    started = cli("--json", "run", "deliver", "--input", "request=CSV export")
+    run_id = started.json()["run_id"]
+    org.assignments = [{"role": "team-lead", "scope": "team", "team": "payments"}]
+    org.refuse_ingest = {"status": 503, "code": "unavailable", "title": "x", "detail": "down"}
+    result = cli("--json", "reject", run_id, "--feedback", "Name every CSV column.")
+    assert result.code == ExitCode.PAUSED, result.err  # a decision never waits on delivery
+    assert f"feedback:{run_id}" not in org.events
+    org.refuse_ingest = None
+    synced = cli("--json", "sync", run_id)
+    assert synced.code == ExitCode.OK, synced.err
+    assert synced.json()["runs"][run_id]["feedback"] == {"sent": 1}
+    assert len(org.events[f"feedback:{run_id}"]) == 1
 
 
 def test_attribute_in_org_mode_calls_the_endpoint(org, cli):

@@ -125,8 +125,12 @@ def feedback_sink(rt: Runtime) -> control_plane.FeedbackSink | None:
 class FeedbackCapture:
     """Records corrections into the run's journal (the engine's `feedback` port)."""
 
-    def __init__(self, rt: Runtime, warn: Callable[[str], None] | None = None) -> None:
-        self.rt = rt
+    def __init__(
+        self, rt: Runtime, warn: Callable[[str], None] | None = None, *, deferred: bool = False
+    ) -> None:
+        """`deferred` (the engine's port): the journal is delivered when the command ends,
+        after the run's own events (`Runtime.deliver_feedback`), never inside a decision."""
+        self.rt, self.deferred = rt, deferred
         self.warn = warn or (lambda message: _LOG.warning("%s", message))
 
     def __call__(self, record: FeedbackRecord) -> None:
@@ -152,7 +156,10 @@ class FeedbackCapture:
         return landed
 
     def after(self, run_id: str) -> None:
-        deliver(self.rt, run_id, self.warn)
+        if self.deferred:
+            self.rt.feedback_runs.add(run_id)
+        else:
+            deliver(self.rt, run_id, self.warn)
         try:
             refresh_proposals(self.rt)
         except Exception as error:  # proposals are recomputed next time
