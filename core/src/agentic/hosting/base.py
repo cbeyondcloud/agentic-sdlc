@@ -23,6 +23,7 @@ There is deliberately no merge operation: a person merges.
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 
@@ -128,6 +129,45 @@ class ReviewHost(Protocol):
     ) -> None:
         """Approve or request changes; with `commit`, the review is of that commit."""
         ...
+
+
+@dataclass(frozen=True)
+class PullRequestReview:
+    """A review of a pull request. `state` is lower case: `changes_requested`,
+    `commented`, `approved`, `dismissed` or `pending`."""
+
+    id: int
+    author: str  # the host's login
+    state: str
+    body: str
+    submitted_at: datetime | None = None
+    commit: str = ""  # the commit it reviewed
+
+
+@dataclass(frozen=True)
+class ReviewComment:
+    """An inline review comment. `line` is None when the line is gone from the newest diff
+    (an outdated comment); `in_reply_to` names the comment that opened its thread."""
+
+    id: int
+    review_id: int | None
+    author: str
+    body: str
+    path: str
+    line: int | None
+    created_at: datetime | None = None
+    in_reply_to: int | None = None
+    commit: str = ""
+
+
+@runtime_checkable
+class FeedbackHost(Protocol):
+    """Reading what people said about a pull request (M3-11: the learning loop's review
+    signals). Read only; separate from publishing and from reviewing."""
+
+    def pull_request_reviews(self, repo: RepoRef, number: int) -> list[PullRequestReview]: ...
+
+    def pull_request_review_comments(self, repo: RepoRef, number: int) -> list[ReviewComment]: ...
 
 
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://(.*)$", re.DOTALL)

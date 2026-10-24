@@ -20,6 +20,7 @@ commit statuses (Jenkins, many older integrations), mapped into the one vocabula
 
 import base64
 import ipaddress
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -30,7 +31,9 @@ from agentic.hosting.base import (
     HostingError,
     ListingIncomplete,
     PullRequest,
+    PullRequestReview,
     RepoRef,
+    ReviewComment,
     splice_body,
 )
 from agentic.transport.network import NetworkSettings, ssl_context
@@ -283,6 +286,43 @@ class GitHubHost:
             payload["commit_id"] = commit
         self._json("POST", path, json=payload)
 
+    # ── what people said (FeedbackHost, M3-11) ───────────────────────────────
+
+    def pull_request_reviews(self, repo: RepoRef, number: int) -> list[PullRequestReview]:
+        """Every review of the pull request, oldest first (every page)."""
+        path = f"{self._repo_path(repo)}/pulls/{int(number)}/reviews"
+        return [
+            PullRequestReview(
+                id=int(row["id"]),
+                author=_login(row),
+                state=str(row.get("state") or "").lower(),
+                body=str(row.get("body") or ""),
+                submitted_at=_moment(row.get("submitted_at")),
+                commit=str(row.get("commit_id") or ""),
+            )
+            for row in self._rows(path)
+            if isinstance(row.get("id"), int)
+        ]
+
+    def pull_request_review_comments(self, repo: RepoRef, number: int) -> list[ReviewComment]:
+        """Every inline review comment of the pull request, oldest first (every page)."""
+        path = f"{self._repo_path(repo)}/pulls/{int(number)}/comments"
+        return [
+            ReviewComment(
+                id=int(row["id"]),
+                review_id=_int(row.get("pull_request_review_id")),
+                author=_login(row),
+                body=str(row.get("body") or ""),
+                path=str(row.get("path") or ""),
+                line=_int(row.get("line")),
+                created_at=_moment(row.get("created_at")),
+                in_reply_to=_int(row.get("in_reply_to_id")),
+                commit=str(row.get("commit_id") or ""),
+            )
+            for row in self._rows(path)
+            if isinstance(row.get("id"), int)
+        ]
+
     # ── HTTP ─────────────────────────────────────────────────────────────────
 
     def _repo_path(self, repo: RepoRef) -> str:
@@ -291,14 +331,27 @@ class GitHubHost:
         return f"/repos/{quote(repo.owner, safe='')}/{quote(repo.name, safe='')}"
 
     def _pages(self, path: str) -> list[dict]:
+        """Every page of a paginated GET whose pages are objects."""
+        return [data if isinstance(data, dict) else {} for data in self._raw_pages(path)]
+
+    def _rows(self, path: str) -> list[dict]:
+        """Every row of a paginated GET whose pages are lists."""
+        return [
+            row
+            for data in self._raw_pages(path)
+            if isinstance(data, list)
+            for row in data
+            if isinstance(row, dict)
+        ]
+
+    def _raw_pages(self, path: str) -> list[Any]:
         """Every page of a paginated GET, following `Link: next` on the API origin only."""
-        pages: list[dict] = []
+        pages: list[Any] = []
         url: str | None = self.api_url + path
         params: dict | None = {"per_page": "100"}
         for _ in range(MAX_PAGES):
             response = self._send("GET", url, params=params)
-            data = _body(response)
-            pages.append(data if isinstance(data, dict) else {})
+            pages.append(_body(response))
             url = response.links.get("next", {}).get("url")
             if not url:
                 break
@@ -431,6 +484,25 @@ def _explain(where: str, response: httpx2.Response) -> str:
     else:
         meaning = "the API refused the request"
     return f"GitHub API {where}: HTTP {status} - {meaning}" + (f" ({said})" if said else "")
+
+
+def _login(row: dict) -> str:
+    return str((row.get("user") or {}).get("login") or "")
+
+
+def _int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _moment(value: Any) -> datetime | None:
+    """An API time stamp (ISO 8601, `Z` for UTC), or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
 def _pull_request(data: Any) -> PullRequest:
