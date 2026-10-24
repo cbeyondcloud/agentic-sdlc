@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from agentic.codeintel import Candidates, CodeIntel, CodeIntelError, Combined
+from agentic.codeintel.export import MANIFEST
 from agentic.repoconfig import CodeIntelConfig
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
@@ -30,6 +31,15 @@ from sdlc_commons.domain_graph import DomainGraph, DomainGraphError
 from sdlc_commons.graph_codeintel import DomainGraphCodeIntel
 
 Factory = Callable[[Path, Path], CodeIntel]  # (run tree, data folder) -> adapter
+LOCAL_INDEX_REL = Path(".agentic") / "local" / "index"  # the developer's index (D39)
+#: The published index export `agentic index import` keeps (M2-44): every run's index
+#: starts from it and catches up with an incremental update.
+INDEX_EXPORT_REL = Path(".agentic") / "local" / "index-export"
+
+
+def seeded(repo: Path) -> bool:
+    """Whether `agentic index import` has kept a published export for this repo."""
+    return (repo / INDEX_EXPORT_REL / MANIFEST).is_file()
 
 
 def codeintel_settings(config: Mapping[str, Any]) -> CodeIntelConfig:
@@ -86,7 +96,11 @@ def codeintel_for(repo: Path, settings: CodeIntelConfig, *, crg_available: bool)
             from agentic.codeintel.crg import CodeReviewGraph
             from agentic.codeintel.index import LocalIndex
 
-            adapters.append(CodeReviewGraph(LocalIndex(tree, data, home_dir=data / "home")))
+            seed = repo / INDEX_EXPORT_REL  # a published export: seconds, not a full build
+            index = LocalIndex(
+                tree, data, home_dir=data / "home", seed=seed if seeded(repo) else None
+            )
+            adapters.append(CodeReviewGraph(index))
         if graph is not None:
             adapters.append(GraphIntel(DomainGraphCodeIntel(graph, tree, settings.component)))
         return Combined.of(*adapters)

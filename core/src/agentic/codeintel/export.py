@@ -260,17 +260,24 @@ def _line(record: dict) -> str:
     return json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
+def out_problem(out: Path) -> str | None:
+    """Why the export may not be written to `out`, or None: it must be missing, an empty
+    folder or an earlier export, so nothing else is ever deleted (`--out .`)."""
+    out = Path(out)
+    if out.is_symlink() or (out.exists() and not out.is_dir()):
+        return f"{out} is not a folder; give a new or empty folder for the export"
+    entries = {entry.name for entry in out.iterdir()} if out.is_dir() else set()
+    if entries and (MANIFEST not in entries or not entries <= EXPORT_ENTRIES):
+        return f"{out} is not an earlier export and not empty; give a new or empty folder"
+    return None
+
+
 def _clear(out: Path) -> None:
     """Make `out` an empty folder: it may be missing, empty or an earlier export."""
-    if out.is_symlink() or (out.exists() and not out.is_dir()):
-        raise ExportError(f"{out} is not a folder; give a new or empty folder for the export")
+    if problem := out_problem(out):
+        raise ExportError(problem)
     if out.is_dir():
-        entries = {entry.name for entry in out.iterdir()}
-        if entries and (MANIFEST not in entries or not entries <= EXPORT_ENTRIES):
-            raise ExportError(
-                f"{out} is not an earlier export and not empty; give a new or empty folder"
-            )
-        for name in entries:
+        for name in {entry.name for entry in out.iterdir()}:
             path = out / name
             shutil.rmtree(path) if path.is_dir() and not path.is_symlink() else path.unlink()
     out.mkdir(parents=True, exist_ok=True)
