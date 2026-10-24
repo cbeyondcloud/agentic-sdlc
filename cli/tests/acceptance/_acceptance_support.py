@@ -1,4 +1,5 @@
-"""Plumbing for the M1 acceptance scenarios (spec §1.3, M1-68..M1-70).
+"""Plumbing for the acceptance scenarios (spec §1.3): M1-68..M1-70 in standalone mode, and
+M2-53 and M2-55, which add the org stack of `_org_stack` (the control plane) to this world.
 
 Each scenario drives the real `agentic` CLI, in this process, on a temporary git
 repository, with:
@@ -188,6 +189,35 @@ class ScriptedUpstream:
         return UpstreamReply(200, json.dumps(reply).encode("utf-8"), "application/json", headers)
 
 
+class WatchedCassetteServer(CassetteServer):
+    """The cassette server, noting what each call asked the gateway for - the model, the
+    functions offered to it and the identity headers - as TokenLean would see it. The
+    scenarios check the gateway's view, never the CLI's own report of it (M2-53)."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.seen: list[dict] = []
+
+    def _answer(self, path: str, body: bytes, headers: dict[str, str]):
+        try:
+            sent = json.loads(body)
+        except ValueError:
+            sent = {}
+        tools = [t.get("function", {}).get("name") for t in sent.get("tools") or []]
+        with self._lock:
+            self.seen.append(
+                {
+                    "step": headers.get("x-agentic-step"),
+                    "agent": headers.get("x-agentic-agent"),
+                    "tier": headers.get("x-agentic-tier"),
+                    "policy_version": headers.get("x-agentic-policy-version"),
+                    "model": sent.get("model"),
+                    "tools": tools,
+                }
+            )
+        return super()._answer(path, body, headers)
+
+
 # ── the CLI and git ──────────────────────────────────────────────────────────
 
 
@@ -227,7 +257,7 @@ class Scenario:
     capsys: object
     name: str = ""
     github: FakeGitHub | None = None
-    server: CassetteServer | None = None
+    server: WatchedCassetteServer | None = None
     upstream: ScriptedUpstream | None = None
     log: list[str] = field(default_factory=list)  # every command run, for failure messages
 
@@ -385,14 +415,14 @@ class Scenario:
         key = f"{self.name}/acceptance/1"
         if RECORD:
             self.upstream = ScriptedUpstream(script)
-            self.server = CassetteServer(CASSETTES, "record", self.upstream).start()
+            self.server = WatchedCassetteServer(CASSETTES, "record", self.upstream).start()
         else:
             cassette = CASSETTES.joinpath(*key.split("/")).with_suffix(".json")
             assert cassette.is_file(), (
                 f"no cassette {cassette}: record it with `uv run python scripts/"
                 "record_acceptance.py`"
             )
-            self.server = CassetteServer(CASSETTES, "replay").start()
+            self.server = WatchedCassetteServer(CASSETTES, "replay").start()
         self.server.expect([key])
         self.monkeypatch.setenv("AGENTIC_GATEWAY_URL", self.server.base_url(key))
 

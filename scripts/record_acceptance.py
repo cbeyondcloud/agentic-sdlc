@@ -1,4 +1,5 @@
-"""Record the M1 acceptance cassettes (cli/tests/acceptance/cassettes/).
+"""Record the acceptance cassettes (cli/tests/acceptance/cassettes/): M1-68..M1-70 and the
+org scenarios M2-53 and M2-55 (which need the org stack's Postgres, as their replay does).
 
     uv run python scripts/record_acceptance.py [pytest arguments]
 
