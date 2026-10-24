@@ -5,7 +5,7 @@ How each is enforced (the ruling; the CLI operations runbook says the same):
 
 | limit       | Linux and macOS                                | native Windows (best effort)  |
 |-------------|------------------------------------------------|-------------------------------|
-| CPU time    | hard `RLIMIT_CPU`, per process (the launcher)  | Job: job user time            |
+| CPU time    | hard `RLIMIT_CPU`, per process (the launcher)  | Job: user time, all processes |
 | memory      | the watchdog: the tree's resident memory       | Job: committed job memory     |
 | file size   | hard `RLIMIT_FSIZE` (the launcher)             | not enforced                  |
 | processes   | the watchdog's count of the tree, and a hard   | Job: active processes         |

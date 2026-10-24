@@ -138,7 +138,7 @@ When a limit stops a command, the agent is told `stopped at the memory (8192 MB)
 
 | Limit | Linux and macOS | Native Windows (best effort) |
 |---|---|---|
-| CPU time | hard `RLIMIT_CPU` per process | Job Object job time: every process in the job ends when it is spent |
+| CPU time | hard `RLIMIT_CPU` per process | Job Object job time: the user CPU time of all its processes together (not per process); when it is spent every process in the job ends |
 | Memory | a watchdog sums the resident memory of the command's processes every 0.1 s on Linux (0.5 s on macOS, where each look runs `ps`) and kills the command past the limit | Job Object job memory (committed memory): an allocation past the limit fails |
 | File size | hard `RLIMIT_FSIZE` | **not enforced** |
 | Processes | a watchdog counts the command's processes, with a hard `RLIMIT_NPROC` backstop (non-root) | Job Object active process limit: starting one more process fails |
