@@ -220,3 +220,20 @@ def test_a_pause_switch_holds_the_run_and_resume_continues_once_cleared(org, gat
     assert done.code == ExitCode.PAUSED, done.err
     assert done.json()["pending"]["id"] == "requirements-approval"
     assert [r["agent"] for r in gateway.requests] == ["ba"]
+
+
+def test_signed_out_resume_stays_held_unconfirmed(org, gateway, cli, monkeypatch):
+    """DF-518 (Review Focus 4): signed out of a configured control plane the switch state
+    can never be confirmed (`Unconfirmable`), so a held run stays held - never continues -
+    with the reason, and no model is called."""
+    switch = org.add_switch("team", "payments", mode="pause", reason="maintenance")
+    held = start(cli)
+    assert held.code == ExitCode.PAUSED and held.json()["pending"]["id"] == "hold"
+    switch["active"] = False
+    monkeypatch.delenv("AGENTIC_CONTROL_PLANE_TOKEN")
+    result = cli("--json", "resume", held.json()["run_id"])
+    assert result.code == ExitCode.PAUSED, result.err
+    pending = result.json()["pending"]
+    assert pending["id"] == "kill-switch-unconfirmed"
+    assert "not signed in" in pending["reason"]
+    assert gateway.requests == []
