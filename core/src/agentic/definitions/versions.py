@@ -25,7 +25,8 @@ Which version a team gets (the resolution order):
 
 1. the team's pin, when it pins this definition;
 2. else, when the rollout lists the definition and the team is not in its `teams`, the
-   rollout's `previous` version (no team at all is outside every rollout);
+   rollout's `previous` version (no team at all is outside every rollout). The rollout
+   names org definitions: a team's own definition (its layer) is never held back;
 3. else the current file.
 
 The chosen version's deprecation then applies: before `blocked_from` the run is warned,

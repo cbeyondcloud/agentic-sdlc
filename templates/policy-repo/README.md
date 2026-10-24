@@ -113,8 +113,9 @@ control plane's own clock.
 Resolution order, for an org or team agent or pipeline:
 
 1. the team's pin, when it pins that definition;
-2. else, when `rollout.yaml` lists the definition and the team is not in its `teams`,
-   the entry's `previous` version;
+2. else, when `rollout.yaml` lists the org definition and the team is not in its
+   `teams`, the entry's `previous` version (a team's own definition, in `teams/<team>/`,
+   is the team's to pin and never held back);
 3. else the current file.
 
 Then the team's overlay for the repository applies (to pipelines), and the chosen
