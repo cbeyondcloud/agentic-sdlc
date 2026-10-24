@@ -126,14 +126,18 @@ def create_app(
     @app.get("/metrics", include_in_schema=False)
     async def metrics_endpoint(request: Request) -> Response:
         """Prometheus metrics (M2-12): only with `AGENTIC_CP_METRICS_TOKEN` as the bearer
-        token; without a configured token the route does not exist (404)."""
+        token; without a configured token the route does not exist (404). A blank token is
+        no token, however the settings were built (review F1)."""
         expected = settings.metrics_token
-        if expected is None:
+        wanted = expected.get_secret_value().strip().encode("utf-8") if expected else b""
+        if not wanted:
             raise ApiProblem(404, "not_found", "no such route or object")
         scheme, _, given = request.headers.get("authorization", "").partition(" ")
-        wanted = expected.get_secret_value().encode("utf-8")
-        if scheme.lower() != "bearer" or not hmac.compare_digest(
-            given.strip().encode("utf-8"), wanted
+        presented = given.strip().encode("utf-8")
+        if (
+            scheme.lower() != "bearer"
+            or not presented
+            or not hmac.compare_digest(presented, wanted)
         ):
             raise ApiProblem(
                 401,

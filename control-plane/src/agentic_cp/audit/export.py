@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from agentic.auditproof import (
     CSV_COLUMNS,
+    csv_meta_row,
     csv_row,
     entry_row,
     header_row,
@@ -127,12 +128,14 @@ async def stream_export(
     fmt: str,
     header: Mapping[str, object],
 ) -> AsyncIterator[bytes]:
-    """The export's bytes, chunk by chunk: header (JSONL), records, proof (JSONL)."""
+    """The export's bytes, chunk by chunk: header, records, proof (a CSV starts with its
+    column row and carries header and proof as rows of their own, review F5)."""
+    values = {"tenant": str(tenant_id), **header}
+    head = header_row(team=team, start=span.start, **values)
     if fmt == "jsonl":
-        values = {"tenant": str(tenant_id), **header}
-        yield jsonl_line(header_row(team=team, start=span.start, **values))
+        yield jsonl_line(head)
     else:
-        yield _csv_line(CSV_COLUMNS)
+        yield _csv_line(CSV_COLUMNS) + _csv_line(csv_meta_row(head))
     entries = links = 0
     end: tuple[int, str] | None = None
     if span.first_seq is not None and span.last_seq is not None:
@@ -152,5 +155,5 @@ async def stream_export(
                 end = (record["seq"], record["hash"])
             cursor = records[-1]["seq"]
             yield b"".join(chunk)
-    if fmt == "jsonl":
-        yield jsonl_line(proof_row(entries=entries, links=links, end=end, head=span.head))
+    proof = proof_row(entries=entries, links=links, end=end, head=span.head)
+    yield jsonl_line(proof) if fmt == "jsonl" else _csv_line(csv_meta_row(proof))

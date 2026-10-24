@@ -80,6 +80,32 @@ def test_rules_carry_no_unbounded_labels():
             assert labels <= {"tenant", "le", "mode", "source", "job", "instance"}, rule["alert"]
 
 
+#: Gauges read from the database: every replica exports the same value.
+DB_GAUGES = (
+    "agentic_cp_outbox_pending",
+    "agentic_cp_outbox_failed",
+    "agentic_cp_outbox_oldest_pending_seconds",
+    "agentic_cp_killswitches_active",
+)
+
+
+def test_database_gauges_are_never_summed_across_replicas():
+    """Review F3: each replica reads the same database, so `sum by (tenant)` multiplies a
+    tenant's backlog (or its auto-tripped teams) by the replica count. The aggregation
+    nearest each database gauge must be `max` (alerts.test.yml runs two replicas)."""
+    aggregation = re.compile(r"\b(sum|max|min|avg|count)\s+(?:by|without)\s*\([^)]*\)\s*\(")
+    checked = 0
+    for rule in _rules():
+        expr = rule["expr"]
+        for name in DB_GAUGES:
+            for found in re.finditer(rf"\b{name}\b", expr):
+                nearest = list(aggregation.finditer(expr, 0, found.start()))
+                assert nearest, (rule["alert"], name)
+                assert nearest[-1].group(1) == "max", (rule["alert"], name)
+                checked += 1
+    assert checked >= 4
+
+
 def test_promtool_accepts_the_rules():
     promtool = shutil.which("promtool")
     if promtool is None:

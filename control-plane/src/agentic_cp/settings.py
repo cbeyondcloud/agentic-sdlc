@@ -14,7 +14,15 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from packaging.version import InvalidVersion, Version
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+)
 from sqlalchemy.engine import make_url
 
 PREFIX = "AGENTIC_CP_"
@@ -52,6 +60,24 @@ def _http_url(value: str) -> str:
     if not re.fullmatch(r"https?://[^\s/?#]+(/[^\s?#]*)?", stripped):
         raise ValueError("not an http(s) URL (for example https://cp.example.com)")
     return stripped
+
+
+#: The shortest bearer secret a setting accepts (a blank one is no secret at all).
+MIN_TOKEN_CHARS = 16
+
+
+def _blank_is_none(value: object) -> object:
+    """An empty or all-space secret (a blank Helm or Kubernetes value) is unset."""
+    text = value.get_secret_value() if isinstance(value, SecretStr) else value
+    if isinstance(text, str) and not text.strip():
+        return None
+    return value
+
+
+def _long_secret(value: SecretStr | None) -> SecretStr | None:
+    if value is not None and len(value.get_secret_value().strip()) < MIN_TOKEN_CHARS:
+        raise ValueError(f"shorter than {MIN_TOKEN_CHARS} characters")
+    return value
 
 
 def checked_address(value: str) -> str:
@@ -126,8 +152,12 @@ class Settings(BaseModel):
     """Requests per minute per token holder, in each process (DF-309); 0: no limit."""
     tenant_rate_limit_per_minute: Annotated[int, Field(ge=0, le=10_000_000)] = 0
     """Requests per minute for all of one tenant's callers together, per process; 0: none."""
-    metrics_token: SecretStr | None = None
-    """The bearer token Prometheus scrapes `/metrics` with (M2-12); None: `/metrics` is 404."""
+    metrics_token: Annotated[
+        SecretStr | None, BeforeValidator(_blank_is_none), AfterValidator(_long_secret)
+    ] = None
+    """The bearer token Prometheus scrapes `/metrics` with (M2-12); None: `/metrics` is 404.
+    A blank value is no token (review F1); a shorter one than `MIN_TOKEN_CHARS` refuses
+    startup."""
     metrics_max_tenants: Annotated[int, Field(ge=1, le=1000)] = 100
     """Tenants labelled by slug in the per-tenant gauges; the rest are summed as `_other`."""
     metrics_refresh_seconds: Annotated[int, Field(ge=1, le=3600)] = 30

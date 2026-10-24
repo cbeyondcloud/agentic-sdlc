@@ -2440,7 +2440,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "maxLength": 63,
+                  "pattern": "^[a-z][a-z0-9-]{0,62}$",
                   "type": "string"
                 },
                 {

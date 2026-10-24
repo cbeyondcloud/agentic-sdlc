@@ -46,13 +46,21 @@ tests:
                 10% of requests answered 5xx over the last 10 minutes. Check the server log
                 and GET /readyz (database, migrations).
 
+  # Every replica reads the same database, so each exports the same gauge value: the
+  # replicas must count once, not once each (review F3).
   - name: an outbox backlog alerts per tenant, a short one does not
     interval: 1m
     input_series:
-      - series: 'agentic_cp_outbox_pending{tenant="acme"}'
+      - series: 'agentic_cp_outbox_pending{tenant="acme", instance="cp-1:8080"}'
         values: "150x30"
-      - series: 'agentic_cp_outbox_pending{tenant="globex"}'
-        values: "3x30"
+      - series: 'agentic_cp_outbox_pending{tenant="acme", instance="cp-2:8080"}'
+        values: "150x30"
+      - series: 'agentic_cp_outbox_pending{tenant="globex", instance="cp-1:8080"}'
+        values: "40x30"
+      - series: 'agentic_cp_outbox_pending{tenant="globex", instance="cp-2:8080"}'
+        values: "40x30"
+      - series: 'agentic_cp_outbox_pending{tenant="globex", instance="cp-3:8080"}'
+        values: "40x30"
     alert_rule_test:
       - eval_time: 10m
         alertname: AgenticOutboxBacklog
@@ -92,9 +100,11 @@ tests:
   - name: an auto-trip switch alerts for its tenant, a person's switch does not
     interval: 1m
     input_series:
-      - series: 'agentic_cp_killswitches_active{tenant="acme", mode="pause", source="auto-trip"}'
-        values: "1x5"
-      - series: 'agentic_cp_killswitches_active{tenant="globex", mode="pause", source="human"}'
+      - series: 'agentic_cp_killswitches_active{tenant="acme", mode="pause", source="auto-trip", instance="cp-1:8080"}'
+        values: "2x5"
+      - series: 'agentic_cp_killswitches_active{tenant="acme", mode="pause", source="auto-trip", instance="cp-2:8080"}'
+        values: "2x5"
+      - series: 'agentic_cp_killswitches_active{tenant="globex", mode="pause", source="human", instance="cp-1:8080"}'
         values: "1x5"
     alert_rule_test:
       - eval_time: 2m
@@ -104,7 +114,7 @@ tests:
               severity: warning
               tenant: acme
             exp_annotations:
-              summary: "Auto-trip paused 1 team(s) in tenant acme"
+              summary: "Auto-trip paused 2 team(s) in tenant acme"
               description: >-
                 A team's spend rate or error rate passed its org.yaml auto_trip threshold and
                 its runs are paused. The team's leads were mailed; `agentic killswitch list`

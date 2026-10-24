@@ -17,6 +17,7 @@ from sqlalchemy import insert
 from test_budget_alerts import Run
 
 from agentic_cp.app import create_app
+from agentic_cp.metrics import Metrics
 from agentic_cp.settings import Settings
 from agentic_cp.tables import notifications
 from agentic_cp.tenancy.context import tenant_tx
@@ -62,6 +63,29 @@ async def test_metrics_needs_a_token(api, mapi):
     wrong = await mapi.get("/metrics", headers={"Authorization": "Bearer nope"})
     assert wrong.status_code == 401
     assert (await mapi.get("/metrics", headers={"Authorization": f"Bearer {TOKEN}"})).is_success
+
+
+async def test_a_blank_token_never_opens_metrics(api):
+    """Review F1: settings built without `from_env` (or a token of spaces) still leave
+    `/metrics` closed; `Bearer` with nothing after it never matches."""
+    for blank in ("", "   "):
+        harness = api.with_settings(metrics_token=SecretStr(blank))
+        try:
+            for header in ("Bearer", "Bearer ", "bearer  ", f"Bearer {blank}"):
+                reply = await harness.get("/metrics", headers={"Authorization": header})
+                assert reply.status_code == 404, (blank, header)
+        finally:
+            await harness.http.aclose()
+
+
+def test_chain_rejection_counters_start_at_zero():
+    """Review F4: a counter child made at its first increment first appears as 1, and
+    `increase()` sees no rise, so the first tampering refusal after a start would not
+    alert. The codes the alert names exist at 0 from the start."""
+    metrics = Metrics(Settings.from_env({"AGENTIC_CP_DATABASE_URL": "postgresql://x@h/db"}))
+    samples = _samples(metrics.exposition()[0].decode("utf-8"))
+    for code in ("ingest.chain_broken", "ingest.fork"):
+        assert _value(samples, "agentic_cp_ingest_rejected_total", code=code) == 0, code
 
 
 def test_metrics_route_is_not_in_the_openapi_document():

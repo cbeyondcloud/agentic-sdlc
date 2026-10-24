@@ -139,6 +139,31 @@ async def test_invalid_range_is_422(api, query):
     assert reply.json()["code"] == "audit.invalid_range"
 
 
+@pytest.mark.parametrize(
+    "team",
+    ["x%E2%82%AC", "a%22b", "a%0D%0Ab", "a%3Bb", "Payments", "-x", "a%20b", "payments%0A", ""],
+)
+async def test_a_team_that_is_not_a_slug_is_422_and_not_audited(api, team):
+    """Review F2: the team goes into the Content-Disposition header and the audit record,
+    so anything but a team slug is refused before either (no 500, no header injection,
+    no junk team in the chain)."""
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        before = (await read_records(conn))[-1].seq
+    reply = await _export(api, api.a.admin_token, f"team={team}")
+    assert reply.status_code == 422, reply.text
+    assert reply.json()["code"] == "invalid_request"
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        assert (await read_records(conn))[-1].seq == before
+
+
+async def test_the_download_name_is_built_from_slugs(api):
+    reply = await _export(api, api.a.admin_token, "team=payments", fmt="csv")
+    assert reply.status_code == 200
+    assert reply.headers["content-disposition"] == (
+        f'attachment; filename="audit-{api.a.slug}-payments.csv"'
+    )
+
+
 async def test_unknown_format_is_422(api):
     assert (await _export(api, api.a.admin_token, fmt="xml")).status_code == 422
 
@@ -170,6 +195,22 @@ async def test_csv_export_is_formula_safe(api, tmp_path):
     report = verify_export(path)
     assert report.ok, report.findings
     assert report.format == "csv"
+
+
+async def test_a_csv_export_carries_its_proof(api, tmp_path):
+    """Review F5: a CSV export is checked for completeness like JSONL: without its last
+    rows it does not verify."""
+    await _switch(api, "payments")
+    reply = await _export(api, api.a.admin_token, fmt="csv")
+    path = tmp_path / "export.csv"
+    path.write_bytes(reply.content)
+    report = verify_export(path)
+    assert report.ok, report.findings
+    assert report.head is not None and report.head == report.end
+    lines = reply.content.splitlines(keepends=True)
+    path.write_bytes(b"".join(lines[:-2]))
+    cut = verify_export(path)
+    assert not cut.ok and "cut short" in cut.findings[-1].detail
 
 
 async def test_export_verifies_independently(api, tmp_path):

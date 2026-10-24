@@ -75,6 +75,15 @@ def test_a_cut_stream_is_reported_broken(plane, capsys, tmp_path):
     assert any("cut short" in f["detail"] for f in data["findings"])
 
 
+def test_a_cut_csv_stream_is_reported_broken(plane, capsys, tmp_path):
+    """Review F5: a CSV export carries its proof too, so a cut one is not 'intact'."""
+    plane.export_cut = True
+    code, data = run(capsys, "export", "--format", "csv")
+    assert code == ExitCode.INVALID
+    assert data["format"] == "csv" and not data["intact"]
+    assert any("cut short" in f["detail"] for f in data["findings"])
+
+
 class _Broken(httpx2.SyncByteStream):
     def __iter__(self):
         yield b'{"kind":"header"}\n'

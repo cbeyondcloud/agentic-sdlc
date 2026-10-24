@@ -11,6 +11,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import StreamingResponse
 
 from agentic.orgapi import API_PREFIX, AuditEntry, AuditVerification
+from agentic.orgapi.models import TEAM_SLUG
 from agentic_cp.audit.chain import AuditEvent, append, format_at, read_records, verify
 from agentic_cp.audit.export import MEDIA_TYPES, export_range, parse_bound, stream_export
 from agentic_cp.auth.deps import Caller
@@ -62,7 +63,9 @@ async def export_audit(
     request: Request,
     ctx: Caller,
     fmt: Literal["jsonl", "csv"] = Query(default="jsonl", alias="format"),
-    team: str | None = Query(default=None, max_length=63),
+    # a team slug only: it is written into the download name and the audit record, so
+    # anything else is refused before either (review F2)
+    team: str | None = Query(default=None, pattern=TEAM_SLUG),
     start: str | None = Query(default=None, alias="from", max_length=40),
     end: str | None = Query(default=None, alias="to", max_length=40),
 ) -> StreamingResponse:

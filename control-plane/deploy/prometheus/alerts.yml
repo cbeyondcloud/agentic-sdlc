@@ -3,6 +3,8 @@
 # Load this file into the Prometheus that scrapes the control plane's /metrics (scrape job
 # "agentic-control-plane", bearer token AGENTIC_CP_METRICS_TOKEN). The rules aggregate by
 # tenant at most: the metrics carry no run, user or token labels (spec section 14.3).
+# The outbox and kill-switch gauges are read from the shared database, so every replica
+# exports the same value: rules take `max` across replicas for them, never `sum`.
 # Checked by `promtool check rules` and `promtool test rules alerts.test.yml` in the Linux
 # check stage (scripts/check.py --linux).
 groups:
@@ -64,7 +66,7 @@ groups:
   - name: agentic-outbox
     rules:
       - alert: AgenticOutboxBacklog
-        expr: sum by (tenant) (agentic_cp_outbox_pending) > 100
+        expr: max by (tenant) (agentic_cp_outbox_pending) > 100
         for: 15m
         labels:
           severity: warning
@@ -86,7 +88,7 @@ groups:
             alerts and auto-trip notices are not going out.
 
       - alert: AgenticOutboxFailures
-        expr: sum by (tenant) (delta(agentic_cp_outbox_failed[1h])) > 0
+        expr: max by (tenant) (delta(agentic_cp_outbox_failed[1h])) > 0
         labels:
           severity: warning
         annotations:
@@ -99,7 +101,9 @@ groups:
   - name: agentic-controls
     rules:
       - alert: AgenticAutoTripActive
-        expr: sum by (tenant) (agentic_cp_killswitches_active{source="auto-trip"}) > 0
+        expr: |
+          sum by (tenant) (max by (tenant, mode) (agentic_cp_killswitches_active{source="auto-trip"}))
+            > 0
         labels:
           severity: warning
         annotations:

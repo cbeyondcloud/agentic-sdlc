@@ -36,12 +36,16 @@ The rows run without a gap from `start.seq + 1` to `end.seq`; the first links to
 continue it, and a history rewritten in between cannot. An export with no `proof` line was
 cut short.
 
-**CSV export**: a header row (`CSV_COLUMNS`), then one row per record (`kind` entry or
-link). `before`/`after` hold canonical JSON; an empty nullable cell is null (or an empty
-string - the hash decides). A cell that a spreadsheet would run as a formula (it starts
-with = + - @, a tab, a carriage return, a full-width = + - @, or a quote) carries one
-extra leading `'`; strip exactly one leading `'` to read the value back. The anchors are
-the first row's `prev` and the last row's `hash`.
+**CSV export**: the column row (`CSV_COLUMNS`), then the same rows as the JSONL export in
+the same order: a `header` row, one row per record (`kind` entry or link), and a `proof`
+row. The header and proof rows carry the JSONL header and proof objects (without `kind`)
+as canonical JSON in the `after` column, so a CSV is checked for completeness exactly
+like JSONL: a CSV without its proof row was cut short, and one with leading rows removed
+no longer continues its header's start anchor. In a record row `before`/`after` hold
+canonical JSON; an empty nullable cell is null (or an empty string - the hash decides).
+A cell that a spreadsheet would run as a formula (it starts with = + - @, a tab, a
+carriage return, a full-width = + - @, or a quote) carries one extra leading `'`; strip
+exactly one leading `'` to read the value back.
 """
 
 from __future__ import annotations
@@ -322,6 +326,18 @@ def csv_row(kind: str, record: Mapping) -> list[str]:
     return cells
 
 
+def csv_meta_row(row: Mapping) -> list[str]:
+    """A CSV export's `header` or `proof` row from the JSONL row (`header_row`,
+    `proof_row`): its fields but `kind` as canonical JSON in the `after` column; a header
+    also shows `tenant` and `team` in theirs (the JSON is what the verifier reads)."""
+    kind = row["kind"]
+    cells = {"kind": kind, "after": _canonical({k: v for k, v in row.items() if k != "kind"})}
+    if kind == "header":
+        cells["tenant"] = str(row.get("tenant") or "")
+        cells["team"] = str(row.get("team") or "")
+    return [csv_cell(cells.get(name, "")) for name in CSV_COLUMNS]
+
+
 # ── verifying exports ─────────────────────────────────────────────────────────
 
 
@@ -407,10 +423,14 @@ def _rows(lines: Sequence[str]) -> Iterator[tuple[int, object]]:
 
 
 def _verify_jsonl(lines: Sequence[str], report: ExportReport) -> None:
-    rows = _rows(lines)
+    _verify_rows(_rows(lines), report)
+
+
+def _verify_rows(rows: Iterator[tuple[int, object]], report: ExportReport) -> None:
+    """Check an export's rows (JSONL-shaped: header, entries and links, proof)."""
     first = next(rows, (0, None))[1]
     if not isinstance(first, Mapping) or first.get("kind") != "header":
-        report.findings.append(Finding(1, None, "format", "the first line is not a header"))
+        report.findings.append(Finding(1, None, "format", "the first row is not a header"))
         return
     if first.get("format") != EXPORT_FORMAT:
         report.findings.append(
@@ -458,7 +478,7 @@ def _verify_jsonl(lines: Sequence[str], report: ExportReport) -> None:
     report.end = checker.last if checker.count else None
     if proof is None:
         report.findings.append(
-            Finding(0, None, "format", "the export ends without its proof line - it was cut short")
+            Finding(0, None, "format", "the export ends without its proof row - it was cut short")
         )
         return
     report.head = _pair(proof.get("head"))
@@ -503,35 +523,35 @@ def _verify_csv(text: str, report: ExportReport) -> None:
     if header is None or tuple(header) != CSV_COLUMNS:
         report.findings.append(Finding(1, None, "format", "the header row is not CSV_COLUMNS"))
         return
-    checker: ChainChecker | None = None
-    for row in reader:
+    _verify_rows(_csv_rows(reader), report)
+
+
+def _csv_rows(reader: Iterable[list[str]]) -> Iterator[tuple[int, object]]:
+    """A CSV export's rows in the JSONL shape (None for a row that cannot be read)."""
+    for number, row in enumerate(reader, 2):
         if not row:
             continue
-        cells = dict(zip(CSV_COLUMNS, row, strict=False))
-        kind = cells.get("kind")
-        try:
-            candidates = _record_candidates(cells)
-        except ValueError:
-            candidates = []
-        if checker is None:
-            first = candidates[0] if candidates else {}
-            seq = _seq_of(first)
-            report.start = (seq - 1, str(first.get("prev", ""))) if seq is not None else None
-            start = report.start or (0, "")
-            checker = ChainChecker(start[0] + 1, start[1])
-        if not candidates or len(row) != len(CSV_COLUMNS) or kind not in ("entry", "link"):
-            checker.feed(None)
-        elif kind == "link":
-            report.links += 1
-            checker.feed({name: candidates[0][name] for name in LINK_FIELDS}, opaque=True)
-        else:
-            report.entries += 1
-            match = next((c for c in candidates if entry_hash(c) == c["hash"]), candidates[0])
-            checker.feed(match)
-    if checker is None:
-        return
-    report.findings.extend(checker.finish())
-    report.end = checker.last if checker.count else None
+        yield number, _csv_as_row(row)
+
+
+def _csv_as_row(row: Sequence[str]) -> dict | None:
+    if len(row) != len(CSV_COLUMNS):
+        return None
+    cells = dict(zip(CSV_COLUMNS, row, strict=True))
+    kind = csv_uncell(cells["kind"])
+    try:
+        if kind in ("header", "proof"):
+            body = json.loads(csv_uncell(cells["after"]))
+            return {**body, "kind": kind} if isinstance(body, dict) else None
+        candidates = _record_candidates(cells)
+    except ValueError:
+        return None
+    if kind == "link":
+        return {"kind": "link", **{name: candidates[0][name] for name in LINK_FIELDS}}
+    if kind == "entry":
+        match = next((c for c in candidates if entry_hash(c) == c["hash"]), candidates[0])
+        return {"kind": "entry", "record": match}
+    return None
 
 
 # ── command line ──────────────────────────────────────────────────────────────

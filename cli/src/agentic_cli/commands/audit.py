@@ -117,7 +117,7 @@ def register(app: typer.Typer) -> None:
             typer.Option("--to", help="ISO date (that whole day), or date-time; exclusive."),
         ] = None,
         fmt: Annotated[
-            ExportFormat, typer.Option("--format", help="jsonl (with the proof) or csv.")
+            ExportFormat, typer.Option("--format", help="jsonl or csv (both carry the proof).")
         ] = ExportFormat.jsonl,
         output: Annotated[
             Path | None,

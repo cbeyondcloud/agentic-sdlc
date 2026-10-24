@@ -40,7 +40,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from agentic_cp.ingest.store import event_time
+from agentic_cp.ingest.store import AUDITED, event_time
 from agentic_cp.killswitch.store import AUTO_TRIP_ACTOR
 from agentic_cp.settings import Settings
 from agentic_cp.tables import kill_switches, notifications
@@ -128,6 +128,11 @@ class Metrics:
             ["code"],
             **reg,
         )
+        # The codes an alert watches exist at 0 from the start: a child made at its first
+        # increment appears as 1, `increase()` sees no rise and the first tampering refusal
+        # after a restart would never alert (review F4).
+        for code in AUDITED:
+            self.ingest_rejected.labels(code).inc(0)
         self.kill_state_reads = Counter(
             "agentic_cp_killswitch_state_reads",
             "Kill-switch state reads by CLIs, by whether any switch applied (active or none)",

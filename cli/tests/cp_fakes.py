@@ -114,15 +114,6 @@ class FakeControlPlane:
             return _problem(403, "rbac.forbidden", "you do not hold audit.export")
         team, fmt = request.url.params.get("team"), request.url.params.get("format", "jsonl")
         records = self.audit
-        if fmt == "csv":
-            out = io.StringIO()
-            writer = csv.writer(out)
-            writer.writerow(auditproof.CSV_COLUMNS)
-            for r in records:
-                kind = "link" if team is not None and r["team"] != team else "entry"
-                writer.writerow(auditproof.csv_row(kind, r))
-            body = out.getvalue().encode("utf-8")
-            return httpx2.Response(200, content=body, headers={"content-type": "text/csv"})
         start = (records[0]["seq"] - 1, records[0]["prev"]) if records else None
         rows = [
             auditproof.header_row(
@@ -143,6 +134,19 @@ class FakeControlPlane:
         end = (records[-1]["seq"], records[-1]["hash"]) if records else None
         if not self.export_cut:
             rows.append(auditproof.proof_row(entries=entries, links=links, end=end, head=end))
+        if fmt == "csv":
+            out = io.StringIO()
+            writer = csv.writer(out)
+            writer.writerow(auditproof.CSV_COLUMNS)
+            for row in rows:
+                if row["kind"] in ("header", "proof"):
+                    writer.writerow(auditproof.csv_meta_row(row))
+                elif row["kind"] == "link":
+                    writer.writerow(auditproof.csv_row("link", row))
+                else:
+                    writer.writerow(auditproof.csv_row("entry", row["record"]))
+            body = out.getvalue().encode("utf-8")
+            return httpx2.Response(200, content=body, headers={"content-type": "text/csv"})
         body = b"".join(auditproof.jsonl_line(row) for row in rows)
         return httpx2.Response(200, content=body, headers={"content-type": "application/x-ndjson"})
 

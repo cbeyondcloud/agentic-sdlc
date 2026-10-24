@@ -20,6 +20,7 @@ from agentic.auditproof import (
     ChainChecker,
     check_chain,
     csv_cell,
+    csv_meta_row,
     csv_row,
     csv_uncell,
     entry_hash,
@@ -286,13 +287,71 @@ def test_an_unknown_format_is_refused(tmp_path):
     assert [f.field_class for f in report.findings] == ["format"]
 
 
-def _csv_export(records, links=()) -> bytes:
+def _csv_export(records, links=(), *, team=None, start=None, meta=True) -> bytes:
+    """A CSV export as the control plane writes it: column row, header row, records,
+    proof row (`meta=False`: the bare table, as an export before review F5)."""
     out = io.StringIO()
     writer = csv.writer(out)
     writer.writerow(CSV_COLUMNS)
+    if start is None:
+        start = (records[0]["seq"] - 1, records[0]["prev"]) if records else (0, "")
+    if meta:
+        header = header_row(tenant=TENANT, team=team, start=start, exported_by="a@x.test")
+        writer.writerow(csv_meta_row(header))
     for record in records:
         writer.writerow(csv_row("link" if record["seq"] in links else "entry", record))
+    if meta:
+        end = (records[-1]["seq"], records[-1]["hash"]) if records else None
+        count = sum(1 for record in records if record["seq"] in links)
+        proof = proof_row(entries=len(records) - count, links=count, end=end, head=end)
+        writer.writerow(csv_meta_row(proof))
     return out.getvalue().encode("utf-8")
+
+
+def _csv_lines(data: bytes) -> list[bytes]:
+    return data.splitlines(keepends=True)
+
+
+def test_a_csv_export_cut_short_is_refused(tmp_path):
+    """Review F5: a CSV with its tail removed must not verify as intact."""
+    lines = _csv_lines(_csv_export(_chain(6)))
+    report = verify_export(_write(tmp_path, b"".join(lines[:5]), "export.csv"))
+    assert not report.ok
+    assert "cut short" in report.findings[-1].detail
+
+
+def test_a_csv_export_with_its_leading_rows_trimmed_is_refused(tmp_path):
+    lines = _csv_lines(_csv_export(_chain(6)))
+    report = verify_export(_write(tmp_path, b"".join(lines[:2] + lines[4:]), "export.csv"))
+    assert {f.field_class for f in report.findings} >= {"link", "sequence"}
+
+
+def test_a_csv_export_without_its_header_row_is_refused(tmp_path):
+    lines = _csv_lines(_csv_export(_chain(4)))
+    report = verify_export(_write(tmp_path, b"".join(lines[:1] + lines[2:]), "export.csv"))
+    assert [f.field_class for f in report.findings] == ["format"]
+
+
+def test_a_bare_csv_table_is_not_a_verified_export(tmp_path):
+    report = verify_export(_write(tmp_path, _csv_export(_chain(4), meta=False), "export.csv"))
+    assert not report.ok and report.findings[0].field_class == "format"
+
+
+def test_a_csv_proof_with_wrong_counts_is_refused(tmp_path):
+    records = _chain(3)
+    data = _csv_export(records).replace(b'""entries"":3', b'""entries"":4')
+    report = verify_export(_write(tmp_path, data, "export.csv"))
+    assert [f.field_class for f in report.findings] == ["anchor"]
+
+
+def test_a_csv_export_carries_its_anchors(tmp_path):
+    records = _chain(6)
+    later = records[3:]
+    data = _csv_export(later, team="payments", start=(3, records[2]["hash"]))
+    report = verify_export(_write(tmp_path, data, "export.csv"))
+    assert report.ok, report.findings
+    assert report.start == (3, records[2]["hash"]) and report.end == (6, records[-1]["hash"])
+    assert report.head == report.end and report.team == "payments"
 
 
 def test_verify_csv_export(tmp_path):
@@ -305,7 +364,7 @@ def test_verify_csv_export(tmp_path):
         record["prev"] = prev
         record["hash"] = entry_hash({k: v for k, v in record.items() if k != "hash"})
         prev = record["hash"]
-    data = _csv_export(records, links={3})
+    data = _csv_export(records, links={3}, team="payments")
     assert b"'=HYPERLINK" in data
     report = verify_export(_write(tmp_path, data, "export.csv"))
     assert report.ok, report.findings

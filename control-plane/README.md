@@ -70,7 +70,8 @@ limit on unauthenticated floods (invalid tokens, webhooks), belongs at the ingre
   database answers, is migrated to this release and enforces the guarantees (503 with a
   problem code otherwise).
 - `GET /metrics`: Prometheus text format, only with `AGENTIC_CP_METRICS_TOKEN` as the bearer
-  token (404 when unset, 401 for a wrong one). Requests by route template and status class,
+  token (404 when unset or blank, 401 for a wrong one; a token shorter than 16 characters
+  refuses startup). Requests by route template and status class,
   request duration, ingest lag/results/rejections, kill-switch state reads, and per tenant
   the mail outbox (pending, failed, oldest pending) and active switches by mode and source
   (`human`, `auto-trip`). The per-tenant gauges are read from the database at most every
@@ -80,7 +81,9 @@ limit on unauthenticated floods (invalid tokens, webhooks), belongs at the ingre
 - `deploy/prometheus/alerts.yml`: alert rules (control plane down, 5xx rate, ingest lag,
   chain rejections, outbox backlog, stuck and failed mail, auto-trip active), with promtool
   unit tests in `alerts.test.yml`; the Linux check stage runs `promtool check rules` and
-  the unit tests. Scrape job name: `agentic-control-plane`.
+  the unit tests. Scrape job name: `agentic-control-plane`. Every replica reads the
+  per-tenant gauges from the same database, so they repeat across replicas: aggregate them
+  with `max`, never `sum`, in your own rules and dashboards.
 
 ### Auto-trip
 
@@ -108,7 +111,11 @@ rate is still high, auto-trip stays disarmed until the rate is below the reset l
 `GET /v1/audit/export?format=jsonl|csv&team=&from=&to=` (CLI: `agentic audit export`)
 streams a range of the tenant's audit chain with its chain proof; it needs `audit.export`
 (the builtin `auditor` role and org admins). Records of other teams in a team export are
-`link` rows (sequence and hashes only). An auditor verifies an export without this
+`link` rows (sequence and hashes only); `team` must be a team slug. Both formats carry the
+chain proof: a header row (the anchor before the range) and a proof row (counts, end
+anchor, chain head), so a file with rows missing at either end does not verify - in CSV
+they are rows of `kind` `header` and `proof` with their values as JSON in the `after`
+column. An auditor verifies an export without this
 database or our packages: copy `core/src/agentic/auditproof.py` (standard library only)
 and run `python auditproof.py export.jsonl` (exit 0 intact, 3 broken). Keep each export's
 end anchor: the next export's start must continue it. CSV cells that a spreadsheet would
