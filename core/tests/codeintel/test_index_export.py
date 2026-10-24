@@ -2,6 +2,7 @@
 sharded text export of the local index, and an import pinned to the tool and schema
 version that, with an incremental update, equals a fresh build."""
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -331,11 +332,45 @@ def test_import_then_update_equals_a_fresh_build(exported, tmp_path):
     assert "pkg/wip.py" in imported.indexed_files() and "pkg/api.py" not in fresh.indexed_files()
 
 
+@needs_crg
+def test_names_with_unicode_line_separators_round_trip(tmp_path):
+    # U+2028 and U+0085 stay raw in a shard (ensure_ascii=False); they end a line for
+    # str.splitlines() but not for the export, whose lines end at "\n" only.
+    rel = "pkg/odd and\u0085name.py"
+    ci = make_repo(tmp_path / "ci" / "repo", {**FILES, rel: "def odd():\n    return 1\n"})
+    export_index(built(ci, tmp_path / "ci-data").db, ci, tmp_path / "export")
+    assert rel in read_export(tmp_path / "export")["files"]
+
+    index = LocalIndex(ci, tmp_path / "d", home_dir=tmp_path / "d" / "home")
+    index.load_export(tmp_path / "export")
+
+    assert rel in index.indexed_files() and index.fresh()
+
+
 def edit_manifest(export: Path, **changes) -> None:
     path = export / MANIFEST
     manifest = json.loads(path.read_text(encoding="utf-8"))
     manifest.update(changes)
     path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+@needs_crg
+def test_a_shard_that_is_not_json_is_refused_naming_the_file(exported, tmp_path):
+    _, export = exported
+    manifest = json.loads((export / MANIFEST).read_text(encoding="utf-8"))
+    entry = manifest["files"]["pkg/models.py"]
+    data = b'{"qualified_name": "unterminated\n'
+    (export / entry["shard"]).write_bytes(data)
+    entry["sha256"] = hashlib.sha256(data).hexdigest()
+    (export / MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+    ci, _ = exported
+    index = LocalIndex(ci, tmp_path / "d", home_dir=tmp_path / "d" / "home")
+
+    with pytest.raises(ExportError) as refused:
+        index.load_export(export)
+
+    assert "pkg/models.py" in str(refused.value) and "line 1" in str(refused.value)
+    assert not index.db.exists()
 
 
 def test_a_different_tool_version_is_refused_naming_both(tmp_path):

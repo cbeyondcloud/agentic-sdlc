@@ -63,8 +63,19 @@ def main() -> None:
         con.execute("begin")
         for rel in sorted(manifest["files"]):
             shard = folder / manifest["files"][rel]["shard"]
-            for line in shard.read_text(encoding="utf-8").splitlines():
-                record = json.loads(line)
+            # Lines end at "\n" only: str.splitlines() would also cut at U+2028, U+0085
+            # and the like, which a shard keeps raw inside its strings.
+            lines = shard.read_text(encoding="utf-8").split("\n")
+            for number, line in enumerate(lines, 1):
+                if not line:
+                    continue
+                where = f"the index export's shard of {rel}, line {number}"
+                try:
+                    record = json.loads(line)
+                except ValueError as error:
+                    _fail(f"{where}, is not JSON: {error}")
+                if not isinstance(record, dict):
+                    _fail(f"{where}, holds no record")
                 kind = "n" if "qualified_name" in record else "e"
                 record = {
                     key: value.replace(ROOT_TOKEN, root) if isinstance(value, str) else value
@@ -76,11 +87,14 @@ def main() -> None:
                     _fail(f"the index export has columns this schema lacks: {sorted(unknown)}")
                 table = "nodes" if kind == "n" else "edges"
                 names = sorted(record)
-                con.execute(
-                    f"insert into {table} ({', '.join(names)}) "
-                    f"values ({', '.join('?' * len(names))})",
-                    [record[name] for name in names],
-                )
+                try:
+                    con.execute(
+                        f"insert into {table} ({', '.join(names)}) "
+                        f"values ({', '.join('?' * len(names))})",
+                        [record[name] for name in names],
+                    )
+                except sqlite3.Error as error:
+                    _fail(f"{where}, was refused: {error}")
                 counts[kind] += 1
         metadata = {
             **{
