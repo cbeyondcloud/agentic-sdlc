@@ -49,7 +49,7 @@ import httpx2
 ROOT = Path(__file__).resolve().parents[3]
 CP_TESTS = ROOT / "control-plane" / "tests"
 if str(CP_TESTS) not in sys.path:  # pg.py and fake_routing.py, shared with those tests
-    sys.path.insert(0, str(CP_TESTS))
+    sys.path.append(str(CP_TESTS))  # last: it never shadows a module of these tests
 
 import pg  # noqa: E402
 from fake_routing import FakeRouting  # noqa: E402

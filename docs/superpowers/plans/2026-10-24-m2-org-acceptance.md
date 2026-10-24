@@ -61,6 +61,10 @@
   control-plane login record, or the cached org policy came from a control plane, it is a
   preflight error: removing the URL no longer skips RBAC, the kill switch, caps and the
   minimum version.
+- **CLI change 3 (found while writing the scenario):** the run summary (`run`, `status`,
+  `approve`... with `--json`, and the human view) did not show the run's policy version,
+  although the run state holds it. It now does (`policy_version`; a `policy <version>`
+  line), so the person's own run record shows it, as §1.3 asks.
 - **No control-plane, migration or table change.** Nothing new needs RLS, an `EndpointCase`
   or an Alembic revision (the head stays `m2_37_usage_views`).
 
@@ -240,7 +244,8 @@ SQLAlchemy (control-plane deps, used only by tests here). No new dependency.
   `cli/tests/acceptance/cassettes/m2-53/acceptance/{1.json,prompts.sha256}` (recorded)
 - Modify: `cli/tests/acceptance/test_accept_cassette_drift.py` (SCENARIOS)
 
-**Story:**
+**Story** (the org pipeline `org-plan` is business-analyst, qa-baseline, design: the
+control plane's own validation refused a design step without an earlier test report):
 1. The admin connects the policy repo and syncs it (v1). Routing is applied:
    `FakeRouting` holds the tier rule `balanced -> acme/balanced-model`.
 2. The developer signs in, runs `agentic init` (the bundle from the control plane) and
@@ -251,7 +256,8 @@ SQLAlchemy (control-plane deps, used only by tests here). No new dependency.
 3. The admin commits v2: `balanced -> acme/balanced-model-v2` and
    `tools.yaml: forbidden: [search]`, then syncs. `agentic run --dry-run` follows v2 (a
    notice) and is refused at preflight: `search` is forbidden by org policy. The live run is
-   refused too, before any model call, with nothing registered.
+   refused too, before any model call, with nothing registered (registration is not an
+   audit event, so this is checked as a 404 on the refused run's id).
 4. The admin commits v3, which takes `search` out of the business-analyst and design types,
    and syncs. Routing is applied again: the overlay now pins `acme/balanced-model-v2`, and
    the gateway version moves on. The next run completes. The gateway is asked for the v2
