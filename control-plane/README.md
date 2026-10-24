@@ -128,6 +128,41 @@ and run `python auditproof.py export.jsonl` (exit 0 intact, 3 broken). Keep each
 end anchor: the next export's start must continue it. CSV cells that a spreadsheet would
 run as a formula carry one leading `'`, which the verifier strips.
 
+### Gateway routing (M2-09)
+
+With `AGENTIC_CP_GATEWAY_ADMIN_URL` and `AGENTIC_CP_GATEWAY_ADMIN_KEY` set (a TokenLean
+admin key with **no team binding**), each accepted policy version is queued in its
+activation's transaction and applied by the worker through TokenLean's `/admin/routing`.
+The apply replaces only `tenants.<gateway tenant>` in the gateway's overlay. That part
+holds G6 rules pinning each tier's model (matched on `X-Agentic-Tier`, and per team and
+classification on `X-Agentic-Team` and `X-Agentic-Classification`) and each team's
+`monthly_spend_cap_usd`. The apply always sends `expected_version`, redoes the change after
+a 409, and reads the result back. It records which gateway version applied which policy
+version.
+
+- Audit records: `routing.queued`, `routing.applied`, `routing.refused` (a 422: fix the
+  policy, or a model the gateway does not serve), `routing.apply_failed` (after
+  `AGENTIC_CP_ROUTING_MAX_ATTEMPTS`, backoff 1 to 60 minutes) and `routing.skipped` (the
+  tenant has no gateway tenant).
+- `GET /v1/routing` shows the applies (`policy.edit.org` or `audit.read.org`), and
+  `POST /v1/routing/apply` queues the active version again (`policy.edit.org`).
+- Team request limits go into TokenLean's global `rate_limit.per_team`. TokenLean keys that
+  section by team name across all tenants, so the control plane writes them only with
+  `AGENTIC_CP_GATEWAY_TEAM_RATE_LIMITS=true`. Turn that on only when team names are unique
+  across this deployment's tenants. An entry someone else wrote is never overwritten.
+- G6 routing must be enabled at the gateway (TokenLean's default).
+
+### Personal backups (M2-20)
+
+`agentic skills backup` sends a user's personal skills and notes, and `agentic skills
+restore` brings them back. They are chained per laptop: `POST
+/v1/personal/devices/{device}/events` stores them and `GET /v1/personal/files` reads them.
+Both need `skills.personal.edit`, and a service account never has it. Content is returned
+only to its owner, never to another user (an org admin included). The audit chain records
+each event (`personal.saved`, `.removed`, `.held`) with its path and sha256, never its
+content. A file the publish scan flags stays on the laptop (`personal.held`). Stored events
+are insert-only.
+
 ## Dashboards (M2-37, M2-38)
 
 Grafana reads the `dash_*` views (`agentic_cp/dashboards/views.py`): runs, steps, gates,
