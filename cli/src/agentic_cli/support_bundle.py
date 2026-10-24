@@ -35,8 +35,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials
 from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.sandbox.process import SECRET_NAME
@@ -44,6 +42,7 @@ from agentic.security.pii import PiiDetector
 from agentic.security.publish_scan import PublishGuard
 from agentic.security.secret_scan import SecretScanner
 from agentic.telemetry.logs import redact_record
+from agentic.yamlio import YamlFileError, dump_yaml, load_yaml, read_text
 from agentic_cli import control_plane
 from agentic_cli.doctor import DoctorReport, versions
 from agentic_cli.driving import summary
@@ -178,10 +177,12 @@ def _cleaner(env: Mapping[str, str]) -> _Cleaner:
 def _config_text(path: Path) -> str:
     """A config file with every secret-named key's value removed; `{}` when absent."""
     try:
-        data = yaml.safe_load(_read(path)) if path.is_file() else {}
-    except (OSError, yaml.YAMLError) as error:
+        data = load_yaml(read_text(path))[0] if path.is_file() else {}
+    except (OSError, YamlFileError) as error:
         return f"# {path.name} could not be read: {type(error).__name__}\n"
-    return yaml.safe_dump(_without_secrets(data or {}), sort_keys=True, allow_unicode=True)
+    if not isinstance(data, dict):
+        return f"# {path.name} is not a mapping of settings\n"
+    return dump_yaml(_without_secrets(data))
 
 
 def _without_secrets(value: Any) -> Any:

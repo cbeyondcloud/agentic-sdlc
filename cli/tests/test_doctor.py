@@ -12,10 +12,10 @@ from pathlib import Path
 
 import httpx2
 import pytest
-import yaml
 from cp_fakes import CP_URL, TOKEN, FakeControlPlane
 
 from agentic.hosting.github import GitHubHost, api_url_for
+from agentic.yamlio import dump_yaml
 from agentic_cli import control_plane, doctor, hosting
 from agentic_cli.commands import doctor as doctor_command
 from agentic_cli.exit_codes import ExitCode
@@ -96,7 +96,7 @@ def setup(home, repo, policy_repo, gateway, monkeypatch):
 def write_config(home: Path, **settings) -> None:
     folder = home / ".agentic"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "config.yaml").write_text(yaml.safe_dump(settings), encoding="utf-8")
+    (folder / "config.yaml").write_text(dump_yaml(settings), encoding="utf-8")
 
 
 def run_doctor(capsys) -> tuple[int, dict]:

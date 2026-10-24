@@ -11,10 +11,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-import yaml
 from test_doctor import GATEWAY, KEY, Gateway, machine_run, present
 
 from agentic.engine.state import Cursor, RunState, RunStore
+from agentic.yamlio import dump_yaml, load_yaml
 from agentic_cli import doctor, support_bundle
 from agentic_cli.commands import doctor as doctor_command
 from agentic_cli.exit_codes import ExitCode
@@ -47,7 +47,7 @@ def setup(home, repo, policy_repo, monkeypatch):
         "notes": f"my token is {GITHUB_LIKE}",
         "jira": {"url": "https://acme.atlassian.net", "password": CONFIG_SECRET},
     }
-    (folder / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+    (folder / "config.yaml").write_text(dump_yaml(config), encoding="utf-8")
     monkeypatch.setattr(
         doctor,
         "default_deps",
@@ -137,7 +137,7 @@ def test_planted_secrets_and_pii_never_reach_the_bundle(repo: Path, tmp_path: Pa
     for name, text in found.items():
         for planted in PLANTED:
             assert planted not in text, f"{planted!r} reached {name}"
-    config = yaml.safe_load(found["config/user-config.yaml"])
+    config = _load(found["config/user-config.yaml"])
     assert config["api_key"] == "<removed>"
     assert config["jira"]["password"] == "<removed>"
     assert config["gateway_url"] == GATEWAY  # not secret: kept for the platform team
@@ -222,3 +222,7 @@ def test_outside_a_repository_still_makes_a_bundle(tmp_path: Path, monkeypatch):
     assert main(["support-bundle"]) == ExitCode.OK
     (made,) = outside.glob("agentic-support-*.zip")
     assert "doctor.json" in members(made)
+
+
+def _load(text: str):
+    return load_yaml(text)[0]

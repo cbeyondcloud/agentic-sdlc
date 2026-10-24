@@ -15,11 +15,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-import yaml
 from cli_helpers import git
 
 import sdlc_commons.ledger as ledger_module
 from agentic.engine.state import Cursor, RunState, RunStore
+from agentic.yamlio import dump_yaml
 from agentic_cli import housekeeping
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.main import main
@@ -45,7 +45,7 @@ def setup(home: Path, repo: Path, monkeypatch: pytest.MonkeyPatch):
 def write_config(home: Path, **settings) -> None:
     folder = home / ".agentic"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / "config.yaml").write_text(yaml.safe_dump(settings), encoding="utf-8")
+    (folder / "config.yaml").write_text(dump_yaml(settings), encoding="utf-8")
 
 
 def make_run(
