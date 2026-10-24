@@ -1,6 +1,6 @@
 """`agentic sync [RUN_ID]`: deliver run events that stayed queued to the control plane
-(M2-20), for one run or every run of this repository, and the personal backup journal
-`agentic skills backup` left queued.
+(M2-20), and each run's feedback journal after them (M3-11), for one run or every run of
+this repository, and the personal backup journal `agentic skills backup` left queued.
 
 The run ledger (`events.jsonl`) is the queue and the sink cursor its committed offset, so
 syncing sends exactly what the control plane has not taken yet, in order; it de-duplicates
@@ -14,12 +14,13 @@ from typing import Annotated
 import typer
 
 from agentic.security.publish_scan import PublishBlocked
-from agentic.telemetry.sinks import ForwardingRecorder
+from agentic.telemetry.sinks import ForwardingRecorder, forward
 from agentic_cli import control_plane, personal_sync
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.output import Output
 from agentic_cli.workspace import Workspace
+from sdlc_commons.feedback import FeedbackJournal
 from sdlc_commons.ledger import LedgerError, RunLedger, run_id_refusal
 
 
@@ -52,8 +53,11 @@ def register(app: typer.Typer) -> None:
         with client:
             guard = control_plane.publish_guard(ws.policy)  # M2-49: nothing unscanned leaves
             sink = control_plane.ControlPlaneSink(client, guard=guard)
+            feedback = control_plane.FeedbackSink(client, guard=guard)
             for name in runs:
                 results[name] = _sync_run(ws, sink, name)
+                if found := _sync_feedback(ws, feedback, name):  # M3-11: after the run's events
+                    results[name]["feedback"] = found
             # the personal backup journal (M2-20): what `agentic skills backup` queued
             delivered = personal_sync.deliver(ws.home, client)
         personal = {"sent": delivered.sent, "queued": delivered.queued}
@@ -92,6 +96,19 @@ def _run_ids(ws: Workspace) -> list[str]:
     if not root.is_dir():
         return []
     return sorted(p.name for p in root.iterdir() if (p / "events.jsonl").is_file())
+
+
+def _sync_feedback(ws: Workspace, sink: control_plane.FeedbackSink, run_id: str) -> dict | None:
+    """The run's feedback journal (M3-11) the control plane has not had; None without one."""
+    journal = FeedbackJournal(ws.repo, run_id)
+    entries = journal.entries()
+    if not entries:
+        return None
+    try:
+        sent = forward(run_id, entries, sink, journal.run_dir / "sinks" / f"{sink.name}.json")
+    except Exception as error:  # queued in the journal: the next sync sends it
+        return {"sent": 0, "error": str(error)}
+    return {"sent": sent}
 
 
 def _sync_run(ws: Workspace, sink: control_plane.ControlPlaneSink, run_id: str) -> dict:
