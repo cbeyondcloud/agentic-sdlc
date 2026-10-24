@@ -117,7 +117,8 @@ def test_a_sink_receives_the_chain_exactly_as_recorded(make_harness):
 def test_a_failing_sink_gets_everything_once_after_recovery(make_harness):  # review focus 2
     sink, errors = MemorySink(fail=3), []
     harness, recorder = run_with(make_harness, [sink], errors)
-    assert len(errors) == 3 and all(name == "memory" for name, _ in errors)
+    # the same failure three times is said once (M2-20 review F14, DF-499)
+    assert len(errors) == 1 and all(name == "memory" for name, _ in errors)
     assert harness.ledger("r-sk").verify() == []  # the run went on; the chain is whole
     recorder.flush()
     seqs = [entry["seq"] for entry in sink.received]
