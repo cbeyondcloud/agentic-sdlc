@@ -74,6 +74,29 @@ def test_an_adapter_that_answers_nothing_leaves_the_other_answer():
     assert found.files == ("x.py",) and found.source == "domain"
 
 
+def test_the_note_of_an_adapter_that_found_nothing_is_dropped_when_another_answered():
+    # DF-465: the domain graph's "cites no integration fact" note on every ordinary file
+    # was noise beside code-review-graph's answer, from an adapter `source` did not name
+    uncited = "the domain graph cites no integration fact in m.py (uncited)"
+    found = Combined(
+        Intel("symbols", ALL, files=["a.py"], note="2 hops"),
+        Intel("domain", ALL, note=uncited),
+    ).dependents("m.py")
+
+    assert found.files == ("a.py",) and found.source == "symbols"
+    assert found.note == "2 hops"
+
+
+def test_every_note_is_kept_when_no_adapter_found_anything():
+    found = Combined(
+        Intel("symbols", ALL, note="the file is not indexed"),
+        Intel("domain", ALL, note="uncited"),
+    ).dependents("m.py")
+
+    assert found.files == () and found.source == "symbols + domain"
+    assert found.note == "the file is not indexed\nuncited"
+
+
 def test_a_failing_adapter_is_named_and_the_other_still_answers():
     found = Combined(Intel("symbols", ALL, fails=True), Intel("domain", ALL, files=["x.py"]))
     answer = found.dependents("m.py")

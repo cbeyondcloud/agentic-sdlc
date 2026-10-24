@@ -47,6 +47,25 @@ def test_an_invalid_section_is_refused_as_invalid(config):
     assert refused.value.code == ExitCode.INVALID and "codeintel" in str(refused.value)
 
 
+@pytest.mark.parametrize(
+    ("section", "where", "hint"),
+    [
+        ({"adapter": "graphify"}, "codeintel.adapter", "code-review-graph, domain-graph or none"),
+        ("none", "codeintel", "a mapping"),
+        ({"adapter": "none", "colour": "red"}, "codeintel.colour", "adapter, graph, component"),
+        ({"adapter": "domain-graph", "graph": ""}, "codeintel.graph", "domain graph's folder"),
+        ({"adapter": "domain-graph", "component": ""}, "codeintel.component", "component"),
+    ],
+)
+def test_each_invalid_section_gets_its_own_hint(section, where, hint):
+    # DF-464: the adapter hint was shown for every error, even a misspelt key
+    with pytest.raises(CliError) as refused:
+        codeintel.codeintel_settings({"codeintel": section})
+    assert f"{where}:" in str(refused.value) and hint in refused.value.hint
+    if where != "codeintel.adapter":
+        assert "code-review-graph, domain-graph or none" not in refused.value.hint
+
+
 def test_the_graph_folder_is_read_against_the_repo(tmp_path):
     assert codeintel.graph_dir(tmp_path, settings()) == tmp_path / ".agentic" / "local" / "graph"
     assert codeintel.graph_dir(tmp_path, settings(graph="../g")) == tmp_path / ".." / "g"

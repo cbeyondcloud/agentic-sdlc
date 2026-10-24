@@ -326,7 +326,12 @@ class Runtime:
         ):
             report.problems.append(Problem(None, "identity", UNVERIFIED, severity="warning"))
         tiers = (self.ws.policy_repo or Path("<policy repo>")) / "policy" / "tiers.yaml"
-        missing = self._codeintel_missing()  # an invalid codeintel section is refused here
+        try:
+            missing = self._codeintel_missing()
+        except CliError as error:  # DF-467: listed with the other problems, not raised alone
+            missing = None
+            detail = f"{error}" + (f" ({error.hint})" if error.hint else "")
+            report.problems.append(Problem(None, "codeintel", detail))
         for agent_name, agent in sorted(report.resolved.items()):
             if PLACEHOLDER in agent.model:  # the gateway would refuse it on the first call
                 detail = (

@@ -53,8 +53,26 @@ def codeintel_settings(config: Mapping[str, Any]) -> CodeIntelConfig:
         raise CliError(
             f"{REPO_CONFIG}: {where}: {problem['msg']}",
             ExitCode.INVALID,
-            hint="codeintel.adapter is code-review-graph, domain-graph or none",
+            hint=_hint(problem),
         ) from error
+
+
+#: What each codeintel setting is, for the hint under an invalid one (DF-464).
+_HINTS = {
+    "adapter": "codeintel.adapter is code-review-graph, domain-graph or none",
+    "graph": "codeintel.graph is the domain graph's folder: repo-relative, absolute or ~/...",
+    "component": "codeintel.component names this repo's component in the domain graph",
+}
+
+
+def _hint(problem: Mapping[str, Any]) -> str:
+    """The hint for one pydantic error of the codeintel section."""
+    loc = tuple(problem.get("loc") or ())
+    if not loc:  # the section itself is not a mapping (`codeintel: none`)
+        return "codeintel is a mapping of settings, for example `codeintel: {adapter: none}`"
+    if problem.get("type") == "extra_forbidden" or loc[0] not in _HINTS:
+        return f"codeintel takes only the settings {', '.join(_HINTS)}"
+    return _HINTS[str(loc[0])]
 
 
 def graph_dir(repo: Path, settings: CodeIntelConfig) -> Path:
@@ -73,6 +91,14 @@ def codeintel_warning(repo: Path, settings: CodeIntelConfig, *, crg_available: b
             f"the domain graph is not built at {graph_dir(repo, settings)} (codeintel.graph): "
             f"it runs with {fallback} until the graph is built there"
         )
+    if settings.adapter == "domain-graph":
+        try:  # DF-467: a damaged graph.jsonl would fail every domain-graph answer
+            DomainGraph(graph_dir(repo, settings)).status()
+        except DomainGraphError as error:
+            return (
+                f"the domain graph at {graph_dir(repo, settings)} cannot be read ({error}): "
+                "rebuild it; its answers fail until then"
+            )
     if settings.adapter == "code-review-graph" and not crg_available:
         return (
             "the code intelligence extra is not installed (agentic-core[codeintel]): it runs "
