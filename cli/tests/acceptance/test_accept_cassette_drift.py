@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from _acceptance_support import CASSETTES, prompt_drift, prompt_fingerprint
 
-SCENARIOS = ("m1-68", "m1-69", "m1-70")
+SCENARIOS = ("m1-68", "m1-69", "m1-70", "m2-53", "m2-55")
 
 
 def test_the_fingerprint_ignores_line_endings(tmp_path: Path):
