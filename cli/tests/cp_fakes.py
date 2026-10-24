@@ -46,6 +46,7 @@ class FakeControlPlane:
     bundle_override: bytes | None = None
     tamper_bundle: bool = False  # serve bytes that do not match the advertised digest
     tree_digest_override: str | None = None
+    version: str = VERSION  # the tenant's active policy version (an admin's sync moves it)
     requests: list[httpx2.Request] = field(default_factory=list)
     events: dict[str, list[dict]] = field(default_factory=dict)
     registered: list[dict] = field(default_factory=list)
@@ -379,14 +380,14 @@ class FakeControlPlane:
     def active(self) -> dict:
         data = self.bundle()
         return {
-            "version": VERSION,
+            "version": self.version,
             "branch": "main",
             "digest": "sha256:" + hashlib.sha256(data).hexdigest(),
             "tree_digest": self.tree_digest_override
             or (tree_digest(self.policy_root) if self.policy_root else "sha256:0"),
             "activated_at": datetime.now(UTC).isoformat(),
             "commit_at": None,
-            "bundle_path": f"/v1/policy/versions/{VERSION}/bundle",
+            "bundle_path": f"/v1/policy/versions/{self.version}/bundle",
         }
 
     def handle(self, request: httpx2.Request) -> httpx2.Response:

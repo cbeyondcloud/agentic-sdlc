@@ -102,6 +102,7 @@ def summary(state: RunState, redact: Callable[[str], str] | None = None) -> dict
         "run_id": state.run_id,
         "pipeline": state.pipeline,
         "pipeline_version": state.pipeline_version,
+        "policy_version": state.policy_version,  # spec §1.3: the policy the run used
         "status": state.status,
         "regime": state.regime,
         "starter": state.starter,
@@ -206,6 +207,7 @@ def show_state(state: RunState, redact: Callable[[str], str] | None = None):
             f"run {state.run_id} ({state.pipeline} {state.pipeline_version}): {state.status}",
             markup=False,
         )
+        console.print(f"  policy {state.policy_version}", markup=False)
         for record in data["history"]:
             detail = f" - {record['detail']}" if record["detail"] else ""
             console.print(

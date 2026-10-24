@@ -1,0 +1,93 @@
+{
+ "key": "m2-53/acceptance/1",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:2b179591112aa5c5fec1c09e18bd48a6b0d6aebd5a91a96e33d70f9621140d20",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-requirements-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Split a total evenly; the first payers take the extra cents.\\nsize: small\\nitems:\\n  - id: REQ-1\\n    statement: An invoice total can be split evenly between several payers.\\n    acceptance_criteria:\\n      - WHEN a total is split between N payers THE system SHALL return N shares that add up to the total.\\n  - id: REQ-2\\n    statement: Shares are whole cents and differ by at most one cent.\\n    acceptance_criteria:\\n      - WHEN a total does not divide evenly THE system SHALL give the extra cents to the first payers.\\nopen_questions: []\\n---\\n# Requirements: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## User scenarios\\n<!-- One story per journey, most important first, each marked P1, P2 or P3: who wants what and why, why it has that priority, and how it can be tested on its own. Under each story list its acceptance criteria in EARS form (WHEN <trigger> THE system SHALL <response>), matching the items above. -->\\n\\n## Edge cases\\n<!-- Boundary conditions and failures to handle: empty or huge inputs, missing permissions, timeouts, concurrent use. -->\\n\\n## Functional requirements\\n<!-- One bullet per item above, by id: \\\"REQ-1: The system MUST ...\\\". -->\\n\\n## Success criteria\\n<!-- Measurable outcomes that show the feature works, independent of how it is built (times, rates, counts). -->\\n\\n## Assumptions\\nAmounts are whole cents, as in invoices.money.\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:0bcf0b17bc1fdf7c835e30272ab70c5eb1330f23be4c9a4831ab6cc7ea2d0a31",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-baseline-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_baseline_1\", \"type\": \"function\", \"function\": {\"name\": \"run_shell\", \"arguments\": \"{\\\"command\\\": \\\"python -m pytest -q\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:64f05f7526854c46759407c27709db194941db74655affeb25a4509330c894f4",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-baseline-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: 'Baseline: 2 pass.'\\nverdict: pass\\ntests:\\n  passed: 2\\n  failed: 0\\n  skipped: 0\\nfailures: []\\nbaseline_failures: []\\nacceptance_results: []\\ndependency_scan:\\n  blocked_licences: []\\n  vulnerabilities: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Test report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Verdict\\nPass: every test passes and every criterion holds.\\n\\n## Test results\\n<!-- The suites run, their counts, the baseline they were judged against, and every failure with its cause, new failures first. -->\\n\\n## Acceptance criteria\\n<!-- Each criterion by id: pass or fail, with the evidence (a test, a log, a manual check). -->\\n\\n## Dependency scan\\n<!-- New dependencies with their licences, blocked licences and known vulnerabilities found. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:6a57ba4274d70e4cfa482fbac33c3f55e1872409df6b68d10920a142b3d2082d",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-design-1\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"deep-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Add invoices/split.py with split_evenly(cents, ways).\\ndecisions:\\n  - id: D1\\n    choice: A new function split_evenly in invoices/split.py.\\n    rationale: Splitting is separate from totals; money.py stays small.\\nimpact:\\n  modules:\\n    - invoices/split.py\\n  interfaces:\\n    - split_evenly(cents, ways)\\n  tests:\\n    - tests/test_split.py\\n  confidence: candidate\\nrisks:\\n  - Callers may pass zero payers.\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Design: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Context and problem statement\\n<!-- The problem this design solves and the forces at play, in two to four sentences; link the requirements it answers. -->\\n\\n## Decision drivers\\n<!-- What the choice must satisfy: requirements, constraints, qualities such as latency, cost or ease of change. -->\\n\\n## Considered options\\n<!-- Every option seriously considered, one bullet each, including \\\"do nothing\\\" when it is one. -->\\n\\n## Decision outcome\\n### D1: a new module invoices/split.py\\n\\n## Impact\\n<!-- Modules, interfaces and tests the change touches. Lists taken from the code graph are candidates for Review and QA to confirm. -->\\n\\n## Risks\\n<!-- What could go wrong and how it is mitigated or watched. -->\\n\\n## Confirmation\\n<!-- How the implementation will be checked against this design: tests, review points, measurements. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:668f16f3249050efd843b3726753acd5b41a73000a90983fe5e6fbe922bc1465",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-requirements-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model-v2\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Split a total evenly; the first payers take the extra cents.\\nsize: small\\nitems:\\n  - id: REQ-1\\n    statement: An invoice total can be split evenly between several payers.\\n    acceptance_criteria:\\n      - WHEN a total is split between N payers THE system SHALL return N shares that add up to the total.\\n  - id: REQ-2\\n    statement: Shares are whole cents and differ by at most one cent.\\n    acceptance_criteria:\\n      - WHEN a total does not divide evenly THE system SHALL give the extra cents to the first payers.\\nopen_questions: []\\n---\\n# Requirements: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## User scenarios\\n<!-- One story per journey, most important first, each marked P1, P2 or P3: who wants what and why, why it has that priority, and how it can be tested on its own. Under each story list its acceptance criteria in EARS form (WHEN <trigger> THE system SHALL <response>), matching the items above. -->\\n\\n## Edge cases\\n<!-- Boundary conditions and failures to handle: empty or huge inputs, missing permissions, timeouts, concurrent use. -->\\n\\n## Functional requirements\\n<!-- One bullet per item above, by id: \\\"REQ-1: The system MUST ...\\\". -->\\n\\n## Success criteria\\n<!-- Measurable outcomes that show the feature works, independent of how it is built (times, rates, counts). -->\\n\\n## Assumptions\\nAmounts are whole cents, as in invoices.money.\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:d6132d857b2c038f13414125f66e51dc010a40b1f3cc556d17346c821990e909",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-baseline-3\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model-v2\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_baseline_3\", \"type\": \"function\", \"function\": {\"name\": \"run_shell\", \"arguments\": \"{\\\"command\\\": \\\"python -m pytest -q\\\"}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:4446339fc510fa04df4d92eb9c9ff981849d384bb4ee8cd5d6519bdfd6b57f19",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-baseline-4\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"balanced-model-v2\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: 'Baseline: 2 pass.'\\nverdict: pass\\ntests:\\n  passed: 2\\n  failed: 0\\n  skipped: 0\\nfailures: []\\nbaseline_failures: []\\nacceptance_results: []\\ndependency_scan:\\n  blocked_licences: []\\n  vulnerabilities: []\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Test report: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Verdict\\nPass: every test passes and every criterion holds.\\n\\n## Test results\\n<!-- The suites run, their counts, the baseline they were judged against, and every failure with its cause, new failures first. -->\\n\\n## Acceptance criteria\\n<!-- Each criterion by id: pass or fail, with the evidence (a test, a log, a manual check). -->\\n\\n## Dependency scan\\n<!-- New dependencies with their licences, blocked licences and known vulnerabilities found. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  },
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:93277f29f95ff61f679b7d12cbbbe98ce06d00f77e6f865426f9be2ed1e87d83",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0125",
+    "x-tokenlean-request-id": "acceptance"
+   },
+   "body": "{\"id\": \"chatcmpl-design-2\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"deep-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Add invoices/split.py with split_evenly(cents, ways).\\ndecisions:\\n  - id: D1\\n    choice: A new function split_evenly in invoices/split.py.\\n    rationale: Splitting is separate from totals; money.py stays small.\\nimpact:\\n  modules:\\n    - invoices/split.py\\n  interfaces:\\n    - split_evenly(cents, ways)\\n  tests:\\n    - tests/test_split.py\\n  confidence: candidate\\nrisks:\\n  - Callers may pass zero payers.\\nopen_questions:\\n  - A question a person must answer before the next step can start.\\n---\\n# Design: <short title>\\n\\n## Summary\\n<!-- Two or three sentences: what was done or decided, and what the next step needs to know. -->\\n\\n## Context and problem statement\\n<!-- The problem this design solves and the forces at play, in two to four sentences; link the requirements it answers. -->\\n\\n## Decision drivers\\n<!-- What the choice must satisfy: requirements, constraints, qualities such as latency, cost or ease of change. -->\\n\\n## Considered options\\n<!-- Every option seriously considered, one bullet each, including \\\"do nothing\\\" when it is one. -->\\n\\n## Decision outcome\\n### D1: a new module invoices/split.py\\n\\n## Impact\\n<!-- Modules, interfaces and tests the change touches. Lists taken from the code graph are candidates for Review and QA to confirm. -->\\n\\n## Risks\\n<!-- What could go wrong and how it is mitigated or watched. -->\\n\\n## Confirmation\\n<!-- How the implementation will be checked against this design: tests, review points, measurements. -->\\n\\n## Open questions\\n<!-- One bullet per question a person must answer; write \\\"None.\\\" when there are none. Mark a guess as [NEEDS CLARIFICATION: ...]. -->\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 200, \"total_tokens\": 1200}}"
+  }
+ ]
+}

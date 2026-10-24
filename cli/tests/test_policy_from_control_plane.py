@@ -26,7 +26,7 @@ from agentic_cli.config import agentic_home
 from agentic_cli.control_plane import CONTROL_PLANE_TOKEN, record_login
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
-from agentic_cli.policy_source import resolve_policy
+from agentic_cli.policy_source import follow_active_policy, resolve_policy
 from agentic_cli.workspace import Workspace
 
 CONFIG = f"org: acme\ncontrol_plane_url: {CP_URL}\n"
@@ -260,3 +260,74 @@ def test_stale_swap_leftovers_are_removed(plane):
     _init_once()
     assert not any(path.exists() for path in [*stale, temp])
     assert fresh.exists()
+
+
+# ── an org run follows the tenant's active policy (M2-53) ───────────────────────────────
+
+NEWER = "git:" + "cd" * 20
+
+
+def _follow():
+    return follow_active_policy(
+        agentic_home(), {"org": "acme", "control_plane_url": CP_URL}, env={}
+    )
+
+
+def _admin_changes_the_policy(plane, policy_repo: Path) -> None:
+    """An admin's commit, synced: a new active version with a changed tier model."""
+    tiers = policy_repo / "policy" / "tiers.yaml"
+    tiers.write_bytes(tiers.read_bytes().replace(b"claude-sonnet", b"claude-sonnet-next"))
+    plane.version = NEWER
+
+
+def test_a_run_follows_a_newer_active_policy(plane, policy_repo, repo):
+    _init_once()
+    _admin_changes_the_policy(plane, policy_repo)
+    assert _follow() == (VERSION, NEWER)
+    stamp = json.loads((_cache() / "fetched.json").read_text(encoding="utf-8"))
+    assert stamp["version"] == NEWER and stamp["source_kind"] == "control-plane"
+    ws = Workspace.load(repo, env={}, home=agentic_home())
+    assert ws.policy().version == NEWER  # the cache verifies: it is the served tree
+    assert ws.policy().tiers["balanced"].model == "anthropic/claude-sonnet-next"
+
+
+def test_a_current_cache_is_not_fetched_again(plane):
+    _init_once()
+    plane.requests.clear()
+    assert _follow() is None
+    assert [r.url.path for r in plane.requests] == ["/v1/policy/active"]
+
+
+def test_an_unreachable_control_plane_leaves_the_cache(plane, policy_repo):
+    """The org checks refuse a run that cannot reach the control plane; following the
+    policy never swaps or removes the cache on its own."""
+    _init_once()
+    before = (_cache() / "fetched.json").read_bytes()
+    _admin_changes_the_policy(plane, policy_repo)
+    plane.down = True
+    assert _follow() is None
+    assert (_cache() / "fetched.json").read_bytes() == before
+
+
+def test_a_tampered_newer_bundle_is_refused_and_the_cache_kept(plane, policy_repo, repo):
+    _init_once()
+    _admin_changes_the_policy(plane, policy_repo)
+    plane.tamper_bundle = True
+    with pytest.raises(CliError) as caught:
+        _follow()
+    assert caught.value.code == ExitCode.REFUSED and "digest" in str(caught.value)
+    ws = Workspace.load(repo, env={}, home=agentic_home())
+    assert ws.policy().version == VERSION  # the old cache, intact
+
+
+def test_no_control_plane_cache_means_nothing_to_follow(plane):
+    """Before `agentic init` there is nothing to refresh: the workspace says to run init."""
+    assert _follow() is None
+    assert plane.requests == []
+
+
+def test_standalone_or_git_policy_has_nothing_to_follow(plane):
+    home = agentic_home()
+    assert follow_active_policy(home, {}, env={}) is None
+    assert follow_active_policy(home, {"org": "acme", "policy_repo": "x"}, env={}) is None
+    assert plane.requests == []

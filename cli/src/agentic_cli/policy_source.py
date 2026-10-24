@@ -284,6 +284,47 @@ def _control_plane_policy(
     return loaded
 
 
+def follow_active_policy(
+    home: Path, config: dict[str, Any], env: Mapping[str, str]
+) -> tuple[str, str] | None:
+    """Make the cached control-plane policy the tenant's active version before a run (M2-53),
+    so an admin's change applies to the next run, not after the next `agentic init` or the
+    cache's expiry. Returns (cached version, active version) when the cache was replaced.
+
+    None when there is nothing to follow (standalone, a git policy repo, or no cache yet: the
+    workspace then says to run init), when the cache is current, or when the control plane
+    cannot be asked (not signed in, unreachable, no policy): the org checks refuse such a
+    run, so the cache is never swapped or removed here. The new bundle is fetched, verified
+    and swapped in exactly as `agentic init` does; one that fails a digest check is refused
+    (exit 2) and the cache is left as it was."""
+    org = str(config.get("org", ""))
+    url = control_plane.control_plane_url(env, config)
+    if not (_ORG.fullmatch(org) and url):
+        return None
+    stamp = control_plane_stamp(home / "policy" / org / "repo")
+    if stamp is None:
+        return None
+    try:
+        client = control_plane.client_for(env, config, home)
+        if client is None:
+            return None
+        with client:
+            active = client.active_policy()
+    except control_plane.ControlPlaneError:
+        return None
+    cached = str(stamp.get("version"))
+    if active.version == cached:
+        return None
+    loaded = _control_plane_policy(home, config, env, org, url)
+    try:
+        if loaded._pending is None:  # it went away meanwhile: the cached copy stays
+            return None
+        loaded.commit()
+    finally:
+        loaded.discard()
+    return cached, loaded.policy.version
+
+
 def _extract(data: bytes, target: Path) -> None:
     """Unpack a policy bundle; an entry that would land outside `target`, a link or a
     device is refused (`filter="data"`)."""

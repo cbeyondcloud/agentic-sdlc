@@ -74,8 +74,12 @@ def test_a_run_pauses_at_its_gate_and_exits_4(workspace, gateway, cli):
     assert shown["pending"]["reason"].startswith("waiting for approval by team-lead")
     assert shown["history"][0]["step"] == "requirements"
     assert shown["cost_usd"] == gateway.cost_usd
+    # spec §1.3 scenario 3: the run record shows the policy version the run used (M2-53)
+    assert shown["policy_version"] == result.json()["policy_version"]
+    assert shown["policy_version"].startswith(("git:", "sha256:"))
     human = cli("status", run_id).out
     assert "requirements-approval" in human and "agentic approve" in human
+    assert f"policy {shown['policy_version']}" in human
 
     runs = cli("--json", "runs").json()
     assert [r["run_id"] for r in runs] == [run_id]
