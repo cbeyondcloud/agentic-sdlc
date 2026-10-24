@@ -4,6 +4,7 @@ gives it, and a deprecated version warned before its date and refused from it. T
 and `pipelines list` show which overlay applied. The policy here is a local policy repo
 (`AGENTIC_POLICY_REPO`), the standalone loader's path; org mode is in test_org_preflight."""
 
+import shutil
 from datetime import date
 
 import pytest
@@ -99,6 +100,21 @@ def test_team_outside_rollout_runs_previous_agent_version(rolled, cli, monkeypat
     assert "agent ba@0.9.0 (your team is not in the rollout of 1.0.0)" in plan["versions"]
     monkeypatch.setenv("AGENTIC_TEAM", "web")
     assert dry_run(cli, "--json").json()["steps"][0]["version"] == "1.0.0"
+
+
+def test_standalone_policy_honours_rollout(rolled, cli, monkeypatch, tmp_path):
+    """The policy `agentic init --standalone` installs under the agentic home is read by
+    the same loader: the rollout and the deprecations apply there too."""
+    installed = tmp_path / "home" / "policy" / "standalone"
+    shutil.copytree(rolled, installed)
+    (rolled / "policy" / "rollout.yaml").unlink()  # only the installed copy rolls out
+    monkeypatch.delenv("AGENTIC_POLICY_REPO")
+    monkeypatch.setattr(workspace_module, "utc_today", lambda: date(2026, 12, 1))
+    result = dry_run(cli, "--json")
+    plan = result.json()
+    assert plan["steps"][0]["version"] == "0.9.0", plan
+    assert "agent ba@0.9.0 (your team is not in the rollout of 1.0.0)" in plan["versions"]
+    assert result.code == ExitCode.INVALID  # architect@2.1.0 is refused from 2026-12-01
 
 
 def test_deprecated_agent_blocked_after_date_in_cli(rolled, cli, monkeypatch):
