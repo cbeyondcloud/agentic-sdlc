@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Shared with Zyroflo: ledger, guards, worktree, graph"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "sdlc-harness",
+    "sdlc-harness==0.1.0",
 ]
 
 [build-system]

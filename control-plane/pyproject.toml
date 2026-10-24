@@ -8,8 +8,8 @@ requires-python = ">=3.12,<3.13"
 # release at least two weeks old (SP15 plan, OSS table). Starlette is pinned because the
 # newest release is younger than the release-age window.
 dependencies = [
-    "agentic-core",
-    "sdlc-commons",
+    "agentic-core==0.1.0",
+    "sdlc-commons==0.1.0",
     "fastapi==0.142.4",
     "starlette==1.7.0",
     "uvicorn==0.54.0",
