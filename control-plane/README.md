@@ -64,6 +64,13 @@ over it the API answers 429 with `Retry-After`. `0` turns a limit off. The bucke
 process and are checked after the token is resolved, so a limit across replicas, and any
 limit on unauthenticated floods (invalid tokens, webhooks), belongs at the ingress.
 
+The CLI waits out a 429 whose `Retry-After` is at most 10 s and retries twice (the
+kill-switch poll once, after at most 2 s); a longer wait is refused at once. A running
+agent asks for the kill-switch state about every 10 s and sends its events as it goes, so
+a service-account token shared by many CI jobs is one bucket for all of them: give each
+pipeline its own service account, or raise the limit to at least 12 requests per minute
+per concurrent run that shares the token (DF-615).
+
 ### Health, metrics and alerts
 
 - `GET /healthz`: liveness (never touches the database). `GET /readyz`: readiness - the
@@ -120,6 +127,47 @@ database or our packages: copy `core/src/agentic/auditproof.py` (standard librar
 and run `python auditproof.py export.jsonl` (exit 0 intact, 3 broken). Keep each export's
 end anchor: the next export's start must continue it. CSV cells that a spreadsheet would
 run as a formula carry one leading `'`, which the verifier strips.
+
+### Gateway routing (M2-09)
+
+With `AGENTIC_CP_GATEWAY_ADMIN_URL` and `AGENTIC_CP_GATEWAY_ADMIN_KEY` set (a TokenLean
+admin key with **no team binding**), each accepted policy version is queued in its
+activation's transaction and applied by the worker through TokenLean's `/admin/routing`.
+The apply replaces only `tenants.<gateway tenant>` in the gateway's overlay. That part
+holds G6 rules pinning each tier's model (matched on `X-Agentic-Tier`, and per team and
+classification on `X-Agentic-Team` and `X-Agentic-Classification`) and each team's
+`monthly_spend_cap_usd`. The apply always sends `expected_version`, redoes the change after
+a 409, and reads the result back. It records which gateway version applied which policy
+version.
+
+- Audit records: `routing.queued`, `routing.applied`, `routing.refused` (a 422: fix the
+  policy, or a model the gateway does not serve), `routing.apply_failed` (after
+  `AGENTIC_CP_ROUTING_MAX_ATTEMPTS`, backoff 1 to 60 minutes) and `routing.skipped` (the
+  tenant has no gateway tenant).
+- `GET /v1/routing` shows the applies (`policy.edit.org` or `audit.read.org`), and
+  `POST /v1/routing/apply` queues the active version again (`policy.edit.org`).
+- Team request limits go into TokenLean's global `rate_limit.per_team`. TokenLean keys that
+  section by team name across all tenants, so the control plane writes them only with
+  `AGENTIC_CP_GATEWAY_TEAM_RATE_LIMITS=true`. Turn that on only when team names are unique
+  across this deployment's tenants. An entry someone else wrote is never overwritten.
+- G6 routing must be enabled at the gateway (TokenLean's default).
+
+### Personal backups (M2-20)
+
+`agentic skills backup` sends a user's personal skills and notes, and `agentic skills
+restore` brings them back. They are chained per laptop: `POST
+/v1/personal/devices/{device}/events` stores them and `GET /v1/personal/files` reads them.
+Both need `skills.personal.edit`, and a service account never has it. Content is returned
+only to its owner, never to another user (an org admin included). The audit chain records
+each event (`personal.saved`, `.removed`, `.held`) with its path and sha256, never its
+content. A file the publish scan flags stays on the laptop (`personal.held`). Stored events
+are insert-only, so each user's share is capped: `AGENTIC_CP_PERSONAL_MAX_DEVICES` (20
+laptops), `AGENTIC_CP_PERSONAL_MAX_BYTES` (64 MiB over every version and device, counting
+content plus 1 KiB per event) and `AGENTIC_CP_PERSONAL_DAILY_BYTES` (16 MiB in any 24 hours).
+A batch past a cap is refused with 429 `personal.quota`; the laptop keeps it queued.
+`GET /v1/personal/files` answers a page at a time (`?after=<path>&limit=<n>`, at most 50).
+A laptop whose journal no longer continues its chain (a copied or reset `~/.agentic`) sends
+it again under a new device id, which counts toward the device cap.
 
 ## Dashboards (M2-37, M2-38)
 

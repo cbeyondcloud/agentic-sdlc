@@ -1,0 +1,37 @@
+# Agent types (D35): the org-approved template for each kind of agent.
+# An agent file declares `type:`; anything it leaves out is inherited from here,
+# and anything it sets must stay within these ceilings. Caps are required.
+types:
+  business-analyst:
+    description: Turns a request into requirements with acceptance criteria.
+    tier: balanced
+    backends: [native]
+    tools: [read_files, search, codeintel]
+    skills: [addyosmani/spec-driven-development]
+    consumes: []
+    produces: requirements
+    limits:
+      max: { budget_usd: 2, max_turns: 40, max_minutes: 30 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0, per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }
+  developer:
+    description: Implements an approved design as small, tested commits.
+    tier: balanced
+    backends: [native, claude-code, codex, opencode]
+    tools: [read_files, search, edit_files, run_shell, codeintel, spawn_agent, activate_skill]
+    shell: [pytest, "npm test", "mvn -q test", ruff, git]
+    skills: [superpowers/test-driven-development, superpowers/systematic-debugging,
+             superpowers/verification-before-completion]
+    consumes: [design, review]
+    produces: dev-report
+    limits:
+      max: { budget_usd: 5, max_turns: 80, max_minutes: 60 }
+      children_max: { max_total: 5, max_concurrent: 2, max_depth: 2, per_child: { budget_usd: 1, max_turns: 30, max_minutes: 15 } }
+  general:
+    description: Any other agent, e.g. a docs writer.
+    tier: fast
+    backends: [native]
+    tools: [read_files, search, edit_files]
+    consumes: [requirements, design, dev-report, review, test-report]
+    limits:
+      max: { budget_usd: 1, max_turns: 30, max_minutes: 20 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0, per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }

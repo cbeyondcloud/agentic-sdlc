@@ -47,12 +47,12 @@ def event_time(value: object) -> datetime | None:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
-def head_problem(code: str, detail: str, head: ChainHead) -> ApiProblem:
+def head_problem(code: str, detail: str, head: ChainHead, hint: str | None = None) -> ApiProblem:
     return ApiProblem(
         409,
         code,
         detail,
-        hint=f"resend the run's events from seq {head.seq + 1}",
+        hint=hint or f"resend the run's events from seq {head.seq + 1}",
         extra={"head": head.model_dump()},
     )
 

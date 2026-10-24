@@ -74,6 +74,14 @@ class TierSpec(_Strict):
     family: str | None = None
 
 
+def gateway_model(model_id: str) -> str:
+    """The name the gateway knows a tier model by: the part after its route (`route/name`,
+    DF-394), or the whole id when it has none. The client sends this name and the control
+    plane's routing rules (M2-09) pin it, so the two never disagree."""
+    _, slash, name = model_id.partition("/")
+    return name if slash and name else model_id
+
+
 class ClassificationRule(_Strict):
     """What a repo of this sensitivity class may use."""
 
@@ -212,11 +220,28 @@ def _looser_auto_trip(team: str, own: TeamAutoTrip | None, org: AutoTripPolicy) 
     return problems
 
 
+class TeamRateLimit(_Strict):
+    """A team's request limits at the gateway (M2-09): requests per minute and per hour for
+    the team's keys together. The control plane writes them into the gateway's routing
+    overlay; at least one is set, and 0 (refuse everything) is not a limit."""
+
+    requests_per_minute: int | None = Field(default=None, ge=1)
+    requests_per_hour: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def names_a_limit(self) -> Self:
+        if self.requests_per_minute is None and self.requests_per_hour is None:
+            raise ValueError("rate_limit needs requests_per_minute or requests_per_hour")
+        return self
+
+
 class TeamPolicy(_Strict):
     """Team narrowing: may only tighten org policy (spec §12.2)."""
 
     allowed_tiers: list[str] | None = None  # None = every tier the org allows
-    monthly_budget_usd: float | None = None
+    # a number (review F1): an infinite or NaN budget is no cap and no alert threshold
+    monthly_budget_usd: float | None = Field(default=None, allow_inf_nan=False)
+    rate_limit: TeamRateLimit | None = None  # M2-09: the gateway's per-team request limits
     limits_max: dict[str, RoleLimits] = {}  # keyed by agent TYPE (D35)
     deny: DenyRules = DenyRules()
     skill_packs: list[str] = []  # opt-in skill packs from the org catalog (spec §11.2)
@@ -501,6 +526,9 @@ PlatformKey = Literal[
 #: A tool name, version or binary: each becomes one folder or file name in the tool cache,
 #: so never '.', '..', a separator, a drive or anything else that could leave it.
 PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
+#: A tier or class name: each is sent as an `X-Agentic-*` header on every model call
+#: (`agentic.transport.identity`), so 1-256 printable ASCII with no blank at either end.
+HEADER_VALUE = re.compile(r"[\x21-\x7e](?:[\x20-\x7e]{0,254}[\x21-\x7e])?")
 
 
 def _plain_name_problem(where: str, value: str) -> str | None:
@@ -694,6 +722,16 @@ class OrgPolicy(_Strict):
                 "prices: a price needs a model name (an empty one would match every model)"
             )
         known_tiers = set(self.tiers)
+        for kind, header, names in (
+            ("tier", "X-Agentic-Tier", self.tiers),
+            ("classification", "X-Agentic-Classification", self.classifications),
+        ):
+            problems += [
+                f"{kind} name {name!r} is sent as the {header} header: it must be 1-256 "
+                "printable ASCII characters with no blank at either end"
+                for name in names
+                if not HEADER_VALUE.fullmatch(name)
+            ]
 
         def check_tiers(where: str, names: list[str] | None) -> None:
             for name in names or []:

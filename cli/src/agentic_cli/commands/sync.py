@@ -1,5 +1,6 @@
 """`agentic sync [RUN_ID]`: deliver run events that stayed queued to the control plane
-(M2-20), for one run or every run of this repository.
+(M2-20), for one run or every run of this repository, and the personal backup journal
+`agentic skills backup` left queued.
 
 The run ledger (`events.jsonl`) is the queue and the sink cursor its committed offset, so
 syncing sends exactly what the control plane has not taken yet, in order; it de-duplicates
@@ -14,7 +15,7 @@ import typer
 
 from agentic.security.publish_scan import PublishBlocked
 from agentic.telemetry.sinks import ForwardingRecorder
-from agentic_cli import control_plane
+from agentic_cli import control_plane, personal_sync
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.output import Output
@@ -40,6 +41,12 @@ def register(app: typer.Typer) -> None:
             )
         if run_id is not None and (why := run_id_refusal(run_id)):
             raise CliError(why, ExitCode.USAGE)
+        if run_id is not None and not (ws.runs_root / run_id / "events.jsonl").is_file():
+            raise CliError(  # DF-497: a mistyped run id is not a quiet success
+                f"no run {run_id} in this repository",
+                ExitCode.INVALID,
+                hint="`agentic runs list` shows this repository's runs",
+            )
         runs = [run_id] if run_id else _run_ids(ws)
         results: dict[str, dict] = {}
         with client:
@@ -47,7 +54,15 @@ def register(app: typer.Typer) -> None:
             sink = control_plane.ControlPlaneSink(client, guard=guard)
             for name in runs:
                 results[name] = _sync_run(ws, sink, name)
-        data = {"runs": results}
+            # the personal backup journal (M2-20): what `agentic skills backup` queued
+            delivered = personal_sync.deliver(ws.home, client)
+        personal = {"sent": delivered.sent, "queued": delivered.queued}
+        if delivered.error:
+            personal["error"] = delivered.error
+        if delivered.new_device:
+            personal["new_device"] = delivered.new_device
+            out.warn(personal_sync.NEW_DEVICE_NOTICE)
+        data = {"runs": results, "personal": personal}
 
         def show(console) -> None:
             if not results:
@@ -61,9 +76,14 @@ def register(app: typer.Typer) -> None:
                 console.print(line, markup=False)
                 if "hint" in result:
                     console.print(f"  hint: {result['hint']}", markup=False)
+            if personal["sent"] or personal["queued"]:
+                line = f"personal backup: sent {personal['sent']}, queued {personal['queued']}"
+                if "error" in personal:
+                    line += f" ({personal['error']})"
+                console.print(line, markup=False)
 
         out.result(data, show)
-        if any("error" in result for result in results.values()):
+        if any("error" in result for result in [*results.values(), personal]):
             raise typer.Exit(ExitCode.ERROR)
 
 

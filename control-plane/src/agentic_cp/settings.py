@@ -148,6 +148,24 @@ class Settings(BaseModel):
     gateway_admin_key: SecretStr | None = None
     gateway_url: Annotated[str, AfterValidator(_http_url)] | None = None
     """The gateway URL people's CLIs use; handed out with a redeemed invite."""
+    gateway_team_rate_limits: bool = False
+    """Write teams' `rate_limit` into the gateway's `rate_limit.per_team` (M2-09). TokenLean
+    keys that section by team name across every tenant, so turn it on only when team names
+    are unique across this deployment's tenants; an entry another writer set is never
+    overwritten either way."""
+    routing_max_attempts: Annotated[int, Field(ge=1, le=50)] = 8
+    """Tries of one routing apply (M2-09) before it is marked failed; an admin queues it
+    again with `POST /v1/routing/apply`, and the next accepted policy version does too."""
+    personal_max_devices: Annotated[int, Field(ge=1, le=1000)] = 20
+    """Laptops (device chains) one user backs up personal skills and notes from (M2-20,
+    review F4); a new one past this is refused with 429 `personal.quota`."""
+    personal_max_bytes: Annotated[int, Field(ge=1)] = 64 * 1024 * 1024
+    """What one user's personal backups may hold over every version and device: content
+    bytes plus 1 KiB per event. Backups are insert-only, so this never shrinks until
+    retention (OR-01) prunes them."""
+    personal_daily_bytes: Annotated[int, Field(ge=1)] = 16 * 1024 * 1024
+    """What one user may add to their personal backups in any 24 hours, counted the same
+    way (a client stuck in a loop, or a stolen token, cannot fill the database)."""
     rate_limit_per_minute: Annotated[int, Field(ge=0, le=1_000_000)] = 1200
     """Requests per minute per token holder, in each process (DF-309); 0: no limit."""
     tenant_rate_limit_per_minute: Annotated[int, Field(ge=0, le=10_000_000)] = 0

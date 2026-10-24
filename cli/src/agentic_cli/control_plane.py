@@ -18,6 +18,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,6 +32,7 @@ from agentic.hosting.base import scrub_url_credentials
 from agentic.orgapi import (
     API_PREFIX,
     CLI_VERSION_HEADER,
+    MAX_FILES_PAGE,
     ActivePolicy,
     Assignment,
     AuditEntry,
@@ -43,6 +45,7 @@ from agentic.orgapi import (
     Me,
     NotificationInfo,
     OffboardResult,
+    PersonalFile,
     ProxyKeyIssued,
     ProxyKeysRevoked,
     RepoInfo,
@@ -76,6 +79,13 @@ EXPORT_TIMEOUT = httpx2.Timeout(120.0, connect=5.0)
 #: Serialised entries per ingest request: about half the control plane's default body
 #: cap (`max_body_bytes`, 1 MiB), leaving room for the envelope (review F6).
 MAX_BATCH_BYTES = 512 * 1024
+#: A 429 is retried this many times when its `Retry-After` is at most `MAX_RETRY_AFTER_S`
+#: (DF-615: the control plane rate-limits every token holder); a longer or missing wait is
+#: refused at once. The kill-switch poll, which a run waits on, retries once, after at most
+#: `KILL_MAX_RETRY_AFTER_S`.
+RETRIES_429 = 2
+MAX_RETRY_AFTER_S = 10.0
+KILL_MAX_RETRY_AFTER_S = 2.0
 
 
 class ControlPlaneError(CliError):
@@ -334,6 +344,33 @@ class ControlPlaneClient:
             raise
         return IngestResult.model_validate(found)
 
+    def ingest_personal(self, device: str, entries: Sequence[Mapping[str, object]]) -> IngestResult:
+        """Send a batch of this device's chained personal-backup events (M2-20), refused
+        exactly as a run's batch is (`ChainRejected` on a gap, a fork or a broken chain)."""
+        path = f"/personal/devices/{quote(device, safe='')}/events"
+        try:
+            found = self._json("POST", path, {"entries": list(entries)})
+        except ControlPlaneRefused as error:
+            if error.code_name.startswith("ingest.") and error.code_name != "ingest.too_large":
+                raise ChainRejected(
+                    str(error), code_name=error.code_name, problems=error.problems, head=error.head
+                ) from None
+            raise
+        return IngestResult.model_validate(found)
+
+    def personal_files(self) -> list[PersonalFile]:
+        """The caller's newest backed-up copy of each personal skill file and note, read a
+        page at a time (a page shorter than asked for is the last)."""
+        found: list[PersonalFile] = []
+        while True:
+            params = {"limit": str(MAX_FILES_PAGE)}
+            if found:
+                params["after"] = found[-1].path
+            page = self._json("GET", "/personal/files", params=params)
+            found += [PersonalFile.model_validate(item) for item in page]
+            if len(page) < MAX_FILES_PAGE:
+                return found
+
     def run(self, run_id: str) -> RunSummary:
         """The run as the control plane holds it (its chain head included)."""
         return RunSummary.model_validate(self._json("GET", f"/runs/{run_id}"))
@@ -414,15 +451,22 @@ class ControlPlaneClient:
             options["params"] = dict(params)
         if timeout is not None:
             options["timeout"] = timeout
-        try:
-            response = self._http.request(method, f"{API_PREFIX}{path}", **options)
-        except httpx2.HTTPError as error:
-            raise ControlPlaneUnavailable(
-                f"cannot reach the control plane at {self._shown} ({type(error).__name__})",
-                hint="check the network or VPN, and control_plane_url",
-            ) from None
-        if response.status_code < 400:
-            return response
+        kill_poll = timeout is KILL_STATE_TIMEOUT
+        retries, longest = (1, KILL_MAX_RETRY_AFTER_S) if kill_poll else (RETRIES_429, None)
+        for attempt in range(retries + 1):
+            try:
+                response = self._http.request(method, f"{API_PREFIX}{path}", **options)
+            except httpx2.HTTPError as error:
+                raise ControlPlaneUnavailable(
+                    f"cannot reach the control plane at {self._shown} ({type(error).__name__})",
+                    hint="check the network or VPN, and control_plane_url",
+                ) from None
+            if response.status_code < 400:
+                return response
+            wait = _retry_after(response, longest or MAX_RETRY_AFTER_S)
+            if response.status_code != 429 or wait is None or attempt == retries:
+                break
+            time.sleep(wait)  # DF-615: a short rate-limit wait is waited out
         raise self._problem(response)
 
     def _problem(self, response: httpx2.Response) -> ControlPlaneError:
@@ -452,6 +496,15 @@ class ControlPlaneClient:
             else None,
             problems=[str(p) for p in found] if isinstance(found, list) else None,
         )
+
+
+def _retry_after(response: httpx2.Response, longest: float) -> float | None:
+    """A 429's `Retry-After` in seconds when it is a number no greater than `longest`."""
+    try:
+        wait = float(response.headers.get("Retry-After", ""))
+    except ValueError:
+        return None
+    return wait if 0 <= wait <= longest else None
 
 
 # ── the run event sink (M2-20) ───────────────────────────────────────────────
@@ -505,7 +558,7 @@ class ControlPlaneSink:
         while start < len(entries):
             chunk = self._chunk(entries, start, limit)
             try:
-                self.client.ingest(run_id, chunk)
+                self._ingest(run_id, chunk)
             except ChainRejected as error:
                 first = chunk[0].get("seq")
                 head = error.head
@@ -524,6 +577,9 @@ class ControlPlaneSink:
                 raise
             start += len(chunk)
 
+    def _ingest(self, run_id: str, chunk: Sequence[Mapping[str, object]]) -> None:
+        self.client.ingest(run_id, chunk)
+
     def _chunk(
         self, entries: Sequence[Mapping[str, object]], start: int, limit: int
     ) -> Sequence[Mapping[str, object]]:
@@ -535,6 +591,21 @@ class ControlPlaneSink:
                 break
             end += 1
         return entries[start:end]
+
+
+class PersonalSink(ControlPlaneSink):
+    """The sink for the personal-backup journal (M2-20): the same batching, 413 halving,
+    catch-up (R21) and refusals as the run sink, sent to the device's chain
+    (`POST /v1/personal/devices/{device}/events`; `forward`'s run id is the device id).
+    No publish guard here: each file was scanned before it was journaled."""
+
+    name = "personal-backup"
+
+    def __init__(self, client: ControlPlaneClient, batch: int = 100) -> None:
+        super().__init__(client, batch)
+
+    def _ingest(self, run_id: str, chunk: Sequence[Mapping[str, object]]) -> None:
+        self.client.ingest_personal(run_id, chunk)
 
 
 # ── which client, from where ────────────────────────────────────────────────

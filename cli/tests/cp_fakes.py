@@ -456,6 +456,15 @@ class FakeControlPlane:
                 200,
                 json={"key": self.proxy_key, "key_id": "0123456789abcdef", "gateway_url": None},
             )
+        if path.startswith("/v1/personal/devices/") and path.endswith("/events"):
+            device = path.split("/")[4]
+            entries = json.loads(request.content)["entries"]
+            return self._ingest(f"personal:{device}", entries)
+        if path == "/v1/personal/files":  # a page in path order, as the control plane
+            after = request.url.params.get("after", "")
+            limit = int(request.url.params.get("limit", "50"))
+            ordered = sorted(self.personal_files(), key=lambda item: item["path"])
+            return httpx2.Response(200, json=[f for f in ordered if f["path"] > after][:limit])
         if path.startswith("/v1/runs/") and path.endswith("/events"):
             if self.max_body is not None and len(request.content) > self.max_body:
                 return _problem(413, "too_large", f"the body is over {self.max_body} bytes")
@@ -548,6 +557,34 @@ class FakeControlPlane:
             "assignments": self.assignments,
         }
 
+    def personal(self) -> list[dict]:
+        """Every personal-backup event received, over all devices, in arrival order."""
+        found = [(key, e) for key, events in self.events.items() for e in events]
+        return [e for key, e in found if key.startswith("personal:")]
+
+    def personal_files(self) -> list[dict]:
+        """`GET /v1/personal/files`: the newest saved-or-removed copy per path."""
+        newest: dict[str, dict] = {}
+        for key, events in self.events.items():
+            if not key.startswith("personal:"):
+                continue
+            for entry in events:
+                if entry["event"] == "personal.held":
+                    newest.setdefault(entry["path"], {}).update(held=True)
+                    continue
+                newest[entry["path"]] = {
+                    "kind": entry["kind"],
+                    "path": entry["path"],
+                    "sha256": entry["sha256"],
+                    "content": entry.get("content"),
+                    "deleted": entry["event"] == "personal.removed",
+                    "held": False,
+                    "device": key.split(":", 1)[1],
+                    "seq": entry["seq"],
+                    "at": entry["at"],
+                }
+        return [item for item in newest.values() if "kind" in item]
+
     def _ingest(self, run_id: str, entries: list[dict]) -> httpx2.Response:
         if self.refuse_ingest is not None:
             return httpx2.Response(
@@ -559,10 +596,13 @@ class FakeControlPlane:
             return _problem(413, "ingest.too_large", f"at most {self.max_entries} entries")
         stored = self.events.setdefault(run_id, [])
         head = len(stored)
+        last = stored[-1]["hash"] if stored else ""
         duplicates = [e for e in entries if e["seq"] <= head]
+        if any(stored[e["seq"] - 1].get("hash") != e.get("hash") for e in duplicates):
+            # as the control plane does: a replay must equal what is stored (review F3)
+            return _problem(409, "ingest.fork", "fork", extra={"head": {"seq": head, "hash": last}})
         rest = [e for e in entries if e["seq"] > head]
         if rest and rest[0]["seq"] != head + 1:
-            last = stored[-1]["hash"] if stored else ""
             return _problem(409, "ingest.gap", "gap", extra={"head": {"seq": head, "hash": last}})
         stored.extend(rest)
         last = stored[-1]

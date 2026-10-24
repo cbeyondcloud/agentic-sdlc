@@ -150,6 +150,42 @@ def is_junk(relative: str) -> bool:
     )
 
 
+#: Where a backed-up personal file lives under `~/.agentic`, by kind (M2-20).
+BACKUP_ROOTS = {"skill": "skills", "memory": "memory"}
+MAX_BACKUP_PATH = 512
+_BAD_PATH_CHARS = re.compile(r'[\x00-\x1f\x7f\\:*?"<>|]')
+
+
+def backup_path_problem(kind: object, path: object) -> str | None:
+    """Why `path` cannot name a backed-up personal file of `kind` (M2-20), or None.
+
+    A POSIX path relative to `~/.agentic`: `skills/<name>/...` for a skill file and
+    `memory/...` for a note; a Markdown or text file; no `.` or `..` segment, no dot-folder
+    or OS file, nothing Windows refuses in a name. The control plane checks what it stores
+    and `agentic skills restore` what it writes with this same rule, so a restore never
+    writes outside the user's skills and notes."""
+    if kind not in BACKUP_ROOTS:
+        return f"kind must be one of {sorted(BACKUP_ROOTS)}"
+    if not isinstance(path, str) or not path or len(path) > MAX_BACKUP_PATH:
+        return f"path must be 1-{MAX_BACKUP_PATH} characters"
+    if _BAD_PATH_CHARS.search(path) or path.startswith("/"):
+        return "path must be a relative POSIX path of plain names"
+    parts = path.split("/")
+    if any(part in ("", ".", "..") for part in parts) or is_junk(path):
+        return "path may hold no empty, '.' or '..' part and no dot-folder or OS file"
+    if any(part.rstrip(" .") != part for part in parts):
+        return "no part of path may end in a space or a dot"
+    if parts[0] != BACKUP_ROOTS[kind]:
+        return f"a {kind} path starts with {BACKUP_ROOTS[kind]}/"
+    if kind == "skill" and (len(parts) < 3 or not NAME.fullmatch(parts[1]) or len(parts[1]) > 64):
+        return "a skill path is skills/<name>/<file>, its name lowercase letters, digits, hyphens"
+    if kind == "memory" and len(parts) < 2:
+        return "a note path is memory/<file>"
+    if Path(parts[-1]).suffix.lower() not in TEXT_SUFFIXES:
+        return "only Markdown or text files are backed up (.md, .txt)"
+    return None
+
+
 def _skill(folder: Path) -> PersonalSkill:
     where = f"skills/{folder.name}"
     if _is_link(folder):
@@ -328,11 +364,13 @@ class PersonalContext:
 __all__ = [
     "MAX_MEMORY_TOKENS",
     "MAX_PERSONAL_SKILLS",
+    "BACKUP_ROOTS",
     "MemoryNote",
     "PersonalContext",
     "PersonalRejection",
     "PersonalSet",
     "PersonalSkill",
+    "backup_path_problem",
     "load_personal",
     "skill_block",
 ]

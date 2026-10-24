@@ -645,6 +645,7 @@ class Runtime:
             agent=f"{agent.definition.name}@{agent.definition.version}",
             policy_version=self.ws.policy().version,
             tier=agent.tier,
+            classification=agent.classification,  # the gateway's class rules (M2-09)
         )
 
     # ── helpers ──────────────────────────────────────────────────────────────

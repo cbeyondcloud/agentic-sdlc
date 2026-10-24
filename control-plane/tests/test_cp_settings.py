@@ -77,6 +77,7 @@ def test_mail_settings_default_to_starttls_and_no_relay():
     assert settings.notify_max_attempts == 8
     assert settings.public_url is None
     assert settings.gateway_admin_url is None and settings.gateway_admin_key is None
+    assert settings.gateway_team_rate_limits is False and settings.routing_max_attempts == 8
 
 
 def test_mail_and_gateway_settings_are_read():

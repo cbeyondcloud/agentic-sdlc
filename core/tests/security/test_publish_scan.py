@@ -146,3 +146,14 @@ def test_policy_loads_from_org_yaml_and_builds_the_guard(tmp_path):
     assert policy.publish_scan.action == "block"
     made = PublishGuard.from_policy(policy)
     assert made.action == "block" and made.pii.entities == ("email",)
+
+
+def test_findings_counts_without_masking_or_auditing():
+    """What a file-level caller (the personal backup, M2-20) asks: the hits by kind and
+    count, the text left as it is, nothing audited (the caller audits its own decision)."""
+    made, seen = guard()
+    fields = {"path": "memory/notes.md", "content": f"mail {EMAIL} key {AWS}"}
+    found = made.findings(fields)
+    assert found["pii:email"] == 1 and sum(found.values()) == 2
+    assert seen == [] and fields["content"] == f"mail {EMAIL} key {AWS}"
+    assert made.findings({"content": "nothing to see"}) == {}

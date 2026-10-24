@@ -1,0 +1,13 @@
+# Capability tiers for the routing-generation fixture (M2-09).
+tiers:
+  deep-reasoning: { model: tokenlean/openrouter/vendor-a/deep-model, effort: high }
+  balanced: { model: tokenlean/vendor-a-balanced, effort: medium }
+  fast: { model: tokenlean/vendor-b-fast }
+  local: { model: ollama/qwen-coder }
+
+# payments has its own contract for two tiers and its own local model, which restricted
+# repos may not use.
+team_overrides:
+  payments:
+    balanced: { model: tokenlean/vendor-c-balanced }
+    local: { model: ollama/payments-coder }

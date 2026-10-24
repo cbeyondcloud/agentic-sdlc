@@ -73,6 +73,8 @@ class PublishBlocked(SinkError):
     sent (see the module). `index` is its place in the batch checked, so the clean entries
     before it can still go (`delivered` then says how many did)."""
 
+    retryable = False  # a chained entry never changes: no retry sends it (DF-535)
+
     def __init__(
         self,
         run_id: str,
@@ -180,6 +182,13 @@ class PublishGuard:
             kinds = sorted(_kind(name) for name in counts)
             event = str(entry.get("event"))
             raise PublishBlocked(run_id, seq, event, kinds, hit, self.action, index=index)
+
+    def findings(self, fields: dict) -> dict[str, int]:
+        """What a scan finds in `fields` (detector, or `pii:<entity>` -> how many), with
+        nothing masked and nothing audited: for a caller that decides and audits itself
+        (the personal backup holds a file back, M2-20)."""
+        _, counts, _ = self._walk_fields(fields, mask=False)
+        return _sorted(counts)
 
     # ── scanning ─────────────────────────────────────────────────────────────
 

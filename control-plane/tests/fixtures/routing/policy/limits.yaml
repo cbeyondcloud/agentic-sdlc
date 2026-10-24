@@ -1,0 +1,2 @@
+# Concurrency limits. Per-agent caps live with the agent types (agent-types.yaml, D35).
+concurrency: { per_user: 3, per_team: 20 }

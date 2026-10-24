@@ -39,6 +39,8 @@ from agentic.policy.portable import portable_path_problems
 from agentic_cp.audit import AuditEvent, append
 from agentic_cp.gitops import GitError, GitRunner, RepoUrlError, check_repo_url
 from agentic_cp.policy_sync.validate import AUDITED, validate_policy_tree
+from agentic_cp.routing.generate import routing_plan
+from agentic_cp.routing.outbox import gateway_configured, queue_apply
 from agentic_cp.settings import Settings
 from agentic_cp.tables import policy_active, policy_versions
 from agentic_cp.tenancy.context import tenant_tx
@@ -155,7 +157,7 @@ async def sync_once(
         previous = await active_policy(conn)
         if stored is not None:
             if stored.status == "accepted" and (previous is None or previous.version != version):
-                await _activate(conn, tenant, version, previous, clock, actor)
+                await _activate(conn, tenant, version, previous, clock, actor, settings)
                 return SyncOutcome(kind="activated", version=version)
             return SyncOutcome(kind="unchanged", version=version, problems=list(stored.problems))
         try:
@@ -196,7 +198,7 @@ async def sync_once(
             )
             log.info("tenant %s: policy %s rejected", tenant.slug, version)
             return SyncOutcome(kind="rejected", version=version, problems=built.problems)
-        await _activate(conn, tenant, version, previous, clock, actor)
+        await _activate(conn, tenant, version, previous, clock, actor, settings)
         return SyncOutcome(kind="activated", version=version)
 
 
@@ -207,6 +209,7 @@ async def _activate(
     previous: ActivePolicy | None,
     clock: Callable[[], datetime],
     actor: Actor,
+    settings: Settings,
 ) -> None:
     now = clock()
     values = {"version": version, "branch": tenant.policy_branch, "activated_at": now}
@@ -234,6 +237,8 @@ async def _activate(
         ),
         clock=clock,
     )
+    if gateway_configured(settings):  # M2-09: the gateway's routing follows, in this tx
+        await queue_apply(conn, version, actor=actor.name, actor_kind=actor.kind, clock=clock)
     log.info("tenant %s: policy %s activated", tenant.slug, version)
 
 
@@ -330,7 +335,15 @@ def _build(git: GitRunner, workdir: Path, tenant: TenantRow, commit: str, versio
         root.mkdir(exist_ok=True)  # an empty commit archives to no files at all
         found, policy = validate_policy_tree(root, version)
         tree = tree_digest(root)
-        settings = run_settings(policy, root) if policy is not None else {}
+        settings = {}
+        if policy is not None:  # the gateway's routing plan (M2-09) rides with the settings
+            try:
+                routing = routing_plan(policy).to_settings()
+            except Exception as error:  # a rejection with its reason, never a wedged sync
+                log.exception("tenant %s: routing for policy %s failed", tenant.slug, version)
+                found = [*found, f"routing: the gateway routing cannot be generated ({error})"]
+            else:
+                settings = {**run_settings(policy, root), "routing": routing}
     teams = sorted(policy.teams) if policy is not None else []
     patterns = list(policy.allowed_repo_patterns) if policy is not None else []
     bundle = gzip_bytes(archive)
@@ -413,6 +426,16 @@ def settings_from_bundle(bundle: bytes, version: str) -> dict:
     were stored (migration 0009 adds the column empty, and versions are insert-only, so it
     is never backfilled: review F2). {} when the policy no longer loads - its pipelines are
     then refused, never waved through."""
+    return _from_bundle(bundle, version, run_settings)
+
+
+def routing_from_bundle(bundle: bytes, version: str) -> dict:
+    """The routing plan (M2-09) generated again from a stored bundle, for a version stored
+    without one or by another generator format; {} when the policy no longer loads."""
+    return _from_bundle(bundle, version, lambda policy, root: routing_plan(policy).to_settings())
+
+
+def _from_bundle(bundle: bytes, version: str, read: Callable[[OrgPolicy, Path], dict]) -> dict:
     with tempfile.TemporaryDirectory(prefix="agentic-cp-policy-") as scratch:
         root = Path(scratch) / "tree"
         with tarfile.open(fileobj=io.BytesIO(gzip.decompress(bundle)), mode="r:") as tar:
@@ -422,7 +445,7 @@ def settings_from_bundle(bundle: bytes, version: str) -> dict:
             policy = load_policy(root / "policy", version=version)
         except PolicyError:
             return {}
-        return run_settings(policy, root)
+        return read(policy, root)
 
 
 def gzip_bytes(data: bytes) -> bytes:

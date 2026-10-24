@@ -30,7 +30,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
 from agentic.agents.metering import CostLog, MeteringTransport
-from agentic.policy import ResolvedAgent
+from agentic.policy import ResolvedAgent, gateway_model
 from agentic.security import SecretScanner
 from agentic.transport import (
     BudgetSlice,
@@ -73,9 +73,8 @@ def build_model_for(
 ) -> Model:
     """`build_model` for a model id rather than a resolved agent - the eval judge, whose
     model comes from a policy tier (M1-63). Same routing, identity and scanning."""
-    provider, _, name = model_id.partition("/")
-    if not name:
-        provider, name = "", model_id
+    name = gateway_model(model_id)  # the routing rules (M2-09) pin this same name
+    provider = model_id.partition("/")[0] if name != model_id else ""
     root = gateway.base_url.rstrip("/")
     client = make_async_client(
         root, identity, network=gateway.network, scanner=scanner, _transport=transport
