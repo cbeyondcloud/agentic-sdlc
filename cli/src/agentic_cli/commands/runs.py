@@ -44,6 +44,7 @@ from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
 from agentic_cli.commands.catalog import show_definition_warnings
 from agentic_cli.commands.killswitch import resume_scope
+from agentic_cli.config import agentic_home, user_config
 from agentic_cli.driving import (
     drive,
     engine_errors,
@@ -58,6 +59,7 @@ from agentic_cli.jira import IssueRun, jira_input
 from agentic_cli.org_preflight import org_checks, plan_section
 from agentic_cli.output import Output
 from agentic_cli.output import table as output_table
+from agentic_cli.policy_source import follow_active_policy
 from agentic_cli.runtime import Runtime, new_run_id
 from agentic_cli.workspace import Workspace
 from sdlc_commons.gates import self_approval_refusal
@@ -100,6 +102,7 @@ def register(app: typer.Typer) -> None:
             raise CliError("--jira-transition goes with --from-jira", ExitCode.USAGE)
         if run_id is not None:
             _check_run_id(run_id)  # before the workspace, preflight and gateway (DF-219)
+        _follow_policy(out)
         rt = Runtime(Workspace.load())
         show_definition_warnings(out, rt.ws)
         run_id = run_id or new_run_id(pipeline)
@@ -296,6 +299,16 @@ def register(app: typer.Typer) -> None:
 
 FOLLOW_INTERVAL_S = 0.5
 _sleep = time.sleep  # replaced by the tests
+
+
+def _follow_policy(out: Output) -> None:
+    """In org mode with a control plane, the run uses the tenant's active policy: a newer
+    version than the cached one is fetched first, and the person is told (M2-53)."""
+    home = agentic_home()
+    moved = follow_active_policy(home, user_config(home), os.environ)
+    if moved is not None:
+        old, new = moved
+        out.notice({"policy": {"from": old, "to": new}}, f"org policy updated to {new} (was {old})")
 
 
 def _log_redactor(rt: Runtime) -> Callable[[str], str]:
