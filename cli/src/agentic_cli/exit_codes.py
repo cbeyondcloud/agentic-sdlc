@@ -23,7 +23,12 @@ EXIT_CODE_TABLE: tuple[tuple[ExitCode, str], ...] = (
         "green; with --json, the result (ready, state) tells these from a failure.",
     ),
     (ExitCode.REFUSED, "Refused by a safety or precondition check; nothing was changed."),
-    (ExitCode.INVALID, "A definition, policy or config file is invalid or violates policy."),
+    (
+        ExitCode.INVALID,
+        "A definition, policy or config file is invalid or violates policy. Also: "
+        "`audit verify` found a run ledger, the org audit chain or an export that does not "
+        "verify (each problem is located).",
+    ),
     (
         ExitCode.PAUSED,
         "The run is paused, waiting for a person: at a gate, for a tool-call approval, or "

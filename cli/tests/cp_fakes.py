@@ -3,6 +3,7 @@ memory through `httpx2.MockTransport`, every request recorded (headers, query, b
 
 from __future__ import annotations
 
+import csv
 import gzip
 import hashlib
 import io
@@ -65,6 +66,89 @@ class FakeControlPlane:
     offboarded: list[tuple[str, str]] = field(default_factory=list)
     keys_revoked: list[str] = field(default_factory=list)  # DELETE /v1/users/<e>/proxy-keys
     service_accounts: list[dict] = field(default_factory=list)
+    audit: list[dict] = field(default_factory=list)  # the tenant's audit chain (M2-26)
+    export_cut: bool = False  # the export stream stops before its proof line (M2-13)
+
+    def add_audit(self, count: int, *, team_of=lambda seq: "payments") -> list[dict]:
+        """`count` chained audit records appended to the tenant's chain."""
+        from agentic.auditproof import entry_hash
+
+        for _ in range(count):
+            seq = len(self.audit) + 1
+            body = {
+                "seq": seq,
+                "tenant": "00000000-0000-4000-8000-0000000000aa",
+                "team": team_of(seq),
+                "actor": "lead@acme.example",
+                "actor_kind": "human",
+                "event": "killswitch.set",
+                "target": f"killswitch:{seq}",
+                "before": None,
+                "after": {"mode": "pause"},
+                "reason": f"reason {seq}",
+                "run_id": None,
+                "trace_id": None,
+                "policy_version": None,
+                "at": f"2026-10-{1 + seq % 28:02d}T09:00:00.000Z",
+                "prev": self.audit[-1]["hash"] if self.audit else "",
+            }
+            self.audit.append({**body, "hash": entry_hash(body)})
+        return self.audit
+
+    def _audit(self, request: httpx2.Request) -> httpx2.Response:
+        params = request.url.params
+        if request.url.path == "/v1/audit/export":
+            return self._export(request)
+        if "audit.read.org" not in self.allowed:
+            return _problem(403, "rbac.forbidden", "you do not hold audit.read.org")
+        after, limit = int(params.get("after_seq", "0")), int(params.get("limit", "100"))
+        page = [r for r in self.audit if r["seq"] > after][:limit]
+        return httpx2.Response(200, json=page)
+
+    def _export(self, request: httpx2.Request) -> httpx2.Response:
+        """The export as the control plane streams it: every record in the range, other
+        teams' as link rows, then the proof (unless `export_cut`)."""
+        from agentic import auditproof
+
+        if "audit.export" not in self.allowed:
+            return _problem(403, "rbac.forbidden", "you do not hold audit.export")
+        team, fmt = request.url.params.get("team"), request.url.params.get("format", "jsonl")
+        records = self.audit
+        start = (records[0]["seq"] - 1, records[0]["prev"]) if records else None
+        rows = [
+            auditproof.header_row(
+                tenant=records[0]["tenant"] if records else "",
+                team=team,
+                start=start,
+                exported_by=self.email,
+            )
+        ]
+        entries = links = 0
+        for r in records:
+            if team is not None and r["team"] != team:
+                rows.append(auditproof.link_row(r))
+                links += 1
+            else:
+                rows.append(auditproof.entry_row(r))
+                entries += 1
+        end = (records[-1]["seq"], records[-1]["hash"]) if records else None
+        if not self.export_cut:
+            rows.append(auditproof.proof_row(entries=entries, links=links, end=end, head=end))
+        if fmt == "csv":
+            out = io.StringIO()
+            writer = csv.writer(out)
+            writer.writerow(auditproof.CSV_COLUMNS)
+            for row in rows:
+                if row["kind"] in ("header", "proof"):
+                    writer.writerow(auditproof.csv_meta_row(row))
+                elif row["kind"] == "link":
+                    writer.writerow(auditproof.csv_row("link", row))
+                else:
+                    writer.writerow(auditproof.csv_row("entry", row["record"]))
+            body = out.getvalue().encode("utf-8")
+            return httpx2.Response(200, content=body, headers={"content-type": "text/csv"})
+        body = b"".join(auditproof.jsonl_line(row) for row in rows)
+        return httpx2.Response(200, content=body, headers={"content-type": "application/x-ndjson"})
 
     def add_invite(self, token: str, *, gateway_key: str | None = None) -> dict:
         self.invites[token] = {
@@ -354,6 +438,8 @@ class FakeControlPlane:
                     "ttl_seconds": 10,
                 },
             )
+        if path == "/v1/audit" or path == "/v1/audit/export":
+            return self._audit(request)
         if path == "/v1/killswitch" or path.startswith("/v1/killswitch/"):
             return self._killswitch(request)
         if path == "/v1/runs" and request.method == "POST":

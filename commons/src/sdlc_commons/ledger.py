@@ -375,6 +375,28 @@ class RunLedger:
             approve.approvals_path(self.target, self.run_id),
         ]
 
+    def chain_files(self) -> list[Path]:
+        """The run's two hash-chained logs, events then approvals (either may not exist
+        yet), for a verifier that locates problems line by line (M2-26)."""
+        return self._logs()
+
+
+def run_ids(target: Path) -> list[str]:
+    """Every run of the repository at `target` with an events log, active or archived,
+    sorted (M2-26: `agentic audit verify` checks them all)."""
+    found: set[str] = set()
+    for root in (state.runs_dir(target), state.archive_dir(target)):
+        if not root.is_dir():
+            continue
+        for folder in root.iterdir():
+            if (
+                folder.is_dir()
+                and (folder / events.EVENTS).is_file()
+                and not run_id_refusal(folder.name)
+            ):
+                found.add(folder.name)
+    return sorted(found)
+
 
 #: A run id: one folder name, safe on Windows too.
 _RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")

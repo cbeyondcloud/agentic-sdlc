@@ -45,6 +45,7 @@ ADDITIONS = {
     "dashboard.view.repo",
     "audit.read.own",
     "audit.read.repo",
+    "audit.export",
 }
 
 

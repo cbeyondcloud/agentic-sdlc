@@ -12,11 +12,10 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Query, Request
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from agentic.killswitch import RunScope, run_level, scope_problem
 from agentic.orgapi import API_PREFIX, KillState, KillSwitchInfo, KillSwitchRequest
-from agentic_cp.audit import AuditEvent, append
 from agentic_cp.auth.deps import Caller
 from agentic_cp.auth.tokens import TokenContext
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
@@ -24,7 +23,7 @@ from agentic_cp.killswitch import store
 from agentic_cp.policy_sync.service import active_teams
 from agentic_cp.rbac.authz import Org, Team, effective_permissions, require
 from agentic_cp.tables import kill_switches
-from agentic_cp.tenancy.context import require_tenant_id, tenant_tx
+from agentic_cp.tenancy.context import tenant_tx
 
 router = APIRouter(
     prefix=f"{API_PREFIX}/killswitch", tags=["killswitch"], responses=PROBLEM_RESPONSES
@@ -57,11 +56,6 @@ async def _may_change(ctx: TokenContext, team: str | None, conn, request: Reques
         await require(ctx, "killswitch.team", Team(team), conn=conn, cache=cache)
 
 
-def _scope(row_or_values) -> dict:
-    get = row_or_values.get if isinstance(row_or_values, dict) else row_or_values._mapping.get
-    return {key: get(key) for key in ("scope_kind", "scope_value", "team", "mode")}
-
-
 @router.post("", status_code=201)
 async def set_switch(body: KillSwitchRequest, request: Request, ctx: Caller) -> KillSwitchInfo:
     """Stop (`kill`) or hold (`pause`) the runs the scope names, from their next check."""
@@ -76,29 +70,15 @@ async def set_switch(body: KillSwitchRequest, request: Request, ctx: Caller) -> 
                     "killswitch.unknown_team",
                     f"team {team!r} is not in the tenant's active policy",
                 )
-        values = {
-            "tenant_id": await require_tenant_id(conn),
-            "scope_kind": kind,
-            "scope_value": value,
-            "team": team,
-            "mode": body.mode,
-            "reason": body.reason.strip(),
-            "created_by": ctx.email,
-            "created_at": state.clock(),
-        }
-        inserted = kill_switches.insert().values(values).returning(kill_switches)
-        row = (await conn.execute(inserted)).one()
-        await append(
+        row = await store.insert_switch(
             conn,
-            AuditEvent(
-                event="killswitch.set",
-                actor=ctx.email,
-                actor_kind=ctx.actor_kind,
-                target=f"killswitch:{row.id}",
-                team=team,
-                reason=row.reason,
-                after=_scope(row),
-            ),
+            scope_kind=kind,
+            scope_value=value,
+            team=team,
+            mode=body.mode,
+            reason=body.reason.strip(),
+            actor=ctx.email,
+            actor_kind=ctx.actor_kind,
             clock=state.clock,
         )
     return store.info(row)
@@ -128,25 +108,12 @@ async def clear_switch(
                 "killswitch.cleared",
                 f"the switch was already cleared by {row.cleared_by}",
             )
-        row = (
-            await conn.execute(
-                update(kill_switches)
-                .where(kill_switches.c.id == id)
-                .values(cleared_by=ctx.email, cleared_at=state.clock())
-                .returning(kill_switches)
-            )
-        ).one()
-        await append(
+        row = await store.clear_switch(
             conn,
-            AuditEvent(
-                event="killswitch.cleared",
-                actor=ctx.email,
-                actor_kind=ctx.actor_kind,
-                target=f"killswitch:{row.id}",
-                team=row.team,
-                reason=reason.strip(),
-                before=_scope(row),
-            ),
+            id,
+            reason=reason.strip(),
+            actor=ctx.email,
+            actor_kind=ctx.actor_kind,
             clock=state.clock,
         )
     return store.info(row)
@@ -190,8 +157,10 @@ async def kill_state(
     scope = RunScope(team=team, user=ctx.email.lower(), repo=repo, pipeline=pipeline)
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         found = await store.rows(conn)
+    applying = [store.info(row) for row in found if run_level(store.as_switch(row), scope)]
+    state.metrics.observe_kill_state(bool(applying))
     return KillState(
-        switches=[store.info(row) for row in found if run_level(store.as_switch(row), scope)],
+        switches=applying,
         checked_at=state.clock(),
         ttl_seconds=state.settings.kill_ttl_seconds,
     )

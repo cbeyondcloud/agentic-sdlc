@@ -98,7 +98,7 @@ def format_at(moment: datetime) -> str:
     return moment.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
-def _record(row) -> AuditRecord:
+def record_from_row(row) -> AuditRecord:
     m = row._mapping
     values = {f.name: m[f.name] for f in fields(AuditRecord) if f.name != "tenant"}
     return AuditRecord(tenant=str(m["tenant_id"]), **values)
@@ -158,7 +158,7 @@ async def read_records(
         query = query.where(audit_log.c.team == team)
     if limit is not None:
         query = query.limit(limit)
-    return [_record(row) for row in await conn.execute(query)]
+    return [record_from_row(row) for row in await conn.execute(query)]
 
 
 async def verify(conn: AsyncConnection, *, from_seq: int = 1) -> list[str]:

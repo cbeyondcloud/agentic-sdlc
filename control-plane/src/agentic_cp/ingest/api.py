@@ -73,7 +73,7 @@ async def ingest(run_id: str, body: IngestRequest, request: Request, ctx: Caller
         )
     try:
         async with tenant_tx(state.engine, ctx.tenant_id) as conn:
-            return await ingest_batch(
+            result = await ingest_batch(
                 conn,
                 ctx,
                 run_id,
@@ -83,10 +83,15 @@ async def ingest(run_id: str, body: IngestRequest, request: Request, ctx: Caller
                 alerts=state.alert_sinks,
             )
     except ApiProblem as problem:
+        state.metrics.observe_rejection(problem.code)
         if problem.code in AUDITED and not isinstance(problem, Unaudited):
             async with tenant_tx(state.engine, ctx.tenant_id) as conn:
                 await audit_rejection(conn, ctx, run_id, problem, state.clock)
         raise
+    # the accepted entries are the batch's tail: replayed ones come first (ingest_batch)
+    fresh = body.entries[len(body.entries) - result.accepted :] if result.accepted else []
+    state.metrics.observe_ingest(fresh, result.accepted, result.duplicates, state.clock())
+    return result
 
 
 async def _readable_run(request: Request, ctx, run_id: str, conn):

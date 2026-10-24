@@ -50,6 +50,8 @@ PERMISSIONS: dict[str, ScopeKind] = {
     "dashboard.view.repo": "repo",
     "audit.read.own": "team",
     "audit.read.repo": "repo",
+    # M2-13: exporting the chain with its proof (auditors; a team lead reads but never exports)
+    "audit.export": "team",
 }
 
 

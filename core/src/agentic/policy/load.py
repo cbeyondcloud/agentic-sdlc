@@ -12,7 +12,7 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
     tool-pins.yaml        tools (per-platform artefacts `init` fetches from the mirror)
     org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines,
                           index_export_workflow, sandbox, unhonoured, secret_scan,
-                          publish_scan, review_prepass, review_batch
+                          publish_scan, review_prepass, review_batch, auto_trip
     eval.yaml             eval                      (agent evaluation defaults, M1-63)
     teams/<team>.yaml     one TeamPolicy per team
 """
@@ -65,6 +65,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "publish_scan": "publish_scan",
         "review_prepass": "review_prepass",
         "review_batch": "review_batch",
+        "auto_trip": "auto_trip",
     },
     "eval.yaml": {"eval": "eval"},
 }

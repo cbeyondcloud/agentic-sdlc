@@ -138,7 +138,7 @@ async def webhook(hook_token: str, request: Request, background: BackgroundTasks
         tenant_id = (await conn.execute(select(func.resolve_webhook(digest)))).scalar()
     if tenant_id is None:
         raise not_found("webhook")
-    limiter = state.rate_limiter or NoLimit()
+    limiter = state.rate_limiter if state.rate_limiter is not None else NoLimit()
     decision = await limiter.check(tenant_id, tenant_id, "webhook")
     if not decision.allowed:
         headers = {"Retry-After": str(decision.retry_after)} if decision.retry_after else None

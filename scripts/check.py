@@ -57,6 +57,8 @@ NETWORK_CHECKS = ("known vulnerabilities",)
 # installed (no unsigned binaries on developer laptops).
 LINUX_ONLY_CHECKS: list[tuple[str, list[str]]] = [
     ("secret scan", ["gitleaks", "dir", ".", "--no-banner", "--redact"]),
+    # the control plane's Prometheus alert rules (M2-12); their unit tests run under pytest
+    ("alert rules", ["promtool", "check", "rules", "control-plane/deploy/prometheus/alerts.yml"]),
 ]
 
 

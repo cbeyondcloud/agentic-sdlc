@@ -1,0 +1,10 @@
+<!doctype html>
+<html><body style="font-family: sans-serif; line-height: 1.4">
+<p>Team <b>$team</b>'s runs in $tenant_name are <b>paused by auto-trip</b>: its $what was
+$value over the last $window_minutes minutes, above the $threshold threshold in the org
+policy.</p>
+<p>Running steps finish; new steps wait until the pause switch is cleared. The switch stays
+until $clear_phrase, and auto-trip arms again once the $what is below $reset.</p>
+<p><code>agentic killswitch list</code> shows the switch and its reason;
+<code>agentic killswitch off &lt;id&gt;</code> clears it.</p>
+</body></html>

@@ -92,6 +92,7 @@ EXPECTED: dict[str, dict[str, str]] = {
         "audit.read.team": EVERYWHERE,
         "audit.read.repo": EVERYWHERE,
         "audit.read.org": EVERYWHERE,
+        "audit.export": EVERYWHERE,  # M2-13 addition (not in §23 yet)
         "dashboard.view.own": EVERYWHERE,
         "dashboard.view.team": EVERYWHERE,
         "dashboard.view.repo": EVERYWHERE,

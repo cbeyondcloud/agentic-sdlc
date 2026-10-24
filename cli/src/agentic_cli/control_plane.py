@@ -21,7 +21,7 @@ import os
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 from urllib.parse import quote
 
 import httpx2
@@ -33,6 +33,7 @@ from agentic.orgapi import (
     CLI_VERSION_HEADER,
     ActivePolicy,
     Assignment,
+    AuditEntry,
     CheckResult,
     IngestResult,
     InviteInfo,
@@ -70,6 +71,8 @@ LOGIN_RECORD = "control-plane.json"
 TIMEOUT = httpx2.Timeout(15.0, connect=5.0)
 #: The kill-switch poll waits less: a run asks before every step and turn (M2-19).
 KILL_STATE_TIMEOUT = httpx2.Timeout(5.0, connect=3.0)
+#: An audit export streams for as long as it takes; each wait for the next chunk is bounded.
+EXPORT_TIMEOUT = httpx2.Timeout(120.0, connect=5.0)
 #: Serialised entries per ingest request: about half the control plane's default body
 #: cap (`max_body_bytes`, 1 MiB), leaving room for the envelope (review F6).
 MAX_BATCH_BYTES = 512 * 1024
@@ -282,6 +285,36 @@ class ControlPlaneClient:
         params = {"status": status} if status else None
         found = self._json("GET", "/notifications", params=params)
         return [NotificationInfo.model_validate(item) for item in found]
+
+    def audit_records(self, *, after_seq: int = 0, limit: int = 1000) -> list[AuditEntry]:
+        """The tenant's audit records after `after_seq`, oldest first (`audit.read.org`),
+        exactly as hashed, for `agentic audit verify --control-plane` (M2-26)."""
+        params = {"after_seq": str(after_seq), "limit": str(limit)}
+        return [
+            AuditEntry.model_validate(item) for item in self._json("GET", "/audit", params=params)
+        ]
+
+    def export_audit(self, params: Mapping[str, str], sink: BinaryIO) -> int:
+        """Stream an audit export (`audit.export`, M2-13) into `sink`; the bytes written.
+        A refusal raises before anything is written; a connection lost mid-way raises
+        `ControlPlaneUnavailable` (the caller discards what it got)."""
+        try:
+            with self._http.stream(
+                "GET", f"{API_PREFIX}/audit/export", params=dict(params), timeout=EXPORT_TIMEOUT
+            ) as response:
+                if response.status_code >= 400:
+                    response.read()
+                    raise self._problem(response)
+                written = 0
+                for chunk in response.iter_bytes():
+                    sink.write(chunk)
+                    written += len(chunk)
+                return written
+        except httpx2.HTTPError as error:
+            raise ControlPlaneUnavailable(
+                f"the audit export from {self._shown} broke off ({type(error).__name__})",
+                hint="run the export again",
+            ) from None
 
     def register_repo(self, remote: str, team: str) -> RepoInfo:
         return RepoInfo.model_validate(

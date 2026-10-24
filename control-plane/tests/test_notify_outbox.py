@@ -39,6 +39,15 @@ def test_every_kind_renders_text_and_html():
             "budget_usd": "10.00",
             "period_phrase": "",
         },
+        "auto_trip": {
+            "team": "payments",
+            "what": "spend rate",
+            "value": "12.50 USD per hour",
+            "threshold": "10.00 USD per hour",
+            "window_minutes": "60",
+            "reset": "5.00 USD per hour",
+            "clear_phrase": "a person clears the pause switch",
+        },
     }
     assert set(values) == set(KINDS)
     for kind, given in values.items():

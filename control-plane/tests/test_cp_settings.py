@@ -119,3 +119,17 @@ def test_mail_and_gateway_settings_are_read():
 def test_mail_settings_refuse_bad_values(name, value, field):
     with pytest.raises(SettingsError, match=field):
         Settings.from_env(_env(**{name: value}))
+
+
+@pytest.mark.parametrize("value", ["", "   ", "\t"])
+def test_a_blank_metrics_token_is_no_token(value):
+    """A blank secret (an empty Helm or Kubernetes value) must not open `/metrics` to
+    `Authorization: Bearer` with nothing after it (review F1): it is unset, so 404."""
+    settings = Settings.from_env(_env(AGENTIC_CP_METRICS_TOKEN=value))
+    assert settings.metrics_token is None
+
+
+def test_a_short_metrics_token_is_refused():
+    with pytest.raises(SettingsError, match="metrics_token") as caught:
+        Settings.from_env(_env(AGENTIC_CP_METRICS_TOKEN="short-1"))
+    assert "short-1" not in str(caught.value)

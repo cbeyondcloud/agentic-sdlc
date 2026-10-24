@@ -75,7 +75,7 @@ async def current_token(
     # Routes open every transaction with `tenant_tx(engine, ctx.tenant_id)`; the context
     # variable is not set here, so it can never outlive the request (a transaction opened
     # without tenant_tx has no tenant: no rows, no writes).
-    limiter = state.rate_limiter or NoLimit()
+    limiter = state.rate_limiter if state.rate_limiter is not None else NoLimit()
     route = getattr(request.scope.get("route"), "path", request.url.path)
     decision = await limiter.check(ctx.tenant_id, ctx.user_id, route)
     if not decision.allowed:

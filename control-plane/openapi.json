@@ -2414,6 +2414,108 @@
         ]
       }
     },
+    "/v1/audit/export": {
+      "get": {
+        "description": "The records whose time is in [`from`, `to`) with the chain proof an auditor verifies\nwithout this database (`agentic.auditproof`). `from`/`to` are ISO dates (a `to` date\nincludes that day) or date-times with a zone. With `team`, other teams' records in the\nrange are link rows only. The export itself is audited (`audit.exported`).",
+        "operationId": "export_audit_v1_audit_export_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "jsonl",
+              "enum": [
+                "jsonl",
+                "csv"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 40,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 40,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-ndjson": {},
+              "text/csv; charset=utf-8": {}
+            },
+            "description": "The export: JSONL (header, entries and links, proof) or CSV, streamed"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Audit",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/v1/audit/verify": {
       "get": {
         "description": "Recompute every hash and link of the tenant's chain; [] means intact.",

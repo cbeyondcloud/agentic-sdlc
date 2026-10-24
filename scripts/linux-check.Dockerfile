@@ -23,6 +23,21 @@ RUN set -e; arch="$(dpkg --print-architecture)"; \
       "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_${file}.tar.gz"; \
     echo "$sum  /tmp/gitleaks.tgz" | sha256sum -c -; \
     tar -xzf /tmp/gitleaks.tgz -C /usr/local/bin gitleaks; rm /tmp/gitleaks.tgz
+# promtool for the control plane's alert rules (M2-12): only the promtool binary from the
+# Prometheus release (Apache-2.0), pinned by version and sha256 for both architectures.
+ARG PROMETHEUS_VERSION=3.15.0
+RUN set -e; arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) sum=2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0 ;; \
+      arm64) sum=f1f90ec08e849d494ca66c611470afc50192f0355f1a61c33f2cbde02d067823 ;; \
+      *) echo "no pinned prometheus for $arch" >&2; exit 1 ;; \
+    esac; \
+    name="prometheus-${PROMETHEUS_VERSION}.linux-${arch}"; \
+    curl -sSfL -o /tmp/prometheus.tgz \
+      "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${name}.tar.gz"; \
+    echo "$sum  /tmp/prometheus.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/prometheus.tgz -C /usr/local/bin --strip-components=1 "${name}/promtool"; \
+    rm /tmp/prometheus.tgz
 # The pinned Codex CLI for the codex backend's contract tests (M2-40, spike S3): the Linux
 # musl binary from the GitHub release, checked against the release's sha256 (Apache-2.0).
 # Developer laptops never get it from here: on Windows it runs inside WSL2 (D38).

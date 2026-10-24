@@ -1,0 +1,121 @@
+# Unit tests for alerts.yml: `promtool test rules alerts.test.yml` (Linux check stage).
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - name: a control plane that stops answering pages after five minutes
+    interval: 1m
+    input_series:
+      - series: 'up{job="agentic-control-plane", instance="cp-1:8080"}'
+        values: "1 1 0 0 0 0 0 0 0"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AgenticControlPlaneDown
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: AgenticControlPlaneDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: agentic-control-plane
+              instance: cp-1:8080
+            exp_annotations:
+              summary: "Control plane cp-1:8080 is not answering scrapes"
+              description: >-
+                Prometheus has not scraped cp-1:8080 for 5 minutes. CLIs fall back to their
+                cached kill-switch state and queue run events until it is back.
+
+  - name: server errors above five percent for ten minutes page
+    interval: 1m
+    input_series:
+      - series: 'agentic_cp_http_requests_total{method="GET", route="/v1/runs/{run_id}", status="2xx"}'
+        values: "0+90x30"
+      - series: 'agentic_cp_http_requests_total{method="GET", route="/v1/runs/{run_id}", status="5xx"}'
+        values: "0+10x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AgenticControlPlaneHighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "More than 5% of control-plane requests fail with a server error"
+              description: >-
+                10% of requests answered 5xx over the last 10 minutes. Check the server log
+                and GET /readyz (database, migrations).
+
+  # Every replica reads the same database, so each exports the same gauge value: the
+  # replicas must count once, not once each (review F3).
+  - name: an outbox backlog alerts per tenant, a short one does not
+    interval: 1m
+    input_series:
+      - series: 'agentic_cp_outbox_pending{tenant="acme", instance="cp-1:8080"}'
+        values: "150x30"
+      - series: 'agentic_cp_outbox_pending{tenant="acme", instance="cp-2:8080"}'
+        values: "150x30"
+      - series: 'agentic_cp_outbox_pending{tenant="globex", instance="cp-1:8080"}'
+        values: "40x30"
+      - series: 'agentic_cp_outbox_pending{tenant="globex", instance="cp-2:8080"}'
+        values: "40x30"
+      - series: 'agentic_cp_outbox_pending{tenant="globex", instance="cp-3:8080"}'
+        values: "40x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AgenticOutboxBacklog
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: AgenticOutboxBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: acme
+            exp_annotations:
+              summary: "Tenant acme has 150 mails waiting"
+              description: >-
+                The mail outbox has held more than 100 pending mails for 15 minutes. Check
+                that the worker runs and that AGENTIC_CP_SMTP_HOST is reachable.
+
+  - name: chain rejections alert at once
+    interval: 1m
+    input_series:
+      - series: 'agentic_cp_ingest_rejected_total{code="ingest.fork"}'
+        values: "0 0 1 1 1"
+      - series: 'agentic_cp_ingest_rejected_total{code="ingest.gap"}'
+        values: "0 5 10 15 20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: AgenticIngestChainRejections
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Run event batches were refused because their chain did not verify"
+              description: >-
+                1 batches were refused as a broken or forked chain in 15 minutes. Each
+                refusal is in the tenant's audit chain (ingest.chain_rejected, ingest.fork);
+                a ledger edited on a laptop shows up here.
+
+  - name: an auto-trip switch alerts for its tenant, a person's switch does not
+    interval: 1m
+    input_series:
+      - series: 'agentic_cp_killswitches_active{tenant="acme", mode="pause", source="auto-trip", instance="cp-1:8080"}'
+        values: "2x5"
+      - series: 'agentic_cp_killswitches_active{tenant="acme", mode="pause", source="auto-trip", instance="cp-2:8080"}'
+        values: "2x5"
+      - series: 'agentic_cp_killswitches_active{tenant="globex", mode="pause", source="human", instance="cp-1:8080"}'
+        values: "1x5"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AgenticAutoTripActive
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: acme
+            exp_annotations:
+              summary: "Auto-trip paused 2 team(s) in tenant acme"
+              description: >-
+                A team's spend rate or error rate passed its org.yaml auto_trip threshold and
+                its runs are paused. The team's leads were mailed; `agentic killswitch list`
+                shows the switch and its reason.

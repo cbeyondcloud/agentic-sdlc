@@ -213,3 +213,62 @@ async def test_provisioning_end_to_end(db, monkeypatch):
                 with pytest.raises(ControlPlaneRefused) as caught:
                     dev.me()
                 assert caught.value.status == 401
+
+
+async def test_tampered_control_plane_record_is_located(live, db):
+    """M2-26: the CLI pulls tenant a's chain from the real server and checks it itself; a
+    record edited in the database (the owner role, as an attacker with database access
+    would) is named by its seq and class, and tenant b's chain stays intact."""
+    from sqlalchemy import update
+
+    from agentic_cli.audit import verify_control_plane
+    from agentic_cp.tables import audit_log
+    from agentic_cp.tenancy.context import tenant_tx
+
+    base, a, b = live
+    with ControlPlaneClient(base, a.admin_token) as client:
+        for n in range(3):
+            client.set_switch({"scope_kind": "tenant", "reason": f"drill {n}"})
+        intact = verify_control_plane(client, "tenant-a")
+        assert intact.intact and intact.records >= 4
+        async with tenant_tx(db.owner, a.id) as conn:
+            await conn.execute(
+                update(audit_log).where(audit_log.c.seq == 2).values(reason="quietly changed")
+            )
+        broken = verify_control_plane(client, "tenant-a")
+    assert [(f["seq"], f["field_class"]) for f in broken.findings] == [(2, "content")]
+    with ControlPlaneClient(base, b.admin_token) as client:
+        assert verify_control_plane(client, "tenant-b").intact
+
+
+async def test_audit_export_end_to_end(live, tmp_path):
+    """M2-13: the CLI's client streams a team export over HTTP from the real server; the
+    auditor's copied stdlib verifier accepts it and rejects one changed byte."""
+    import shutil
+    import subprocess
+    import sys
+
+    from agentic import auditproof
+    from agentic_cli.audit import download_export
+
+    base, a, _ = live
+    with ControlPlaneClient(base, a.admin_token) as client:
+        for team in ("payments", "billing", "payments"):
+            client.set_switch(
+                {"scope_kind": "team", "scope_value": team, "mode": "pause", "reason": team}
+            )
+        report = download_export(
+            client, {"format": "jsonl", "team": "payments"}, tmp_path / "team.jsonl"
+        )
+        csv_report = download_export(client, {"format": "csv"}, tmp_path / "org.csv")
+    assert report.ok and report.team == "payments" and report.links >= 1, report.findings
+    assert csv_report.ok and csv_report.entries >= 3, csv_report.findings
+    copy = tmp_path / "verify.py"
+    shutil.copyfile(auditproof.__file__, copy)
+    check = [sys.executable, "-I", str(copy), str(tmp_path / "team.jsonl")]
+    assert subprocess.run(check, capture_output=True).returncode == 0
+    data = (tmp_path / "team.jsonl").read_bytes()
+    (tmp_path / "team.jsonl").write_bytes(
+        data.replace(b'"reason":"payments"', b'"reason":"paymentz"', 1)
+    )
+    assert subprocess.run(check, capture_output=True).returncode == 3

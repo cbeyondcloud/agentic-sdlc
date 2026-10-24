@@ -342,6 +342,20 @@ async def _proxy_key_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, An
     }
 
 
+@register("auto_trips")
+async def _auto_trip_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    switch = await _insert(conn, "kill_switches", await _kill_switch_row(conn, tenant_id))
+    return {
+        "tenant_id": tenant_id,
+        "team": f"team-{next(_sequence)}",
+        "kind": "spend",
+        "state": "tripped",
+        "switch_id": switch["id"],
+        "value": "12.5",
+        "threshold": "10",
+    }
+
+
 # ── endpoint cases ────────────────────────────────────────────────────────────
 
 
@@ -538,6 +552,14 @@ ENDPOINT_CASES += [
     EndpointCase("rbac", "GET", "/v1/rbac/assignments", _assignment_in_b, must_not_list=True),
     EndpointCase("rbac", "GET", "/v1/rbac/roles", _role_in_b, must_not_list=True),
     EndpointCase("audit", "GET", "/v1/audit", _audit_record_in_b, must_not_list=True),
+    EndpointCase("audit", "GET", "/v1/audit/export", _audit_record_in_b, must_not_list=True),
+    EndpointCase(
+        "audit",
+        "GET",
+        "/v1/audit/export?format=csv&team=payments",
+        _audit_record_in_b,
+        must_not_list=True,
+    ),
     EndpointCase("policy", "GET", "/v1/policy/versions/{version}/bundle", _policy_version_in_b),
     EndpointCase("policy", "GET", "/v1/policy/versions", _policy_version_in_b, must_not_list=True),
     EndpointCase("repos", "GET", "/v1/repos/{repo_key}/maintainers", _repo_in_b),

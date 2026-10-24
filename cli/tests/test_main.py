@@ -28,6 +28,11 @@ def test_exit_4_says_it_covers_every_pause_and_where_to_tell_them_apart():
     assert "gate" in meaning and "step error" in meaning and "--json" in meaning
 
 
+def test_exit_3_covers_a_chain_that_does_not_verify():
+    """`agentic audit verify` exits 3 for a tampered ledger or export (M2-26)."""
+    assert "audit verify" in dict(EXIT_CODE_TABLE)[ExitCode.INVALID]
+
+
 def test_help_lists_the_registered_commands(capsys):
     assert main(["--help"]) == ExitCode.OK
     shown = capsys.readouterr().out
