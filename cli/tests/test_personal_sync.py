@@ -103,6 +103,56 @@ def test_a_removal_is_journaled(agentic, guard):
     assert last["event"] == "personal.removed" and "content" not in last
 
 
+@pytest.mark.parametrize(
+    "grown",
+    [
+        "x" * (personal_sync.MAX_CONTENT_BYTES + 1),  # too big now
+        b"small note\x00",  # a NUL now
+        b"\xff\xfe not UTF-8 now",
+    ],
+    ids=["too-big", "nul", "not-utf8"],
+)
+def test_a_file_that_can_no_longer_be_backed_up_is_not_removed(agentic, guard, grown):
+    """Review F2: a file still on disk is never journaled as removed - the last good copy
+    stays the one a restore brings back - and it is named as skipped on every backup."""
+    write(agentic, "memory/big.md", "small note")
+    record_changes(agentic, guard)
+    write(agentic, "memory/big.md", grown)
+    for _ in range(2):
+        recorded = record_changes(agentic, guard)
+        assert recorded.removed == []
+        assert [path for path, why in recorded.skipped] == ["memory/big.md"]
+    assert [e["event"] for e in journal_entries(agentic)] == ["personal.saved"]
+
+
+def test_a_missing_folder_removes_nothing(agentic, guard):
+    """Review F2: a `memory/` folder that is gone (moved, an unmounted drive) does not mark
+    every note in it removed; the backup says why, and an empty folder records removals."""
+    write(agentic, "memory/a.md", "a")
+    write(agentic, "skills/review-helper/SKILL.md", SKILL)
+    record_changes(agentic, guard)
+    (agentic / "memory").rename(agentic / "memory.moved")
+    recorded = record_changes(agentic, guard)
+    assert recorded.removed == []
+    assert any("memory" in warning for warning in recorded.warnings)
+    (agentic / "memory.moved").rename(agentic / "memory")
+    assert record_changes(agentic, guard).saved == []  # nothing changed meanwhile
+    (agentic / "memory" / "a.md").unlink()
+    assert record_changes(agentic, guard).removed == ["memory/a.md"]  # an emptied folder
+
+
+def test_a_folder_replaced_by_a_link_removes_nothing(agentic, guard, tmp_path):
+    write(agentic, "memory/a.md", "a")
+    record_changes(agentic, guard)
+    (agentic / "memory").rename(tmp_path / "real")
+    try:
+        (agentic / "memory").symlink_to(tmp_path / "real", target_is_directory=True)
+    except OSError:
+        pytest.skip("this account cannot make symbolic links")
+    recorded = record_changes(agentic, guard)
+    assert recorded.removed == [] and recorded.warnings
+
+
 def test_secret_file_is_held_back(agentic, guard):
     write(agentic, "memory/contacts.md", f"ask {EMAIL}")
     recorded = record_changes(agentic, guard)

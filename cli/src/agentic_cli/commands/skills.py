@@ -303,6 +303,7 @@ def register(app: typer.Typer) -> None:
             "removed": recorded.removed,
             "held": recorded.held,
             "skipped": [{"path": path, "why": why} for path, why in recorded.skipped],
+            "warnings": recorded.warnings,
             "sent": delivered.sent,
             "queued": delivered.queued,
             "error": delivered.error,
@@ -311,6 +312,8 @@ def register(app: typer.Typer) -> None:
             out.warn(
                 f"{path} holds a secret or personal data: it stays on this laptop, not backed up"
             )
+        for warning in recorded.warnings:
+            out.warn(warning)
         out.result(data, lambda c: _show_backup(c, data))
         if delivered.error:
             raise typer.Exit(ExitCode.ERROR)

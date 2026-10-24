@@ -25,7 +25,9 @@ serialises the CLI processes that write the journal (an `agentic skills backup` 
 
 Only Markdown and text files under `skills/` and `memory/` are backed up (the
 instruction-only rule of M2-45); a link, a file over `MAX_CONTENT_BYTES`, a file that is not
-UTF-8 text and a file whose name holds a secret or personal data are skipped and named.
+UTF-8 text and a file whose name holds a secret or personal data are skipped and named. A
+file is journaled as removed only when it is gone from disk and its folder is still there
+(review F2): a skipped file keeps its last good copy, and a missing folder removes nothing.
 `restore` writes the newest backed-up copies back, never outside those two folders and
 never over a local file that differs unless forced."""
 
@@ -73,6 +75,7 @@ class Recorded:
     removed: list[str] = field(default_factory=list)
     held: list[str] = field(default_factory=list)
     skipped: list[tuple[str, str]] = field(default_factory=list)  # (path, why)
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -147,6 +150,8 @@ def record_changes(
             _append(folder, {**event, "kind": kind, "path": path, "sha256": digest}, clock)
             state[path] = digest
         for path in sorted(set(state) - set(found)):
+            if not _gone(home, path, recorded):  # still there: its last good copy stands
+                continue
             kind = "skill" if path.startswith(f"{BACKUP_ROOTS['skill']}/") else "memory"
             empty = "sha256:" + hashlib.sha256(b"").hexdigest()
             event = {"event": "personal.removed", "kind": kind, "path": path, "sha256": empty}
@@ -157,13 +162,34 @@ def record_changes(
     return recorded
 
 
+def _usable_root(base: Path) -> bool:
+    return base.is_dir() and not base.is_symlink() and not base.is_junction()
+
+
+def _gone(home: Path, path: str, recorded: Recorded) -> bool:
+    """Whether a backed-up `path` was really removed (review F2): not when it is still on
+    disk but can no longer be backed up (it is named in `recorded.skipped`), nor when its
+    whole folder is missing or became a link - an unmounted drive or a moved folder is not
+    the user deleting every note in it."""
+    root = path.split("/", 1)[0]
+    if not _usable_root(home / root):
+        warning = (
+            f"~/.agentic/{root} is missing or a link: nothing in it is marked removed (to "
+            f"record that its files were deleted, make an empty {root} folder and back up)"
+        )
+        if warning not in recorded.warnings:
+            recorded.warnings.append(warning)
+        return False
+    return not os.path.lexists(home.joinpath(*path.split("/")))
+
+
 def _personal_files(home: Path, recorded: Recorded) -> dict[str, tuple[str, bytes]]:
     """path -> (kind, bytes) for every file that can be backed up; the rest is named in
     `recorded.skipped` (junk the OS or an editor leaves is skipped silently)."""
     found: dict[str, tuple[str, bytes]] = {}
     for kind, root in BACKUP_ROOTS.items():
         base = home / root
-        if not base.is_dir() or base.is_symlink() or base.is_junction():
+        if not _usable_root(base):
             continue
         files, links = skill_files(base)
         for link in links:
