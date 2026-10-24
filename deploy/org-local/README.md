@@ -16,9 +16,13 @@ Podman.
 ## Use
 
 You need a container engine with compose (Docker Desktop, Rancher Desktop or Podman with a
-compose provider), curl (bash scripts) and a TokenLean checkout that has `deploy/lite/local`.
-That checkout is only read; TokenLean's own `up` writes its git-ignored `.env.lite` and
-`.state/` there.
+compose provider), curl (bash scripts) and a TokenLean checkout that has `deploy/lite/local`
+(its LITE profile). That checkout is only read; TokenLean's own `up` writes its git-ignored
+`.env.lite` and `.state/` there.
+
+Published ports bind to `127.0.0.1` and are set in `.env.org`: `ORG_CP_PORT` (8280),
+`ORG_GRAFANA_PORT` (3300); the gateway's port is `LITE_PROXY_PORT` in its `.env.lite`. Change
+them there if something else on the machine already listens on one.
 
 bash or zsh (macOS, Linux, Git Bash):
 

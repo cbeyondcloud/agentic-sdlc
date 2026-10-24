@@ -35,6 +35,10 @@ org_check_tokenlean
 LITE_ARGS=(--mock)
 if [ "$BUILD" = 0 ]; then LITE_ARGS+=(--no-build); fi
 echo "org: starting the gateway's LITE stack (mock mode) from $TOKENLEAN_DIR"
+# Git Bash on Windows rewrites variables that look like POSIX paths when it starts a
+# Windows program; the LITE stack's overlay list holds container paths, so keep it as is.
+# (MSYS only; ignored on macOS and Linux.)
+export MSYS2_ENV_CONV_EXCL="LITE_CONFIG_OVERLAYS${MSYS2_ENV_CONV_EXCL:+;$MSYS2_ENV_CONV_EXCL}"
 CONTAINER_ENGINE="$ORG_ENGINE" bash "$TOKENLEAN_DIR/deploy/lite/local/up.sh" "${LITE_ARGS[@]}"
 
 # 2. Settings and secrets.
