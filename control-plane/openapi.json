@@ -3274,8 +3274,33 @@
     },
     "/v1/personal/files": {
       "get": {
-        "description": "The caller's newest backed-up copy of each personal file (for `agentic skills\nrestore`).",
+        "description": "The caller's newest backed-up copy of each personal file (for `agentic skills\nrestore`), a page at a time in path order: at most `limit` paths after `after`; a page\nshorter than `limit` is the last (review F4).",
         "operationId": "files_v1_personal_files_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 1024,
+              "title": "After",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
