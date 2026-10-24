@@ -181,6 +181,13 @@ class PublishGuard:
             event = str(entry.get("event"))
             raise PublishBlocked(run_id, seq, event, kinds, hit, self.action, index=index)
 
+    def findings(self, fields: dict) -> dict[str, int]:
+        """What a scan finds in `fields` (detector, or `pii:<entity>` -> how many), with
+        nothing masked and nothing audited: for a caller that decides and audits itself
+        (the personal backup holds a file back, M2-20)."""
+        _, counts, _ = self._walk_fields(fields, mask=False)
+        return _sorted(counts)
+
     # ── scanning ─────────────────────────────────────────────────────────────
 
     def _walk_fields(self, fields: dict, *, mask: bool) -> tuple[dict, Counter, tuple[str, ...]]:

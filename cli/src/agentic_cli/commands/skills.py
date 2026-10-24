@@ -10,6 +10,9 @@ agentic skills approve N --to S                   the scope owner approves (RBAC
 agentic skills decline N --to S --reason R        ... or asks for changes
 agentic skills status [--retire]                  your submissions; --retire moves the
                                                   personal copy of a merged one aside
+agentic skills backup                             your personal skills and notes to the
+                                                  control plane (M2-20; scanned first)
+agentic skills restore [--force]                  ... and back from it
 
 The commands join the `skills` group `catalog.py` creates (list, search).
 """
@@ -28,14 +31,14 @@ from agentic.hosting.base import ListingIncomplete
 from agentic.skills import SkillsError
 from agentic.skills.authoring import SCOPES, check_skill, scaffold
 from agentic.skills.personal import load_personal, skill_block
-from agentic_cli import evaluation
+from agentic_cli import control_plane, evaluation, personal_sync
 from agentic_cli import skill_promotion as promo
 from agentic_cli.config import agentic_home, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.hosting import connect
 from agentic_cli.output import Output
-from agentic_cli.workspace import find_repo
+from agentic_cli.workspace import Workspace, find_repo
 
 ScopeOption = Annotated[str, typer.Option("--to", help="repo, team or org.")]
 TeamOption = Annotated[
@@ -285,8 +288,97 @@ def register(app: typer.Typer) -> None:
         rows = promo.refresh(home, user_config(home), out.warn, retire_merged=retire)
         out.result({"submissions": rows}, lambda c: _show_status(c, rows))
 
+    @group.command("backup")
+    def backup(ctx: typer.Context) -> None:
+        """Back up your personal skills and notes to the control plane (M2-20)."""
+        out: Output = ctx.obj
+        home = agentic_home()
+        client = _personal_client(home)
+        guard = control_plane.publish_guard(lambda: _policy_here(home))
+        recorded = personal_sync.record_changes(home, guard)
+        with client:
+            delivered = personal_sync.deliver(home, client)
+        data = {
+            "saved": recorded.saved,
+            "removed": recorded.removed,
+            "held": recorded.held,
+            "skipped": [{"path": path, "why": why} for path, why in recorded.skipped],
+            "sent": delivered.sent,
+            "queued": delivered.queued,
+            "error": delivered.error,
+        }
+        for path in recorded.held:
+            out.warn(
+                f"{path} holds a secret or personal data: it stays on this laptop, not backed up"
+            )
+        out.result(data, lambda c: _show_backup(c, data))
+        if delivered.error:
+            raise typer.Exit(ExitCode.ERROR)
+
+    @group.command("restore")
+    def restore(
+        ctx: typer.Context,
+        force: Annotated[
+            bool,
+            typer.Option("--force", help="Also replace local files that differ from the backup."),
+        ] = False,
+    ) -> None:
+        """Bring your backed-up personal skills and notes back from the control plane."""
+        out: Output = ctx.obj
+        home = agentic_home()
+        with _personal_client(home) as client:
+            files = client.personal_files()
+        done = personal_sync.restore(home, files, force=force)
+        data = {
+            "written": done.written,
+            "unchanged": done.unchanged,
+            "kept": done.kept,
+            "refused": [{"path": path, "why": why} for path, why in done.refused],
+        }
+        if done.kept:
+            out.warn(
+                f"{len(done.kept)} local file(s) differ from the backup and were kept; "
+                "`agentic skills restore --force` replaces them"
+            )
+        out.result(data, lambda c: _show_restore(c, data))
+
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _personal_client(home: Path) -> control_plane.ControlPlaneClient:
+    client = control_plane.client_for(os.environ, user_config(home), home)
+    if client is None:
+        raise CliError(
+            "no control plane to back up to",
+            ExitCode.INVALID,
+            hint=f"set control_plane_url in ~/.agentic/config.yaml or {control_plane.URL_ENV}",
+        )
+    return client
+
+
+def _policy_here(home: Path):
+    """The org policy of the repository the command runs in, for the publish scan; outside
+    one, `publish_guard` falls back to the scan's defaults (every kind)."""
+    return Workspace.load(home=home).policy()
+
+
+def _show_backup(console, data: dict) -> None:
+    for key in ("saved", "removed", "held"):
+        for path in data[key]:
+            console.print(f"{key}: {path}", markup=False)
+    for item in data["skipped"]:
+        console.print(f"skipped: {item['path']} ({item['why']})", markup=False)
+    line = f"sent {data['sent']}, queued {data['queued']}"
+    console.print(line + (f" ({data['error']})" if data["error"] else ""), markup=False)
+
+
+def _show_restore(console, data: dict) -> None:
+    for key in ("written", "unchanged", "kept"):
+        for path in data[key]:
+            console.print(f"{key}: {path}", markup=False)
+    for item in data["refused"]:
+        console.print(f"refused: {item['path']} ({item['why']})", markup=False)
 
 
 def _decide(

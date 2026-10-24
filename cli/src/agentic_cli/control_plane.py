@@ -43,6 +43,7 @@ from agentic.orgapi import (
     Me,
     NotificationInfo,
     OffboardResult,
+    PersonalFile,
     ProxyKeyIssued,
     ProxyKeysRevoked,
     RepoInfo,
@@ -334,6 +335,24 @@ class ControlPlaneClient:
             raise
         return IngestResult.model_validate(found)
 
+    def ingest_personal(self, device: str, entries: Sequence[Mapping[str, object]]) -> IngestResult:
+        """Send a batch of this device's chained personal-backup events (M2-20), refused
+        exactly as a run's batch is (`ChainRejected` on a gap, a fork or a broken chain)."""
+        path = f"/personal/devices/{quote(device, safe='')}/events"
+        try:
+            found = self._json("POST", path, {"entries": list(entries)})
+        except ControlPlaneRefused as error:
+            if error.code_name.startswith("ingest.") and error.code_name != "ingest.too_large":
+                raise ChainRejected(
+                    str(error), code_name=error.code_name, problems=error.problems, head=error.head
+                ) from None
+            raise
+        return IngestResult.model_validate(found)
+
+    def personal_files(self) -> list[PersonalFile]:
+        """The caller's newest backed-up copy of each personal skill file and note."""
+        return [PersonalFile.model_validate(item) for item in self._json("GET", "/personal/files")]
+
     def run(self, run_id: str) -> RunSummary:
         """The run as the control plane holds it (its chain head included)."""
         return RunSummary.model_validate(self._json("GET", f"/runs/{run_id}"))
@@ -505,7 +524,7 @@ class ControlPlaneSink:
         while start < len(entries):
             chunk = self._chunk(entries, start, limit)
             try:
-                self.client.ingest(run_id, chunk)
+                self._ingest(run_id, chunk)
             except ChainRejected as error:
                 first = chunk[0].get("seq")
                 head = error.head
@@ -524,6 +543,9 @@ class ControlPlaneSink:
                 raise
             start += len(chunk)
 
+    def _ingest(self, run_id: str, chunk: Sequence[Mapping[str, object]]) -> None:
+        self.client.ingest(run_id, chunk)
+
     def _chunk(
         self, entries: Sequence[Mapping[str, object]], start: int, limit: int
     ) -> Sequence[Mapping[str, object]]:
@@ -535,6 +557,21 @@ class ControlPlaneSink:
                 break
             end += 1
         return entries[start:end]
+
+
+class PersonalSink(ControlPlaneSink):
+    """The sink for the personal-backup journal (M2-20): the same batching, 413 halving,
+    catch-up (R21) and refusals as the run sink, sent to the device's chain
+    (`POST /v1/personal/devices/{device}/events`; `forward`'s run id is the device id).
+    No publish guard here: each file was scanned before it was journaled."""
+
+    name = "personal-backup"
+
+    def __init__(self, client: ControlPlaneClient, batch: int = 100) -> None:
+        super().__init__(client, batch)
+
+    def _ingest(self, run_id: str, chunk: Sequence[Mapping[str, object]]) -> None:
+        self.client.ingest_personal(run_id, chunk)
 
 
 # ── which client, from where ────────────────────────────────────────────────

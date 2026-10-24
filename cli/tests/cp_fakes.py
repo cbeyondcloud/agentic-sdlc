@@ -456,6 +456,12 @@ class FakeControlPlane:
                 200,
                 json={"key": self.proxy_key, "key_id": "0123456789abcdef", "gateway_url": None},
             )
+        if path.startswith("/v1/personal/devices/") and path.endswith("/events"):
+            device = path.split("/")[4]
+            entries = json.loads(request.content)["entries"]
+            return self._ingest(f"personal:{device}", entries)
+        if path == "/v1/personal/files":
+            return httpx2.Response(200, json=self.personal_files())
         if path.startswith("/v1/runs/") and path.endswith("/events"):
             if self.max_body is not None and len(request.content) > self.max_body:
                 return _problem(413, "too_large", f"the body is over {self.max_body} bytes")
@@ -547,6 +553,34 @@ class FakeControlPlane:
             "token_expires_at": (datetime.now(UTC) + timedelta(days=90)).isoformat(),
             "assignments": self.assignments,
         }
+
+    def personal(self) -> list[dict]:
+        """Every personal-backup event received, over all devices, in arrival order."""
+        found = [(key, e) for key, events in self.events.items() for e in events]
+        return [e for key, e in found if key.startswith("personal:")]
+
+    def personal_files(self) -> list[dict]:
+        """`GET /v1/personal/files`: the newest saved-or-removed copy per path."""
+        newest: dict[str, dict] = {}
+        for key, events in self.events.items():
+            if not key.startswith("personal:"):
+                continue
+            for entry in events:
+                if entry["event"] == "personal.held":
+                    newest.setdefault(entry["path"], {}).update(held=True)
+                    continue
+                newest[entry["path"]] = {
+                    "kind": entry["kind"],
+                    "path": entry["path"],
+                    "sha256": entry["sha256"],
+                    "content": entry.get("content"),
+                    "deleted": entry["event"] == "personal.removed",
+                    "held": False,
+                    "device": key.split(":", 1)[1],
+                    "seq": entry["seq"],
+                    "at": entry["at"],
+                }
+        return [item for item in newest.values() if "kind" in item]
 
     def _ingest(self, run_id: str, entries: list[dict]) -> httpx2.Response:
         if self.refuse_ingest is not None:
