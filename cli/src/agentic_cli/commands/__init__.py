@@ -10,6 +10,7 @@ from agentic_cli.commands import (
     basics,
     catalog,
     cost,
+    doctor,
     evals,
     gates,
     gc,
@@ -41,4 +42,5 @@ COMMANDS: list[Callable[[typer.Typer], None]] = [
     rbac.register,
     audit.register,
     gc.register,
+    doctor.register,
 ]

@@ -21,6 +21,7 @@ import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, BinaryIO, NamedTuple
 from urllib.parse import quote
@@ -223,6 +224,24 @@ class ControlPlaneClient:
 
     def me(self) -> Me:
         return Me.model_validate(self._json("GET", "/me"))
+
+    def probe_me(self) -> tuple[Me, datetime | None]:
+        """`me()`, and the time the server says it is (its `Date` header): `agentic doctor`
+        compares it with this machine's clock (M3-09)."""
+        response = self._send("GET", "/me")
+        try:
+            me = Me.model_validate(response.json())
+        except ValueError:
+            raise ControlPlaneUnavailable(
+                f"{self._shown} answered something that is not JSON ({response.status_code})"
+            ) from None
+        try:
+            date = parsedate_to_datetime(response.headers.get("Date", ""))
+        except (TypeError, ValueError):
+            date = None
+        if date is not None and date.tzinfo is None:
+            date = date.replace(tzinfo=UTC)
+        return me, date
 
     def active_policy(self) -> ActivePolicy:
         return ActivePolicy.model_validate(self._json("GET", "/policy/active"))
