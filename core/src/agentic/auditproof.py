@@ -5,7 +5,8 @@ and run
 
     python auditproof.py audit-export.jsonl      (or .csv)
 
-It needs no network, no database and nothing else of ours. Exit 0: the export is intact;
+It needs Python 3.9 or later (the system Python of macOS and Ubuntu 22.04 will do), no
+network, no database and nothing else of ours (DF-612). Exit 0: the export is intact;
 3: it is not (each problem is printed with the record's seq and the class of change);
 1: a file could not be read; 64: wrong usage. The framework itself uses the same code for
 `agentic audit verify` (M2-26), so the auditor and the CLI agree by construction.
@@ -58,7 +59,7 @@ import json
 import sys
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 EXPORT_FORMAT = "agentic-audit-export/1"
@@ -292,7 +293,8 @@ def proof_row(
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    now = datetime.now(timezone.utc)  # noqa: UP017 - datetime.UTC is 3.11+ (DF-612)
+    return now.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def csv_cell(value: str) -> str:
@@ -537,7 +539,7 @@ def _csv_rows(reader: Iterable[list[str]]) -> Iterator[tuple[int, object]]:
 def _csv_as_row(row: Sequence[str]) -> dict | None:
     if len(row) != len(CSV_COLUMNS):
         return None
-    cells = dict(zip(CSV_COLUMNS, row, strict=True))
+    cells = dict(zip(CSV_COLUMNS, row))  # noqa: B905 - lengths checked above; 3.9 has no strict
     kind = csv_uncell(cells["kind"])
     try:
         if kind in ("header", "proof"):
