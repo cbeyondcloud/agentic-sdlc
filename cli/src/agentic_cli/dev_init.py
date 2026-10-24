@@ -27,6 +27,7 @@ with M2-20.
 import json
 import os
 import platform as _platform
+import shlex
 import shutil
 import tempfile
 from collections.abc import Callable
@@ -466,20 +467,38 @@ class _Tools:
         return Item(f"tool: {name}", "warn", detail, path_fix(binary.parent, system))
 
 
-def path_fix(folder: Path, system: str) -> str:
-    """How to put `folder` on PATH for the person's shell, then open a new terminal."""
+def path_fix(folder: Path, system: str, shell: str | None = None) -> str:
+    """How to put `folder` on PATH for the person's shell (`shell`: $SHELL by default),
+    then open a new terminal (DF-349)."""
     if system == "Windows":
+        # the raw user Path, written back as REG_EXPAND_SZ: %USERPROFILE% entries stay
+        # as they are (SetEnvironmentVariable would expand them and store REG_SZ); the
+        # last call only tells running programs that the environment changed
         quoted = str(folder).replace("'", "''")
         return (
             "add it to your user PATH in PowerShell, then open a new terminal:\n"
-            "[Environment]::SetEnvironmentVariable('Path', "
-            f"[Environment]::GetEnvironmentVariable('Path', 'User') + ';{quoted}', 'User')"
+            "$k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true); "
+            "$p = $k.GetValue('Path', '', 'DoNotExpandEnvironmentNames'); "
+            f"$k.SetValue('Path', ((@($p.TrimEnd(';'), '{quoted}') | Where-Object {{ $_ }}) "
+            "-join ';'), 'ExpandString'); $k.Close(); "
+            "[Environment]::SetEnvironmentVariable('AGENTIC_PATH_REFRESH', $null, 'User')"
         )
+    name = Path(shell if shell is not None else os.environ.get("SHELL", "")).name
+    if name == "fish":
+        return (
+            "add it to PATH, then open a new terminal:\n"
+            + f"fish_add_path {shlex.quote(str(folder))}"
+        )
+    if name == "zsh":
+        profile = "~/.zshrc"
+    elif name == "bash":  # macOS Terminal starts login shells, which read ~/.bash_profile
+        profile = "~/.bash_profile" if system == "Darwin" else "~/.bashrc"
+    else:
+        profile = "~/.profile"
     shown = str(folder).replace("'", "'\\''")  # inside the single-quoted echo argument
     return (
-        "add it to PATH in your shell profile, then open a new terminal "
-        "(zsh on macOS: ~/.zshrc; bash: ~/.bashrc):\n"
-        f"echo 'export PATH=\"{shown}:$PATH\"' >> ~/.zshrc"
+        f"add it to PATH in your shell profile ({profile}), then open a new terminal:\n"
+        f"echo 'export PATH=\"{shown}:$PATH\"' >> {profile}"
     )
 
 
