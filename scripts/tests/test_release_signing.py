@@ -12,33 +12,10 @@ from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from release_support import IDENTITY, allowed, new_key
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agentic_release import signing  # noqa: E402
-
-IDENTITY = "release@example.invalid"
-
-
-def new_key(tmp_path: Path, name: str = "release") -> tuple[Path, str]:
-    """A throwaway OpenSSH private key file and its public key line."""
-    key = Ed25519PrivateKey.generate()
-    path = tmp_path / f"{name}_ed25519"
-    path.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.OpenSSH,
-            serialization.NoEncryption(),
-        )
-    )
-    public = key.public_key().public_bytes(
-        serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH
-    )
-    return path, public.decode()
-
-
-def allowed(public: str, identity: str = IDENTITY, options: str = "") -> str:
-    return f"# release signers\n{identity} {options + ' ' if options else ''}{public} ci\n"
 
 
 @pytest.fixture

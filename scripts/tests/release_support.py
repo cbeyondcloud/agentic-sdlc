@@ -49,6 +49,34 @@ def make_release_repo(dest: Path) -> Path:
     return dest
 
 
+IDENTITY = "release@example.invalid"
+
+
+def new_key(folder: Path, name: str = "release") -> tuple[Path, str]:
+    """A throwaway OpenSSH Ed25519 private key file and its public key line."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = Ed25519PrivateKey.generate()
+    path = folder / f"{name}_ed25519"
+    path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.OpenSSH,
+            serialization.NoEncryption(),
+        )
+    )
+    public = key.public_key().public_bytes(
+        serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH
+    )
+    return path, public.decode()
+
+
+def allowed(public: str, identity: str = IDENTITY, options: str = "") -> str:
+    """An allowed_signers file naming `public` for `identity`."""
+    return f"# release signers\n{identity} {options + ' ' if options else ''}{public} ci\n"
+
+
 def _copy(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     if source.is_dir():
