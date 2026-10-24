@@ -3,11 +3,13 @@ checks before any spend, and the engine obeys kill and pause switches while it r
 
 import hashlib
 import json
+import shutil
 
 import pytest
 from _cli_support import FakeGateway, answer, git
 from cp_fakes import CP_URL, TOKEN, FakeControlPlane
 
+from agentic.policy import tree_digest
 from agentic_cli import control_plane, runtime
 from agentic_cli.exit_codes import ExitCode
 
@@ -142,6 +144,45 @@ def test_org_mode_without_a_control_plane_warns_that_org_checks_were_skipped(
     assert result.code == ExitCode.OK, result.err
     problems = result.json()["preflight"]["problems"]
     assert any(p["check"] == "org" and p["severity"] == "warning" for p in problems)
+
+
+def test_a_signed_in_person_cannot_skip_the_org_checks_by_removing_the_url(
+    workspace, tmp_path, cli, gateway
+):
+    """DF-519: someone who signed in to a control plane cannot unset control_plane_url to run
+    without RBAC, the kill switch, caps and the minimum version (spec §8.6)."""
+    _org_config(tmp_path, url=None)
+    control_plane.record_login(tmp_path / "home", CP_URL, "acme", "dev@example.invalid")
+    result = start(cli)
+    assert result.code == ExitCode.INVALID
+    assert "control_plane_url" in result.out and CP_URL in result.out
+    assert gateway.requests == []
+    dry = cli("--json", "run", "deliver", "--input", "request=x", "--dry-run")
+    assert dry.code == ExitCode.INVALID
+    (problem,) = [p for p in dry.json()["preflight"]["problems"] if p["check"] == "org"]
+    assert problem["severity"] == "error"
+
+
+def test_a_control_plane_policy_cannot_be_run_without_its_control_plane(
+    workspace, tmp_path, cli, gateway, monkeypatch
+):
+    """DF-519: the org policy cached from a control plane (`fetched.json`) names it, so a
+    run on that policy without its control plane is refused too."""
+    _org_config(tmp_path, url=None)
+    cache = tmp_path / "home" / "policy" / "acme"
+    shutil.copytree(workspace.parent / "org-policy", cache / "repo")
+    stamp = {
+        "source_kind": "control-plane",
+        "url": CP_URL,
+        "tenant": "acme",
+        "tree_digest": tree_digest(cache / "repo"),
+    }
+    (cache / "fetched.json").write_text(json.dumps(stamp), encoding="utf-8")
+    monkeypatch.delenv("AGENTIC_POLICY_REPO")
+    dry = cli("--json", "run", "deliver", "--input", "request=x", "--dry-run")
+    assert dry.code == ExitCode.INVALID, dry.out
+    (problem,) = [p for p in dry.json()["preflight"]["problems"] if p["check"] == "org"]
+    assert problem["severity"] == "error" and CP_URL in problem["detail"]
 
 
 def _approvals(workspace, run_id) -> list[dict]:

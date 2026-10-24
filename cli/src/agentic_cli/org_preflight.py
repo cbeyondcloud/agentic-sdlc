@@ -13,7 +13,9 @@ problem `org-<check>`, so a run is refused before any spend with the exact reaso
 
 In org mode with a control plane, a run does not start when the checks cannot run (not
 signed in, or unreachable): the kill-switch state could not be confirmed (ruling R6). Org
-mode without a control plane runs with a warning that the checks were skipped."""
+mode without a control plane runs with a warning that the checks were skipped - unless the
+person signed in to a control plane or holds its policy (DF-519): removing
+`control_plane_url` is then refused, so it cannot be used to skip the checks."""
 
 from __future__ import annotations
 
@@ -24,11 +26,26 @@ from pathlib import Path
 from agentic.engine.preflight import PreflightReport, Problem
 from agentic.orgapi import RunPreflight
 from agentic_cli import control_plane
+from agentic_cli.policy_source import control_plane_stamp
 
 SKIPPED = (
     "org checks skipped: no control plane is configured (RBAC, kill switch, CLI version, "
     "concurrency and pipeline integrity are not checked)"
 )
+REMOVED = (
+    "org checks cannot run: you signed in to the control plane at {url} (or hold its "
+    "policy), but no control_plane_url is set - a run cannot skip RBAC, the kill switch, the "
+    "caps and the minimum CLI version; set control_plane_url in ~/.agentic/config.yaml"
+)
+
+
+def _known_control_plane(ws) -> str | None:
+    """The control plane this person signed in to, or whose policy the org cache holds
+    (DF-519): org mode without its URL then refuses rather than warns. None for an org that
+    never had one (M1's git policy repo), which keeps the warning."""
+    record = control_plane.login_record(ws.home) or {}
+    stamp = control_plane_stamp(ws.home / "policy" / str(ws.settings.get("org")) / "repo")
+    return record.get("url") or (stamp or {}).get("url") or None
 
 
 def org_checks(
@@ -52,7 +69,10 @@ def org_checks(
         report.problems.append(Problem(None, "org", f"org checks cannot run: {error}{hint}"))
         return None
     if client is None:
-        report.problems.append(Problem(None, "org", SKIPPED, severity="warning"))
+        if known := _known_control_plane(ws):
+            report.problems.append(Problem(None, "org", REMOVED.format(url=known)))
+        else:
+            report.problems.append(Problem(None, "org", SKIPPED, severity="warning"))
         return None
     if not ws.team:
         report.problems.append(
