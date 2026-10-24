@@ -64,6 +64,13 @@ over it the API answers 429 with `Retry-After`. `0` turns a limit off. The bucke
 process and are checked after the token is resolved, so a limit across replicas, and any
 limit on unauthenticated floods (invalid tokens, webhooks), belongs at the ingress.
 
+The CLI waits out a 429 whose `Retry-After` is at most 10 s and retries twice (the
+kill-switch poll once, after at most 2 s); a longer wait is refused at once. A running
+agent asks for the kill-switch state about every 10 s and sends its events as it goes, so
+a service-account token shared by many CI jobs is one bucket for all of them: give each
+pipeline its own service account, or raise the limit to at least 12 requests per minute
+per concurrent run that shares the token (DF-615).
+
 ### Health, metrics and alerts
 
 - `GET /healthz`: liveness (never touches the database). `GET /readyz`: readiness - the

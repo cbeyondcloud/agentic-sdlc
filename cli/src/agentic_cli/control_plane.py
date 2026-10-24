@@ -18,6 +18,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -77,6 +78,13 @@ EXPORT_TIMEOUT = httpx2.Timeout(120.0, connect=5.0)
 #: Serialised entries per ingest request: about half the control plane's default body
 #: cap (`max_body_bytes`, 1 MiB), leaving room for the envelope (review F6).
 MAX_BATCH_BYTES = 512 * 1024
+#: A 429 is retried this many times when its `Retry-After` is at most `MAX_RETRY_AFTER_S`
+#: (DF-615: the control plane rate-limits every token holder); a longer or missing wait is
+#: refused at once. The kill-switch poll, which a run waits on, retries once, after at most
+#: `KILL_MAX_RETRY_AFTER_S`.
+RETRIES_429 = 2
+MAX_RETRY_AFTER_S = 10.0
+KILL_MAX_RETRY_AFTER_S = 2.0
 
 
 class ControlPlaneError(CliError):
@@ -433,15 +441,22 @@ class ControlPlaneClient:
             options["params"] = dict(params)
         if timeout is not None:
             options["timeout"] = timeout
-        try:
-            response = self._http.request(method, f"{API_PREFIX}{path}", **options)
-        except httpx2.HTTPError as error:
-            raise ControlPlaneUnavailable(
-                f"cannot reach the control plane at {self._shown} ({type(error).__name__})",
-                hint="check the network or VPN, and control_plane_url",
-            ) from None
-        if response.status_code < 400:
-            return response
+        kill_poll = timeout is KILL_STATE_TIMEOUT
+        retries, longest = (1, KILL_MAX_RETRY_AFTER_S) if kill_poll else (RETRIES_429, None)
+        for attempt in range(retries + 1):
+            try:
+                response = self._http.request(method, f"{API_PREFIX}{path}", **options)
+            except httpx2.HTTPError as error:
+                raise ControlPlaneUnavailable(
+                    f"cannot reach the control plane at {self._shown} ({type(error).__name__})",
+                    hint="check the network or VPN, and control_plane_url",
+                ) from None
+            if response.status_code < 400:
+                return response
+            wait = _retry_after(response, longest or MAX_RETRY_AFTER_S)
+            if response.status_code != 429 or wait is None or attempt == retries:
+                break
+            time.sleep(wait)  # DF-615: a short rate-limit wait is waited out
         raise self._problem(response)
 
     def _problem(self, response: httpx2.Response) -> ControlPlaneError:
@@ -471,6 +486,15 @@ class ControlPlaneClient:
             else None,
             problems=[str(p) for p in found] if isinstance(found, list) else None,
         )
+
+
+def _retry_after(response: httpx2.Response, longest: float) -> float | None:
+    """A 429's `Retry-After` in seconds when it is a number no greater than `longest`."""
+    try:
+        wait = float(response.headers.get("Retry-After", ""))
+    except ValueError:
+        return None
+    return wait if 0 <= wait <= longest else None
 
 
 # ── the run event sink (M2-20) ───────────────────────────────────────────────
