@@ -316,6 +316,7 @@ class Runtime:
             available_backends=CONFIGURED_BACKENDS,
             skills=self._skill_check(name, live=live),
             honoured=agent_backends.HONOURED,  # the codex guard hook (DF-426)
+            skill_versions=self._skill_versions(),  # deprecations (M2-15)
         )
         report.problems += agent_backends.problems(
             report, decision, repo=self.ws.repo, settings=self.ws.settings
@@ -731,6 +732,13 @@ class Runtime:
                 )
                 problems.append(Problem(None, "personal-skills", detail, severity="warning"))
         return problems
+
+    def _skill_versions(self) -> dict[str, str] | None:
+        """Each catalogued skill's version (None without a catalog)."""
+        library = self._installed()
+        if library is None:
+            return None
+        return {name: entry.version for name, entry in library.catalog.skills.items()}
 
     def _skill_check(self, pipeline: str, *, live: bool):
         library = self._installed()
