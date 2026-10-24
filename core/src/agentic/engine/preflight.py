@@ -21,7 +21,13 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from agentic.backends import available, backend_issues
-from agentic.definitions import AgentStep, DefinitionSet, LoopStep, PipelineDefinition
+from agentic.definitions import (
+    AgentDefinition,
+    AgentStep,
+    DefinitionSet,
+    LoopStep,
+    PipelineDefinition,
+)
 from agentic.definitions.pipeline import ActionStep, GateStep, step_names
 from agentic.definitions.versions import VersionChoice, deprecation_state
 from agentic.engine.expressions import ExpressionError, cel_name, compile_condition
@@ -243,6 +249,8 @@ def preflight(
 
     def produces(step: AgentStep) -> str | None:
         agent = report.resolved.get(step.agent)
+        if agent is None and step.agent in definitions.agents:
+            return _with_kinds(definitions.agent(step.agent), policy).produces
         return agent.produces if agent is not None else None
 
     def action_step(step: ActionStep) -> None:
@@ -312,13 +320,28 @@ def preflight(
         if kind not in made[position + 1 :]:  # its handoff is the run's last word on `kind`
             judging(step, kind)
 
-    agents = {**{name: defn for name, (defn, _) in definitions.agents.items()}, **report.resolved}
+    agents = {
+        **{name: _with_kinds(defn, policy) for name, (defn, _) in definitions.agents.items()},
+        **report.resolved,
+    }
     for v in check_compatibility(pipeline, agents):
         if v.field == "agent":
             continue  # already reported per step
         severity = "warning" if v.field == CONDITIONAL else "error"
         problems.append(Problem(None, "compatibility", v.reason, severity=severity))
     return report
+
+
+def _with_kinds(agent: AgentDefinition, policy: OrgPolicy) -> AgentDefinition:
+    """An agent policy refused, with the handoff kinds its type gives it (D35): what it
+    reads and writes does not depend on the refusal, so the later steps' checks of kinds
+    still hold instead of reporting its output as missing (review F2)."""
+    agent_type = policy.agent_types.get(agent.type)
+    if agent_type is None:
+        return agent
+    consumes = agent.consumes if agent.consumes is not None else list(agent_type.consumes)
+    produces = agent.produces or agent_type.produces
+    return agent.model_copy(update={"consumes": consumes, "produces": produces})
 
 
 def _version_problem(

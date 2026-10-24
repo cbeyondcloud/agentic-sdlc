@@ -115,6 +115,43 @@ def test_checkpoint_exclusions_extend_from_org_yaml(policy_dir: Path):
         load_policy(policy_dir)
 
 
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "/abs/**",  # absolute: git refuses it, so every step's checkpoint would fail
+        "\\\\server\\x",
+        "../outside/**",  # outside the repository
+        "src/../../x",
+        "a:b",  # magic or a drive letter (C:/x); refused by git on Windows
+        "C:/build/**",
+        "dir\\file",  # a backslash is an escape in a git glob, not a separator
+        "**",  # every new file: the agent's work would be deleted, not committed
+        "*",
+        "**/*",
+        "*/**",
+        "?",
+        "src/[ab",  # an unclosed bracket
+        " build/**",  # surrounding blanks
+    ],
+)
+def test_a_checkpoint_exclusion_git_refuses_or_that_takes_everything_is_refused(
+    policy_dir: Path, pattern: str
+):
+    """Review F3: an exclusion is checked at load (policy check, sync and every laptop),
+    not first by a step's checkpoint after the model budget is spent - and a catch-all
+    that would delete every new file is refused."""
+    quoted = pattern.replace("'", "''")
+    _append(policy_dir / "org.yaml", f"checkpoint_exclude: ['{quoted}']\n")
+    with pytest.raises(PolicyError, match="checkpoint_exclude"):
+        load_policy(policy_dir)
+
+
+@pytest.mark.parametrize("pattern", ["**/target/**", "build/**", "src/**", "**/*.log", ".gradle"])
+def test_a_narrow_checkpoint_exclusion_loads(policy_dir: Path, pattern: str):
+    _append(policy_dir / "org.yaml", f"checkpoint_exclude: ['{pattern}']\n")
+    assert load_policy(policy_dir).checkpoint_exclude == [pattern]
+
+
 def test_required_steps_load_from_org_yaml(policy_dir: Path):
     _append(
         policy_dir / "org.yaml",

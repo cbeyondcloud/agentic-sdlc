@@ -148,6 +148,30 @@ def test_removing_a_loop_with_a_required_step_is_refused():
     assert "build-review" in text and "review" in text and "rule required-step" in text
 
 
+@pytest.mark.parametrize(
+    ("removed", "required_gate"),
+    [
+        (["build-review"], "review-approval"),  # a required gate would approve design instead
+        (["requirements"], "requirements-approval"),  # ... or approve the baseline
+    ],
+)
+def test_removing_the_work_a_required_gate_approves_is_refused(removed, required_gate):
+    """Review F1: re-anchoring a required gate onto another step is a weakening - it would
+    approve work it was never meant to approve, so its anchor cannot be removed."""
+    text = refused(overlay(remove=removed), required=[required_gate])
+    assert "rule required-gate" in text and required_gate in text and removed[0] in text
+
+
+def test_a_set_on_reject_must_name_an_earlier_step():
+    """Review F2: an overlay's on_reject is checked where the overlay is applied, so the
+    policy-repo gate names it, not each laptop's preflight."""
+    for target in ("nonexist", "publish"):  # missing, and after the gate
+        text = refused(overlay(gates={"review-approval": {"on_reject": target}}))
+        assert "rule unknown-step" in text and repr(target) in text
+    result = apply_overlay(base(), overlay(gates={"review-approval": {"on_reject": "develop"}}))
+    assert gate(result.pipeline, "review-approval").on_reject == "develop"
+
+
 def test_required_gate_approver_cannot_change():
     text = refused(overlay(gates={"review-approval": {"approver_role": "developer"}}))
     assert "rule required-gate" in text

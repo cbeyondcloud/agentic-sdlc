@@ -28,18 +28,21 @@ An overlay never weakens a pipeline. Each refusal names its rule:
 
     required-step  removing an org-required step, gate or loop (or a loop holding one;
                    `org.yaml` required_steps)
-    required-gate  changing an org-required gate's approver_role
+    required-gate  changing an org-required gate's approver_role, or removing the step it
+                   approves (its anchor: re-anchored, it would approve other work)
     four-eyes      turning four_eyes off
     regime         a looser regime
     max-minutes    a longer run limit
     unknown-step   naming a step, gate or loop the pipeline does not have (at that point:
-                   removals apply first, then additions in order, then gate changes)
+                   removals apply first, then additions in order, then gate changes), or
+                   an on_reject that is not an agent or action step before its gate
     empty-loop     removing every step of a loop (remove the loop instead)
     invalid        a result that is not a valid pipeline (a gate inside a loop, a name
                    used twice)
 
 Gate re-anchoring (spec §6.1): a gate's anchor is the nearest step before it that is not
-a gate - the work it approves. When an overlay removes a gate's anchor, the gate stays and
+a gate - the work it approves. When an overlay removes a gate's anchor (never an
+org-required gate's: rule required-gate), the gate stays and
 anchors to the previous remaining step; with none before it, it moves right after the next
 remaining step. A gate whose `on_reject` named a removed step routes rejections to the
 step now standing in its place: the nearest remaining agent or action step before it (none:
@@ -307,6 +310,7 @@ def _remove(
         if step_kind(step) == "gate"
     }
     order = _work_steps(steps)
+    approved_by = {anchor: gate for gate, anchor in anchors.items() if gate in required and anchor}
     removed: set[str] = set()
     for name in names:
         found = _locate(steps, name)
@@ -323,6 +327,13 @@ def _remove(
             problems.append(
                 f"remove {what}: rule required-step: org policy requires "
                 f"{', '.join(hit)} in {pipeline} (org.yaml required_steps)"
+            )
+            continue
+        if name in approved_by:
+            problems.append(
+                f"remove {name}: rule required-gate: org-required gate {approved_by[name]} "
+                f"approves {name}'s work; re-anchored it would approve another step "
+                "(org.yaml required_steps)"
             )
             continue
         removed.update(_covered(holder[index]))
@@ -411,10 +422,13 @@ def _change_gate(
     problems: list[str],
     notes: list[str],
 ) -> None:
-    gate = next((s for s in steps if step_kind(s) == "gate" and s["gate"] == name), None)
-    if gate is None:
+    index = next(
+        (i for i, s in enumerate(steps) if step_kind(s) == "gate" and s["gate"] == name), None
+    )
+    if index is None:
         problems.append(f"gates {name}: rule unknown-step: no gate named {name!r}")
         return
+    gate = steps[index]
     if change.approver_role is not None and change.approver_role != gate["approver_role"]:
         if name in required:
             problems.append(
@@ -433,5 +447,11 @@ def _change_gate(
             gate["four_eyes"] = True
             notes.append(f"gate {name} four_eyes on")
     if change.on_reject is not None and change.on_reject != gate.get("on_reject"):
+        if change.on_reject not in _work_steps(steps[:index]):
+            problems.append(
+                f"gates {name}: rule unknown-step: on_reject names {change.on_reject!r}, "
+                "which is not an agent or action step before the gate"
+            )
+            return
         gate["on_reject"] = change.on_reject
         notes.append(f"gate {name} on_reject -> {change.on_reject}")

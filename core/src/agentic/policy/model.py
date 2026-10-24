@@ -9,7 +9,14 @@ from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from agentic.definitions import ChildLimits, DenyRules, Limits
 from agentic.definitions.discovery import PolicyRules
@@ -18,6 +25,30 @@ from agentic.definitions.versions import Deprecations, Pins, Rollout
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")  # typos in policy files are errors
+
+
+def _checkpoint_glob(pattern: str) -> str:
+    """One `checkpoint_exclude` entry (review F3): a git glob relative to the repository
+    that git accepts on every laptop and that leaves some new file to commit. A wrong one
+    would otherwise fail every step's checkpoint after its model spend, or delete the
+    agent's new files instead of committing them."""
+    segments = pattern.split("/")
+    if pattern != pattern.strip() or "\n" in pattern:
+        raise ValueError(f"{pattern!r}: no surrounding blanks or line breaks")
+    if pattern.startswith(("/", "!")) or ":" in pattern:
+        raise ValueError(f"{pattern!r}: a glob relative to the repository (no /, ! or :)")
+    if "\\" in pattern:
+        raise ValueError(f"{pattern!r}: separate folders with / (a \\ escapes in a git glob)")
+    if ".." in segments:
+        raise ValueError(f"{pattern!r}: no .. - a glob inside the repository")
+    if all(set(segment) <= set("*?") for segment in segments):
+        raise ValueError(
+            f"{pattern!r}: matches every new file - the agent's work would be deleted, not "
+            "committed; name the folders or files to leave out"
+        )
+    if pattern.count("[") != pattern.count("]"):
+        raise ValueError(f"{pattern!r}: an unclosed [ ]")
+    return pattern
 
 
 class ModelPrice(_Strict):
@@ -497,7 +528,7 @@ class OrgPolicy(_Strict):
     # DF-315/DF-317: untracked paths (git globs, relative to the tree) a step's checkpoint
     # leaves out on top of the framework's list, e.g. "**/target/**"; it only ever adds
     checkpoint_exclude: list[
-        Annotated[str, StringConstraints(min_length=1, pattern=r"^[^:!][^\n]*$")]
+        Annotated[str, StringConstraints(min_length=1), AfterValidator(_checkpoint_glob)]
     ] = []
     # M2-15 (spec §12.5, rollout.yaml): new versions team by team, and deprecations
     rollout: Rollout = Rollout()

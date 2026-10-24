@@ -93,11 +93,16 @@ A team tailors an org pipeline for one repository with an overlay,
 `repo: host/owner/name` inside binds it to exactly one repository). Overlays live only
 here, so only the team's leads and the org admins change them (D33). An overlay may add
 steps, remove steps that are not org-required, turn `four_eyes` on, set a gate's
-`on_reject`, tighten the regime and lower `max_minutes`. It can never remove or weaken a
-step or gate listed in `policy/org.yaml` `required_steps`: `agentic policy check`, the
-control plane's sync and every laptop refuse it with the rule named. When a removed step
-had a gate after it, the gate re-anchors to the previous remaining step (and the run's
-plan says so). The control plane checks the overlay's hash like the pipeline's: a run
+`on_reject` (to an earlier step), tighten the regime and lower `max_minutes`. It can
+never remove or weaken a step or gate listed in `policy/org.yaml` `required_steps`, nor
+remove the step an org-required gate approves: `agentic policy check`, the control plane's
+sync and every laptop refuse it with the rule named. List the work as well as the gates
+in `required_steps` (the template requires the build loop's developer, code review and
+QA), or an overlay could remove it. When a removed step had a gate after it that is not
+org-required, the gate re-anchors to the previous remaining step (and the run's plan says
+so). The policy check and the sync also run the preflight checks that hold on every
+laptop on each team's pipelines, overlays applied: required steps present, `on_reject`
+targets, conditions, and the handoffs each step needs. The control plane checks the overlay's hash like the pipeline's: a run
 with an edited overlay, another team's overlay, or without the overlay that applies is
 refused. `teams/payments/pipelines/overlays/payments-api.yaml` is an example, commented
 out until the library's pipelines are copied in (an overlay of a missing pipeline is

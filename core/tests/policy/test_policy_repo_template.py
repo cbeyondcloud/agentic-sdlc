@@ -175,6 +175,55 @@ def test_template_overlay_applies_to_the_library_pipeline(policy, tmp_path: Path
     assert plain.overlays == {}
 
 
+def _overlay(root: Path, text: str) -> None:
+    path = root / "teams" / "payments" / "pipelines" / "overlays" / "payments-api.yaml"
+    path.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("pipeline", "removed"),
+    [
+        ("feature-delivery", "[build-review]"),
+        ("feature-delivery", "[develop]"),
+        ("feature-delivery", "[review, qa]"),
+        ("feature-delivery", "[requirements]"),
+        ("bugfix", "[fix-review]"),
+        ("bugfix", "[qa]"),
+    ],
+)
+def test_the_template_keeps_the_build_loop_from_overlays(tmp_path: Path, pipeline, removed):
+    """Review F1: with the template's required_steps, an overlay cannot drop the work the
+    required gates approve - the developer, code review and QA (spec §6.1) - and leave a
+    pull request nobody built, reviewed or tested."""
+    root = with_library(tmp_path)
+    _overlay(root, f"pipelines:\n  {pipeline}:\n    remove: {removed}\n")
+    problems = check_policy_repo(root)
+    assert any(
+        p.startswith("teams/payments/pipelines/overlays/payments-api.yaml: ")
+        and ("rule required-step" in p or "rule required-gate" in p)
+        for p in problems
+    ), problems
+
+
+def test_the_gate_catches_an_overlay_that_breaks_the_pipeline(tmp_path: Path):
+    """Review F2: an overlay that leaves a loop's `until` reading a removed step's handoff
+    passes the overlay rules (nothing it removes is required here) but fails every laptop's
+    preflight - so the policy-repo gate refuses it, naming the overlay."""
+    root = with_library(tmp_path)
+    org = root / "policy" / "org.yaml"
+    text = read_text(org)
+    start, end = text.index("required_steps:"), text.index("# Where `agentic init`")
+    org.write_text(text[:start] + "required_steps: {}\n\n" + text[end:], encoding="utf-8")
+    _overlay(root, "pipelines:\n  feature-delivery:\n    remove: [review, qa]\n")
+    problems = check_policy_repo(root)
+    assert any(
+        p.startswith("teams/payments/pipelines/overlays/payments-api.yaml: ")
+        and "feature-delivery" in p
+        and "reads 'review', which no earlier step produces" in p
+        for p in problems
+    ), problems
+
+
 def test_readme_covers_codeowners_branch_protection_and_bootstrap():
     text = read_text(TEMPLATE / "README.md")
     for needed in (

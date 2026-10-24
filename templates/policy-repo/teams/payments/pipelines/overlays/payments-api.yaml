@@ -4,11 +4,12 @@
 #
 # An overlay may remove steps, gates and loops that are not org-required (remove: [...]),
 # add steps (add: [{after: <step>, step: {...}}] or before:), turn four_eyes on, set a
-# gate's on_reject or (not for an org-required gate) its approver_role, tighten the
-# regime and lower max_minutes. It can never remove or weaken an org-required step or
-# gate (policy/org.yaml required_steps): the policy check, the control plane's sync and
-# every laptop refuse it, naming the rule. When a removed step had a gate after it, the
-# gate re-anchors to the previous remaining step, and the run's plan says so.
+# gate's on_reject (an earlier step) or (not for an org-required gate) its approver_role,
+# tighten the regime and lower max_minutes. It can never remove or weaken an org-required
+# step or gate (policy/org.yaml required_steps), nor remove the step such a gate approves:
+# the policy check, the control plane's sync and every laptop refuse it, naming the rule.
+# When a removed step had another gate after it, that gate re-anchors to the previous
+# remaining step, and the run's plan says so.
 #
 # repo: git.example.com/your-org/payments-api   # optional: bind to exactly one repository
 #

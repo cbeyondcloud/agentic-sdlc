@@ -208,6 +208,12 @@ async def test_sync_rejects_a_policy_with_a_refused_overlay(api, settings, tmp_p
         "name: deliver\nversion: 1.0.0\nsteps:\n  - id: build\n    agent: developer\n"
         "  - gate: ship\n    approver_role: approver\n",
     )
+    write(  # the sync preflights each team's pipelines (review F2): its agent must exist
+        repo,
+        "agents/developer.md",
+        "---\nname: developer\ntype: general\nversion: 1.0.0\ndescription: d\n"
+        "consumes: []\n---\nGo.\n",
+    )
     org = (repo / "policy" / "org.yaml").read_text(encoding="utf-8")
     write(repo, "policy/org.yaml", org + "required_steps:\n  deliver: [ship]\n")
     commit(repo, "a pipeline with a required gate")

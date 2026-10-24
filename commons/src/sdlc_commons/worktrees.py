@@ -196,10 +196,18 @@ class StepCheckpoints:
             # new files, minus what running the tests leaves behind; then every change to
             # a tracked file, wherever it is (a repository may vendor node_modules)
             generated = [f":(glob){g}" for g in self.generated]
-            left_out = _git(
-                path, "ls-files", "-z", "--others", "--exclude-standard", "--", *generated
-            )
-            for rel in filter(None, left_out.split("\0")):
+            warned = set()
+            for pattern in (g for g in self.generated if g not in GENERATED):
+                # an org pattern broader than meant deletes the agent's work: say so loudly
+                for rel in _new_files(path, f":(glob){pattern}") - warned:
+                    warned.add(rel)
+                    _LOG.warning(
+                        "checkpoint of %s left out and deleted %s (org checkpoint_exclude %s)",
+                        name,
+                        rel,
+                        pattern,
+                    )
+            for rel in sorted(_new_files(path, *generated) - warned):
                 _LOG.info("checkpoint of %s left out %s (generated)", name, rel)
             excluded = (f":(exclude,glob){g}" for g in self.generated)
             _git(path, "add", "-A", "--", ".", *excluded)
@@ -331,6 +339,12 @@ def _git(where: Path, *args: str, check: bool = True) -> str:
     """A checkpoint git call: never runs an fsmonitor command the tree's or the
     repository's config names (agent-reachable without a sandbox, review I5)."""
     return worktree_git(where, "-c", "core.fsmonitor=false", *args, check=check)
+
+
+def _new_files(tree: Path, *pathspecs: str) -> set[str]:
+    """Untracked files in `tree` git does not ignore that match `pathspecs`."""
+    listing = _git(tree, "ls-files", "-z", "--others", "--exclude-standard", "--", *pathspecs)
+    return set(filter(None, listing.split("\0")))
 
 
 def _nested_repositories(tree: Path) -> list[str]:

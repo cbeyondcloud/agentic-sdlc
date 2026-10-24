@@ -155,6 +155,16 @@ def test_policy_violation_names_the_allowed_value(check):
     assert problem.policy_value is not None and "(policy:" in report.text()
 
 
+def test_an_agent_policy_refuses_still_hands_over_its_type_kind(check):  # review F2
+    """The BA's tools are refused, but what it writes comes from its type: the later steps
+    are not told that nothing produces the requirements (a false second and third error,
+    and the policy-repo gate could not check a team's pipelines at all)."""
+    report = check(CLEAN, extra_agents={"ba": "type: business-analyst\ntools: [deploy_prod]\n"})
+
+    errors = [(p.step, p.check) for p in report.problems if p.severity == "error"]
+    assert errors == [("requirements", "policy")]
+
+
 def test_a_kind_inherited_from_the_type_must_exist(check):  # DF-44
     # an agent FILE naming an unknown kind is refused at discovery (D37); a kind
     # inherited from the agent TYPE is caught here

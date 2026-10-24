@@ -248,6 +248,26 @@ def test_the_exclusions_are_narrow_logged_and_org_extended(repo, caplog):
     assert "fast.pyd" not in logged
 
 
+def test_what_an_org_exclusion_deletes_is_a_warning(repo, caplog):
+    """Review F3: an org pattern broader than meant deletes the agent's new files rather
+    than committing them - each such file is a warning a person sees, not an info line;
+    the framework's own caches stay at info."""
+    RunLedger(repo, RUN).open(
+        identity=IDENTITY, kind="feature", project="demo", owner="platform", criticality="low"
+    )
+    checkpoints = StepCheckpoints(repo, RUN, exclude=("src/**",))
+    tree = checkpoints.prepare()
+    for made in ("src/new.py", "__pycache__/a.pyc"):
+        (tree / made).parent.mkdir(parents=True, exist_ok=True)
+        (tree / made).write_bytes(b"\x00made")
+    with caplog.at_level("INFO", logger="sdlc_commons.worktrees"):
+        checkpoints.finish("agentic: dev #1 (r-ckpt-1)")
+
+    warned = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warned) == 1 and "src/new.py" in warned[0] and "src/**" in warned[0], warned
+    assert any("a.pyc" in r.getMessage() and r.levelname == "INFO" for r in caplog.records)
+
+
 def test_a_checkpoint_leaves_the_tree_clean_so_the_run_can_be_removed(repo):  # review F2
     """Caches left out of the checkpoint must not leave the tree dirty: removing the run's
     trees at closure refuses any uncommitted change. Ignored files (.venv/) are kept."""

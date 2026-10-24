@@ -19,8 +19,11 @@ def write(path: Path, text: str) -> Path:
     return path
 
 
-def agent(name: str, version: str) -> str:
-    return f"---\nname: {name}\ntype: general\nversion: {version}\ndescription: d\n---\nGo.\n"
+def agent(name: str, version: str, consumes: str = "[]") -> str:
+    return (
+        f"---\nname: {name}\ntype: general\nversion: {version}\ndescription: d\n"
+        f"consumes: {consumes}\n---\nGo.\n"
+    )
 
 
 PIPELINE = (
@@ -127,6 +130,50 @@ def test_a_broken_archive_is_a_problem(root: Path):
     assert any("agents/versions/developer/1.1.0.md" in p and "1.0.0" in p for p in found), found
     assert any("agents/versions/developer/notes.txt" in p for p in found), found
     assert any("pipelines/versions/stray.yaml" in p for p in found), found
+
+
+def test_an_overlay_on_reject_naming_no_earlier_step_is_a_problem(root: Path):
+    """Review F2 (a): caught at the gate, not first by each laptop's preflight."""
+    write(
+        root / "teams" / "payments" / "pipelines" / "overlays" / "payments-api.yaml",
+        "pipelines:\n  deliver:\n    gates: {ship: {on_reject: nonexist}}\n",
+    )
+    found = problems(root)
+    assert any(
+        p.startswith("teams/payments/pipelines/overlays/payments-api.yaml: ")
+        and "on_reject" in p
+        and "'nonexist'" in p
+        for p in found
+    ), found
+
+
+def test_a_team_pipeline_missing_a_required_step_is_a_problem(root: Path):
+    """Review F2 (c): a team pipeline shadowing an org pipeline without a required step
+    would refuse every run of the team; the gate names the team's file."""
+    append(root / "policy" / "org.yaml", "required_steps:\n  deliver: [build, ship]\n")
+    write(
+        root / "teams" / "payments" / "pipelines" / "deliver.yaml",
+        "name: deliver\nversion: 1.0.0\nsteps:\n  - id: build\n    agent: developer\n",
+    )
+    found = problems(root)
+    assert any(
+        p.startswith("teams/payments/pipelines/deliver.yaml: ")
+        and "required-step" in p
+        and "'ship'" in p
+        for p in found
+    ), found
+
+
+def test_a_pipeline_that_would_fail_preflight_names_its_teams(root: Path):
+    """Review F2: what a laptop's preflight refuses whoever runs it - here a step reading a
+    handoff nothing produces - is named once, with the views it breaks in."""
+    write(root / "agents" / "reader.md", agent("reader", "1.0.0", consumes="[requirements]"))
+    write(
+        root / "pipelines" / "review.yaml",
+        "name: review\nversion: 1.0.0\nsteps:\n  - id: read\n    agent: reader\n",
+    )
+    found = [p for p in problems(root) if p.startswith("pipelines/review.yaml: ")]
+    assert len(found) == 1 and "needs 'requirements'" in found[0], found
 
 
 def test_each_problem_is_reported_once(root: Path):
