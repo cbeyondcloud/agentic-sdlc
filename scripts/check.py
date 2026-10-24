@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import tomllib
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -61,10 +62,22 @@ WORKFLOW_TEMPLATES = (
     "templates/release/release.yml",
 )
 
+# A git bundle of HEAD's history, streamed into the container with the files under
+# HISTORY_MEMBER and moved to HISTORY_BUNDLE, outside the tree the other checks see.
+HISTORY_MEMBER = ".agentic-check-history.bundle"
+HISTORY_BUNDLE = "/tmp/agentic-history.bundle"
+
 # Checks that run only in the Linux container, where their pinned native binary is
 # installed (no unsigned binaries on developer laptops).
 LINUX_ONLY_CHECKS: list[tuple[str, list[str]]] = [
     ("secret scan", ["gitleaks", "dir", ".", "--no-banner", "--redact"]),
+    # HEAD's history too (DF-96): a secret committed and deleted again is still in it.
+    # The bundle arrives with the files and is moved out of the tree before any scan.
+    ("history clone", ["git", "clone", "-q", HISTORY_BUNDLE, "/tmp/agentic-history"]),
+    (
+        "secret scan (history)",
+        ["gitleaks", "git", "/tmp/agentic-history", "--no-banner", "--redact"],
+    ),
     # the control plane's Prometheus alert rules (M2-12); their unit tests run under pytest
     ("alert rules", ["promtool", "check", "rules", "control-plane/deploy/prometheus/alerts.yml"]),
     # shellcheck and pyflakes integrations off: neither is in the image (GPL-3.0 / unused)
@@ -235,7 +248,25 @@ def tracked_files_tar() -> bytes:
         for name in filter(None, listing.decode().split("\0")):
             if (REPO_ROOT / name).is_file():  # skips files deleted but not yet committed
                 archive.add(REPO_ROOT / name, arcname=name)
+        bundle = history_bundle(REPO_ROOT)
+        member = tarfile.TarInfo(HISTORY_MEMBER)
+        member.size = len(bundle)
+        archive.addfile(member, io.BytesIO(bundle))
     return buffer.getvalue()
+
+
+def history_bundle(repo: Path) -> bytes:
+    """A git bundle of HEAD and its whole history (no other branch: parallel tracks'
+    branches are their own checks' business), for the history secret scan (DF-96)."""
+    with tempfile.TemporaryDirectory(prefix="agentic-check-") as scratch:
+        path = Path(scratch) / "history.bundle"
+        subprocess.run(
+            ["git", "bundle", "create", "-q", str(path), "HEAD"],
+            cwd=repo,
+            capture_output=True,
+            check=True,
+        )
+        return path.read_bytes()
 
 
 def run_linux(run=subprocess.run) -> bool:
@@ -264,7 +295,7 @@ def run_linux(run=subprocess.run) -> bool:
     )
     script = (
         f"{github_auth} && mkdir -p /work && cd /work && tar -xf - "
-        f"&& uv sync --locked -q && {inner}"
+        f"&& mv {HISTORY_MEMBER} {HISTORY_BUNDLE} && uv sync --locked -q && {inner}"
     )
     token = _github_token()
     if not token:

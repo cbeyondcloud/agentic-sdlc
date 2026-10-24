@@ -79,6 +79,45 @@ def test_the_secret_scan_runs_before_anything_writes_into_the_tree():
     assert names.index("secret scan") < names.index("lock file up to date")
 
 
+def test_the_linux_stage_scans_the_git_history_too():
+    """DF-96: a secret committed and deleted again stays in history; the working-tree scan
+    cannot see it, so the container also scans a bundle of HEAD's history."""
+    from check import HISTORY_BUNDLE, linux_steps
+
+    steps = linux_steps()
+    names = [name for name, _ in steps]
+    assert names.index("secret scan") < names.index("secret scan (history)") < names.index("tests")
+    command = dict(steps)["secret scan (history)"]
+    assert command[:2] == ["gitleaks", "git"] and "--redact" in command
+    clone = dict(steps)["history clone"]
+    assert clone[:3] == ["git", "clone", "-q"] and HISTORY_BUNDLE in clone
+
+
+def test_the_history_bundle_holds_head_and_only_head(tmp_path):
+    import subprocess
+
+    from check import history_bundle
+
+    def git(*args, cwd=tmp_path / "repo"):
+        return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+    (tmp_path / "repo").mkdir()
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "dev@example.invalid")
+    git("config", "user.name", "Dev")
+    git("commit", "-q", "--allow-empty", "-m", "first")
+    git("commit", "-q", "--allow-empty", "-m", "second")
+    git("branch", "other-track")
+    git("commit", "-q", "--allow-empty", "-m", "third")
+    bundle = tmp_path / "h.bundle"
+    bundle.write_bytes(history_bundle(tmp_path / "repo"))
+    git("clone", "-q", str(bundle), str(tmp_path / "clone"), cwd=tmp_path)
+    log = git("log", "--format=%s", cwd=tmp_path / "clone").stdout.split()
+    assert log == ["third", "second", "first"]
+    refs = git("ls-remote", str(bundle), cwd=tmp_path).stdout
+    assert "other-track" not in refs  # another track's branch is not this check's business
+
+
 def test_the_linux_stage_checks_the_alert_rules_with_promtool():
     # M2-12: promtool is a native binary, so it runs only in the Linux check image
     from check import REPO_ROOT, checks_for, linux_steps
