@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -200,8 +201,11 @@ def _rules(policy: OrgPolicy, warnings: list[str]) -> list[dict]:
 # ── team caps ────────────────────────────────────────────────────────────────
 
 
-def _money(value: float) -> int | float:
-    """A budget as a JSON number written the way the policy wrote it (2000, 512.5)."""
+def _money(where: str, value: float) -> int | float:
+    """A budget as a JSON number written the way the policy wrote it (2000, 512.5);
+    ValueError for infinity or NaN, which no JSON number holds (review F1)."""
+    if not math.isfinite(value):
+        raise ValueError(f"{where} is {value}: a spend cap must be a finite number")
     exact = Decimal(str(value))
     return int(exact) if exact == exact.to_integral_value() else float(exact)
 
@@ -218,5 +222,6 @@ def _team_caps(policy: OrgPolicy, warnings: list[str]) -> dict[str, dict]:
                 "and refuses every request under a negative one, so no team cap is set"
             )
             continue
-        teams[team] = {"monthly_spend_cap_usd": _money(budget)}
+        cap = _money(f"teams.{team}.monthly_budget_usd", budget)
+        teams[team] = {"monthly_spend_cap_usd": cap}
     return teams

@@ -337,7 +337,13 @@ def _build(git: GitRunner, workdir: Path, tenant: TenantRow, commit: str, versio
         tree = tree_digest(root)
         settings = {}
         if policy is not None:  # the gateway's routing plan (M2-09) rides with the settings
-            settings = {**run_settings(policy, root), "routing": routing_plan(policy).to_settings()}
+            try:
+                routing = routing_plan(policy).to_settings()
+            except Exception as error:  # a rejection with its reason, never a wedged sync
+                log.exception("tenant %s: routing for policy %s failed", tenant.slug, version)
+                found = [*found, f"routing: the gateway routing cannot be generated ({error})"]
+            else:
+                settings = {**run_settings(policy, root), "routing": routing}
     teams = sorted(policy.teams) if policy is not None else []
     patterns = list(policy.allowed_repo_patterns) if policy is not None else []
     bundle = gzip_bytes(archive)

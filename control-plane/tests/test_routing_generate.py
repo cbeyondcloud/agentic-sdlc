@@ -158,6 +158,17 @@ def test_a_zero_or_negative_budget_is_not_sent_and_is_named(policy):
     assert any("payments" in warning for warning in plan.warnings)
 
 
+@pytest.mark.parametrize("budget", [float("inf"), float("nan")])
+def test_a_budget_that_is_not_a_number_is_a_value_error(policy, budget):
+    """Review F1: the policy model refuses such a budget; should one reach the generator
+    anyway, it raises ValueError (policy sync records a rejection), never OverflowError or
+    a NaN in the plan that the database cannot store."""
+    search = policy.teams["search"].model_copy(update={"monthly_budget_usd": budget})
+    broken = policy.model_copy(update={"teams": {**policy.teams, "search": search}})
+    with pytest.raises(ValueError, match="search"):
+        routing_plan(broken)
+
+
 def test_a_class_that_allows_no_model_is_named(policy):
     data = policy.model_dump(mode="json", exclude_defaults=True)
     data["classifications"]["restricted"]["allowed_models"] = ["ollama/not-a-tier-model"]

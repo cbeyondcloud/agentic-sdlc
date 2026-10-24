@@ -251,6 +251,47 @@ async def test_readback_mismatch_is_not_applied(api, settings, gateway, tmp_path
     assert row.gateway_version is None
 
 
+async def _sync(api, settings, tmp_path, edit):
+    repo = _policy_repo(tmp_path / "repo", edit)
+    async with tenant_tx(api.db.owner, api.a.id) as conn:
+        await conn.execute(
+            update(tenants).where(tenants.c.id == api.a.id).values(policy_repo_url=url(repo))
+        )
+    return await sync_once(api.db.app, GitRunner(settings), api.a.id, settings, api.clock)
+
+
+@pytest.mark.parametrize("budget", [".inf", ".nan"])
+async def test_a_budget_that_is_not_a_number_is_rejected(api, settings, tmp_path, budget):
+    """Review F1: such a policy used to wedge the tenant's sync (OverflowError, or NaN the
+    database refused); it is now a recorded rejection naming the field."""
+
+    def edit(root: Path) -> None:
+        team = root / "teams" / "search.yaml"
+        text = team.read_text(encoding="utf-8")
+        team.write_text(text.replace("512.5", budget), encoding="utf-8")
+
+    outcome = await _sync(api, settings, tmp_path, edit)
+    assert outcome.kind == "rejected", outcome
+    assert any("monthly_budget_usd" in problem for problem in outcome.problems)
+    assert await _rows(api) == []
+
+
+async def test_a_routing_generator_failure_rejects_the_version(
+    api, settings, tmp_path, monkeypatch
+):
+    """Review F1: a generator bug becomes a rejection with its problem recorded, never an
+    exception that the worker retries for ever."""
+
+    def explode(policy):
+        raise ValueError("teams.search: cannot be sent")
+
+    monkeypatch.setattr("agentic_cp.policy_sync.service.routing_plan", explode)
+    outcome = await _sync(api, settings, tmp_path, None)
+    assert outcome.kind == "rejected", outcome
+    assert any("routing" in p and "teams.search" in p for p in outcome.problems)
+    assert await _rows(api) == []
+
+
 async def test_no_gateway_tenant_is_skipped(api, settings, gateway, tmp_path):
     await _gateway_tenant(api, api.a.id, None)
     await _accept(api, settings, tmp_path)
