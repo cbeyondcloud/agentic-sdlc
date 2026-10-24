@@ -27,9 +27,12 @@ import json
 import re
 import shutil
 import sqlite3
+import subprocess
+import sys
 from contextlib import closing
 from pathlib import Path
 
+from agentic.backends.processes import run_contained
 from agentic.codeintel.interface import CodeIntelError
 
 ROOT_TOKEN = "${ROOT}"
@@ -158,6 +161,92 @@ def export_index(db: Path, tree: Path, out: Path, *, tool_version: str | None = 
     text = json.dumps(manifest, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
     (Path(out) / MANIFEST).write_bytes(text.encode("utf-8"))  # last: a partial one has none
     return manifest
+
+
+def read_export(folder: Path) -> dict:
+    """The manifest of the export in `folder`, checked: this format and tool, a commit,
+    every shard named as the export names it (never a path of its own) and holding the
+    bytes the manifest's sha256 says. Raises ExportError (ExportMismatch for another
+    format or tool)."""
+    folder = Path(folder)
+    try:
+        manifest = json.loads((folder / MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ExportError(f"{folder} is not an index export (no readable {MANIFEST})") from error
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), dict):
+        raise ExportError(f"{folder / MANIFEST} is not an index export manifest")
+    if manifest.get("format") != FORMAT:
+        raise ExportMismatch(
+            f"the index export is format {manifest.get('format')}; this agentic reads "
+            f"format {FORMAT} - update agentic, or re-run the export with this version"
+        )
+    if manifest.get("tool") != TOOL:
+        raise ExportMismatch(f"the index export was made by {manifest.get('tool')!r}, not {TOOL}")
+    if not re.fullmatch(r"[0-9a-f]{40}([0-9a-f]{24})?", str(manifest.get("commit", ""))):
+        raise ExportError(f"{folder / MANIFEST} names no commit")
+    for rel, entry in manifest["files"].items():
+        shard = entry.get("shard") if isinstance(entry, dict) else None
+        if not isinstance(rel, str) or shard != shard_name(rel):
+            raise ExportError(f"{folder / MANIFEST}: file {rel!r} names an unexpected shard")
+        try:
+            data = (folder / shard).read_bytes()
+        except OSError as error:
+            raise ExportError(f"the index export is missing the shard of {rel}") from error
+        if hashlib.sha256(data).hexdigest() != entry.get("sha256"):
+            raise ExportError(f"the shard of {rel} does not match its sha256: damaged or edited")
+    return manifest
+
+
+def check_tool(manifest: dict, installed: str | None) -> None:
+    """Refuse an export made by another code-review-graph version than `installed`."""
+    if installed is None:
+        raise ExportError(f"{TOOL} is not installed (agentic-core[codeintel])")
+    made = manifest.get("tool_version")
+    if made != installed:
+        raise ExportMismatch(
+            f"the index export was made with {TOOL} {made} and this machine has {installed}; "
+            f"an import is pinned to the version that made it. Re-run the export with "
+            f"{installed}, or install {TOOL}=={made}"
+        )
+
+
+def import_export(
+    folder: Path, tree: Path, target: Path, env: dict[str, str], *, timeout: float = 1800
+) -> dict:
+    """Write the index the export in `folder` holds, for `tree`, to the new file `target`
+    (code-review-graph runs in its own process, `_crg_import`); returns the manifest.
+    Raises ExportError, ExportMismatch for another tool, schema or format version."""
+    manifest = read_export(folder)
+    check_tool(manifest, installed_tool_version())
+    request = {"folder": str(Path(folder).resolve()), "tree": str(tree), "target": str(target)}
+    try:
+        done = run_contained(
+            [sys.executable, "-m", "agentic.codeintel._crg_import"],
+            input=json.dumps(request),
+            env=env,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ExportError(f"the index import could not run: {error}") from error
+    answer = _answer(done.stdout)
+    if done.returncode != 0 or "error" in answer:
+        Path(target).unlink(missing_ok=True)
+        lines = done.stderr.strip().splitlines()
+        why = answer.get("error") or (lines[-1] if lines else f"exit {done.returncode}")
+        raise (ExportMismatch if answer.get("mismatch") else ExportError)(why)
+    return manifest
+
+
+def _answer(stdout: str) -> dict:
+    """The import's JSON answer: the last line that is a JSON object."""
+    for line in reversed(stdout.strip().splitlines()):
+        try:
+            answer = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(answer, dict):
+            return answer
+    return {}
 
 
 def _relative(rewritten: object, raw: str) -> str:

@@ -14,7 +14,10 @@ from agentic.codeintel.export import (
     MANIFEST,
     ROOT_TOKEN,
     ExportError,
+    ExportMismatch,
+    check_tool,
     export_index,
+    read_export,
 )
 from agentic.codeintel.index import LocalIndex, available
 
@@ -234,3 +237,178 @@ def test_out_is_only_replaced_when_it_is_an_earlier_export(tmp_path, planted):
     with pytest.raises(ExportError, match="not an earlier export"):
         export_index(db, tree, out, tool_version="0-test")
     assert (out / planted).read_text(encoding="utf-8") == "keep me"
+
+
+# ── import ───────────────────────────────────────────────────────────────────
+
+
+def dump(index: LocalIndex) -> dict[str, list[str]]:
+    """Every node and edge, derived columns included, with the root made relative."""
+    root = index.tree.resolve().as_posix()
+    rows: dict[str, list[str]] = {}
+    with sqlite3.connect(index.db) as con:
+        con.row_factory = sqlite3.Row
+        for table in ("nodes", "edges"):
+            found = []
+            for row in con.execute(f"select * from {table}"):
+                record = {
+                    key: row[key].replace(root, ROOT_TOKEN)
+                    if isinstance(row[key], str)
+                    else row[key]
+                    for key in row.keys()
+                    if key not in ("id", "updated_at", "community_id")
+                }
+                found.append(json.dumps(record, sort_keys=True))
+            rows[table] = sorted(found)
+    return rows
+
+
+def clone(source: Path, target: Path) -> Path:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    git(source.parent, "clone", "-q", str(source), str(target))
+    return target
+
+
+def spied(index: LocalIndex) -> list[str]:
+    ran: list[str] = []
+    real = index._run
+
+    def spy(command: str, *args: str) -> str:
+        ran.append(command)
+        return real(command, *args)
+
+    index._run = spy
+    return ran
+
+
+@pytest.fixture
+def exported(tmp_path) -> tuple[Path, Path]:
+    """The CI checkout and its export."""
+    ci = make_repo(tmp_path / "ci" / "repo")
+    export_index(built(ci, tmp_path / "ci-data").db, ci, tmp_path / "export")
+    return ci, tmp_path / "export"
+
+
+@needs_crg
+def test_a_seed_is_imported_instead_of_built_and_round_trips(exported, tmp_path):
+    ci, export = exported
+    laptop = clone(ci, tmp_path / "laptop" / "my checkout")
+    index = LocalIndex(laptop, tmp_path / "d", home_dir=tmp_path / "d" / "home", seed=export)
+    ran = spied(index)
+    index.ensure()
+
+    assert "build" not in ran and "update" not in ran  # the export is at HEAD already
+    assert index.seed_note is None and index.fresh()
+    export_index(index.db, laptop, tmp_path / "again")
+    assert folder_bytes(tmp_path / "again") == folder_bytes(export)
+
+
+@needs_crg
+def test_import_then_update_equals_a_fresh_build(exported, tmp_path):
+    ci, export = exported
+    laptop = clone(ci, tmp_path / "laptop" / "repo")
+    write(
+        laptop,
+        {
+            "pkg/extra.py": "from pkg.service import serve\n\n\ndef more():\n    return serve()\n",
+            "pkg/models.py": "class Model:\n    def name(self):\n        return 'x'\n\n"
+            "    def other(self):\n        return 1\n",
+        },
+    )
+    (laptop / "pkg" / "api.py").unlink()
+    git(laptop, "add", "-A")
+    git(laptop, "commit", "-qm", "ahead")
+    write(laptop, {"pkg/wip.py": "from pkg.models import Model\n"})  # uncommitted, untracked
+
+    imported = LocalIndex(laptop, tmp_path / "i", home_dir=tmp_path / "i" / "home", seed=export)
+    ran = spied(imported)
+    imported.ensure()
+    fresh = built(laptop, tmp_path / "f")
+
+    assert "build" not in ran and "update" in ran
+    assert dump(imported) == dump(fresh)
+    assert imported.indexed_files() == fresh.indexed_files()
+    assert "pkg/wip.py" in imported.indexed_files() and "pkg/api.py" not in fresh.indexed_files()
+
+
+def edit_manifest(export: Path, **changes) -> None:
+    path = export / MANIFEST
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest.update(changes)
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_a_different_tool_version_is_refused_naming_both(tmp_path):
+    with pytest.raises(ExportMismatch) as refused:
+        check_tool({"tool": "code-review-graph", "tool_version": "2.3.8"}, "2.3.9")
+    assert "2.3.8" in str(refused.value) and "2.3.9" in str(refused.value)
+    with pytest.raises(ExportError, match="not installed"):
+        check_tool({"tool": "code-review-graph", "tool_version": "2.3.9"}, None)
+
+
+@needs_crg
+@pytest.mark.parametrize(
+    ("changes", "named"),
+    [
+        ({"tool_version": "2.3.8"}, "2.3.8"),
+        ({"schema_version": 12}, "12"),
+        ({"format": 2}, "format 2"),
+        ({"tool": "another-indexer"}, "another-indexer"),
+    ],
+)
+def test_a_mismatched_export_is_refused_and_writes_nothing(exported, tmp_path, changes, named):
+    ci, export = exported
+    edit_manifest(export, **changes)
+    index = LocalIndex(ci, tmp_path / "d", home_dir=tmp_path / "d" / "home")
+    with pytest.raises(ExportMismatch, match=named):
+        index.load_export(export)
+    assert not index.db.exists()
+    assert [p.name for p in index.data_dir.iterdir() if p.name.startswith("graph")] == []
+
+
+@needs_crg
+def test_a_tampered_shard_is_refused(exported):
+    _, export = exported
+    manifest = json.loads((export / MANIFEST).read_text(encoding="utf-8"))
+    shard = export / manifest["files"]["pkg/models.py"]["shard"]
+    shard.write_bytes(shard.read_bytes().replace(b"Model", b"Modal"))
+    with pytest.raises(ExportError, match="sha256"):
+        read_export(export)
+
+
+@needs_crg
+@pytest.mark.parametrize("shard", ["../outside.jsonl", "/etc/passwd", "shards/../../x.jsonl"])
+def test_unsafe_shard_names_are_refused(exported, shard):
+    _, export = exported
+    manifest = json.loads((export / MANIFEST).read_text(encoding="utf-8"))
+    manifest["files"]["pkg/models.py"]["shard"] = shard
+    (export / MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ExportError, match="shard"):
+        read_export(export)
+
+
+def test_a_folder_without_a_manifest_is_no_export(tmp_path):
+    with pytest.raises(ExportError, match="not an index export"):
+        read_export(tmp_path)
+
+
+@needs_crg
+def test_a_failed_import_keeps_the_old_index(exported, tmp_path):
+    ci, export = exported
+    index = built(ci, tmp_path / "d")
+    before = dump(index)
+    edit_manifest(export, schema_version=99)
+    with pytest.raises(ExportMismatch):
+        index.load_export(export)
+    assert dump(index) == before and index.fresh()
+
+
+@needs_crg
+def test_a_seed_that_cannot_be_imported_falls_back_to_a_build(exported, tmp_path):
+    ci, export = exported
+    edit_manifest(export, tool_version="0.0.1")
+    index = LocalIndex(ci, tmp_path / "d", home_dir=tmp_path / "d" / "home", seed=export)
+    ran = spied(index)
+    index.ensure()
+    assert "build" in ran and index.fresh()
+    assert "0.0.1" in index.seed_note
