@@ -2045,11 +2045,15 @@ name = "sdlc-commons"
 version = "0.1.0"
 source = { editable = "commons" }
 dependencies = [
+    { name = "filelock" },
     { name = "sdlc-harness" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "sdlc-harness", git = "https://github.com/cbeyondcloud/sdlc-harness?rev=ce4ab12bd17e82d882aba07676259c5d3f0e1638" }]
+requires-dist = [
+    { name = "filelock", specifier = "==4.2.1" },
+    { name = "sdlc-harness", git = "https://github.com/cbeyondcloud/sdlc-harness?rev=ce4ab12bd17e82d882aba07676259c5d3f0e1638" },
+]
 
 [[package]]
 name = "sdlc-harness"
