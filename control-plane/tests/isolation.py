@@ -402,6 +402,18 @@ async def _routing_apply_in_b(api) -> dict[str, str]:
     return {"id": str(row["id"]), "version": row["policy_version"]}
 
 
+async def _personal_backup_in_b(api) -> dict[str, str]:
+    """A personal backup event of tenant b's admin, on its own device (written as owner)."""
+    from agentic_cp.tenancy.context import tenant_tx
+
+    async with tenant_tx(api.db.owner, api.b.id) as conn:
+        row = await _personal_event_row(conn, api.b.id)
+        row["user_id"] = api.b.admin_id
+        row["content"] = f"b-only note {uuid.uuid4().hex}"
+        await _insert(conn, "personal_events", row)
+    return {"device": row["device"], "content": row["content"]}
+
+
 async def _token_in_b(api) -> dict[str, str]:
     issued = await api.post("/v1/tokens", api.b.admin_token, {"name": "b-only"})
     assert issued.status_code == 201, issued.text
@@ -615,6 +627,19 @@ ENDPOINT_CASES += [
         body={"handles": ["git.example.test:someone"]},
     ),
     EndpointCase("routing", "GET", "/v1/routing", _routing_apply_in_b, must_not_list=True),
+    EndpointCase(
+        # another tenant's device is a new, unknown chain here: the same refusal as for a
+        # device nobody used (an entry that is not an event)
+        "personal",
+        "POST",
+        "/v1/personal/devices/{device}/events",
+        _personal_backup_in_b,
+        body={"entries": [{"seq": 2}]},
+        expect_status=422,
+    ),
+    EndpointCase(
+        "personal", "GET", "/v1/personal/files", _personal_backup_in_b, must_not_list=True
+    ),
     EndpointCase("runs", "GET", "/v1/runs/{run_id}", _run_in_b),
     EndpointCase("runs", "GET", "/v1/runs/{run_id}/events", _run_in_b),
     EndpointCase(
