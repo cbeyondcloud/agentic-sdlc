@@ -1,0 +1,4 @@
+# Org-wide settings.
+allowed_repo_patterns: ["github.com/acme/*"]
+tool_mirror_url: https://artifacts.acme.example/agentic
+allow_repo_pipelines: false

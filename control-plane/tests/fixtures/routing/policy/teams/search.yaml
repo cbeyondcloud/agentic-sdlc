@@ -1,0 +1,5 @@
+# A second team for the routing-generation fixture: a fractional budget and request limits.
+monthly_budget_usd: 512.5
+rate_limit:
+  requests_per_minute: 120
+  requests_per_hour: 3000

@@ -1,0 +1,14 @@
+# Repo sensitivity classes for the routing-generation fixture (M2-09): one class that allows
+# every tier (no class rules), one that leaves a tier out, one pinned to a local model.
+default_classification: internal
+classifications:
+  internal:
+    allowed_tiers: [deep-reasoning, balanced, fast, local]
+    allowed_backends: [native]
+  confidential:
+    allowed_tiers: [balanced, deep-reasoning, local]
+    allowed_backends: [native]
+  restricted:
+    allowed_tiers: [local]
+    allowed_models: [ollama/qwen-coder]
+    allowed_backends: [native]
