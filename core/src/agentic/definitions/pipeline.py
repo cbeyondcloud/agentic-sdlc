@@ -163,6 +163,9 @@ class PipelineDefinition(BaseModel):
     version: str
     regime: Literal["solo", "team", "regulated"] = "team"  # gate regime (spec §6.1)
     max_minutes: int | None = Field(default=None, ge=1)  # run wall-clock limit (M1-26)
+    # a run reaching its end on a failing review or test report pauses for a person
+    # (DF-238); `complete` is for a pipeline whose product is that report (DF-263, DF-269)
+    failing_handoff: Literal["pause", "complete"] = "pause"
     inputs: dict[str, dict[str, Any]] = {}
     steps: list[Step] = Field(min_length=1)
 

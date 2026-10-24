@@ -64,6 +64,28 @@ def test_a_run_registers_with_the_org_checks_first(org, gateway, cli, policy_rep
     assert body["policy_version"].startswith(("git:", "sha256:"))
 
 
+def test_registration_sends_the_overlay(org, gateway, cli, policy_repo):
+    """M2-23 (D33): the approved hash covers the base and the overlay, so the overlay
+    applied for this repository goes to the control plane by path and hash, with the
+    version of the pipeline the team gets (M2-15)."""
+    rel = "teams/payments/pipelines/overlays/app.yaml"
+    overlay = policy_repo / rel
+    overlay.parent.mkdir(parents=True)
+    overlay.write_bytes(b"pipelines:\n  deliver:\n    max_minutes: 30\n")
+    assert start(cli).code == ExitCode.PAUSED
+    (body,) = org.registrations
+    assert body["overlay_file"] == rel
+    assert body["overlay_sha256"] == "sha256:" + hashlib.sha256(overlay.read_bytes()).hexdigest()
+    assert body["pipeline_file"] == "pipelines/deliver.yaml"  # the base file, as approved
+    assert body["pipeline_version"] == "1.0.0"
+
+
+def test_registration_without_an_overlay_sends_none(org, gateway, cli):
+    assert start(cli).code == ExitCode.PAUSED
+    (body,) = org.registrations
+    assert body["overlay_file"] is None and body["overlay_sha256"] is None
+
+
 def test_the_run_budget_is_registered_for_budget_alerts(org, gateway, cli):
     """M2-16: the control plane alerts at 80 % and 100 % of the budget it was told."""
     assert start(cli, "--budget", "12.5").code == ExitCode.PAUSED

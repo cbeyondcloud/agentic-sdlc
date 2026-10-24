@@ -5,16 +5,50 @@ resolver (agentic.policy.resolve, M1-04) checks every request against.
 """
 
 import re
+from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from agentic.definitions import ChildLimits, DenyRules, Limits
+from agentic.definitions.discovery import PolicyRules
+from agentic.definitions.versions import Deprecations, Pins, Rollout
 
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")  # typos in policy files are errors
+
+
+def _checkpoint_glob(pattern: str) -> str:
+    """One `checkpoint_exclude` entry (review F3): a git glob relative to the repository
+    that git accepts on every laptop and that leaves some new file to commit. A wrong one
+    would otherwise fail every step's checkpoint after its model spend, or delete the
+    agent's new files instead of committing them."""
+    segments = pattern.split("/")
+    if pattern != pattern.strip() or "\n" in pattern:
+        raise ValueError(f"{pattern!r}: no surrounding blanks or line breaks")
+    if pattern.startswith(("/", "!")) or ":" in pattern:
+        raise ValueError(f"{pattern!r}: a glob relative to the repository (no /, ! or :)")
+    if "\\" in pattern:
+        raise ValueError(f"{pattern!r}: separate folders with / (a \\ escapes in a git glob)")
+    if ".." in segments:
+        raise ValueError(f"{pattern!r}: no .. - a glob inside the repository")
+    if all(set(segment) <= set("*?") for segment in segments):
+        raise ValueError(
+            f"{pattern!r}: matches every new file - the agent's work would be deleted, not "
+            "committed; name the folders or files to leave out"
+        )
+    if pattern.count("[") != pattern.count("]"):
+        raise ValueError(f"{pattern!r}: an unclosed [ ]")
+    return pattern
 
 
 class ModelPrice(_Strict):
@@ -190,6 +224,9 @@ class TeamPolicy(_Strict):
     # (never the native loop; M2-47, D28)
     backend_plugins: list[str] = []
     auto_trip: TeamAutoTrip | None = None  # M2-11: tighter thresholds only
+    # versions this team keeps whatever the rollout says (M2-15); each must exist in the
+    # policy repo and is still refused once deprecated past its date
+    pins: Pins = Pins()
 
 
 #: Read-denied in every sandbox, whatever policy adds: where credentials live (D38).
@@ -563,6 +600,17 @@ class OrgPolicy(_Strict):
     tool_mirror_url: str | None = None
     tool_pins: dict[str, ToolPin] = {}  # tools `init` fetches from the mirror (M1-51)
     allow_repo_pipelines: bool = False  # D33: pipelines only from the policy repo
+    # M2-23 (spec §6.1): per pipeline, the steps, gates and loops no overlay may remove or
+    # weaken; preflight refuses a pipeline missing one, whatever the cause
+    required_steps: dict[str, list[str]] = {}
+    # DF-315/DF-317: untracked paths (git globs, relative to the tree) a step's checkpoint
+    # leaves out on top of the framework's list, e.g. "**/target/**"; it only ever adds
+    checkpoint_exclude: list[
+        Annotated[str, StringConstraints(min_length=1), AfterValidator(_checkpoint_glob)]
+    ] = []
+    # M2-15 (spec §12.5, rollout.yaml): new versions team by team, and deprecations
+    rollout: Rollout = Rollout()
+    deprecated: Deprecations = Deprecations()
     # M2-08: older CLIs are refused runs with an upgrade message (the control plane's own
     # floor applies too; the higher wins). Release, pre-release, post and dev parts only:
     # every value this accepts is a PEP 440 version the control plane compares, so none is
@@ -605,6 +653,20 @@ class OrgPolicy(_Strict):
         lowered = model.lower()
         matches = [name for name in self.prices if name.lower() in lowered]
         return self.prices[max(matches, key=len)] if matches else None
+
+    def rules(self, *, team: str | None, repo: str | None, today: date) -> PolicyRules:
+        """What discovery needs to give `team`, in the repository whose origin key is
+        `repo`, the versions and overlay it gets on `today` (M2-15, M2-23)."""
+        team_policy = self.teams.get(team) if team else None
+        return PolicyRules(
+            team=team,
+            repo=repo,
+            today=today,
+            rollout=self.rollout,
+            deprecated=self.deprecated,
+            pins=team_policy.pins if team_policy is not None else Pins(),
+            required_steps=self.required_steps,
+        )
 
     @model_validator(mode="before")
     @classmethod
@@ -653,6 +715,14 @@ class OrgPolicy(_Strict):
         for team in self.team_overrides:
             if team not in self.teams:
                 problems.append(f"team_overrides names unknown team '{team}'")
+        for kind, entries in (
+            ("agents", self.rollout.agents),
+            ("pipelines", self.rollout.pipelines),
+        ):
+            for name, entry in entries.items():
+                for team in entry.teams:
+                    if team not in self.teams:
+                        problems.append(f"rollout.{kind}.{name} names unknown team '{team}'")
         for type_name, agent_type in self.agent_types.items():
             check_tiers(f"agent_types.{type_name}", [agent_type.tier])
             for tool in agent_type.tools:

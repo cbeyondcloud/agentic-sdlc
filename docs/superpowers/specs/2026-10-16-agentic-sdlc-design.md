@@ -410,7 +410,7 @@ steps:
 ```
 
 - `when` / `until` are expressions over handoff front-matter fields, evaluated by a **safe expression evaluator** (OSS to be chosen; candidates cel-python, simpleeval — spike S13).
-- **Overlays**: a repo can overlay an org pipeline (add/replace a step, change a gate's approver) without forking it.
+- **Overlays** (M2-23): a team tailors an org pipeline for one repository without forking it, in `teams/<team>/pipelines/overlays/<repo>.yaml` in the policy repo (D33: only the team's leads and org admins change it; the file name is the repository's name, `repo: host/owner/name` binds it to exactly one). An overlay may add steps (`after:`/`before:` a named step), remove steps, gates and loops that are not org-required, turn `four_eyes` on, set `on_reject` or (not for an org-required gate) the approver role, tighten the regime and lower `max_minutes`; anything else is refused with the rule named. The resolved pipeline (base + overlay) is what preflight checks and the run plan shows, and the control plane's approved-hash check covers the base file and the overlay file (a run that leaves out the overlay applying to it is refused).
 - Gates: **approve**, **reject with feedback** (routes back per pipeline), or **edit the handoff then approve** (opens `$EDITOR`).
 - **Failures route back, never complete (DF-238):** work goes back on a failure through a loop whose `until` reads the judging handoff (e.g. QA inside the build loop, running every round so the loop always ends on a report about the current change, `until: "review.open_blocking == 0 && test_report.verdict == 'pass'"`). An exhausted loop's gate refuses a bare approval while `until` is false: a person edits a pinned handoff so it holds (marking a review finding accepted, or naming a failing test or criterion in the test report's `accepted_failures` - an attributable acceptance that only a person may write, never an agent), rejects with feedback for another pass, or stops the run. Only blocking findings count towards a loop's oscillation check. A run whose newest review or test report still reports a failure at the end pauses `failing-handoff` instead of completing.
 - Preflight compiles the pipeline and checks step N `produces` matches step N+1 `consumes`.
@@ -418,8 +418,8 @@ steps:
 ### 6.1 Gate model (from Zyroflo)
 
 - **Gate regimes** per pipeline or repo: `solo` (starter may approve), `team` (approver role, optional four-eyes), `regulated` (four-eyes mandatory, signed approvals, required evidence).
-- **Org-required phases and gates**: org policy can declare that certain steps/gates (e.g. review, security pre-pass, QA) cannot be removed by repo overlays; preflight rejects pipelines that drop them.
-- **Gate re-anchoring**: when an overlay removes a step, its gate re-anchors to the nearest remaining step rather than disappearing.
+- **Org-required phases and gates**: org policy (`org.yaml` `required_steps: {<pipeline>: [<step, gate or loop>]}`) declares steps/gates (e.g. review, security pre-pass, QA) that overlays can never remove or weaken; preflight rejects a resolved pipeline that lacks one, whatever dropped it.
+- **Gate re-anchoring**: when an overlay removes a step, its gate re-anchors to the previous remaining step (with none before it, right after the next one) rather than disappearing; a gate whose `on_reject` named the removed step routes to the step now in its place. Each re-anchoring is shown with the run's plan. An org-required gate never re-anchors: removing the step it approves is refused (re-anchored, it would approve other work), so `required_steps` should list the work (e.g. the build loop's developer, review and QA) as well as the gates. `agentic policy check` and the control plane's sync run the laptop-independent preflight checks (required steps, agents, `on_reject` targets, conditions, handoff compatibility) on every team's pipelines with each overlay applied, so a breaking change is caught at the pull request, not on a laptop.
 - **Diff-size budget per review batch**: the Developer splits work so each gated diff stays under a configurable size, keeping human review readable.
 - **Digest pinning**: an approval records the digest of the exact handoff and diff approved; any later change invalidates the approval (§7.3).
 
@@ -680,7 +680,7 @@ Each repo has a classification label (e.g. `public`, `internal`, `confidential`,
 
 ### 12.5 Versioning and rollout
 
-Agents, pipelines and skills are semver-versioned in the policy repo. A new version can be rolled out team by team (`rollout: [team-a, team-b]`) and a pipeline can pin agent versions. Deprecated versions warn, then block after a date.
+Agents, pipelines and skills are semver-versioned in the policy repo (M2-15). A new version of an agent or pipeline is rolled out team by team in `policy/rollout.yaml` (`<name>: {version, previous, teams: [...]}`), the previous version kept under `<layer>/agents|pipelines/versions/<name>/<version>.*`; a team's leads may pin a version (`pins:` in `policy/teams/<team>.yaml`). Resolution order: the team's pin, else the rollout's `previous` for a team not in its `teams` (org definitions only: a team's own is the team's to pin), else the current file; then the team's overlay for the repository. Deprecated versions (`deprecated:` in `rollout.yaml`, agents, pipelines and skills) warn until `blocked_from`, then block - in the CLI (org and standalone policy) and at run registration by the control plane's clock, which also refuses a version other than the team's pin and a new version run by a team outside its rollout. Repo-layer definitions are never versioned. A pipeline pinning agent versions is not offered yet.
 
 ### 12.6 Catalog
 

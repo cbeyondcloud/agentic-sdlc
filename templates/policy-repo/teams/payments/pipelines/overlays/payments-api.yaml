@@ -1,0 +1,24 @@
+# An overlay (spec §6, D33): team payments' changes to org pipelines for ONE repository,
+# the one whose name is this file's name (payments-api, in any letter case). Only this
+# team's leads and the org admins change it (CODEOWNERS). EDIT or delete this example.
+#
+# An overlay may remove steps, gates and loops that are not org-required (remove: [...]),
+# add steps (add: [{after: <step>, step: {...}}] or before:), turn four_eyes on, set a
+# gate's on_reject (an earlier step) or (not for an org-required gate) its approver_role,
+# tighten the regime and lower max_minutes. It can never remove or weaken an org-required
+# step or gate (policy/org.yaml required_steps), nor remove the step such a gate approves:
+# the policy check, the control plane's sync and every laptop refuse it, naming the rule.
+# When a removed step had another gate after it, that gate re-anchors to the previous
+# remaining step, and the run's plan says so.
+#
+# repo: git.example.com/your-org/payments-api   # optional: bind to exactly one repository
+#
+# The example below is commented out because this template ships no pipelines: an
+# overlay of a pipeline the policy repo does not have is refused. Uncomment it once the
+# library's pipelines are copied in (README, step 1).
+#
+# pipelines:
+#   feature-delivery:
+#     gates:
+#       review-approval: {four_eyes: true}   # a second person signs off every change
+#     max_minutes: 240

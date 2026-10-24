@@ -23,6 +23,7 @@ a repository without one is a single component.
 """
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,16 +33,19 @@ from tools.sdlc import worktree as zyroflo
 
 from sdlc_commons.ledger import run_id_refusal
 
+_LOG = logging.getLogger("sdlc_commons.worktrees")
+
 #: Untracked files a checkpoint never commits: what running a repository's tests or
 #: linters leaves in the tree (bytecode, tool caches, coverage data, installed packages).
 #: A repository that ignores them in .gitignore is unaffected; one that does not would
 #: otherwise get them on the run branch and in its pull request (M1-68). The checkpoint
 #: then deletes them (the next run regenerates them), as a fresh attempt already does.
 #: Tracked files under these paths are still committed. Git glob pathspecs, relative to
-#: the tree.
+#: the tree. Org policy adds to them (`org.yaml` `checkpoint_exclude`), never removes
+#: one; each path left out is logged (DF-315, DF-317).
 GENERATED: tuple[str, ...] = (
     "**/__pycache__/**",
-    "**/*.py[cod]",
+    "**/*.py[co]",  # not .pyd: a native extension is work
     "**/.pytest_cache/**",
     "**/.mypy_cache/**",
     "**/.ruff_cache/**",
@@ -143,9 +147,11 @@ def _live(record: dict) -> dict[str, Tree]:
 class StepCheckpoints:
     """Per-step checkpoints on one run's trees (all components at once)."""
 
-    def __init__(self, target: Path, run_id: str) -> None:
+    def __init__(self, target: Path, run_id: str, *, exclude: Sequence[str] = ()) -> None:
         self.worktrees = RunWorktrees(target, run_id)
         self.target, self.run_id = self.worktrees.target, run_id
+        # the framework's exclusions plus the org's (`exclude`): only ever more
+        self.generated = tuple(dict.fromkeys((*GENERATED, *exclude)))
 
     def prepare(self) -> Path:
         """Make the run's trees (harmless when they exist) and return where agents
@@ -189,13 +195,28 @@ class StepCheckpoints:
                 )
             # new files, minus what running the tests leaves behind; then every change to
             # a tracked file, wherever it is (a repository may vendor node_modules)
-            _git(path, "add", "-A", "--", ".", *(f":(exclude,glob){g}" for g in GENERATED))
+            generated = [f":(glob){g}" for g in self.generated]
+            warned = set()
+            for pattern in (g for g in self.generated if g not in GENERATED):
+                # an org pattern broader than meant deletes the agent's work: say so loudly
+                for rel in _new_files(path, f":(glob){pattern}") - warned:
+                    warned.add(rel)
+                    _LOG.warning(
+                        "checkpoint of %s left out and deleted %s (org checkpoint_exclude %s)",
+                        name,
+                        rel,
+                        pattern,
+                    )
+            for rel in sorted(_new_files(path, *generated) - warned):
+                _LOG.info("checkpoint of %s left out %s (generated)", name, rel)
+            excluded = (f":(exclude,glob){g}" for g in self.generated)
+            _git(path, "add", "-A", "--", ".", *excluded)
             _git(path, "add", "-u")
             if _git(path, "diff", "--cached", "--name-only"):
                 _git(path, *self._commit_config(path), "commit", "-q", "--no-verify", "-m", message)
             # and the caches left out go, so the tree is clean again: removing the run's
             # trees at closure refuses any uncommitted change (review F2); ignored files stay
-            _git(path, "clean", "-q", "-fd", "--", *(f":(glob){g}" for g in GENERATED))
+            _git(path, "clean", "-q", "-fd", "--", *generated)
             heads[name] = _git(path, "rev-parse", "HEAD")
         self._keep_base(None)  # the next step starts from this checkpoint
         return heads
@@ -318,6 +339,12 @@ def _git(where: Path, *args: str, check: bool = True) -> str:
     """A checkpoint git call: never runs an fsmonitor command the tree's or the
     repository's config names (agent-reachable without a sandbox, review I5)."""
     return worktree_git(where, "-c", "core.fsmonitor=false", *args, check=check)
+
+
+def _new_files(tree: Path, *pathspecs: str) -> set[str]:
+    """Untracked files in `tree` git does not ignore that match `pathspecs`."""
+    listing = _git(tree, "ls-files", "-z", "--others", "--exclude-standard", "--", *pathspecs)
+    return set(filter(None, listing.split("\0")))
 
 
 def _nested_repositories(tree: Path) -> list[str]:

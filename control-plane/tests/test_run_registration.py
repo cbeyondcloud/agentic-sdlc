@@ -117,6 +117,7 @@ async def test_every_check_passes_and_the_run_holds_a_slot(api, version):
         "killswitch",
         "policy",
         "pipeline",
+        "versions",
         "concurrency",
         "budget",
     }
@@ -337,3 +338,192 @@ async def test_a_registered_run_keeps_its_budget_for_alerts(api, version):
     async with tenant_tx(api.db.app, api.a.id) as conn:
         found = dict((await conn.execute(select(runs.c.run_id, runs.c.budget_usd))).all())
     assert found == {"b-1": Decimal("12.50"), "b-2": None}
+
+
+# ── overlays and versions (M2-23, M2-15; D33 integrity of the resolved pipeline) ─────────
+
+OVERLAY = "pipelines:\n  deliver:\n    max_minutes: 30\n"
+OVERLAY_SHA = "sha256:" + hashlib.sha256(OVERLAY.encode()).hexdigest()
+PAYMENTS_OVERLAY = "teams/payments/pipelines/overlays/app.yaml"
+WEB_OVERLAY = "teams/web/pipelines/overlays/app.yaml"
+
+
+def _agent(version: str) -> str:
+    return (
+        f"---\nname: developer\ntype: general\nversion: {version}\ndescription: builds\n"
+        "---\nBuild it.\n"
+    )
+
+
+@pytest.fixture
+async def overlaid(api, tmp_path):
+    """Team payments has an approved overlay for every repository named `app`; team web
+    has one too."""
+    repo = make_policy_repo(tmp_path / "policy", teams=("payments", "web"))
+    write(repo, "pipelines/deliver.yaml", PIPELINE)
+    write(repo, PAYMENTS_OVERLAY, OVERLAY)
+    write(repo, WEB_OVERLAY, OVERLAY.replace("30", "20"))
+    commit(repo, "a pipeline and two overlays")
+    return await _sync(api, api.a, repo)
+
+
+def _overlaid(version, run_id="run-1", **over):
+    body = _body(version, run_id, overlay_file=PAYMENTS_OVERLAY, overlay_sha256=OVERLAY_SHA)
+    return {**body, **over}
+
+
+async def test_overlaid_run_passes(api, overlaid):
+    result = await _register(api, api.a.admin_token, _overlaid(overlaid))
+    check = _check(result, "pipeline")
+    assert check["passed"] and result["registered"], result["checks"]
+    assert PAYMENTS_OVERLAY in check["detail"]
+
+
+async def test_edited_overlay_refused(api, overlaid):
+    edited = "sha256:" + "e" * 64
+    result = await _register(api, api.a.admin_token, _overlaid(overlaid, overlay_sha256=edited))
+    check = _check(result, "pipeline")
+    assert not check["passed"] and result["registered"] is False
+    assert OVERLAY_SHA in check["detail"] and edited in check["detail"]
+    assert PAYMENTS_OVERLAY in check["detail"]
+
+
+async def test_overlay_of_another_team_refused(api, overlaid):
+    web_sha = "sha256:" + hashlib.sha256(OVERLAY.replace("30", "20").encode()).hexdigest()
+    body = _overlaid(overlaid, overlay_file=WEB_OVERLAY, overlay_sha256=web_sha)
+    result = await _register(api, api.a.admin_token, body)
+    check = _check(result, "pipeline")
+    assert not check["passed"] and result["registered"] is False
+    assert "team web" in check["detail"]
+
+
+async def test_skipped_overlay_refused(api, overlaid):
+    """A run that leaves out the overlay its team approved for this repository (an old or
+    altered CLI) runs a pipeline nobody approved for it."""
+    body = _body(overlaid)  # no overlay_file
+    result = await _register(api, api.a.admin_token, body)
+    check = _check(result, "pipeline")
+    assert not check["passed"] and result["registered"] is False
+    assert PAYMENTS_OVERLAY in check["detail"]
+    other_repo = _body(overlaid, "run-2", repo="github.com/acme/billing")  # none applies
+    assert (await _register(api, api.a.admin_token, other_repo))["registered"]
+
+
+async def test_overlay_for_another_repository_refused(api, overlaid):
+    body = _overlaid(overlaid, repo="github.com/acme/billing")
+    check = _check(await _register(api, api.a.admin_token, body), "pipeline")
+    assert not check["passed"] and "does not apply" in check["detail"]
+
+
+@pytest.fixture
+async def rolled(api, tmp_path):
+    """developer 1.1.0 is rolled out to team web only (1.0.0 archived); a pipeline version
+    1.0.0 is archived beside the current deliver."""
+    repo = make_policy_repo(tmp_path / "policy", teams=("payments", "web"))
+    write(repo, "pipelines/deliver.yaml", PIPELINE.replace("1.0.0", "2.0.0"))
+    write(repo, "pipelines/versions/deliver/1.0.0.yaml", PIPELINE)
+    write(repo, "agents/developer.md", _agent("1.1.0"))
+    write(repo, "agents/versions/developer/1.0.0.md", _agent("1.0.0"))
+    blocked = (api.clock.now + timedelta(days=1)).date().isoformat()
+    write(
+        repo,
+        "policy/rollout.yaml",
+        "rollout:\n  agents:\n    developer: {version: 1.1.0, previous: 1.0.0, teams: [web]}\n"
+        f"deprecated:\n  pipelines:\n    deliver:\n      '1.0.0': {{blocked_from: {blocked}}}\n",
+    )
+    write(repo, "policy/teams/web.yaml", "pins:\n  pipelines: {deliver: 2.0.0}\n")
+    commit(repo, "a rollout, a deprecation and a pin")
+    return await _sync(api, api.a, repo)
+
+
+def _rolled(version, run_id="run-1", **over):
+    archived = {
+        "pipeline_file": "pipelines/versions/deliver/1.0.0.yaml",
+        "pipeline_sha256": SHA,
+        "pipeline_version": "1.0.0",
+        "agents": ["developer@1.0.0"],
+    }
+    return {**_body(version, run_id), **archived, **over}
+
+
+async def test_held_back_team_runs_the_archived_versions(api, rolled):
+    result = await _register(api, api.a.admin_token, _rolled(rolled))
+    assert result["registered"], result["checks"]
+    assert _check(result, "versions")["passed"]
+    assert _check(result, "pipeline")["passed"]  # the archived file is approved too
+
+
+async def test_version_outside_rollout_refused(api, rolled):
+    result = await _register(api, api.a.admin_token, _rolled(rolled, agents=["developer@1.1.0"]))
+    check = _check(result, "versions")
+    assert not check["passed"] and result["registered"] is False
+    assert "not rolled out to team payments" in check["detail"]
+
+
+async def test_pinned_version_mismatch_refused(api, rolled):
+    body = _rolled(rolled, team="web", agents=["developer@1.1.0"])
+    check = _check(await _register(api, api.a.admin_token, body), "versions")
+    assert not check["passed"] and "pins pipeline deliver to 2.0.0" in check["detail"]
+
+
+async def test_blocked_version_refused_by_server_clock(api, rolled):
+    """The deprecation is judged by the control plane's clock, not the laptop's: refused
+    from `blocked_from`, warned-only the day before."""
+    before = await _register(api, api.a.admin_token, _rolled(rolled, dry_run=True))
+    assert _check(before, "versions")["passed"]
+    assert "deprecated" in _check(before, "versions")["detail"]  # the warning is shown
+    api.clock.advance(timedelta(days=1))
+    after = await _register(api, api.a.admin_token, _rolled(rolled))
+    check = _check(after, "versions")
+    assert not check["passed"] and after["registered"] is False
+    assert "deliver@1.0.0 is deprecated and refused since" in check["detail"]
+
+
+@pytest.fixture
+async def pipeline_rolled(api, tmp_path):
+    """deliver 2.0.0 is rolled out to team web only (1.0.0 archived); team payments has
+    its own developer agent at the version the org rolls out."""
+    repo = make_policy_repo(tmp_path / "policy", teams=("payments", "web"))
+    write(repo, "pipelines/deliver.yaml", PIPELINE.replace("1.0.0", "2.0.0"))
+    write(repo, "pipelines/versions/deliver/1.0.0.yaml", PIPELINE)
+    write(repo, "agents/developer.md", _agent("1.1.0"))
+    write(repo, "agents/versions/developer/1.0.0.md", _agent("1.0.0"))
+    write(repo, "teams/payments/agents/developer.md", _agent("1.1.0"))
+    write(
+        repo,
+        "policy/rollout.yaml",
+        "rollout:\n  pipelines:\n    deliver: {version: 2.0.0, previous: 1.0.0, teams: [web]}\n"
+        "  agents:\n    developer: {version: 1.1.0, previous: 1.0.0, teams: [web]}\n",
+    )
+    commit(repo, "a pipeline rollout and a team's own agent")
+    return await _sync(api, api.a, repo)
+
+
+CURRENT_SHA = "sha256:" + hashlib.sha256(PIPELINE.replace("1.0.0", "2.0.0").encode()).hexdigest()
+
+
+async def test_the_current_pipeline_version_is_the_approved_files(api, pipeline_rolled):
+    """The control plane reads the version of an approved current file itself: a run that
+    claims the previous version while sending the new file is still outside the rollout."""
+    body = _body(
+        pipeline_rolled,
+        pipeline_sha256=CURRENT_SHA,
+        pipeline_version="1.0.0",
+        agents=["developer@1.1.0"],
+    )
+    check = _check(await _register(api, api.a.admin_token, body), "versions")
+    assert not check["passed"]
+    assert "pipeline deliver@2.0.0 is not rolled out to team payments" in check["detail"]
+
+
+async def test_a_team_owned_agent_is_not_held_by_the_org_rollout(api, pipeline_rolled):
+    """payments' own developer (its layer) is the team's to version: developer@1.1.0 is
+    not the org's rolled-out agent for it."""
+    body = _body(
+        pipeline_rolled,
+        pipeline_file="pipelines/versions/deliver/1.0.0.yaml",
+        pipeline_version="1.0.0",
+        agents=["developer@1.1.0"],
+    )
+    result = await _register(api, api.a.admin_token, body)
+    assert _check(result, "versions")["passed"], result["checks"]

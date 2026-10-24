@@ -1134,7 +1134,7 @@
         "type": "object"
       },
       "OrgCheck": {
-        "description": "One org check: `check` is rbac, killswitch, policy, pipeline, concurrency or budget.",
+        "description": "One org check: `check` is rbac, killswitch, policy, pipeline, versions, concurrency\nor budget.",
         "properties": {
           "check": {
             "title": "Check",
@@ -1714,7 +1714,7 @@
       },
       "RunRegistration": {
         "additionalProperties": false,
-        "description": "`POST /v1/runs`: the org checks before a run starts (spec §8.2), and the run's\nconcurrency slot when they pass. `pipeline_file` is the pipeline's path in the policy\nrepo (None for a repo-layer pipeline) and `pipeline_sha256` the hash of its bytes (D33);\n`agents` (name@version), `models` and `backends` are what the run's steps resolved to.\n`dry_run` runs every check and registers nothing.",
+        "description": "`POST /v1/runs`: the org checks before a run starts (spec §8.2), and the run's\nconcurrency slot when they pass. `pipeline_file` is the pipeline's path in the policy\nrepo (None for a repo-layer pipeline) and `pipeline_sha256` the hash of its bytes (D33);\n`agents` (name@version), `models` and `backends` are what the run's steps resolved to.\n`overlay_file` and `overlay_sha256` are the team's overlay applied to the pipeline, by\nits policy repo path and the hash of its bytes (M2-23; None: no overlay), and\n`pipeline_version` the version of the pipeline the team gets (M2-15).\n`dry_run` runs every check and registers nothing.",
         "properties": {
           "agents": {
             "items": {
@@ -1757,6 +1757,30 @@
             "title": "Models",
             "type": "array"
           },
+          "overlay_file": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overlay File"
+          },
+          "overlay_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overlay Sha256"
+          },
           "pipeline": {
             "maxLength": 128,
             "minLength": 1,
@@ -1786,6 +1810,18 @@
               }
             ],
             "title": "Pipeline Sha256"
+          },
+          "pipeline_version": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Version"
           },
           "policy_version": {
             "maxLength": 80,

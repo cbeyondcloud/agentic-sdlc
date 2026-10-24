@@ -382,9 +382,10 @@ def check_inputs(pipeline: PipelineDefinition, inputs: Mapping[str, str]) -> Non
 
 
 def pipeline_digest(pipeline: PipelineDefinition) -> str:
-    canonical = json.dumps(
-        pipeline.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    )
+    data = pipeline.model_dump(mode="json")
+    if data.get("failing_handoff") == "pause":  # the default left out: runs started before
+        del data["failing_handoff"]  # the key existed still resume (DF-263)
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -446,13 +447,19 @@ class _Run:
             failures = self._failures()
         except _Unusable as problem:
             return self._pause(problem.pause_id, problem.reason)
-        if failures:
+        if failures and self.pipeline.failing_handoff == "complete":  # DF-263, DF-269
+            state.end_reason = self.e.redact(
+                "completed with a failing handoff (the pipeline sets failing_handoff: "
+                "complete): " + "; ".join(failures.values())
+            )
+        elif failures:
             reason = "the run cannot complete while a handoff reports a failure: "
             # pinned, so `agentic show` shows the failing handoffs themselves (DF-268)
             pinned = {
                 rel: self.state.digests.get(rel) or self.recorder.digest(rel) for rel in failures
             }
             reason += "; ".join(failures.values())
+            reason += " (a pipeline whose product is such a report sets failing_handoff: complete)"
             return self._pause(FAILING_PAUSE, reason, artefacts=pinned)
         return self._close("completed")
 

@@ -6,12 +6,14 @@ name no vendor or model, keep `restricted` code away from personal skills and me
 ship the org deny list, and pass the policy-repo gate (`agentic policy check`)."""
 
 import shutil
+from datetime import date
 from pathlib import Path
 
 import pytest
 from test_standalone_policy import VENDORS
 
 from agentic.definitions import DefinitionSet
+from agentic.definitions.versions import Deprecations, Pins, Rollout
 from agentic.policy import load_policy
 from agentic.skills import load_catalog
 from agentic.skills.gate import check_policy_repo
@@ -20,6 +22,7 @@ from agentic.yamlio import read_text
 REPO = Path(__file__).resolve().parents[3]
 TEMPLATE = REPO / "templates" / "policy-repo"
 LIBRARY = REPO / "library"
+TODAY = date(2026, 10, 24)
 
 
 @pytest.fixture(scope="module")
@@ -54,6 +57,15 @@ def test_no_vendor_names():
         if path.is_file()
     }
     assert {name: hits for name, hits in found.items() if hits} == {}
+
+
+def test_template_shows_the_prepass_and_checkpoint_keys(policy):
+    """DF-533, DF-315: admins find `review_prepass` (set to its defaults) and the commented
+    `checkpoint_exclude` example in org.yaml."""
+    text = read_text(TEMPLATE / "policy" / "org.yaml")
+    assert "\nreview_prepass:\n" in text and "# checkpoint_exclude:" in text
+    assert policy.review_prepass.enabled and not policy.review_prepass.online_vulnerability_lookup
+    assert policy.checkpoint_exclude == []
 
 
 def test_tiers_are_placeholders(policy):
@@ -124,6 +136,94 @@ def test_the_gate_names_a_broken_team_catalog(tmp_path: Path):
     assert any(p.startswith("teams/payments/skills/catalog.yaml") for p in problems), problems
 
 
+def test_template_rollout_loads(policy):
+    """M2-15: the example rollout file loads with nothing rolled out (its examples are
+    comments: a live entry needs an archived previous version)."""
+    assert policy.rollout == Rollout() and policy.deprecated == Deprecations()
+    assert policy.teams["payments"].pins == Pins()
+    text = read_text(TEMPLATE / "policy" / "rollout.yaml")
+    for needed in ("previous:", "teams:", "blocked_from:", "versions/"):
+        assert needed in text, needed
+    assert "# pins:" in read_text(TEMPLATE / "policy" / "teams" / "payments.yaml")
+
+
+def test_template_overlay_applies_to_the_library_pipeline(policy, tmp_path: Path):
+    """M2-23: the example overlay tightens the library's feature-delivery for one
+    repository of team payments, keeping every org-required gate."""
+    root = with_library(tmp_path)
+    overlay = root / "teams" / "payments" / "pipelines" / "overlays" / "payments-api.yaml"
+    text = read_text(overlay)
+    example = text[text.index("# pipelines:") :]  # the commented example, uncommented
+    overlay.write_text(
+        text.replace(example, "".join(line[2:] for line in example.splitlines(True))),
+        encoding="utf-8",
+    )
+    assert {"requirements-approval", "review-approval"} <= set(
+        policy.required_steps["feature-delivery"]
+    )
+    rules = policy.rules(team="payments", repo="git.example.com/your-org/payments-api", today=TODAY)
+    found = DefinitionSet.discover(
+        org=root, team=root / "teams" / "payments", repo=None, rules=rules
+    )
+    applied = found.overlays["feature-delivery"]
+    assert applied.file.name == "payments-api.yaml"
+    assert "gate review-approval four_eyes on" in applied.notes
+    other = policy.rules(team="payments", repo="git.example.com/your-org/billing", today=TODAY)
+    plain = DefinitionSet.discover(
+        org=root, team=root / "teams" / "payments", repo=None, rules=other
+    )
+    assert plain.overlays == {}
+
+
+def _overlay(root: Path, text: str) -> None:
+    path = root / "teams" / "payments" / "pipelines" / "overlays" / "payments-api.yaml"
+    path.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("pipeline", "removed"),
+    [
+        ("feature-delivery", "[build-review]"),
+        ("feature-delivery", "[develop]"),
+        ("feature-delivery", "[review, qa]"),
+        ("feature-delivery", "[requirements]"),
+        ("bugfix", "[fix-review]"),
+        ("bugfix", "[qa]"),
+    ],
+)
+def test_the_template_keeps_the_build_loop_from_overlays(tmp_path: Path, pipeline, removed):
+    """Review F1: with the template's required_steps, an overlay cannot drop the work the
+    required gates approve - the developer, code review and QA (spec §6.1) - and leave a
+    pull request nobody built, reviewed or tested."""
+    root = with_library(tmp_path)
+    _overlay(root, f"pipelines:\n  {pipeline}:\n    remove: {removed}\n")
+    problems = check_policy_repo(root)
+    assert any(
+        p.startswith("teams/payments/pipelines/overlays/payments-api.yaml: ")
+        and ("rule required-step" in p or "rule required-gate" in p)
+        for p in problems
+    ), problems
+
+
+def test_the_gate_catches_an_overlay_that_breaks_the_pipeline(tmp_path: Path):
+    """Review F2: an overlay that leaves a loop's `until` reading a removed step's handoff
+    passes the overlay rules (nothing it removes is required here) but fails every laptop's
+    preflight - so the policy-repo gate refuses it, naming the overlay."""
+    root = with_library(tmp_path)
+    org = root / "policy" / "org.yaml"
+    text = read_text(org)
+    start, end = text.index("required_steps:"), text.index("# Where `agentic init`")
+    org.write_text(text[:start] + "required_steps: {}\n\n" + text[end:], encoding="utf-8")
+    _overlay(root, "pipelines:\n  feature-delivery:\n    remove: [review, qa]\n")
+    problems = check_policy_repo(root)
+    assert any(
+        p.startswith("teams/payments/pipelines/overlays/payments-api.yaml: ")
+        and "feature-delivery" in p
+        and "reads 'review', which no earlier step produces" in p
+        for p in problems
+    ), problems
+
+
 def test_readme_covers_codeowners_branch_protection_and_bootstrap():
     text = read_text(TEMPLATE / "README.md")
     for needed in (
@@ -137,5 +237,11 @@ def test_readme_covers_codeowners_branch_protection_and_bootstrap():
         "backend_plugins",
         "restricted",
         "agentic skills submit",
+        "pipelines/overlays/<repo>.yaml",
+        "required_steps",
+        "re-anchor",
+        "rollout.yaml",
+        "pins:",
+        "Resolution order",
     ):
         assert needed in text, needed

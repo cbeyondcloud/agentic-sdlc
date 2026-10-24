@@ -27,12 +27,14 @@ import os
 import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, date, datetime
 from functools import cached_property
 from pathlib import Path
 from typing import Any
 
 from agentic.definitions import DefinitionError, DefinitionSet
 from agentic.policy import OrgPolicy, ResolveContext, load_policy
+from agentic.policy.repos import normalise_remote
 from agentic.yamlio import YamlFileError, load_yaml, read_text
 from agentic_cli.config import agentic_home, local_policy_setting, user_config
 from agentic_cli.errors import CliError
@@ -44,6 +46,10 @@ REPO_CONFIG = Path(".agentic") / "config.yaml"
 RUNS = Path(".agentic") / "local" / "runs"
 STANDALONE_POLICY = Path(".agentic") / "local" / "policy"
 INIT_STATE = Path(".agentic") / "local" / "init.json"  # written by `agentic init`
+
+
+def utc_today() -> date:
+    return datetime.now(UTC).date()
 
 
 def find_repo(start: Path) -> Path:
@@ -184,16 +190,43 @@ class Workspace:
         org = self.settings.get("org")
         return bool(org) and root == self.home / "policy" / str(org) / "repo"
 
+    @cached_property
+    def repo_key(self) -> str | None:
+        """This repository as `host/owner/name` (its origin), or None without one: which
+        overlay applies (M2-23), and the repo the control plane checks."""
+        from agentic_cli.repo_guard import origin_url
+
+        remote = origin_url(self.repo)
+        return normalise_remote(remote) if remote else None
+
+    def policy_path(self, path: Path) -> str:
+        """`path` as its POSIX path in the policy repo (the name the control plane and the
+        policy repo's reviewers know it by), or its file name outside it."""
+        root = self.policy_repo
+        try:
+            return Path(path).resolve().relative_to(Path(root).resolve()).as_posix()
+        except (TypeError, ValueError, OSError):
+            return Path(path).name
+
+    def today(self) -> date:
+        """Today (UTC), for deprecations (M2-15); tests replace `utc_today`."""
+        return utc_today()
+
     def definitions(self) -> DefinitionSet:
+        """The agents and pipelines this run gets: each at the version the team gets (its
+        pin, the rollout), with the team's overlay for this repository applied (M2-15,
+        M2-23; the order is in `agentic.definitions.versions`)."""
         if "definitions" not in self._cache:
             root, team = self._policy_root(), self.team
             team_layer = root / "teams" / team if team else None
+            policy = self.policy()
             try:
                 self._cache["definitions"] = DefinitionSet.discover(
                     org=root,
                     team=team_layer if team_layer is not None and team_layer.is_dir() else None,
                     repo=self.repo / ".agentic",
-                    allow_repo_pipelines=self.policy().allow_repo_pipelines,
+                    allow_repo_pipelines=policy.allow_repo_pipelines,
+                    rules=policy.rules(team=team, repo=self.repo_key, today=self.today()),
                 )
             except DefinitionError as error:
                 raise CliError(str(error), ExitCode.INVALID) from error

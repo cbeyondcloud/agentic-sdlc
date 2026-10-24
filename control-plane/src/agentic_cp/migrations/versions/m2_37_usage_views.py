@@ -6,7 +6,7 @@ The view DDL lives in `agentic_cp.dashboards.views`; a later change to it ships 
 migration that drops and re-creates the views (and `db link-usage` is run again).
 
 Revision ID: m2_37_usage_views
-Revises: 0010
+Revises: 0011_audit_ops
 Create Date: 2026-10-24
 """
 
@@ -17,7 +17,7 @@ from agentic_cp.dashboards.views import drop_statements, view_statements
 from agentic_cp.tenancy.rls import schema_of
 
 revision = "m2_37_usage_views"
-down_revision = "0010"
+down_revision = "0011_audit_ops"
 branch_labels = None
 depends_on = None
 

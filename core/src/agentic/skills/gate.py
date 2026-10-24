@@ -2,8 +2,9 @@
 policy repo's CI on every pull request, so a change that would not load, or a skill that
 would not be admitted, is caught before a code owner approves it.
 
-It checks a policy repo tree as the control plane's sync will (`load_policy`, the org
-layer and each team's layer of definitions) and adds what only a full checkout can:
+It checks a policy repo tree as the control plane's sync will (`load_policy`, and
+`agentic.policy.tree.definition_problems`: the org layer, each team's layer at the versions
+it gets, its overlays, the rollout and the archives) and adds what only a full checkout can:
 
   * every skill catalog - the org's `skills/` and each team's `teams/<team>/skills/` -
     goes through catalog admission (licence, `skills-ref validate`, size, scan, pin);
@@ -17,8 +18,9 @@ Each problem is one line, starting with its file relative to the tree root.
 
 from pathlib import Path
 
-from agentic.definitions import DefinitionError, DefinitionSet
 from agentic.policy import PolicyError, load_policy
+from agentic.policy.tree import definition_problems
+from agentic.policy.tree import named as _named
 from agentic.skills.admission import admit_catalog
 from agentic.skills.catalog import (
     CATALOG_FILE,
@@ -41,16 +43,10 @@ def check_policy_repo(root: Path, *, version: str | None = None) -> list[str]:
         policy = load_policy(root / "policy", version=version)
     except PolicyError as error:
         return _named(root, error)
-    problems: list[str] = []
     teams_root = root / "teams"
     teams = sorted(p for p in teams_root.iterdir() if p.is_dir()) if teams_root.is_dir() else []
-    for team in [None, *teams]:
-        try:
-            DefinitionSet.discover(
-                org=root, team=team, repo=None, allow_repo_pipelines=policy.allow_repo_pipelines
-            )
-        except DefinitionError as error:
-            problems += _named(root, error)
+    # every team's view, its overlays, the rollout, pins and archives (M2-15, M2-23)
+    problems: list[str] = definition_problems(root, policy)
     limits = AdmissionLimits(**policy.skill_limits.given())
     for catalog_root in [root / "skills", *(team / "skills" for team in teams)]:
         if not (catalog_root / CATALOG_FILE).is_file():
@@ -90,15 +86,6 @@ def plugin_problems(catalog_root: Path, catalog: Catalog) -> list[str]:
             if why := telemetry_problem(plugin):
                 problems.append(f"{where}: {why}")
     return problems
-
-
-def _named(root: Path, error: DefinitionError) -> list[str]:
-    """`error`'s lines, each prefixed with its file relative to the tree root."""
-    try:
-        where = Path(error.path).resolve().relative_to(root.resolve()).as_posix()
-    except (ValueError, OSError):
-        where = Path(error.path).name
-    return [f"{where}: {line}" for line in error.errors] or [f"{where}: invalid"]
 
 
 __all__ = ["check_policy_repo", "plugin_problems"]

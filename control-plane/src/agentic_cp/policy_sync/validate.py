@@ -5,8 +5,9 @@ The tree is the policy repo at one commit, extracted from `git archive`:
 
     policy/            the org policy (`agentic.policy.load_policy`)
     agents/, pipelines/  the org layer of definitions
-    teams/<team>/      each team's layer (`DefinitionSet.discover` per team), and its own
-                       skills catalog `teams/<team>/skills/` when present (M2-51)
+    teams/<team>/      each team's layer at the versions it gets, with its per-repo
+                       overlays (`agentic.policy.tree.definition_problems`, M2-15, M2-23),
+                       and its own skills catalog `teams/<team>/skills/` when present (M2-51)
     skills/            the skills catalog, when present (`agentic.skills.load_catalog`)
 
 The full admission of every catalogued skill (licence, format, size, scan, pins) is the
@@ -18,8 +19,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agentic.definitions import DefinitionError, DefinitionSet
+from agentic.definitions import DefinitionError
 from agentic.policy import OrgPolicy, PolicyError, load_policy
+from agentic.policy.tree import definition_problems
 from agentic.skills import CatalogError, load_catalog
 
 #: Problems kept per version (an audit record carries at most AUDITED of them).
@@ -36,20 +38,10 @@ def validate_policy_tree(root: Path, version: str) -> tuple[list[str], OrgPolicy
         policy = load_policy(root / "policy", version=version)
     except PolicyError as error:
         return _named(root, error), None
-    try:
-        DefinitionSet.discover(
-            org=root, team=None, repo=None, allow_repo_pipelines=policy.allow_repo_pipelines
-        )
-    except DefinitionError as error:
-        problems += _named(root, error)
+    # every team's view at the versions it gets, its overlays, the rollout, pins and
+    # archives (M2-15, M2-23): the same check as `agentic policy check`
+    problems += definition_problems(root, policy)
     teams = root / "teams"
-    for team in sorted(p for p in teams.iterdir() if p.is_dir()) if teams.is_dir() else []:
-        try:
-            DefinitionSet.discover(
-                org=root, team=team, repo=None, allow_repo_pipelines=policy.allow_repo_pipelines
-            )
-        except DefinitionError as error:
-            problems += _named(root, error)
     team_dirs = sorted(p for p in teams.iterdir() if p.is_dir()) if teams.is_dir() else []
     for catalog in [root / "skills", *(team / "skills" for team in team_dirs)]:
         if not (catalog / "catalog.yaml").is_file() and catalog != root / "skills":

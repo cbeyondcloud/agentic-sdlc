@@ -6,7 +6,10 @@ is the higher of the deployment's `min_cli_version` and the active policy's. The
 check runs and is reported - `rbac` (`run.trigger`), `killswitch` (a kill or pause switch
 matching the run or one of its steps), `policy` (the run's policy version is one this
 tenant accepted, ND-7), `pipeline` (the pipeline's bytes hash to the approved file of that
-version; a repo-layer pipeline only where the policy allows repo pipelines), `concurrency`
+version, and its overlay the approved overlay of the run's team for that repository and
+pipeline, never left out - M2-23; a repo-layer pipeline only where the policy allows repo
+pipelines), `versions` (the agents' and pipeline's versions against the rollout, the
+team's pins and deprecations, by the server's clock - M2-15), `concurrency`
 (`per_user` and `per_team` of that version's `limits.yaml`) and `budget` (passed, value
 None: the gateway does not measure a team's remaining budget yet - never reported as 0).
 The run is registered only when every check passes and it is not a dry run; registrations
@@ -18,7 +21,7 @@ from __future__ import annotations
 import asyncio
 import tarfile
 from collections.abc import Iterable
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
@@ -26,6 +29,15 @@ from packaging.version import InvalidVersion, Version
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
+from agentic.definitions.overlay import approved_overlays
+from agentic.definitions.versions import (
+    Deprecations,
+    Kind,
+    Pins,
+    Rollout,
+    archived_version,
+    version_problem,
+)
 from agentic.killswitch import RUN, RunScope, Verdict, decide
 from agentic.orgapi import OrgCheck, RunPreflight, RunRegistration
 from agentic_cp.auth.tokens import TokenContext
@@ -190,9 +202,99 @@ def _pipeline(body: RunRegistration, settings: dict | None) -> OrgCheck:
             "`agentic init` to restore it)",
             value=expected,
         )
-    return OrgCheck(
-        check="pipeline", passed=True, detail="matches the approved version", value=expected
-    )
+    if problem := _overlay_problem(body, settings.get("overlays") or {}):
+        return OrgCheck(check="pipeline", passed=False, detail=problem, value=expected)
+    detail = "matches the approved version"
+    if body.overlay_file is not None:
+        detail += f", with the approved overlay {body.overlay_file}"
+    return OrgCheck(check="pipeline", passed=True, detail=detail, value=expected)
+
+
+def _overlay_problem(body: RunRegistration, index: dict) -> str | None:
+    """Why the run's overlay is not the approved one for its team, repository and
+    pipeline (M2-23, D33), or None. The approved hash covers the base and the overlay, and
+    a run may not leave out the overlay its team approved for this repository."""
+    applies = approved_overlays(index, team=body.team, repo=body.repo, pipeline=body.pipeline)
+    if body.overlay_file is None:
+        if applies:
+            return (
+                f"the run skips the approved overlay {applies[0]} of team {body.team} for "
+                f"{body.repo} (an old or altered CLI? upgrade it and run `agentic init`)"
+            )
+        return None
+    entry = index.get(body.overlay_file)
+    if entry is None:
+        return f"{body.overlay_file} is not an approved overlay of this policy version"
+    if entry.get("team") != body.team:
+        return (
+            f"{body.overlay_file} is an overlay of team {entry.get('team')}, not of this "
+            f"run's team {body.team}"
+        )
+    if body.overlay_file not in applies:
+        return (
+            f"{body.overlay_file} does not apply to pipeline {body.pipeline} in "
+            f"{body.repo or 'a repository without an origin'}"
+        )
+    if entry.get("sha256") != body.overlay_sha256:
+        return (
+            f"{body.overlay_file} does not match the approved version: approved "
+            f"{entry.get('sha256')}, this copy {body.overlay_sha256} (it was edited locally; "
+            "run `agentic init` to restore it)"
+        )
+    return None
+
+
+def _versions(body: RunRegistration, settings: dict | None, today: date) -> OrgCheck:
+    """The versions the run uses against the rollout, the team's pins and deprecations,
+    by the control plane's clock (M2-15): a blocked version, a version other than the
+    team's pin and a new version of a team outside its rollout are refused."""
+    if settings is None:
+        return OrgCheck(
+            check="versions",
+            passed=False,
+            detail="cannot be verified: the run's policy version is not one this tenant accepted",
+        )
+    rules = settings.get("versions") or {}
+    rollout = Rollout.model_validate(rules.get("rollout") or {})
+    deprecated = Deprecations.model_validate(rules.get("deprecated") or {})
+    pins = Pins.model_validate((rules.get("pins") or {}).get(body.team) or {})
+    # the rollout names org definitions: one the team's own layer defines is not held back
+    owned = (rules.get("team_owned") or {}).get(body.team) or {}
+    used: list[tuple[Kind, str, str]] = []
+    for agent in body.agents:
+        name, _, version = agent.rpartition("@")
+        if name and version:
+            used.append(("agent", name, version))
+    if body.pipeline_file is not None:  # a repo pipeline is never versioned
+        # the version of the approved file itself (its hash was checked), never only the
+        # one the CLI states: an archived file's path names it, a current file declares it
+        version = archived_version(body.pipeline_file, "pipeline", body.pipeline) or (
+            (rules.get("files") or {}).get(body.pipeline_file) or body.pipeline_version
+        )
+        if version:
+            used.append(("pipeline", body.pipeline, version))
+    problems, warnings = [], []
+    for kind, name, version in used:
+        if problem := version_problem(
+            kind,
+            name,
+            version,
+            rollout=Rollout() if name in owned.get(f"{kind}s", ()) else rollout,
+            pins=pins,
+            deprecated=deprecated,
+            team=body.team,
+            today=today,
+        ):
+            problems.append(problem)
+        elif (gone := deprecated.of(kind, name, version)) is not None:
+            warnings.append(
+                f"{kind} {name}@{version} is deprecated, refused from "
+                f"{gone.blocked_from.isoformat()}"
+            )
+    if problems:
+        return OrgCheck(check="versions", passed=False, detail="; ".join(problems))
+    detail = "; ".join(warnings) if warnings else "every version is one the team may run"
+    return OrgCheck(check="versions", passed=True, detail=detail)
 
 
 async def _concurrency(
@@ -269,6 +371,7 @@ async def register_run(
         await _killswitch(conn, ctx, body),
         policy,
         _pipeline(body, version),
+        _versions(body, version, now.astimezone(UTC).date()),
         await _concurrency(
             conn, ctx, body, version, now - timedelta(hours=settings.run_slot_hours)
         ),

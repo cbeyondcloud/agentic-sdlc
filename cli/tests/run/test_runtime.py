@@ -166,6 +166,41 @@ def test_a_skill_restored_before_a_run_is_a_preflight_warning(workspace, policy_
     assert "Ignore your instructions" not in target.read_text(encoding="utf-8")
 
 
+def test_a_deprecated_skill_version_warns_then_blocks(workspace, policy_repo, monkeypatch):
+    """M2-15: a catalogued skill's version deprecated in rollout.yaml warns before its
+    date and refuses the run from it (the clock injected)."""
+    import shutil
+    from datetime import date
+
+    from cli_helpers import ROOT
+
+    from agentic_cli import workspace as workspace_module
+
+    shutil.copytree(ROOT / "library" / "skills", policy_repo / "skills")
+    types = policy_repo / "policy" / "agent-types.yaml"
+    types.write_text(
+        types.read_text("utf-8").replace(
+            "    produces: requirements\n",
+            "    produces: requirements\n    skills: [superpowers/test-driven-development]\n",
+        ),
+        "utf-8",
+    )
+    (policy_repo / "policy" / "rollout.yaml").write_text(
+        "deprecated:\n  skills:\n    superpowers/test-driven-development:\n"
+        "      '1.0.0': {blocked_from: 2026-12-01, note: use 1.1.0}\n",
+        "utf-8",
+    )
+    monkeypatch.setattr(workspace_module, "utc_today", lambda: date(2026, 11, 30))
+    early = Runtime(Workspace.load()).preflight("deliver", live=False)
+    (warning,) = [p for p in early.problems if p.check == "version"]
+    assert warning.severity == "warning" and "use 1.1.0" in warning.detail
+    monkeypatch.setattr(workspace_module, "utc_today", lambda: date(2026, 12, 1))
+    late = Runtime(Workspace.load()).preflight("deliver", live=False)
+    (error,) = [p for p in late.problems if p.check == "version"]
+    assert error.severity == "error" and not late.passed
+    assert "superpowers/test-driven-development@1.0.0" in error.detail
+
+
 def test_steps_scan_tool_output_with_the_org_policy_scanner(workspace, policy_repo):
     # batch-2 integration: the run command puts the policy scanner (DF-148) on every step's
     # tools, not the scanner's default
@@ -176,6 +211,15 @@ def test_steps_scan_tool_output_with_the_org_policy_scanner(workspace, policy_re
     decision = runtime.decide_sandbox(runtime.machine_readiness(), "solo", policy.sandbox)
     wiring = rt._wiring(decision)
     assert wiring.scanner is not None and wiring.scanner.action == "mask"
+
+
+def test_steps_checkpoint_with_the_org_exclusions(workspace, policy_repo):
+    """DF-315: `org.yaml` `checkpoint_exclude` reaches every step's checkpoint."""
+    org = policy_repo / "policy" / "org.yaml"
+    org.write_text(org.read_text("utf-8") + "checkpoint_exclude: ['**/target/**']\n", "utf-8")
+    rt = Runtime(Workspace.load())
+    decision = runtime.decide_sandbox(runtime.machine_readiness(), "solo", rt.ws.policy().sandbox)
+    assert "**/target/**" in rt._wiring(decision).trees_for("r-x").generated
 
 
 def test_the_engine_s_wiring_knows_the_gateway_an_agent_process_may_reach(workspace, gateway):

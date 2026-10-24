@@ -204,6 +204,28 @@ def test_a_locally_edited_pipeline_is_refused_with_the_approved_hash(plane, poli
     assert "pipelines/deliver.yaml" in message and approved in message
 
 
+def test_edited_overlay_named_in_the_cache_refusal(plane, policy_repo, repo):
+    """M2-23 (D33): an overlay is approved like a pipeline, so a locally edited one is
+    named with the hash of its approved version."""
+    rel = "teams/payments/pipelines/overlays/app.yaml"
+    overlay = policy_repo / rel
+    overlay.parent.mkdir(parents=True)
+    text = b"pipelines:\n  deliver:\n    max_minutes: 30\n"
+    overlay.write_bytes(text)
+    approved = "sha256:" + hashlib.sha256(text).hexdigest()
+    _init_once()
+    stamp = json.loads((_cache() / "fetched.json").read_text(encoding="utf-8"))
+    assert stamp["overlays"] == {rel: approved}
+    (_cache() / "repo" / rel).write_bytes(text.replace(b"30", b"300"))
+    plane.down = True
+    ws = Workspace.load(repo, env={}, home=agentic_home())
+    with pytest.raises(CliError) as caught:
+        ws.policy()
+    message = str(caught.value)
+    assert caught.value.code == ExitCode.REFUSED
+    assert f"{rel} (approved {approved}" in message and "overlays differ" in message
+
+
 def test_not_signed_in_is_refused_with_the_login_hint(plane):
     keyring.get_keyring().stored.clear()  # the test keyring (conftest): signed out
     with pytest.raises(CliError) as caught:

@@ -198,6 +198,43 @@ async def test_symlink_in_policy_tree_is_rejected(api, settings, tmp_path):
     assert any("policy/link.yaml" in problem for problem in outcome.problems)
 
 
+async def test_sync_rejects_a_policy_with_a_refused_overlay(api, settings, tmp_path):
+    """M2-23 (Review Focus 5): an overlay removing an org-required gate is caught by the
+    sync, which keeps the previous version, never first on a laptop."""
+    repo = make_policy_repo(tmp_path / "policy-a")
+    write(
+        repo,
+        "pipelines/deliver.yaml",
+        "name: deliver\nversion: 1.0.0\nsteps:\n  - id: build\n    agent: developer\n"
+        "  - gate: ship\n    approver_role: approver\n",
+    )
+    write(  # the sync preflights each team's pipelines (review F2): its agent must exist
+        repo,
+        "agents/developer.md",
+        "---\nname: developer\ntype: general\nversion: 1.0.0\ndescription: d\n"
+        "consumes: []\n---\nGo.\n",
+    )
+    org = (repo / "policy" / "org.yaml").read_text(encoding="utf-8")
+    write(repo, "policy/org.yaml", org + "required_steps:\n  deliver: [ship]\n")
+    commit(repo, "a pipeline with a required gate")
+    await _point(api.db, api.a.id, url(repo))
+    good = await _sync(api.db, settings, api.a.id)
+    assert good.kind == "activated", good
+    write(
+        repo,
+        "teams/payments/pipelines/overlays/app.yaml",
+        "pipelines:\n  deliver:\n    remove: [ship]\n",
+    )
+    commit(repo, "an overlay dropping the gate")
+    outcome = await _sync(api.db, settings, api.a.id)
+    assert outcome.kind == "rejected", outcome
+    assert any(
+        p.startswith("teams/payments/pipelines/overlays/app.yaml: ") and "rule required-step" in p
+        for p in outcome.problems
+    ), outcome.problems
+    assert (await _active(api.db, api.a.id)).version == good.version
+
+
 @pytest.mark.parametrize(
     "names",
     [

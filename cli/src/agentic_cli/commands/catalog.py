@@ -309,6 +309,11 @@ def show_definition_warnings(out: Output, ws: Workspace) -> None:
 def _pipelines(out: Output, ws: Workspace, text: str) -> None:
     show_definition_warnings(out, ws)
     definitions = ws.definitions()
+
+    def overlay(name: str) -> str | None:  # the team's overlay for this repository (M2-23)
+        path = definitions.overlay_file(name)
+        return ws.policy_path(path) if path is not None else None
+
     rows = [
         {
             "name": name,
@@ -316,11 +321,13 @@ def _pipelines(out: Output, ws: Workspace, text: str) -> None:
             "regime": definitions.pipeline(name).regime,
             "layer": definitions.pipeline_source(name),
             "steps": len(definitions.pipeline(name).steps),
+            "overlay": overlay(name),
         }
         for name in definitions.pipeline_names()
         if _matches(text, name)
     ]
-    out.result(rows, lambda c: _table(c, rows, ("name", "version", "regime", "layer", "steps")))
+    columns = ("name", "version", "regime", "layer", "steps", "overlay")
+    out.result(rows, lambda c: _table(c, rows, columns))
 
 
 def _skills(out: Output, ws: Workspace, text: str) -> None:

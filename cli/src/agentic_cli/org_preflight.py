@@ -5,7 +5,9 @@ concurrency slot - when every check passes.
 The control plane checks RBAC (`run.trigger`), the kill switch (for the run and each step's
 agent, model and backend), the CLI version (an old CLI is refused with the upgrade message:
 exit 2), the policy version, pipeline integrity (the pipeline's bytes against the approved
-file of that policy version) and the concurrency caps; it reports the team's remaining
+file of that policy version, and the team's overlay for this repository against the approved
+overlay - M2-23), the versions the run uses against the rollout, the team's pins and
+deprecations (M2-15) and the concurrency caps; it reports the team's remaining
 budget as None while that is not measured (never 0). Each failed check becomes a preflight
 problem `org-<check>`, so a run is refused before any spend with the exact reason.
 
@@ -97,12 +99,14 @@ def registration(
     layer = definitions.pipeline_source(name)
     pipeline_file, digest = None, None
     if path is not None:
-        digest = "sha256:" + hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        digest = _sha256(path)
         if layer in ("org", "team") and ws.policy_repo is not None:
             try:
                 pipeline_file = Path(path).resolve().relative_to(ws.policy_repo.resolve())
             except ValueError:
                 pipeline_file = None
+    # the team's overlay for this repository (M2-23): the approved hash covers it too
+    overlay = definitions.overlay_file(name)
     agents = sorted(report.resolved.values(), key=lambda a: a.definition.name)
     body = {
         "run_id": run_id,
@@ -111,6 +115,9 @@ def registration(
         "pipeline": name,
         "pipeline_file": pipeline_file.as_posix() if pipeline_file is not None else None,
         "pipeline_sha256": digest,
+        "pipeline_version": definitions.pipeline(name).version,  # the team's (M2-15)
+        "overlay_file": ws.policy_path(overlay) if overlay is not None else None,
+        "overlay_sha256": _sha256(overlay) if overlay is not None else None,
         "policy_version": ws.policy().version,
         "agents": [f"{a.definition.name}@{a.definition.version}" for a in agents],
         "models": sorted({a.model for a in agents}),
@@ -120,6 +127,10 @@ def registration(
     if budget_usd is not None:  # budget alerts at 80 % and 100 % (M2-16)
         body["budget_usd"] = format(budget_usd.quantize(Decimal("0.000001")).normalize(), "f")
     return body
+
+
+def _sha256(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def plan_section(answer: RunPreflight | None) -> dict | None:

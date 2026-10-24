@@ -19,6 +19,19 @@ def test_policy_check_passes_the_template(tmp_path: Path, capsys):
     assert out == {"path": str(root), "problems": []}
 
 
+def test_policy_check_names_an_overlay_of_a_missing_pipeline(tmp_path: Path, capsys):
+    """M2-23: an overlay of a pipeline the policy repo does not have is named by file
+    (never an overlay silently ignored)."""
+    root = tmp_path / "org-policy"
+    shutil.copytree(TEMPLATE, root)
+    overlay = root / "teams" / "payments" / "pipelines" / "overlays" / "payments-api.yaml"
+    overlay.write_text("pipelines:\n  feature-delivery: {max_minutes: 60}\n", encoding="utf-8")
+    assert main(["--json", "policy", "check", str(root)]) == ExitCode.INVALID
+    (problem,) = json.loads(capsys.readouterr().out)["problems"]
+    assert problem.startswith("teams/payments/pipelines/overlays/payments-api.yaml: ")
+    assert "feature-delivery" in problem
+
+
 def test_policy_check_names_each_problem_and_exits_3(tmp_path: Path, capsys):
     root = tmp_path / "org-policy"
     shutil.copytree(TEMPLATE, root)

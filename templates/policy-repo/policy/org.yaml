@@ -8,6 +8,16 @@ allowed_repo_patterns: ["git.example.com/your-org/*"]
 # changed by pull requests the code owners approve. Repo-level pipelines are ignored.
 allow_repo_pipelines: false
 
+# Org-required steps, gates and loops per pipeline (spec §6.1): a team's overlay
+# (teams/<team>/pipelines/overlays/<repo>.yaml) can never remove them, remove the step a
+# required gate approves, or change a required gate's approver, and a run whose pipeline
+# lacks one is refused. List the work as well as the gates: the build loop's developer,
+# code review and QA, so no overlay ships a change nobody built, reviewed or tested.
+required_steps:
+  feature-delivery:
+    [requirements-approval, design-approval, build-review, develop, review, qa, review-approval]
+  bugfix: [intake-approval, fix-review, develop, review, qa, review-approval]
+
 # Where `agentic init` fetches pinned tools from (tool-pins.yaml); an internal mirror.
 # tool_mirror_url: https://artifacts.example.com/agentic-tools/
 
@@ -47,3 +57,17 @@ unhonoured: { temperature: warn, effort: warn }
 review_batch:
   max_files: 40
   max_lines: 1500
+
+# The deterministic review pre-pass before a reviewing agent sees a change: secrets,
+# blocked licences, new ignore rules, and gitleaks, ast-grep and osv-scanner when
+# tool-pins.yaml pins them. osv-scanner stays offline unless the online lookup is on,
+# which sends the change's dependency list to the OSV service.
+review_prepass:
+  enabled: true
+  agent_types: [code-review]
+  online_vulnerability_lookup: false
+
+# Untracked paths a step's checkpoint leaves out of the run branch, on top of the
+# framework's own (bytecode, tool caches, coverage data); each path left out is logged.
+# It only adds: git globs relative to the repository.
+# checkpoint_exclude: ["**/target/**", "**/build/**", "**/.gradle/**"]

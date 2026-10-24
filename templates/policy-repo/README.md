@@ -17,7 +17,8 @@ policy-repo/
 │   ├── tools.yaml            tool catalog and the org deny list (D31)
 │   ├── limits.yaml           concurrency, skill admission limits
 │   ├── licences.yaml         blocked dependency licences, licences a skill may carry
-│   ├── org.yaml              repo patterns, sandbox, secret and publish scans  EDIT
+│   ├── org.yaml              repo patterns, required steps, sandbox, scans  EDIT
+│   ├── rollout.yaml          versions team by team, deprecations (spec §12.5)
 │   ├── eval.yaml, retention.yaml, prices.yaml
 │   └── teams/<team>.yaml     one team's narrowing (it can only narrow)
 ├── agents/                   org agents          (copy library/agents here)
@@ -84,6 +85,48 @@ control plane, not here; repo maintainers come from each repository's own CODEOW
 Agent roles - what a Business Analyst or a Developer agent may use - are the agent types
 in `policy/agent-types.yaml`, and a team narrows their caps in `policy/teams/<team>.yaml`
 (`limits_max`).
+
+## Pipeline overlays
+
+A team tailors an org pipeline for one repository with an overlay,
+`teams/<team>/pipelines/overlays/<repo>.yaml` (the file name is the repository's name;
+`repo: host/owner/name` inside binds it to exactly one repository). Overlays live only
+here, so only the team's leads and the org admins change them (D33). An overlay may add
+steps, remove steps that are not org-required, turn `four_eyes` on, set a gate's
+`on_reject` (to an earlier step), tighten the regime and lower `max_minutes`. It can
+never remove or weaken a step or gate listed in `policy/org.yaml` `required_steps`, nor
+remove the step an org-required gate approves: `agentic policy check`, the control plane's
+sync and every laptop refuse it with the rule named. List the work as well as the gates
+in `required_steps` (the template requires the build loop's developer, code review and
+QA), or an overlay could remove it. When a removed step had a gate after it that is not
+org-required, the gate re-anchors to the previous remaining step (and the run's plan says
+so). The policy check and the sync also run the preflight checks that hold on every
+laptop on each team's pipelines, overlays applied: required steps present, `on_reject`
+targets, conditions, and the handoffs each step needs. The control plane checks the overlay's hash like the pipeline's: a run
+with an edited overlay, another team's overlay, or without the overlay that applies is
+refused. `teams/payments/pipelines/overlays/payments-api.yaml` is an example, commented
+out until the library's pipelines are copied in (an overlay of a missing pipeline is
+refused, and this template must sync as it is).
+
+## Versions and rollout
+
+Roll a new version of an agent or pipeline out team by team in `policy/rollout.yaml`:
+keep the previous version under `agents/versions/<name>/<version>.md` or
+`pipelines/versions/<name>/<version>.yaml`, and list the teams that get the new one. A
+team's leads may pin a version (`pins:` in `policy/teams/<team>.yaml`). A deprecated
+version warns until its `blocked_from` date and is refused from it, by the CLI and by the
+control plane's own clock.
+
+Resolution order, for an org or team agent or pipeline:
+
+1. the team's pin, when it pins that definition;
+2. else, when `rollout.yaml` lists the org definition and the team is not in its
+   `teams`, the entry's `previous` version (a team's own definition, in `teams/<team>/`,
+   is the team's to pin and never held back);
+3. else the current file.
+
+Then the team's overlay for the repository applies (to pipelines), and the chosen
+version's deprecation. A repository's own `.agentic/` definitions are never versioned.
 
 ## Skills
 
