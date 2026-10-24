@@ -50,6 +50,14 @@ _SESSION = "import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])"
 _log = logging.getLogger("agentic.backends.processes")
 
 
+class Limits(Protocol):
+    """What a Job Object can limit (`agentic.policy.model.ResourceLimits`, M3-10)."""
+
+    cpu_seconds: int | None
+    memory_mb: int | None
+    processes: int | None
+
+
 class Started(Protocol):
     """A started child: `subprocess.Popen`, an `asyncio` or an `anyio` process."""
 
@@ -93,12 +101,13 @@ class ProcessTree:
         self._settled = False  # exited with nothing left: never signal its group again
         self._lock = threading.RLock()
 
-    def adopt(self, process: Started) -> "ProcessTree":
-        """Contain `process` (just started) and register it in the current scope."""
+    def adopt(self, process: Started, *, limits: "Limits | None" = None) -> "ProcessTree":
+        """Contain `process` (just started) and register it in the current scope. On
+        Windows `limits` (M3-10: CPU time, memory, processes) are set on its job."""
         with self._lock:
             self._process, self.pid = process, process.pid
             if os.name == "nt" and self._job is None and not self._exited():
-                self._job = _Job.containing(process.pid)
+                self._job = _Job.containing(process.pid, limits)
         scope = _SCOPE.get()
         if scope is not None:
             scope.add(self)
@@ -409,6 +418,9 @@ def run_contained(
 
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+_JOB_OBJECT_LIMIT_JOB_TIME = 0x0004  # PerJobUserTimeLimit, in 100 ns units
+_JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x0008  # ActiveProcessLimit
+_JOB_OBJECT_LIMIT_JOB_MEMORY = 0x0200  # JobMemoryLimit, committed bytes of the whole job
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_SET_QUOTA = 0x0100
 
@@ -477,6 +489,24 @@ def _last_error() -> OSError:
     return ctypes.WinError(ctypes.get_last_error())
 
 
+def _job_limits(given: Limits | None) -> _ExtendedLimits:
+    """A job's limits: killed with its last handle, and the resource limits given."""
+    limits = _ExtendedLimits()
+    basic = limits.BasicLimitInformation
+    flags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if given is not None and given.cpu_seconds:
+        flags |= _JOB_OBJECT_LIMIT_JOB_TIME
+        basic.PerJobUserTimeLimit = given.cpu_seconds * 10_000_000
+    if given is not None and given.processes:
+        flags |= _JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+        basic.ActiveProcessLimit = given.processes
+    if given is not None and given.memory_mb:
+        flags |= _JOB_OBJECT_LIMIT_JOB_MEMORY
+        limits.JobMemoryLimit = given.memory_mb * 1024 * 1024
+    basic.LimitFlags = flags
+    return limits
+
+
 class _Job:
     """A Windows Job Object that kills its processes when its last handle closes. The
     handle is not inheritable, so only this process holds it."""
@@ -485,16 +515,15 @@ class _Job:
         self.handle: int | None = handle
 
     @classmethod
-    def containing(cls, pid: int) -> "_Job | None":
+    def containing(cls, pid: int, given: Limits | None = None) -> "_Job | None":
         """A new job holding `pid`, or None (logged) when Windows refuses: the tree is
-        then killed by `taskkill /T` alone."""
+        then killed by `taskkill /T` alone. `given`: the job's resource limits (M3-10)."""
         k = _kernel32()
         job = k.CreateJobObjectW(None, None)
         if not job:
             _log.warning("no job object for pid %s: %s", pid, _last_error())
             return None
-        limits = _ExtendedLimits()
-        limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        limits = _job_limits(given)
         process = None
         try:
             size = ctypes.sizeof(limits)
