@@ -16,13 +16,14 @@ into core's `Candidates` and `CodeIntelError`. A missing graph or extra never
 refuses a run: preflight warns (`codeintel_warning`) and agents get what is there.
 """
 
+import json
 import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from agentic.codeintel import Candidates, CodeIntel, CodeIntelError, Combined
-from agentic.codeintel.export import MANIFEST
+from agentic.codeintel.export import MANIFEST, installed_tool_version
 from agentic.repoconfig import CodeIntelConfig
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
@@ -104,7 +105,24 @@ def codeintel_warning(repo: Path, settings: CodeIntelConfig, *, crg_available: b
             "the code intelligence extra is not installed (agentic-core[codeintel]): it runs "
             "without it and uses search instead"
         )
+    if crg_available and seeded(repo):
+        made, installed = _seed_tool_version(repo), installed_tool_version()
+        if made != installed:  # every run's index would be refused the seed and built anew
+            return (
+                f"the imported index export ({INDEX_EXPORT_REL.as_posix()}) was made with "
+                f"code-review-graph {made} and this machine has {installed}: runs build the "
+                "index from scratch until `agentic index import` brings an export of this "
+                "version"
+            )
     return None
+
+
+def _seed_tool_version(repo: Path) -> str | None:
+    try:
+        manifest = json.loads((repo / INDEX_EXPORT_REL / MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return manifest.get("tool_version") if isinstance(manifest, dict) else None
 
 
 def codeintel_for(repo: Path, settings: CodeIntelConfig, *, crg_available: bool) -> Factory | None:

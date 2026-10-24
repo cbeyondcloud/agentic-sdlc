@@ -174,6 +174,20 @@ class Inner:
         raise DomainGraphError("no graph")
 
 
+def test_an_imported_export_of_another_tool_version_is_a_warning(tmp_path, monkeypatch):
+    # M2-44: every run would try the seed, be refused, and build from scratch
+    seed = tmp_path / ".agentic" / "local" / "index-export"
+    seed.mkdir(parents=True)
+    (seed / "manifest.json").write_text('{"tool_version": "2.3.1"}', encoding="utf-8")
+    monkeypatch.setattr(codeintel, "installed_tool_version", lambda: "2.3.9")
+
+    warning = codeintel.codeintel_warning(tmp_path, settings(), crg_available=True)
+
+    assert "2.3.1" in warning and "2.3.9" in warning and "agentic index import" in warning
+    monkeypatch.setattr(codeintel, "installed_tool_version", lambda: "2.3.1")
+    assert codeintel.codeintel_warning(tmp_path, settings(), crg_available=True) is None
+
+
 def test_a_commons_error_becomes_a_codeintel_error():
     intel = codeintel.GraphIntel(Inner())
 
