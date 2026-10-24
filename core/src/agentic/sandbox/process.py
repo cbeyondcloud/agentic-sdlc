@@ -90,7 +90,9 @@ def _report(names: list[str]) -> None:
     noticeable = any(name.upper() in _NOTICEABLE for name in new)
     _log.log(
         logging.WARNING if noticeable else logging.INFO,
-        "withheld from agent commands (a secret name or a credential in the value): %s",
+        "withheld from agent commands on purpose (a secret name or a credential in the "
+        "value): %s - if a tool needs one (an authenticated proxy, the SSH agent), ask your "
+        "org admin to list it in policy sandbox.pass_env; `agentic doctor` lists them",
         ", ".join(new),
     )
 
