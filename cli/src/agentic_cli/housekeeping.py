@@ -280,10 +280,11 @@ def _remove_folder(ws: Workspace, candidate: Candidate, notes: list[str]) -> str
     try:
         os.replace(candidate.folder, trash)
     except OSError as error:
+        trees = " (its trees, clean, were removed)" if candidate.trees is not None else ""
         return (
-            f"in use: its run folder could not be moved aside ({error.strerror or error}); "
-            "close whatever has a file in it open (an editor, `agentic logs --follow`), "
-            "then run gc again"
+            f"in use: its run folder could not be moved aside ({error.strerror or error})"
+            f"{trees}; close whatever has a file in it open (an editor, `agentic logs "
+            "--follow`), then run gc again"
         )
     if not remove_tree(trash):
         notes.append(f"{trash} is partly left (a file is in use); the next gc removes it")

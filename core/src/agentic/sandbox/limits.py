@@ -45,7 +45,8 @@ from agentic.backends.processes import descendants
 from agentic.policy.model import ResourceLimits
 
 MB = 1024 * 1024
-POLL_S = 0.1
+#: How often the watchdog reads the tree: /proc is cheap; elsewhere each read runs `ps`.
+POLL_S = 0.1 if Path("/proc").is_dir() else 0.5
 #: setrlimit each given limit (soft, hard), never above the hard limit already in place,
 #: then become the command. argv: cpu seconds, file bytes, processes ("-": none), command.
 LAUNCHER = (
