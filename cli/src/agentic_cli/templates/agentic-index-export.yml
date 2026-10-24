@@ -9,7 +9,8 @@
 #       gh run download -n agentic-index-export -D agentic-index-export
 #       agentic index import agentic-index-export
 #   * or, when the repository variable AGENTIC_INDEX_PUBLISH is `ref`, on the
-#     agentic-index branch (one commit, replaced every night):
+#     agentic-index branch (a commit a night holding only the shards that changed,
+#     restarted as one commit after 30 nights; any other history there is refused):
 #       git fetch origin agentic-index:refs/remotes/origin/agentic-index
 #       agentic index import --ref origin/agentic-index
 #

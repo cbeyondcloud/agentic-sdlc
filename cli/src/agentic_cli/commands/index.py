@@ -178,14 +178,17 @@ def register(app: typer.Typer) -> None:
         ] = False,
         repo: RepoOption = None,
     ) -> None:
-        """Publish an export on its own ref, outside main (force-pushed, one commit)."""
+        """Publish an export on its own ref, outside main (only the shards that changed)."""
         from agentic_cli.index_publish import publish_export
 
         output: Output = ctx.obj
         root = find_repo(repo or Path.cwd())
         _checked(folder, pinned=False)
         result = publish_export(root, folder, ref=ref, remote=remote, dry_run=dry_run)
-        verb = "would push" if dry_run else "pushed"
+        if result["unchanged"]:
+            verb = "unchanged, nothing to push:"
+        else:
+            verb = "would push" if dry_run else "pushed"
         output.result(
             result,
             lambda c: c.print(

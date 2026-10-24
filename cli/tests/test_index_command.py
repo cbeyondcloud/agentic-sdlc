@@ -11,7 +11,7 @@ from cli_helpers import git
 
 from agentic.codeintel.export import MANIFEST, read_export
 from agentic.codeintel.index import available
-from agentic_cli import codeintel
+from agentic_cli import codeintel, index_publish
 from agentic_cli.commands import index as index_command
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.main import main
@@ -255,6 +255,88 @@ def test_publish_never_targets_main_the_default_or_the_current_branch(
     code, data = run(capsys, "publish", str(exported), "--ref", ref, "--repo", str(ci))
     assert code == ExitCode.REFUSED, data
     assert refs(remote) == before
+
+
+@needs_crg
+@pytest.mark.parametrize("ref", ["release/1.0", "refs/heads/develop", "refs/agentic/kept"])
+def test_publish_never_overwrites_history_that_is_not_an_index_export(
+    ci, exported, remote, capsys, ref
+):
+    git(ci, "push", "-q", "origin", f"main:{index_publish.full_ref(ref)}")
+    before = refs(remote)
+
+    for dry_run in (["--dry-run"], []):
+        code, data = run(
+            capsys, "publish", str(exported), "--ref", ref, *dry_run, "--repo", str(ci)
+        )
+        assert code == ExitCode.REFUSED, data
+        assert "not an index export" in json.dumps(data)
+    assert refs(remote) == before
+
+
+def export_again(ci: Path, tmp_path: Path, capsys, name: str, files: dict[str, str]) -> Path:
+    commit(ci, files, name)
+    out = tmp_path / name
+    code, data = run(capsys, "export", "--out", str(out), "--repo", str(ci))
+    assert code == ExitCode.OK, data
+    return out
+
+
+@needs_crg
+def test_publish_commits_only_the_changed_shards_on_the_last_export(
+    ci, exported, remote, tmp_path, capsys, monkeypatch
+):
+    code, first = run(capsys, "publish", str(exported), "--repo", str(ci))
+    assert code == ExitCode.OK and first["pushed"] is True, first
+
+    # A night with nothing new pushes nothing.
+    before = refs(remote)
+    code, same = run(capsys, "publish", str(exported), "--repo", str(ci))
+    assert code == ExitCode.OK, same
+    assert same["unchanged"] is True and same["pushed"] is False
+    assert same["commit"] == first["commit"] and refs(remote) == before
+
+    # A changed file: one child commit of the last export, holding only what changed.
+    models = SOURCES["pkg/models.py"] + "\n\ndef helper():\n    return 1\n"
+    second = export_again(ci, tmp_path, capsys, "export-2", {"pkg/models.py": models})
+    code, data = run(capsys, "publish", str(second), "--repo", str(ci))
+    assert code == ExitCode.OK and data["pushed"] is True and data["unchanged"] is False, data
+    assert git(remote, "rev-parse", "agentic-index^") == first["commit"]
+    assert git(remote, "rev-list", "--count", "agentic-index") == "2"
+    old, new = (read_export(f)["files"] for f in (exported, second))
+    changed = {MANIFEST} | {e["shard"] for rel, e in new.items() if old.get(rel) != e}
+    diff = git(remote, "diff-tree", "--name-only", "-r", first["commit"], data["commit"])
+    assert set(diff.splitlines()) == changed and len(changed) < len(new) + 1
+
+    # After HISTORY nights the ref starts again from one commit, so fetches stay small.
+    monkeypatch.setattr(index_publish, "HISTORY", 2)
+    code, data = run(capsys, "publish", str(exported), "--repo", str(ci))
+    assert code == ExitCode.OK and data["pushed"] is True, data
+    assert git(remote, "rev-list", "--count", "agentic-index") == "1"
+    assert git(remote, "rev-parse", "agentic-index^{tree}") == git(
+        remote, "rev-parse", f"{first['commit']}^{{tree}}"
+    )
+
+
+@needs_crg
+def test_publish_never_overwrites_a_ref_that_moved_after_it_looked(
+    ci, exported, remote, capsys, monkeypatch
+):
+    code, first = run(capsys, "publish", str(exported), "--repo", str(ci))
+    assert code == ExitCode.OK, first
+    real = index_publish._tree
+
+    def meanwhile(repo, files):
+        # Another publisher moves the ref between this one's look and its push.
+        other = git(ci, "commit-tree", f"{first['commit']}^{{tree}}", "-m", "other")
+        git(ci, "push", "-q", "origin", f"+{other}:refs/heads/agentic-index")
+        return real(repo, {**files, "changed": b"1\n"})
+
+    monkeypatch.setattr(index_publish, "_tree", meanwhile)
+    code, data = run(capsys, "publish", str(exported), "--repo", str(ci))
+
+    assert code == ExitCode.ERROR, data
+    assert git(remote, "log", "-1", "--format=%s", "agentic-index") == "other"
 
 
 @needs_crg
