@@ -163,6 +163,11 @@ class FindingLike(Protocol):
     line: int | None
 
 
+def _is_bot(login: str, bots: set[str]) -> bool:
+    lowered = login.lower()
+    return lowered in bots or lowered.endswith("[bot]")
+
+
 def pr_feedback(
     *,
     run_id: str,
@@ -177,13 +182,14 @@ def pr_feedback(
     """The corrections in a pull request's reviews: every inline comment that opens a
     thread (a reply is the same conversation), and every review that requested changes or
     commented with a body. Approvals, empty reviews and anything written by the agent's
-    own host login (the bot that opened the pull request) are not corrections."""
+    own host login (`agent_logins`) or by any app account (a login ending in `[bot]`) are
+    not corrections."""
     bots = {login.lower() for login in agent_logins if login}
     states = {review.id: review.state.lower() for review in reviews}
     found: list[FeedbackRecord] = []
     for review in reviews:
         state = review.state.lower()
-        if review.author.lower() in bots or not review.body.strip():
+        if _is_bot(review.author, bots) or not review.body.strip():
             continue
         if state not in ("changes_requested", "commented"):
             continue
@@ -203,7 +209,7 @@ def pr_feedback(
             )
         )
     for comment in comments:
-        if comment.author.lower() in bots or not comment.body.strip() or comment.in_reply_to:
+        if _is_bot(comment.author, bots) or not comment.body.strip() or comment.in_reply_to:
             continue
         source = f"pr:{repo}#{int(number)}:comment:{comment.id}"
         found.append(

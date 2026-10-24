@@ -15,6 +15,7 @@ from agentic_cli.commands import (
     index,
     init,
     killswitch,
+    learn,
     login,
     pr,
     rbac,
@@ -39,4 +40,5 @@ COMMANDS: list[Callable[[typer.Typer], None]] = [
     killswitch.register,
     rbac.register,
     audit.register,
+    learn.register,
 ]

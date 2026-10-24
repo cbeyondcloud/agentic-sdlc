@@ -113,6 +113,12 @@ class FakeGitHub:
                 return 404, {"message": "Not Found"}
             pull.setdefault("reviews", []).append(body)
             return 200, {"id": len(pull["reviews"]), "state": body.get("event")}
+        said = re.fullmatch(_REPO + r"/pulls/(?P<n>\d+)/(?P<what>reviews|comments)", path)
+        if said and method == "GET":  # M3-11: what people said, as a test recorded it
+            pull = next((p for p in self.pulls if p["number"] == int(said["n"])), None)
+            if pull is None:
+                return 404, {"message": "Not Found"}
+            return 200, pull.get(f"recorded_{said['what']}", [])
         found = re.fullmatch(_REPO + r"/pulls/(?P<n>\d+)", path)
         if found and method in ("GET", "PATCH"):  # an update reads the body first (DF-296)
             pull = next((p for p in self.pulls if p["number"] == int(found["n"])), None)

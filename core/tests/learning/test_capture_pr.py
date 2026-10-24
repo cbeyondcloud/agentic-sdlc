@@ -71,6 +71,20 @@ def test_approvals_and_bot_comments_are_not_corrections():
     assert "pr:github.com/acme/app#7:review:104" not in sources  # an empty review body
 
 
+def test_app_accounts_are_never_corrections_even_unnamed():
+    reviews, comments = recorded_pr()
+    found = pr_feedback(
+        run_id="r-1",
+        repo=REPO,
+        number=7,
+        reviews=reviews,
+        comments=comments,
+        agent_logins=[],
+        at=AT,
+    )
+    assert "agentic-bot[bot]" not in {r.actor for r in found}
+
+
 def test_capturing_twice_gives_the_same_ids():
     assert [r.id for r in records()] == [r.id for r in records()]
 

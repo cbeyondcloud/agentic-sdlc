@@ -64,6 +64,7 @@ from agentic_cli.codeintel import codeintel_for as codeintel_factory
 from agentic_cli.codeintel import codeintel_settings, codeintel_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.learning import FeedbackCapture
 from agentic_cli.skill_activity import SkillActivity, StampingRecorder
 from agentic_cli.standalone import PLACEHOLDER
 from agentic_cli.step_extras import StepExtras
@@ -593,6 +594,7 @@ class Runtime:
             step_logs=StepLogs(self.redact(gateway)),
             redact=self.redact(gateway),  # pause reasons and step details in run.json
             handoff_prefix=RUNS.as_posix(),  # repo-relative Agentic-Handoff trailers (DF-174)
+            feedback=FeedbackCapture(self),  # gate corrections -> the feedback journal (M3-11)
         )
 
     def repo_key(self) -> str | None:
