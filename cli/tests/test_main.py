@@ -44,6 +44,15 @@ def test_version_prints_the_package_version(capsys):
     assert __version__ in capsys.readouterr().out
 
 
+def test_dash_dash_version_prints_the_version_and_runs_nothing_else(capsys):
+    """`agentic --version` (M3-21): what the upgrade runbook and installers check."""
+    assert main(["--version"]) == ExitCode.OK
+    assert capsys.readouterr().out.strip() == f"agentic {__version__}"
+    assert main(["--json", "--version"]) == ExitCode.OK
+    assert json.loads(capsys.readouterr().out) == {"version": __version__}
+    assert main(["--version", "no-such-command"]) == ExitCode.OK  # eager, like --help
+
+
 def test_json_output_is_machine_readable(capsys):
     assert main(["--json", "version"]) == ExitCode.OK
     assert json.loads(capsys.readouterr().out) == {"version": __version__}
