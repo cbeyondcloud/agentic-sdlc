@@ -3,6 +3,11 @@
 # teams/<team>.yaml.
 concurrency: { per_user: 3, per_team: 20 }
 
+# A laptop's own run data: `agentic gc` prunes finished runs older than this by default,
+# and `agentic status` warns when a repository's local data (.agentic/local and the run
+# trees) is over the cap. Nothing is deleted unless a person runs `agentic gc`.
+local: { gc_after_days: 14, disk_cap_gb: 20 }
+
 # Skill admission limits for every catalog in this repo (the org's skills/ and each
 # team's teams/<team>/skills/). A catalog may tighten them, never raise them.
 skills:

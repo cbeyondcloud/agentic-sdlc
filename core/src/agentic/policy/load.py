@@ -49,7 +49,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
     },
     "tools.yaml": {"catalog": "tools_catalog", "forbidden": "forbidden_tools", "deny": "deny"},
     "agent-types.yaml": {"types": "agent_types"},
-    "limits.yaml": {"concurrency": "concurrency", "skills": "skill_limits"},
+    "limits.yaml": {"concurrency": "concurrency", "skills": "skill_limits", "local": "local_data"},
     "licences.yaml": {
         "blocked": "blocked_licences",
         "scan": "licence_scan",

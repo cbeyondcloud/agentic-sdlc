@@ -308,6 +308,20 @@ def _unpadded(host: str) -> str:
     return f"{name}:{int(port)}" if sep else host
 
 
+class ResourceLimits(_Strict):
+    """What one agent command may use (M3-10, `org.yaml` `sandbox.limits:`); None sets no
+    limit. Enforced on Linux and macOS, best effort on native Windows (Job Object limits;
+    no file-size limit there): see `agentic.sandbox.limits` and the CLI operations runbook."""
+
+    cpu_seconds: int | None = Field(default=None, ge=1)  # CPU time, per process (POSIX)
+    memory_mb: int | None = Field(default=None, ge=1)  # resident memory of the whole command
+    max_file_mb: int | None = Field(default=None, ge=1)  # the largest file it may write
+    processes: int | None = Field(default=None, ge=1)  # processes it may run at once
+
+    def given(self) -> dict[str, int]:
+        return {name: value for name, value in self.model_dump().items() if value is not None}
+
+
 class SandboxPolicy(_Strict):
     """How agent commands are sandboxed (D38, spike S6): `srt` on every OS."""
 
@@ -324,6 +338,7 @@ class SandboxPolicy(_Strict):
     # (DF-365): e.g. an authenticated HTTPS_PROXY, SSH_AUTH_SOCK. Never AGENTIC_*.
     pass_env: list[str] = []
     srt_version: str = "0.0.78"
+    limits: ResourceLimits = ResourceLimits()  # M3-10: per agent command
 
     @property
     def effective_deny_read(self) -> list[str]:
@@ -592,6 +607,16 @@ class SkillLimits(_Strict):
         return {name: value for name, value in self.model_dump().items() if value is not None}
 
 
+class LocalDataPolicy(_Strict):
+    """A laptop's own run data (M3-08, `limits.yaml` `local:`): the default age at which
+    `agentic gc` prunes a finished run, and the size of a repository's local data
+    (`.agentic/local` and the run trees) past which `agentic status` warns. Nothing is
+    deleted automatically (spec §14.6, OR-01): gc runs only when a person runs it."""
+
+    gc_after_days: int = Field(default=14, ge=1)
+    disk_cap_gb: float = Field(default=20, gt=0, allow_inf_nan=False)
+
+
 class OrgPolicy(_Strict):
     # --- models ---
     tiers: dict[str, TierSpec]
@@ -619,6 +644,7 @@ class OrgPolicy(_Strict):
     # None / unset: the framework's own list and limits
     skill_licences: list[str] | None = None
     skill_limits: SkillLimits = SkillLimits()
+    local_data: LocalDataPolicy = LocalDataPolicy()  # M3-08: `agentic gc` and the disk cap
 
     # --- teams ---
     teams: dict[str, TeamPolicy] = {}

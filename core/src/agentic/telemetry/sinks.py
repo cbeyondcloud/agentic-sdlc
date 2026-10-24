@@ -291,6 +291,20 @@ class ForwardingRecorder:
         return self.ledger.run_dir / "sinks" / f"{sink.name}.json"
 
 
+def queued(run_dir: Path, sink: str) -> int:
+    """How many events of the run in `run_dir` the sink named `sink` has not taken yet:
+    `ForwardingRecorder.pending` read from the run folder alone (M3-08: `agentic gc` keeps
+    a run while its events are queued). Every line of `events.jsonl` counts, a torn last
+    one included; an unreadable cursor counts every event, as delivery would."""
+    events = Path(run_dir) / "events.jsonl"
+    try:
+        data = events.read_bytes()
+    except FileNotFoundError:
+        return 0
+    total = sum(1 for line in data.split(b"\n") if line.strip())
+    return max(total - _load(Path(run_dir) / "sinks" / f"{sink}.json")["seq"], 0)
+
+
 def _report(name: str, error: Exception) -> None:
     """The default `on_error`: one warning, worded by whether a retry can help (DF-535)."""
     if not getattr(error, "retryable", True):
