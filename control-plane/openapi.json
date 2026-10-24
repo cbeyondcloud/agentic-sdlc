@@ -2947,7 +2947,7 @@
     },
     "/v1/killswitch/state": {
       "get": {
-        "description": "The active switches that may apply to a run of the caller's with this team, repo and\npipeline: agent, model and backend switches are always included (the CLI decides per\nstep). Any authenticated user of the tenant may ask; user switches are the caller's.",
+        "description": "The active switches that may apply to a run of the caller's with this team, repo and\npipeline: agent, model and backend switches are always included (the CLI decides per\nstep). Any authenticated user of the tenant may ask; user switches are the caller's.\n\n`team`, `repo` and `pipeline` are what the client says (DF-518): they only narrow what\nthe caller is shown, so a client that omits its team is not shown team-qualified\nswitches. Stopping such a client's model calls anyway is the gateway deny rule's job\n(spec §8.6 defence in depth, M2-30).\n\nConditional GET (DF-506): the answer carries an `ETag` over the tenant, the caller, the\nquery and the switches and TTL (never `checked_at`); a poll sending it back in\n`If-None-Match` while nothing changed gets 304 with no body.",
         "operationId": "kill_state_v1_killswitch_state_get",
         "parameters": [
           {
@@ -3000,6 +3000,23 @@
               ],
               "title": "Pipeline"
             }
+          },
+          {
+            "in": "header",
+            "name": "if-none-match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-None-Match"
+            }
           }
         ],
         "responses": {
@@ -3012,6 +3029,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "304": {
+            "description": "Not modified since the `ETag` sent"
           },
           "default": {
             "content": {

@@ -139,6 +139,58 @@ async def test_state_of_tenant_b_never_shows_a_switch_of_a(api):
     assert state.status_code == 200 and state.json()["switches"] == []
 
 
+STATE = "/v1/killswitch/state?team=payments&pipeline=deliver"
+
+
+async def test_state_etag_and_304(api):
+    """DF-506: a poll whose answer has not changed gets 304 and no body; a change gives a
+    new tag. Every answer must be revalidated (`no-cache`) and is the caller's (`private`)."""
+    token = api.a.admin_token
+    first = await api.get(STATE, token)
+    assert first.status_code == 200, first.text
+    tag = first.headers["etag"]
+    assert tag.startswith('"') and tag.endswith('"') and len(tag) == 66
+    assert first.headers["cache-control"] == "private, no-cache"
+    again = await api.get(STATE, token)
+    assert again.headers["etag"] == tag  # checked_at changes, the tag does not
+    same = await api.get(STATE, token, headers={"If-None-Match": tag})
+    assert same.status_code == 304 and same.content == b""
+    assert same.headers["etag"] == tag and same.headers["cache-control"] == "private, no-cache"
+    assert (await api.get(STATE, token, headers={"If-None-Match": '"other"'})).status_code == 200
+    await _set(api, token, scope_kind="pipeline", scope_value="deliver")
+    changed = await api.get(STATE, token, headers={"If-None-Match": tag})
+    assert changed.status_code == 200 and changed.headers["etag"] != tag
+    assert [s["scope_value"] for s in changed.json()["switches"]] == ["deliver"]
+
+
+async def test_state_etag_differs_per_caller_and_tenant(api):
+    """DF-506 (ruling R6): equal answers to two callers, or to two tenants, never share a
+    tag, so a tag learned elsewhere never earns a 304."""
+    dev, _ = await member(api, api.a, "dev@a.example.test", "developer", "payments")
+    tags = {
+        (await api.get(STATE, token)).headers["etag"]
+        for token in (api.a.admin_token, dev, api.b.admin_token)
+    }
+    assert len(tags) == 3
+    a_tag = (await api.get(STATE, api.a.admin_token)).headers["etag"]
+    other = await api.get(STATE, api.b.admin_token, headers={"If-None-Match": a_tag})
+    assert other.status_code == 200 and other.json()["switches"] == []
+
+
+async def test_state_without_a_team_shows_no_team_switch(api):
+    """DF-518: `team` is what the client says; omitting it only hides team-qualified
+    switches from that client (tenant-wide ones still apply). Enforcing team switches for
+    a client that omits its team is the gateway deny rule's job (M2-30)."""
+    token = api.a.admin_token
+    tenant_wide = (await _set(api, token, scope_kind="tenant", mode="pause")).json()["id"]
+    await _set(api, token, scope_kind="team", scope_value="payments")
+    await _set(api, token, scope_kind="model", scope_value="acme/m", team="payments")
+    bare = await api.get("/v1/killswitch/state", token)
+    assert [s["id"] for s in bare.json()["switches"]] == [tenant_wide]
+    with_team = await api.get("/v1/killswitch/state?team=payments", token)
+    assert len(with_team.json()["switches"]) == 3
+
+
 async def test_list_shows_what_the_caller_may_clear(api):
     token = api.a.admin_token
     lead, _ = await member(api, api.a, "lead@a.example.test", "team-lead", "payments")
