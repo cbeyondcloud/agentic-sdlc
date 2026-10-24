@@ -127,6 +127,16 @@ Each one is closed with a regression test, or recorded with why it stands:
 - DF-315, DF-317 (checkpoint exclusion list): narrow the glob, log each excluded path, and let org policy extend (never shrink) the list - if it fits; otherwise retarget.
 - DF-264, DF-272, DF-473, DF-525 (consume-by-step, remaining-work loop, deterministic pre-pass gate): engine/handoff features outside overlays and rollout - retarget with notes.
 
+**Outcomes (continuation after the API outages):**
+- DF-227, DF-236: Done by SP6 on-fail (DF-238): QA runs inside the build loop, a failing report routes back to the Developer, and a run ending on one pauses `failing-handoff` (`core/tests/engine/test_on_fail.py::test_a_run_ending_on_a_failing_qa_pauses_instead_of_completing`).
+- DF-263, DF-269: Done: `failing_handoff: pause | complete` (default `pause`, left out of the pipeline digest so earlier runs resume); the pause reason names the opt-out; preflight's judging-step warning is skipped for `complete`; an overlay cannot set it.
+- DF-315, DF-317: Done: `**/*.py[co]` (a `.pyd` is work), each path left out logged at info, `org.yaml` `checkpoint_exclude` adds (never removes) and reaches every step's checkpoint (`StepWiring.checkpoint_exclude`).
+- DF-530: Done: `nothing-scanned` renders "ran, nothing to scan" (findings 0, not in `not_run`).
+- DF-533: Partial: the pre-pass failing is a "could not run" block, never a crashed review step; the template's `org.yaml` shows `review_prepass` and `checkpoint_exclude`; `personal_skills`/`personal_memory` were already off for `restricted` in both templates. A run-ledger record that the pre-pass ran is retargeted (the prepass JSON report is written to the run folder already).
+- DF-264, DF-272, DF-473, DF-525: Retarget (engine/handoff features: consume-by-step, a remaining-work loop condition, a deterministic gate on pre-pass errors).
+
+Review fixes made in the continuation: the rollout holds back org definitions only (a team's own definition is the team's to pin); run registration reads a current pipeline file's version from the approved tree (`version_index`) instead of trusting the CLI's `pipeline_version`, and never applies the org rollout to a team-owned definition; catalogued skills' deprecations are checked by CLI preflight.
+
 ### Task 10: Full CI
 
 - [ ] `uv run python scripts/check.py --all` in the background to completion; fix and rerun until green; re-record acceptance cassettes only if a prompt changed.
