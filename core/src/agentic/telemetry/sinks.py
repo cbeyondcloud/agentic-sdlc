@@ -17,7 +17,10 @@ never by a second one:
     forward. `flush()` forwards without recording (events Zyroflo appended itself,
     such as gate entries, are picked up this way). With `background=True` (a network
     sink, M2-20) `record` only wakes a delivery thread, so a slow sink never holds up
-    the run (DF-304); `close()` waits a bounded time and says what stays queued. A
+    the run (DF-304); `close()` waits a bounded time and says what stays queued. While a
+    sink keeps failing, its failure is reported once until it changes or delivery recovers,
+    and the thread waits a backoff (1 s doubling to 60 s) before reading the ledger again;
+    `close()` still makes one last attempt at once (M2-20 review F14). A
     `screen` (the publish scan, M2-49) sees each event's fields before the ledger
     chains them and may mask them: a chained entry can never change on its way out.
 
@@ -36,21 +39,26 @@ import logging
 import os
 import re
 import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
 _NAME = re.compile(r"[a-z][a-z0-9-]{0,63}")
 _LOG = logging.getLogger("agentic.telemetry.sinks")
+#: The delivery thread's wait after a failed delivery: doubling from MIN to MAX seconds.
+BACKOFF_MIN_S, BACKOFF_MAX_S = 1.0, 60.0
 
 
 class SinkError(Exception):
     """The entries cannot be forwarded: the chain does not continue from the cursor.
 
     A sink that sent the first entries of a batch before refusing the rest sets
-    `delivered` to how many it sent: `forward` moves the cursor past them."""
+    `delivered` to how many it sent: `forward` moves the cursor past them. `retryable` is
+    False for a refusal no retry can change (the publish scan holding a run back)."""
 
     delivered: int = 0
+    retryable: bool = True
 
 
 class SinkBehind(SinkError):
@@ -160,6 +168,13 @@ class ForwardingRecorder:
         self.on_error = on_error or _report
         self.screen = screen
         self._flushing = threading.Lock()  # one forward per sink cursor at a time
+        # a sink's failure is reported once until it changes or delivery recovers (F14)
+        self._reported: dict[str, str] = {}
+        self._failing = False
+        # while a sink fails, the delivery thread waits this long before reading the ledger
+        # again (doubling up to BACKOFF_MAX_S); close() cuts the wait short
+        self._backoff, self._retry_at = 0.0, 0.0
+        self._closing = threading.Event()
         self._wake, self._stop, self._idle = threading.Event(), threading.Event(), threading.Event()
         self._idle.set()
         # wake and idle change together under this lock, so a request made while the thread
@@ -193,13 +208,19 @@ class ForwardingRecorder:
         with self._flushing:
             entries = self.ledger.events()
             run_id = str(entries[0].get("run_id", "")) if entries else ""
-            sent = {}
+            sent, failing = {}, False
             for sink in self.sinks:
                 try:
                     sent[sink.name] = forward(run_id, entries, sink, self._cursor(sink))
                 except Exception as error:  # a sink never stops the run (the event is on disk)
-                    sent[sink.name] = 0
-                    self.on_error(sink.name, error)
+                    sent[sink.name], failing = 0, True
+                    if self._reported.get(sink.name) != str(error):
+                        self._reported[sink.name] = str(error)
+                        self.on_error(sink.name, error)
+                else:
+                    if self._reported.pop(sink.name, None) is not None:
+                        _LOG.info("sink %s: delivery resumed", sink.name)
+            self._failing = failing
             return sent
 
     def pending(self) -> dict[str, int]:
@@ -219,7 +240,8 @@ class ForwardingRecorder:
         `agentic sync`, delivers it)."""
         if self._thread is not None:
             # one more flush, even with nothing recorded since: entries Zyroflo appended
-            # itself (gate decisions) never woke the thread
+            # itself (gate decisions) never woke the thread; at once, whatever the backoff
+            self._closing.set()
             self._request()
             self._idle.wait(timeout)
             self._stop.set()
@@ -240,10 +262,21 @@ class ForwardingRecorder:
                 self._wake.clear()
             if self._stop.is_set():
                 break
+            wait = self._retry_at - time.monotonic()
+            if wait > 0 and not self._closing.is_set():
+                self._closing.wait(wait)  # a failing sink: no ledger read per event (F14)
+                if self._stop.is_set():
+                    break
             try:
                 self.flush()
             except Exception as error:  # the ledger itself could not be read
+                self._failing = True
                 self.on_error("all", error)
+            if self._failing:
+                self._backoff = min(max(self._backoff * 2, BACKOFF_MIN_S), BACKOFF_MAX_S)
+                self._retry_at = time.monotonic() + self._backoff
+            else:
+                self._backoff, self._retry_at = 0.0, 0.0
             with self._state:
                 if not self._wake.is_set():
                     self._idle.set()
@@ -259,7 +292,13 @@ class ForwardingRecorder:
 
 
 def _report(name: str, error: Exception) -> None:
-    _LOG.warning("sink %s: delivery failed, will retry on the next event (%s)", name, error)
+    """The default `on_error`: one warning, worded by whether a retry can help (DF-535)."""
+    if not getattr(error, "retryable", True):
+        _LOG.warning("sink %s: held back; a retry will not send it (%s)", name, error)
+        return
+    _LOG.warning(
+        "sink %s: delivery failed, will retry (said once until it changes) (%s)", name, error
+    )
 
 
 def _seq(entry: Mapping[str, object]) -> int:

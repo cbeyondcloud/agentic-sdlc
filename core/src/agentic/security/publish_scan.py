@@ -73,6 +73,8 @@ class PublishBlocked(SinkError):
     sent (see the module). `index` is its place in the batch checked, so the clean entries
     before it can still go (`delivered` then says how many did)."""
 
+    retryable = False  # a chained entry never changes: no retry sends it (DF-535)
+
     def __init__(
         self,
         run_id: str,

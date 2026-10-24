@@ -148,7 +148,7 @@ def test_events_queued_offline_replay_once_in_order(tmp_path):
     sink.offline = True
     for _ in range(3):
         recorder.record("step_started")
-    assert sink.kept == {} and len(errors) == 3
+    assert sink.kept == {} and len(errors) == 1  # the same failure is said once (F14)
     sink.offline = False
     recorder.record("step_finished")
     assert list(sink.kept) == [1, 2, 3, 4]
