@@ -338,6 +338,32 @@ def test_status_quiet_under_the_cap(repo: Path, capsys):
     assert "local data" not in capsys.readouterr().err
 
 
+def test_local_usage_never_follows_a_link_out(repo: Path, tmp_path: Path):
+    """A junction (Windows) or symlink in a run folder - pnpm makes them - is not counted."""
+    from cli_helpers import link_dir
+
+    folder = make_run(repo, "r-1", "completed", days_old=1, payload=10)
+    outside = tmp_path / "store"
+    outside.mkdir()
+    (outside / "huge.bin").write_bytes(b"z" * 200_000)
+    link_dir(folder / "node_modules", outside)
+    assert housekeeping.local_usage(repo, stop_at=None, deadline_s=10).bytes < 100_000
+
+
+def test_gc_removes_a_link_never_what_it_points_to(repo: Path, tmp_path: Path, capsys):
+    from cli_helpers import link_dir
+
+    folder = make_run(repo, "r-1", "completed", days_old=30)
+    outside = tmp_path / "store"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("not the run's", encoding="utf-8")
+    link_dir(folder / "node_modules", outside)
+    _, data = gc(capsys)
+    assert [r["run_id"] for r in data["removed"]] == ["r-1"]
+    assert not folder.exists()
+    assert (outside / "keep.txt").read_text(encoding="utf-8") == "not the run's"
+
+
 def test_local_usage_stops_at_the_cap(repo: Path):
     for n in range(5):
         make_run(repo, f"r-{n}", "completed", days_old=1, payload=10_000)

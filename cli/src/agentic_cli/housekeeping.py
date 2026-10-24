@@ -364,6 +364,8 @@ def _walk(roots: list[Path], stop_at: int | None, deadline: float | None) -> tup
             continue
         for entry in entries:
             try:
+                if entry.is_junction():  # a Windows link (pnpm's node_modules): not ours
+                    continue
                 if entry.is_dir(follow_symlinks=False):
                     pending.append(Path(entry.path))
                 elif entry.is_file(follow_symlinks=False):
