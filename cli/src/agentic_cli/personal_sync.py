@@ -14,7 +14,8 @@ the control plane for backup/audit").
   * `device.json` - this laptop's random device id: each device is its own chain at the
     control plane, so two laptops never fork one;
   * `cursors/<scope>.json` - how far each control plane (and signed-in user) has taken the
-    journal.
+    journal as this device's chain; a journal that forked from that chain starts a new
+    device id (`deliver`).
 
 The journal and a cursor ARE the offline queue (as a run's ledger and its sink cursor):
 `deliver` hands the journal to `agentic.telemetry.sinks.forward`, which sends what the
@@ -50,6 +51,7 @@ from agentic.skills.catalog import skill_files
 from agentic.skills.personal import BACKUP_ROOTS, backup_path_problem, is_junk
 from agentic.telemetry.sinks import SinkError, forward
 from agentic_cli.control_plane import (
+    ChainRejected,
     ControlPlaneClient,
     ControlPlaneError,
     PersonalSink,
@@ -67,6 +69,11 @@ JOURNAL, STATE, DEVICE, LOCK, CURSORS = (
 )
 #: The largest file backed up (the control plane refuses more).
 MAX_CONTENT_BYTES = 256 * 1024
+#: Said once when the journal forked from its device chain and moved to a new device.
+NEW_DEVICE_NOTICE = (
+    "this laptop's backup journal no longer matched what the control plane holds for it "
+    "(a copied, restored or reset ~/.agentic): it now backs up as a new device"
+)
 
 
 @dataclass
@@ -83,6 +90,7 @@ class Delivered:
     sent: int = 0
     queued: int = 0
     error: str | None = None
+    new_device: str | None = None  # the journal forked and now backs up as this device
 
 
 @dataclass
@@ -287,21 +295,66 @@ def default_scope(home: Path, client: ControlPlaneClient) -> str:
 
 
 def deliver(home: Path, client: ControlPlaneClient, scope: str | None = None) -> Delivered:
-    """Send the journal entries the control plane has not taken yet, in order."""
+    """Send the journal entries the control plane has not taken yet, in order.
+
+    A journal that no longer continues what the control plane holds for this device - a
+    home folder copied to another laptop or restored from a snapshot, a journal reset while
+    device.json stayed - is sent again, once, as a new device's chain (review F3): replays
+    are no-ops and a restore takes the newest copy by receive order, so nothing is lost,
+    where the old chain would refuse every backup for ever."""
     scope = scope or default_scope(home, client)
-    name = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:24]
     with _lock(home):
         entries = journal_entries(home)
         if not entries:
             return Delivered()
-        cursor = _folder(home) / CURSORS / f"{name}.json"
         device = device_id(home)
-        try:
-            sent, error = forward(device, entries, PersonalSink(client), cursor), None
-        except (ControlPlaneError, SinkError) as failure:  # the journal stays queued
-            sent, error = 0, str(failure)
+        cursor = _cursor_path(home, scope, device)
+        sent, error, forked = _send(device, entries, client, cursor)
+        new_device = None
+        if forked and _chain_intact(entries):
+            new_device = uuid.uuid4().hex
+            _write_json(_folder(home) / DEVICE, {"device": new_device})
+            cursor.unlink(missing_ok=True)
+            cursor = _cursor_path(home, scope, new_device)
+            sent, error, _ = _send(new_device, entries, client, cursor)
         taken = _cursor_seq(cursor)
-    return Delivered(sent=sent, queued=max(len(entries) - taken, 0), error=error)
+    return Delivered(
+        sent=sent, queued=max(len(entries) - taken, 0), error=error, new_device=new_device
+    )
+
+
+def _cursor_path(home: Path, scope: str, device: str) -> Path:
+    """One cursor per control plane, user and device chain."""
+    name = hashlib.sha256(f"{scope}|{device}".encode()).hexdigest()[:24]
+    return _folder(home) / CURSORS / f"{name}.json"
+
+
+def _send(
+    device: str, entries: list[dict], client: ControlPlaneClient, cursor: Path
+) -> tuple[int, str | None, bool]:
+    """(sent, error, forked): `forked` when the control plane's chain for `device`, or the
+    cursor, is not where this journal leads. On any error the journal stays queued."""
+    try:
+        return forward(device, entries, PersonalSink(client), cursor), None, False
+    except ChainRejected as failure:
+        return 0, str(failure), failure.code_name == "ingest.fork"
+    except ControlPlaneError as failure:
+        return 0, str(failure), False
+    except SinkError as failure:  # the cursor or the server's head is off this journal
+        return 0, str(failure), True
+
+
+def _chain_intact(entries: list[dict]) -> bool:
+    """Whether the journal is one unbroken chain from event 1: only then can it start a new
+    device's chain (a corrupted journal would fail there too, and burn device ids)."""
+    prev = ""
+    for seq, entry in enumerate(entries, 1):
+        if entry.get("seq") != seq or entry.get("prev") != prev:
+            return False
+        if entry.get("hash") != entry_hash(entry):
+            return False
+        prev = str(entry["hash"])
+    return True
 
 
 def _cursor_seq(cursor: Path) -> int:

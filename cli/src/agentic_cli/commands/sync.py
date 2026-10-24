@@ -59,6 +59,9 @@ def register(app: typer.Typer) -> None:
         personal = {"sent": delivered.sent, "queued": delivered.queued}
         if delivered.error:
             personal["error"] = delivered.error
+        if delivered.new_device:
+            personal["new_device"] = delivered.new_device
+            out.warn(personal_sync.NEW_DEVICE_NOTICE)
         data = {"runs": results, "personal": personal}
 
         def show(console) -> None:

@@ -38,6 +38,12 @@ SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 #: The largest file a backup carries (UTF-8 bytes); the CLI skips bigger ones.
 MAX_CONTENT_BYTES = 256 * 1024
 MAX_AT_CHARS = 64
+#: A laptop's journal that no longer continues its device chain (a copied or reset home
+#: folder): the CLI sends it again as a new device's chain (review F3).
+FORK_HINT = (
+    "this device's journal no longer continues the chain stored for it; send the whole "
+    "journal again as a new device (`agentic skills backup` does this)"
+)
 
 
 def entry_problems(entry: object, where: str) -> list[str]:
@@ -137,13 +143,21 @@ async def ingest_personal(
             ).all()
         )
         if any(stored.get(e["seq"]) != e["hash"] for e in replayed):
-            raise head_problem("ingest.fork", "the batch differs from events already stored", head)
+            raise head_problem(
+                "ingest.fork",
+                "the batch differs from events already stored for this device",
+                head,
+                hint=FORK_HINT,
+            )
     fresh = [e for e in entries if e["seq"] > head.seq]
     if not fresh:
         return IngestResult(accepted=0, duplicates=len(replayed), head=head)
     if fresh[0]["seq"] != head.seq + 1:
         raise head_problem(
-            "ingest.gap", f"the batch starts at {fresh[0]['seq']}, after {head.seq}", head
+            "ingest.gap",
+            f"the batch starts at {fresh[0]['seq']}, after {head.seq}",
+            head,
+            hint=f"resend the device's backup events from seq {head.seq + 1}",
         )
     seq, prev, chain_problems = head.seq, head.hash, []
     for entry in fresh:

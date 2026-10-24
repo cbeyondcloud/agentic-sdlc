@@ -593,10 +593,13 @@ class FakeControlPlane:
             return _problem(413, "ingest.too_large", f"at most {self.max_entries} entries")
         stored = self.events.setdefault(run_id, [])
         head = len(stored)
+        last = stored[-1]["hash"] if stored else ""
         duplicates = [e for e in entries if e["seq"] <= head]
+        if any(stored[e["seq"] - 1].get("hash") != e.get("hash") for e in duplicates):
+            # as the control plane does: a replay must equal what is stored (review F3)
+            return _problem(409, "ingest.fork", "fork", extra={"head": {"seq": head, "hash": last}})
         rest = [e for e in entries if e["seq"] > head]
         if rest and rest[0]["seq"] != head + 1:
-            last = stored[-1]["hash"] if stored else ""
             return _problem(409, "ingest.gap", "gap", extra={"head": {"seq": head, "hash": last}})
         stored.extend(rest)
         last = stored[-1]

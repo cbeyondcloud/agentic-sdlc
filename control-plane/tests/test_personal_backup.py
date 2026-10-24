@@ -103,6 +103,9 @@ async def test_a_gap_or_a_fork_is_409_with_the_head(api, dev):
     refused = await send(api, dev, fork)
     assert refused.status_code == 409 and refused.json()["code"] == "ingest.fork"
     assert refused.json()["head"]["seq"] == 1
+    # review F3: the hints speak of the device's backup chain, not of a run
+    assert "run" not in gap.json()["hint"] and "device" in gap.json()["hint"]
+    assert "run" not in refused.json()["hint"] and "new device" in refused.json()["hint"]
 
 
 async def test_a_broken_chain_or_entry_is_422(api, dev):

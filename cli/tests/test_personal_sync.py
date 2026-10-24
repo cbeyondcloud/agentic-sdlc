@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import threading
 from pathlib import Path
 
@@ -202,6 +203,72 @@ def test_offline_events_replay_once_in_order(agentic, guard, fake):
         cursor.unlink()
     assert deliver(agentic, client(fake)).sent == 3
     assert len(fake.personal()) == 3
+
+
+def _reset_journal(agentic: Path, *, cursors: bool) -> None:
+    """The journal starts over while device.json stays (a reinstall, a cleanup script)."""
+    folder = agentic / "sync" / "personal"
+    for name in ("journal.jsonl", "state.json"):
+        (folder / name).unlink()
+    if cursors:
+        for cursor in (folder / "cursors").iterdir():
+            cursor.unlink()
+
+
+@pytest.mark.parametrize("cursors", [True, False], ids=["cursor-lost", "cursor-kept"])
+def test_a_forked_device_chain_starts_a_new_device(agentic, guard, fake, cursors):
+    """Review F3: a journal that no longer continues what the control plane holds for this
+    device (ingest.fork, or a cursor the journal no longer reaches) is sent again as a new
+    device's chain, once, instead of failing every backup and sync for ever."""
+    write(agentic, "memory/a.md", "a")
+    write(agentic, "memory/b.md", "b")
+    record_changes(agentic, guard)
+    assert deliver(agentic, client(fake)).sent == 2
+    before = personal_sync.device_id(agentic)
+    _reset_journal(agentic, cursors=cursors)
+    (agentic / "memory" / "a.md").unlink()
+    write(agentic, "memory/c.md", "c")
+    record_changes(agentic, guard)  # a new journal: b.md is now event 1, c.md event 2
+    delivered = deliver(agentic, client(fake))
+    assert delivered.error is None, delivered
+    after = personal_sync.device_id(agentic)
+    assert after != before
+    paths = [e["path"] for e in fake.events[f"personal:{after}"]]
+    assert paths == ["memory/b.md", "memory/c.md"]
+    assert (delivered.sent, delivered.queued) == (2, 0)
+    assert deliver(agentic, client(fake)).sent == 0  # the new chain continues normally
+
+
+def test_a_cloned_home_forks_once_and_both_laptops_keep_backing_up(agentic, guard, fake, tmp_path):
+    """Review F3: a home folder copied to a second laptop (same device.json): the laptop
+    whose journal no longer matches moves to a new device; the other carries on."""
+    write(agentic, "memory/a.md", "a")
+    record_changes(agentic, guard)
+    deliver(agentic, client(fake))
+    clone = tmp_path / "clone"
+    shutil.copytree(agentic, clone)
+    write(clone, "memory/from-clone.md", "clone")
+    record_changes(clone, guard)
+    assert deliver(clone, client(fake)).error is None
+    write(agentic, "memory/from-first.md", "first")
+    record_changes(agentic, guard)
+    delivered = deliver(agentic, client(fake))
+    assert delivered.error is None, delivered
+    assert personal_sync.device_id(agentic) != personal_sync.device_id(clone)
+    assert {f["path"] for f in fake.personal_files()} >= {
+        "memory/from-clone.md",
+        "memory/from-first.md",
+    }
+
+
+def test_a_fork_from_the_fake_is_refused_like_the_server(fake):
+    """The fake compares hashes as the control plane does (review F3)."""
+    sink = client(fake)
+    first = [{"seq": 1, "prev": "", "hash": "h1", "event": "personal.saved"}]
+    sink.ingest_personal("d" * 32, first)
+    with pytest.raises(control_plane.ChainRejected) as refused:
+        sink.ingest_personal("d" * 32, [{**first[0], "hash": "other"}])
+    assert refused.value.code_name == "ingest.fork" and refused.value.head == (1, "h1")
 
 
 def test_each_control_plane_and_user_has_its_own_cursor(agentic, guard, fake):

@@ -314,6 +314,9 @@ def register(app: typer.Typer) -> None:
             )
         for warning in recorded.warnings:
             out.warn(warning)
+        if delivered.new_device:
+            data["new_device"] = delivered.new_device
+            out.warn(personal_sync.NEW_DEVICE_NOTICE)
         out.result(data, lambda c: _show_backup(c, data))
         if delivered.error:
             raise typer.Exit(ExitCode.ERROR)
