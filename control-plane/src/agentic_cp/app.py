@@ -38,6 +38,7 @@ from agentic_cp.rbac.api import router as rbac_router
 from agentic_cp.rbac.authz import EnforcerCache
 from agentic_cp.rbac.import_api import router as rbac_import_router
 from agentic_cp.rbac.repos_api import router as repos_router
+from agentic_cp.routing.api import router as routing_router
 from agentic_cp.settings import Settings
 from agentic_cp.tenancy.api import router as tenant_router
 from agentic_cp.tenancy.ratelimit import limiter_for
@@ -111,6 +112,7 @@ def create_app(
     app.include_router(service_accounts_router)
     app.include_router(keys_router)
     app.include_router(provisioning_router)
+    app.include_router(routing_router)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:

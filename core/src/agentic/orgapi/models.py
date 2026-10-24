@@ -554,6 +554,52 @@ class NotificationInfo(BaseModel):
     sent_at: datetime | None = None
 
 
+class RoutingApplyInfo(BaseModel):
+    """One routing apply (M2-09): which gateway (TokenLean) routing version applied which
+    policy version, or why it did not."""
+
+    id: UUID
+    policy_version: str
+    status: Literal["pending", "applied", "invalid", "failed", "superseded", "skipped"]
+    attempts: int
+    gateway_version: int | None = None
+    previous_gateway_version: int | None = None
+    plan_sha256: str | None = None
+    problems: list[str] = []
+    warnings: list[str] = []
+    last_error: str | None = None
+    requested_by: str
+    created_at: datetime
+    next_attempt_at: datetime
+    applied_at: datetime | None = None
+
+
+#: A personal backup's device id (M2-20): 32 lowercase hex characters, made per laptop.
+DEVICE_ID = r"^[0-9a-f]{32}$"
+
+
+class PersonalIngestRequest(RequestModel):
+    """A batch of one device's chained personal-backup events (M2-20)."""
+
+    entries: list[dict[str, Any]] = Field(min_length=1, max_length=5000)
+
+
+class PersonalFile(BaseModel):
+    """The newest backed-up copy of one personal skill file or note (M2-20). A removed file
+    is `deleted`; a held-back one (`held`: the publish scan found a secret or personal
+    data) has no content. Only its owner ever reads this."""
+
+    kind: Literal["skill", "memory"]
+    path: str
+    sha256: str
+    content: str | None = None
+    deleted: bool = False
+    held: bool = False
+    device: str
+    seq: int
+    at: str
+
+
 def invite_url(public_url: str, token: str) -> str:
     """The link an invite mail carries: the token in the fragment, which no server and no
     log ever sees, and which a mail scanner opening the link cannot consume (ruling P8)."""
