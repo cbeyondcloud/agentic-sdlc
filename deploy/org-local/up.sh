@@ -6,7 +6,8 @@
 #
 #   --no-build  do not rebuild the control-plane and gateway proxy images
 #
-# TOKENLEAN_DIR is a TokenLean checkout with deploy/lite/local; it is only read (its own up
+# TOKENLEAN_DIR is a TokenLean checkout with deploy/lite/local and the usage tags (ST-1,
+# ST-2: checked before anything is built); it is only read (its own up
 # writes its git-ignored .env.lite and .state). First run: creates .env.org from
 # .env.org.template and generates its passwords. Engine: CONTAINER_ENGINE=docker (default)
 # or podman.
@@ -30,6 +31,7 @@ done
 
 org_check_engine
 org_check_tokenlean
+org_check_usage_tags
 
 # 1. The gateway's LITE stack, started the way it documents (ruling S1).
 LITE_ARGS=(--mock)

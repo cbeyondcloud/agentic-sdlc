@@ -307,7 +307,12 @@ def _link_usage(args: argparse.Namespace) -> int:
 def _dashboard_role(args: argparse.Namespace) -> int:
     """Bind one Grafana reader role to one tenant (M2-37, ruling T1)."""
     from agentic_cp.app import utc_now
-    from agentic_cp.dashboards.readers import ReaderError, bind_reader, checked_role
+    from agentic_cp.dashboards.readers import (
+        PasswordNeeded,
+        ReaderError,
+        bind_reader,
+        checked_role,
+    )
 
     settings = _settings()
     _owner_dsn(settings)
@@ -329,6 +334,10 @@ def _dashboard_role(args: argparse.Namespace) -> int:
 
     try:
         asyncio.run(_with_tenant(settings, args.tenant, work))
+    except PasswordNeeded as error:
+        raise CommandError(
+            f"{error}: set {args.password_env} (or name another variable with --password-env)", 2
+        ) from None
     except ReaderError as error:
         raise CommandError(str(error), 2) from None
     print(f"tenant {args.tenant}: dashboard reader role {role} bound (the dash_* views only)")

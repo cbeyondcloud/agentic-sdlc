@@ -1,15 +1,21 @@
 """The local org stack (M2-39, deploy/org-local): control plane, its Postgres, Grafana and the
-gateway's LITE stack. These checks are static; the live up / smoke / down run is recorded
-in the track's output (it needs a container engine and the gateway's checkout).
+gateway's LITE stack. These checks are static, apart from the gateway checkout check run in
+bash and PowerShell; the live up / smoke / down run is recorded in the track's output (it
+needs a container engine and the gateway's checkout).
 
 Review Focus 6: images pinned by tag and digest, engine-neutral scripts in bash and
 PowerShell that always name the project, LF shell scripts, no secret on a command line,
 SELinux labels on bind mounts, and the gateway's checkout only ever read."""
 
 import importlib.util
+import os
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 from agentic.yamlio import load_yaml
 
@@ -150,3 +156,75 @@ def test_gateway_dashboards_are_the_lite_set():
     found_ps1 = re.search(r"\$script:OrgLiteDashboards = @\(([^)]+)\)", _text("_lib.ps1"))
     assert found_sh and set(found_sh[1].split()) == LITE_SET
     assert found_ps1 and {n.strip(" '") for n in found_ps1[1].split(",")} == LITE_SET
+
+
+def _gateway_checkout(root: Path, *, usage_tags: bool) -> Path:
+    """A stand-in TokenLean checkout: the LITE profile's scripts, and billing.sql with or
+    without the ST-1 team and ST-2 tags columns."""
+    local = root / "deploy" / "lite" / "local"
+    local.mkdir(parents=True)
+    for name in ("up.sh", "up.ps1"):
+        (local / name).write_text("# stand-in\n", encoding="utf-8")
+    migrations = root / "infra" / "migrations"
+    migrations.mkdir(parents=True)
+    sql = "CREATE TABLE IF NOT EXISTS usage_events (id BIGSERIAL PRIMARY KEY);\n"
+    if usage_tags:
+        sql += "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS team TEXT NOT NULL DEFAULT '';\n"
+        sql += "ALTER TABLE usage_events ADD COLUMN IF NOT EXISTS tags JSONB;\n"
+    (migrations / "billing.sql").write_text(sql, encoding="utf-8")
+    return root
+
+
+def _run(argv: list[str], checkout: Path) -> subprocess.CompletedProcess:
+    env = {**os.environ, "TOKENLEAN_DIR": str(checkout)}
+    return subprocess.run(argv, env=env, capture_output=True, text=True, timeout=120)
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("bash") is None,
+    reason="bash on Windows may be WSL's launcher; the Linux CI stage runs this",
+)
+@pytest.mark.parametrize("usage_tags", [False, True])
+def test_bash_refuses_a_gateway_without_usage_tags(tmp_path, usage_tags):
+    """Review F4: the LITE profile alone lacks ST-1/ST-2, so `db link-usage` would refuse
+    minutes into `up`. The check stops before anything is built."""
+    checkout = _gateway_checkout(tmp_path / "tl", usage_tags=usage_tags)
+    script = f'. "{(STACK / "_lib.sh").as_posix()}"; org_check_tokenlean; org_check_usage_tags'
+    done = _run(["bash", "-c", script], checkout)
+    if usage_tags:
+        assert done.returncode == 0, done.stderr
+    else:
+        assert done.returncode == 1 and "ST-1" in done.stderr and "ST-2" in done.stderr, done
+
+
+def _powershell() -> str | None:
+    return shutil.which("pwsh") or (shutil.which("powershell") if sys.platform == "win32" else None)
+
+
+@pytest.mark.skipif(_powershell() is None, reason="no PowerShell on this machine")
+@pytest.mark.parametrize("usage_tags", [False, True])
+def test_powershell_refuses_a_gateway_without_usage_tags(tmp_path, usage_tags):
+    checkout = _gateway_checkout(tmp_path / "tl", usage_tags=usage_tags)
+    lib = str(STACK / "_lib.ps1").replace("'", "''")
+    script = f"& {{ . '{lib}'; Assert-OrgUsageTags (Get-OrgTlDir); exit 0 }}"
+    argv = [_powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"]
+    done = _run([*argv, "-Command", script], checkout)
+    output = done.stdout + done.stderr
+    if usage_tags:
+        assert done.returncode == 0, output
+    else:
+        assert done.returncode == 1 and "ST-1" in output and "ST-2" in output, output
+
+
+def test_readme_names_the_gateway_prerequisite():
+    readme = _text("README.md")
+    assert "ST-1" in readme and "ST-2" in readme and "deploy/lite/local" in readme
+
+
+def test_only_up_checks_the_usage_tags():
+    """down and smoke must work on any checkout (to stop a stack after a branch switch)."""
+    assert "org_check_usage_tags" in _text("up.sh")
+    assert "Assert-OrgUsageTags" in _text("up.ps1")
+    for script in ("down", "smoke"):
+        assert "org_check_usage_tags" not in _text(f"{script}.sh"), script
+        assert "Assert-OrgUsageTags" not in _text(f"{script}.ps1"), script

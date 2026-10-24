@@ -38,13 +38,24 @@ org_check_engine() {
   command -v curl >/dev/null 2>&1 || org_die "curl is required"
 }
 
-# The gateway's checkout (read only): TOKENLEAN_DIR, holding deploy/lite/local.
+# The gateway's checkout (read only): TOKENLEAN_DIR, holding deploy/lite/local (the LITE
+# profile) and the usage tags (ST-1 team, ST-2 tags columns of usage_events).
+ORG_TL_HINT="needs the LITE profile (deploy/lite/local) and the usage tags (ST-1 team, ST-2 tags) together - see README"
 org_check_tokenlean() {
   [ -n "${TOKENLEAN_DIR:-}" ] \
-    || org_die "set TOKENLEAN_DIR to a TokenLean checkout that has deploy/lite/local (see README)"
+    || org_die "set TOKENLEAN_DIR to a TokenLean checkout that $ORG_TL_HINT"
   [ -f "$TOKENLEAN_DIR/deploy/lite/local/up.sh" ] \
-    || org_die "TOKENLEAN_DIR=$TOKENLEAN_DIR has no deploy/lite/local/up.sh"
+    || org_die "TOKENLEAN_DIR=$TOKENLEAN_DIR has no deploy/lite/local/up.sh: it $ORG_TL_HINT"
   ORG_LITE_ENV="$TOKENLEAN_DIR/deploy/lite/local/.env.lite"
+}
+
+# up only (down and smoke must work on any checkout): without the usage tags `db link-usage`
+# refuses minutes into the first build, so this stops before anything is built.
+org_check_usage_tags() {
+  local billing="$TOKENLEAN_DIR/infra/migrations/billing.sql"
+  { [ -f "$billing" ] && grep -qi 'column if not exists team ' "$billing" \
+    && grep -qi 'tags jsonb' "$billing"; } \
+    || org_die "TOKENLEAN_DIR=$TOKENLEAN_DIR has no usage_events team/tags columns in infra/migrations/billing.sql: it $ORG_TL_HINT"
 }
 
 # A value from the LITE stack's .env.lite (empty when missing).

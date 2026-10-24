@@ -40,14 +40,26 @@ function Assert-OrgEngine {
     }
 }
 
-# The gateway's checkout (read only): TOKENLEAN_DIR, holding deploy/lite/local.
+# The gateway's checkout (read only): TOKENLEAN_DIR, holding deploy/lite/local (the LITE
+# profile) and the usage tags (ST-1 team, ST-2 tags columns of usage_events).
+$script:OrgTlHint = 'needs the LITE profile (deploy/lite/local) and the usage tags (ST-1 team, ST-2 tags) together - see README'
 function Get-OrgTlDir {
     $TlDir = $env:TOKENLEAN_DIR
-    if (-not $TlDir) { Stop-Org 'set TOKENLEAN_DIR to a TokenLean checkout that has deploy/lite/local (see README)' }
+    if (-not $TlDir) { Stop-Org "set TOKENLEAN_DIR to a TokenLean checkout that $OrgTlHint" }
     if (-not (Test-Path (Join-Path $TlDir 'deploy/lite/local/up.ps1'))) {
-        Stop-Org "TOKENLEAN_DIR=$TlDir has no deploy/lite/local/up.ps1"
+        Stop-Org "TOKENLEAN_DIR=$TlDir has no deploy/lite/local/up.ps1: it $OrgTlHint"
     }
     return $TlDir
+}
+
+# up only (down and smoke must work on any checkout): without the usage tags 'db link-usage'
+# refuses minutes into the first build, so this stops before anything is built.
+function Assert-OrgUsageTags([string]$TlDir) {
+    $billing = Join-Path $TlDir 'infra/migrations/billing.sql'
+    $sql = if (Test-Path $billing) { [IO.File]::ReadAllText($billing) } else { '' }
+    if ($sql -notmatch '(?i)column if not exists team ' -or $sql -notmatch '(?i)tags jsonb') {
+        Stop-Org "TOKENLEAN_DIR=$TlDir has no usage_events team/tags columns in infra/migrations/billing.sql: it $OrgTlHint"
+    }
 }
 
 # KEY=value pairs of an env file, read literally (CR dropped).

@@ -11,12 +11,15 @@ owner too. `dash_scope` adds the binding: the session's `app.tenant_id` tenant, 
 when the session is that tenant's registered reader (`tenants.dashboard_role`) or a role
 that may already read the tenant tables directly (runtime, owner), whose RLS the GUC
 governs anyway. A reader that sets `app.tenant_id` to another tenant gets no rows. Every
-`dash_*` view joins `dash_scope`; gateway rows match on the tenant's `gateway_tenant`, and
-on none when another tenant has the same one.
+`dash_*` view reads through `dash_scope`; gateway rows match the tenant's `gateway_tenant`
+(compared as a scalar, so the gateway filters them), and none match when another tenant
+has the same one.
 
 **Measures.** Unmeasured is NULL, never 0: a sum over no gateway call, a step without a
 reported cost. A call without a run tag is the `(unattributed)` line of each cost view
-(the label cannot be a run id, step, agent or team: none may hold parentheses)."""
+(the label cannot be a run id, step, agent or team: none may hold parentheses). A step's
+agent is the one its ledger event records, else the agent tag of its first gateway call
+(`dash_step_runs.agent_source` says which)."""
 
 from __future__ import annotations
 
@@ -155,8 +158,15 @@ def _scope(schema: str) -> str:
     )
 
 
+#: The gateway rows of the session's tenant. The tenant is compared with a scalar subquery
+#: (an InitPlan), not joined: postgres_fdw then sends `tenant_id = $1` to the gateway, which
+#: returns that tenant's rows only (a join filters locally, after every tenant's rows and
+#: all history crossed the wire: review F2).
+_GATEWAY_TENANT = "(SELECT gateway_tenant FROM dash_scope)"
+_SCOPE_TENANT = "(SELECT tenant_id FROM dash_scope)"
+
 _CALLS = f"""
-SELECT s.tenant_id, u.request_id, u.at, u.provider, u.model, u.routed_model,
+SELECT {_SCOPE_TENANT} AS tenant_id, u.request_id, u.at, u.provider, u.model, u.routed_model,
   {_key("u.team")} AS team,
   {_tag("run_id")} AS run_id,
   {_key(_tag("run_id"))} AS run_key,
@@ -168,12 +178,32 @@ SELECT s.tenant_id, u.request_id, u.at, u.provider, u.model, u.routed_model,
   u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
   u.cost_usd, u.status_code, u.duration_ms,
   ({_tag("run_id")} IS NOT NULL) AS attributed
-FROM usage_source u JOIN dash_scope s ON u.gateway_tenant = s.gateway_tenant
+FROM usage_source u WHERE u.gateway_tenant = {_GATEWAY_TENANT}
 """
 
+#: The agent of each run step as the gateway saw it: the agent tag (and tier) of the step's
+#: first call. The engine records no agent identity on its step events yet, so this is
+#: where a step's agent comes from until it does (review F1); one the ledger records wins.
+_STEP_AGENTS = f"""
+SELECT {_SCOPE_TENANT} AS tenant_id, run_id, step_key AS step,
+  (array_agg(agent_key ORDER BY at, request_id))[1] AS agent,
+  (array_agg(tier ORDER BY at, request_id))[1] AS tier
+FROM dash_calls
+WHERE run_id IS NOT NULL AND agent_key <> '{UNATTRIBUTED}'
+GROUP BY run_id, step_key
+"""
+
+_LEDGER_AGENT = _ext("agent")
+
+#: dash_step_agents is joined on its GROUP BY key (plus the one scoped tenant) and read only
+#: for the agent columns, so the planner drops the join, and its gateway read, from views
+#: that show no agent (`test_views_without_an_agent_never_read_the_gateway`).
 _STEP_RUNS = f"""
 SELECT e.tenant_id, e.run_id, r.team, e.step, e.seq,
-  {_ext("agent")} AS agent, {_ext("tier")} AS tier,
+  COALESCE({_LEDGER_AGENT}, sa.agent) AS agent,
+  CASE WHEN {_LEDGER_AGENT} IS NOT NULL THEN {_ext("tier")} ELSE sa.tier END AS tier,
+  CASE WHEN {_LEDGER_AGENT} IS NOT NULL THEN 'ledger'
+    WHEN sa.agent IS NOT NULL THEN 'gateway' END AS agent_source,
   e.entry ->> 'outcome' AS outcome,
   {_number("e.entry -> 'cost' ->> 'usd'")} AS reported_usd,
   st.started_at,
@@ -188,6 +218,8 @@ LEFT JOIN LATERAL (
     AND b.event = 'step_started' AND b.seq < e.seq
   ORDER BY b.seq DESC LIMIT 1
 ) st ON true
+LEFT JOIN dash_step_agents sa ON sa.tenant_id = e.tenant_id AND sa.run_id = e.run_id
+  AND sa.step = e.step
 WHERE e.event = 'step_finished'
 """
 
@@ -372,9 +404,9 @@ WHERE k.cleared_at IS NOT NULL
 
 _SAFETY_MATCH = " OR ".join(f"a.action LIKE '{pattern}'" for pattern in SAFETY_ACTIONS)
 _GATEWAY_SAFETY = f"""
-SELECT s.tenant_id, a.at, a.action, a.request_id, a.details
-FROM gateway_audit_source a JOIN dash_scope s ON a.gateway_tenant = s.gateway_tenant
-WHERE {_SAFETY_MATCH}
+SELECT {_SCOPE_TENANT} AS tenant_id, a.at, a.action, a.request_id, a.details
+FROM gateway_audit_source a
+WHERE a.gateway_tenant = {_GATEWAY_TENANT} AND ({_SAFETY_MATCH})
 """
 
 _AUDIT = f"""
@@ -394,6 +426,7 @@ FROM repos r JOIN dash_scope s ON s.tenant_id = r.tenant_id
 DASH_VIEWS: tuple[str, ...] = (
     "dash_scope",
     "dash_calls",
+    "dash_step_agents",
     "dash_step_runs",
     "dash_gates",
     "dash_runs",
@@ -413,6 +446,7 @@ def _bodies(schema: str) -> dict[str, str]:
     return {
         "dash_scope": _scope(schema),
         "dash_calls": _CALLS,
+        "dash_step_agents": _STEP_AGENTS,
         "dash_step_runs": _STEP_RUNS,
         "dash_gates": _GATES,
         "dash_runs": _RUNS,

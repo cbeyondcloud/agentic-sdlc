@@ -16,9 +16,20 @@ Podman.
 ## Use
 
 You need a container engine with compose (Docker Desktop, Rancher Desktop or Podman with a
-compose provider), curl (bash scripts) and a TokenLean checkout that has `deploy/lite/local`
-(its LITE profile). That checkout is only read; TokenLean's own `up` writes its git-ignored
-`.env.lite` and `.state/` there.
+compose provider), curl (bash scripts) and a TokenLean checkout that has both:
+
+- the LITE profile, `deploy/lite/local` (branch `feat/agentic-lite-profile` today), and
+- the usage tags: ST-1 (`usage_events.team`, the authenticated team) and ST-2
+  (`usage_events.tags`, the `X-Agentic-*` attribution headers), today on branch
+  `feat/responses-and-traceparent`.
+
+No single TokenLean branch has both yet: merge the two into a local branch (or use one
+where they have landed). Without ST-1/ST-2, `db link-usage` refuses the gateway, so `up`
+checks `infra/migrations/billing.sql` for the `team` and `tags` columns and stops before it
+builds anything. The live smoke runs recorded for M2-39 used such a combined copy.
+
+That checkout is only read; TokenLean's own `up` writes its git-ignored `.env.lite` and
+`.state/` there.
 
 Published ports bind to `127.0.0.1` and are set in `.env.org`: `ORG_CP_PORT` (8280),
 `ORG_GRAFANA_PORT` (3300); the gateway's port is `LITE_PROXY_PORT` in its `.env.lite`. Change

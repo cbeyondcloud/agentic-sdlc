@@ -114,6 +114,47 @@ async def test_new_role_needs_a_password(readers):
         await made.bind(seeded.a, made.name("nopw"), None)
 
 
+async def _dba_role(db, made, label: str) -> str:
+    """A login role a DBA made: the owner role holds no ADMIN OPTION on it."""
+    role = made.name(label)
+    admin = await connect_admin(db.admin_dsn)
+    try:
+        await admin.execute(f"CREATE ROLE {role} LOGIN")
+    finally:
+        await admin.close()
+    return role
+
+
+async def test_a_role_the_owner_may_not_manage_is_refused_cleanly(readers):
+    """Review F3: the usual enterprise case, a DBA made the role. The refusal says what the
+    DBA runs, and never carries the statement (it held the password's SCRAM verifier)."""
+    db, seeded, made = readers
+    role = await _dba_role(db, made, "dba")
+    with pytest.raises(ReaderError) as refused:
+        await made.bind(seeded.a, role, "reader-" + secrets.token_hex(8))
+    message = str(refused.value)
+    assert role in message and "ADMIN OPTION" in message, message
+    assert "SCRAM" not in message and "PASSWORD" not in message.upper(), message
+
+
+async def test_dashboard_role_command_refusals_name_the_fix(readers, monkeypatch, capsys):
+    db, seeded, made = readers
+    monkeypatch.setenv("AGENTIC_CP_DATABASE_URL", db.app_dsn)
+    monkeypatch.setenv("AGENTIC_CP_OWNER_DATABASE_URL", db.owner_dsn)
+    monkeypatch.setenv("TEST_READER_PASSWORD", "reader-" + secrets.token_hex(8))
+    role = await _dba_role(db, made, "dbacmd")
+    argv = ["db", "dashboard-role", "--tenant", "tenant-a", "--role", role]
+    argv += ["--password-env", "TEST_READER_PASSWORD"]
+    assert await anyio.to_thread.run_sync(main, argv) == 2  # no traceback
+    err = capsys.readouterr().err
+    assert "ADMIN OPTION" in err and "SCRAM" not in err, err
+    monkeypatch.delenv("TEST_READER_PASSWORD")
+    argv = ["db", "dashboard-role", "--tenant", "tenant-a", "--role", made.name("nopwcmd")]
+    argv += ["--password-env", "TEST_READER_PASSWORD"]
+    assert await anyio.to_thread.run_sync(main, argv) == 2
+    assert "TEST_READER_PASSWORD" in capsys.readouterr().err
+
+
 async def test_rebinding_moves_the_grants(readers):
     db, seeded, made = readers
     first, second = made.name("first"), made.name("second")

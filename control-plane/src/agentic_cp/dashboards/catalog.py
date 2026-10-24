@@ -60,6 +60,12 @@ def stat(title: str, sql: str, unit: str | None = None, description: str = "") -
 
 
 USD = "currencyUSD"
+#: Where a step's agent comes from (`dash_step_runs.agent_source`, review F1).
+AGENT_SOURCE = (
+    "A step's agent is the one its run ledger records, else the agent tag of its first "
+    "gateway call (agent_source: ledger or gateway); a step with neither is "
+    f"{UNATTRIBUTED}."
+)
 TEAM = Variable("team", "Team", "SELECT DISTINCT team FROM dash_team_cost ORDER BY 1")
 RUN = Variable(
     "run",
@@ -218,8 +224,10 @@ RUN_EXPLORER = Dashboard(
         Panel(
             "Step executions",
             "table",
-            "SELECT seq, step, agent, tier, outcome, reported_usd, started_at, finished_at, "
-            "duration_s FROM dash_step_runs WHERE run_id = ${run:sqlstring} ORDER BY seq",
+            "SELECT seq, step, agent, tier, agent_source, outcome, reported_usd, started_at, "
+            "finished_at, duration_s FROM dash_step_runs WHERE run_id = ${run:sqlstring} "
+            "ORDER BY seq",
+            description=AGENT_SOURCE,
         ),
         Panel(
             "Gate decisions",
@@ -249,7 +257,8 @@ AGENT_QUALITY = Dashboard(
             "SELECT agent, executions, completed, failed, limited, repeats, approvals, "
             "rejections, rejection_rate, gateway_usd, usd_per_approval "
             "FROM dash_agent_quality ORDER BY executions DESC",
-            description="repeats: executions beyond one per run step (review loops, retries).",
+            description="repeats: executions beyond one per run step (review loops, retries). "
+            + AGENT_SOURCE,
             w=24,
         ),
         Panel(

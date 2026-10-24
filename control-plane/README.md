@@ -54,6 +54,10 @@ limits, audit and repos, joined with the gateway's usage rows through their tags
 agent, user, repo, pipeline, tier, policy version) and its authenticated team. Cost per run,
 step, agent and team shows the gateway's cost next to the cost the engine reported; calls
 without a run tag are the `(unattributed)` line; what was not measured is NULL, never 0.
+A step's agent is the one its run ledger records; the engine records none on step events
+yet, so until it does the agent is the tag of the step's first gateway call
+(`dash_step_runs.agent_source`). The gateway is asked for the tenant's rows only (the
+tenant filter is part of the SQL `postgres_fdw` sends).
 
     python -m agentic_cp db link-usage --host H --dbname D --user U --password-env VAR
     python -m agentic_cp db dashboard-role --tenant acme --role grafana_acme --password-env VAR
@@ -66,7 +70,8 @@ without a run tag are the `(unattributed)` line; what was not measured is NULL, 
   gateway upgrade; a gateway without ST-1 (`team`) or ST-2 (`tags`) is refused.
 - **Reader roles.** One Grafana login role per tenant. It may select the `dash_*` views and
   nothing else, its role default `app.tenant_id` is its tenant, and the views show it that
-  tenant's rows only, whatever it sets the setting to. Each tenant's Grafana organisation
+  tenant's rows only, whatever it sets the setting to. A role a DBA made needs
+  `GRANT <role> TO <owner> WITH ADMIN OPTION` first. Each tenant's Grafana organisation
   provisions the datasource uid `agentic-postgres` with its own reader, so every tenant uses
   the same dashboard JSON (`agentic_cp/dashboards/grafana`, rendered from `catalog.py`).
 - **One-time DBA steps** (a superuser, once per database): `CREATE EXTENSION postgres_fdw`,

@@ -85,7 +85,10 @@ CALLS: tuple[Call, ...] = (
 
 @dataclass(frozen=True)
 class Step:
-    """One finished step execution the engine reported (`cost` None: no cost recorded)."""
+    """One finished step execution the engine reported (`cost` None: no cost recorded).
+    `agent` is the agent its gateway calls were tagged with: the engine records no agent
+    on step events today (it passes no agent identity to the ledger), so the seed writes
+    none either and the views take it from the step's calls."""
 
     run: str
     step: str
@@ -147,12 +150,10 @@ class _Chain:
         self.seq = 0
         self.minutes = 300.0
 
-    async def add(self, event: str, step: str = "", agent: str | None = None, **fields) -> None:
+    async def add(self, event: str, step: str = "", **fields) -> None:
         self.seq += 1
         self.minutes -= 5
         block = {"team": self.team, "policy_version": POLICY}
-        if agent:
-            block.update(agent=agent, tier="standard")
         entry = {
             "seq": self.seq,
             "run_id": self.run_id,
@@ -198,9 +199,9 @@ async def _run(conn, tenant: UUID, run_id: str, team: str, starter: UUID) -> _Ch
 async def _steps(chains: dict[str, _Chain], steps: tuple[Step, ...]) -> None:
     for step in steps:
         chain = chains[step.run]
-        await chain.add("step_started", step.step, step.agent)
+        await chain.add("step_started", step.step, attempt=1)
         extra = {"cost": {"usd": step.cost}} if step.cost is not None else {}
-        await chain.add("step_finished", step.step, step.agent, outcome=step.outcome, **extra)
+        await chain.add("step_finished", step.step, outcome=step.outcome, **extra)
 
 
 async def seed_framework(engine, a: UUID, b: UUID) -> None:

@@ -39,6 +39,10 @@ class ReaderError(Exception):
     """The reader role could not be bound; nothing changed."""
 
 
+class PasswordNeeded(ReaderError):
+    """A new reader role was named without a password."""
+
+
 def checked_role(name: str) -> str:
     """A reader role name: a lower-case Postgres identifier (it is interpolated into DDL)."""
     if not _IDENT.fullmatch(name):
@@ -52,6 +56,31 @@ def checked_role(name: str) -> str:
 async def _execute(conn: AsyncConnection, statement: str, shown: str | None = None) -> None:
     log.info("readers: %s", shown or statement)
     await conn.exec_driver_sql(statement)
+
+
+def _first_line(error: DBAPIError) -> str:
+    """The driver's message alone: SQLAlchemy's own text repeats the statement, which may
+    hold the password's SCRAM verifier."""
+    return str(error.orig).strip().splitlines()[0] if error.orig else type(error).__name__
+
+
+async def _manage(
+    conn: AsyncConnection, role: str, exists: bool, statement: str, shown: str | None = None
+) -> None:
+    """A statement that changes `role` itself; a refusal says what the DBA runs."""
+    try:
+        await _execute(conn, statement, shown)
+    except DBAPIError as error:
+        reason = _first_line(error)
+        if exists:
+            raise ReaderError(
+                f"{role} exists and the owner role may not manage it ({reason}): a DBA runs "
+                f"`GRANT {role} TO <owner role> WITH ADMIN OPTION` once, or names a new role"
+            ) from None
+        raise ReaderError(
+            f"the owner role may not create {role} ({reason}): it needs CREATEROLE, or a DBA "
+            f"creates the role and runs `GRANT {role} TO <owner role> WITH ADMIN OPTION`"
+        ) from None
 
 
 async def _one(conn: AsyncConnection, statement: str, *params):
@@ -134,7 +163,7 @@ async def bind_reader(
     await _check_views_owner(conn, schema)
     exists = await _check_role(conn, role, runtime_role)
     if not exists and not password:
-        raise ReaderError(f"{role} is a new role: give it a password")
+        raise PasswordNeeded(f"{role} is a new role: give it a password")
     other = await _one(
         conn, "select slug from tenants where dashboard_role = $1 and id <> $2", role, tenant_id
     )
@@ -144,14 +173,43 @@ async def bind_reader(
         await conn.execute(select(tenants.c.dashboard_role).where(tenants.c.id == tenant_id))
     ).scalar_one()
     database = _quoted((await _one(conn, "select current_database()"))[0])
+    try:
+        await _grant(conn, schema, role, exists, password, old, database, tenant_id)
+    except DBAPIError as error:  # one the checks above did not foresee: never the statement
+        raise ReaderError(f"{role} could not be bound: {_first_line(error)}") from None
+    await conn.execute(update(tenants).where(tenants.c.id == tenant_id).values(dashboard_role=role))
+    await append(
+        conn,
+        AuditEvent(
+            event="dashboard.reader_bound",
+            actor=OPERATOR,
+            actor_kind="system",
+            target=f"role:{role}",
+            before={"role": old} if old else None,
+            after={"role": role},
+        ),
+        clock=clock,
+    )
 
+
+async def _grant(
+    conn: AsyncConnection,
+    schema: str,
+    role: str,
+    exists: bool,
+    password: str | None,
+    old: str | None,
+    database: str,
+    tenant_id: object,
+) -> None:
+    """The role's login, its grants (the `dash_*` views only) and its role defaults."""
     verb = "ALTER" if exists else "CREATE"
     statement = f"{verb} ROLE {role} LOGIN NOINHERIT"
     shown = statement
     if password:
         statement += f" PASSWORD '{scram_verifier(password)}'"
         shown += " PASSWORD <scram verifier>"
-    await _execute(conn, statement, shown)
+    await _manage(conn, role, exists, statement, shown)
     parents = await conn.exec_driver_sql(
         "select r.rolname from pg_auth_members m join pg_roles r on r.oid = m.roleid "
         "join pg_roles me on me.oid = m.member where me.rolname = $1",
@@ -178,16 +236,3 @@ async def bind_reader(
             f"`GRANT SET ON PARAMETER {SETTING} TO <owner role>` once"
         ) from None
     await _execute(conn, f"ALTER ROLE {role} IN DATABASE {database} SET search_path = {schema}")
-    await conn.execute(update(tenants).where(tenants.c.id == tenant_id).values(dashboard_role=role))
-    await append(
-        conn,
-        AuditEvent(
-            event="dashboard.reader_bound",
-            actor=OPERATOR,
-            actor_kind="system",
-            target=f"role:{role}",
-            before={"role": old} if old else None,
-            after={"role": role},
-        ),
-        clock=clock,
-    )

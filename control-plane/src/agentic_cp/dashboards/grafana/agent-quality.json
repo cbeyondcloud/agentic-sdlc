@@ -12,7 +12,7 @@
         "type": "grafana-postgresql-datasource",
         "uid": "agentic-postgres"
       },
-      "description": "repeats: executions beyond one per run step (review loops, retries).",
+      "description": "repeats: executions beyond one per run step (review loops, retries). A step's agent is the one its run ledger records, else the agent tag of its first gateway call (agent_source: ledger or gateway); a step with neither is (unattributed).",
       "fieldConfig": {
         "defaults": {},
         "overrides": []

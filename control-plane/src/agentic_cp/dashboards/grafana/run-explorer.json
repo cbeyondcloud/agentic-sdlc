@@ -84,7 +84,7 @@
         "type": "grafana-postgresql-datasource",
         "uid": "agentic-postgres"
       },
-      "description": "",
+      "description": "A step's agent is the one its run ledger records, else the agent tag of its first gateway call (agent_source: ledger or gateway); a step with neither is (unattributed).",
       "fieldConfig": {
         "defaults": {},
         "overrides": []
@@ -106,7 +106,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT seq, step, agent, tier, outcome, reported_usd, started_at, finished_at, duration_s FROM dash_step_runs WHERE run_id = ${run:sqlstring} ORDER BY seq",
+          "rawSql": "SELECT seq, step, agent, tier, agent_source, outcome, reported_usd, started_at, finished_at, duration_s FROM dash_step_runs WHERE run_id = ${run:sqlstring} ORDER BY seq",
           "refId": "A"
         }
       ],

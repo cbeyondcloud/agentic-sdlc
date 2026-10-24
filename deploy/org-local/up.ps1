@@ -8,7 +8,8 @@
 
   -NoBuild  do not rebuild the control-plane and gateway proxy images
 
-  TOKENLEAN_DIR is a TokenLean checkout with deploy/lite/local; it is only read (its own up
+  TOKENLEAN_DIR is a TokenLean checkout with deploy/lite/local and the usage tags (ST-1,
+  ST-2: checked before anything is built); it is only read (its own up
   writes its git-ignored .env.lite and .state). First run: creates .env.org from
   .env.org.template and generates its passwords. Engine: $env:CONTAINER_ENGINE = 'docker'
   (default) or 'podman'. If scripts are blocked: powershell -ExecutionPolicy Bypass -File .\up.ps1
@@ -18,6 +19,7 @@ param([switch]$NoBuild)
 
 Assert-OrgEngine
 $TlDir = Get-OrgTlDir
+Assert-OrgUsageTags $TlDir
 
 # 1. The gateway's LITE stack, started the way it documents (ruling S1).
 Write-Host "org: starting the gateway's LITE stack (mock mode) from $TlDir"
