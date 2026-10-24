@@ -204,6 +204,7 @@ def _waiting(run_id: str) -> tuple[Runtime, RunState]:
             ExitCode.REFUSED,
             hint=f"agentic status {run_id}",
         )
+    rt.check_same_policy(state)  # before an editor opens: the edit could not be used
     return rt, state
 
 

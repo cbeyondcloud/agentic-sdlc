@@ -207,6 +207,7 @@ def register(app: typer.Typer) -> None:
             )
         rt = Runtime(Workspace.load())
         state = _load(rt, run_id)
+        rt.check_same_policy(state)
         decisions: dict[str, bool | str] | None = None
         if allow or deny:
             decisions = {call: True for call in allow or []} | {call: False for call in deny or []}

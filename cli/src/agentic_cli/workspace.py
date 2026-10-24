@@ -186,6 +186,12 @@ class Workspace:
                 raise CliError(str(error), ExitCode.INVALID) from error
         return self._cache["policy"]
 
+    def control_plane_policy(self) -> bool:
+        """Whether the policy is the one `agentic init` cached from the control plane (its
+        version moves only when the tenant's admins activate another)."""
+        root = self.policy_repo
+        return root is not None and self._is_org_cache(root) and bool(control_plane_stamp(root))
+
     def _is_org_cache(self, root: Path) -> bool:
         org = self.settings.get("org")
         return bool(org) and root == self.home / "policy" / str(org) / "repo"

@@ -3,15 +3,19 @@ checks before any spend, and the engine obeys kill and pause switches while it r
 
 import hashlib
 import json
+import os
 import shutil
 
 import pytest
 from _cli_support import FakeGateway, answer, git
-from cp_fakes import CP_URL, TOKEN, FakeControlPlane
+from cp_fakes import CP_URL, TOKEN, VERSION, FakeControlPlane
 
 from agentic.policy import tree_digest
 from agentic_cli import control_plane, runtime
+from agentic_cli.commands import gates
+from agentic_cli.config import user_config
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.policy_source import follow_active_policy
 
 KEY = "tl-" + "fake-gateway-key-0021"  # gitleaks:allow (not a real key)
 
@@ -261,3 +265,88 @@ def test_a_pause_switch_holds_the_run_and_resume_continues_once_cleared(org, gat
     assert done.code == ExitCode.PAUSED, done.err
     assert done.json()["pending"]["id"] == "requirements-approval"
     assert [r["agent"] for r in gateway.requests] == ["ba"]
+
+
+# ── a paused run keeps the policy it started on (review F3, M2-53) ──────────────────────
+
+NEWER = "git:" + "cd" * 20
+
+
+def _cached_control_plane_policy(org, workspace, tmp_path, monkeypatch) -> None:
+    """The org policy as `agentic init` caches it from the control plane, at VERSION."""
+    cache = tmp_path / "home" / "policy" / "acme"
+    shutil.copytree(workspace.parent / "org-policy", cache / "repo")
+    org.policy_root = workspace.parent / "org-policy"
+    stamp = {
+        "source_kind": "control-plane",
+        "url": CP_URL,
+        "tenant": "acme",
+        "version": VERSION,
+        "tree_digest": tree_digest(cache / "repo"),
+    }
+    (cache / "fetched.json").write_text(json.dumps(stamp), encoding="utf-8")
+    monkeypatch.delenv("AGENTIC_POLICY_REPO")
+
+
+def _another_run_follows_a_newer_policy(org, tmp_path) -> None:
+    """An admin's sync moves the tenant on, and another `agentic run` in the same home
+    follows it (M2-53): the cache now holds the newer version."""
+    org.version = NEWER
+    home = tmp_path / "home"
+    assert follow_active_policy(home, user_config(home), os.environ) == (VERSION, NEWER)
+
+
+@pytest.mark.parametrize("command", ["approve", "reject", "edit"])
+def test_a_gate_decision_is_refused_once_the_org_policy_moved_on(
+    org, gateway, cli, workspace, tmp_path, monkeypatch, command
+):
+    """Spec §1.3/§12.1: the run record names the policy the run used. A run paused at a gate
+    on one policy version does not carry on under another one (another `agentic run` in the
+    same home follows the tenant's active policy) with the old version on its record. An
+    edit is refused before the editor opens."""
+    _cached_control_plane_policy(org, workspace, tmp_path, monkeypatch)
+    monkeypatch.setattr(gates, "edit_file", lambda path: pytest.fail("the editor opened"))
+    org.assignments = [{"role": "team-lead", "scope": "team", "team": "payments"}]
+    started = start(cli)
+    assert started.code == ExitCode.PAUSED, started.err
+    run_id = started.json()["run_id"]
+    assert started.json()["policy_version"] == VERSION
+    _another_run_follows_a_newer_policy(org, tmp_path)
+    asked = len(gateway.requests)
+    extra = ["--feedback", "not this way"] if command == "reject" else []
+    refused = cli(command, run_id, *extra)
+    assert refused.code == ExitCode.REFUSED, refused.err
+    assert VERSION in refused.err and NEWER in refused.err
+    assert f"agentic stop {run_id}" in refused.err
+    assert len(gateway.requests) == asked  # no step ran under the new policy
+    status = cli("--json", "status", run_id).json()
+    assert status["pending"]["id"] == "requirements-approval"
+    stopped = cli("--json", "stop", run_id, "--reason", "the org policy changed")
+    assert stopped.code == ExitCode.OK, stopped.err
+    assert stopped.json()["status"] == "stopped"
+
+
+def test_resume_is_refused_once_the_org_policy_moved_on(
+    org, gateway, cli, workspace, tmp_path, monkeypatch
+):
+    _cached_control_plane_policy(org, workspace, tmp_path, monkeypatch)
+    switch = org.add_switch("team", "payments", mode="pause", reason="maintenance")
+    held = start(cli)
+    assert held.code == ExitCode.PAUSED, held.err
+    switch["active"] = False
+    _another_run_follows_a_newer_policy(org, tmp_path)
+    refused = cli("resume", held.json()["run_id"])
+    assert refused.code == ExitCode.REFUSED, refused.err
+    assert VERSION in refused.err and NEWER in refused.err
+    assert gateway.requests == []
+
+
+def test_a_paused_run_on_the_current_policy_continues(
+    org, gateway, cli, workspace, tmp_path, monkeypatch
+):
+    _cached_control_plane_policy(org, workspace, tmp_path, monkeypatch)
+    org.assignments = [{"role": "team-lead", "scope": "team", "team": "payments"}]
+    run_id = start(cli).json()["run_id"]
+    approved = cli("--json", "approve", run_id)
+    assert approved.code in (ExitCode.OK, ExitCode.PAUSED), approved.err
+    assert [r["agent"] for r in gateway.requests] == ["ba", "architect"]

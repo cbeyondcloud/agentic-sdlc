@@ -44,7 +44,7 @@ from agentic.engine.engine import Engine, EngineError, StepContext
 from agentic.engine.factory import StepRunners
 from agentic.engine.gates import Authorizer, StandaloneAuthorizer
 from agentic.engine.preflight import PreflightReport, Problem, preflight
-from agentic.engine.state import RunStore
+from agentic.engine.state import RunState, RunStore
 from agentic.killswitch import KillSwitch, NoKillSwitch
 from agentic.orgapi import Me
 from agentic.orgapi.rbac import OrgAuthorizer
@@ -615,6 +615,24 @@ class Runtime:
         if me is None:
             return StandaloneAuthorizer(), None
         return OrgAuthorizer(me, self.ws.team), me.user.email
+
+    def check_same_policy(self, state: RunState) -> None:
+        """Before a paused run continues (resume, a gate decision): a run keeps the policy it
+        started on, so its record names the policy every step used (spec §1.3, §12.1). With
+        the control plane's policy, any `agentic run` in this home follows the tenant's active
+        version (M2-53), so a run paused on an older one is refused here (exit 2) rather than
+        carried on under the new tiers and tools with the old version on its record (review
+        F3). `agentic stop` still ends it."""
+        current = self.ws.policy().version
+        if state.policy_version == current or not self.ws.control_plane_policy():
+            return
+        raise CliError(
+            f"run {state.run_id} started on org policy {state.policy_version}, and the org "
+            f"policy is now {current}: a run continues only on the policy it started on",
+            ExitCode.REFUSED,
+            hint=f"agentic stop {state.run_id} --reason 'org policy changed', then start it "
+            f"again: agentic run {state.pipeline}",
+        )
 
     def killswitch(self) -> KillSwitch:
         """The engine's kill-switch port (M2-19): the control plane's switches in org mode

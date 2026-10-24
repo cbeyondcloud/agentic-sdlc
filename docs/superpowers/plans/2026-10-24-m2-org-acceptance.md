@@ -299,3 +299,16 @@ control plane's own validation refused a design step without an earlier test rep
   `fmt: skip`.
 - [ ] `uv run python scripts/check.py --all` (Windows native and Linux container) until green.
   Report its final lines.
+
+### Task 7: Final review fixes
+
+- F3 (re-graded Important: the run record must name the policy every step used, and the
+  follow made a mismatch routine). `Runtime.check_same_policy` refuses `resume`, `approve`,
+  `reject` and `edit` (before the editor opens) of a run whose recorded policy version is
+  not the cached control-plane policy's version: exit 2, naming both versions, with the
+  hint to stop and start again. `stop` still works. Only with a control-plane policy cache
+  (`Workspace.control_plane_policy`); git and standalone policies keep their behaviour.
+  Tests: `cli/tests/run/test_org_preflight.py` (`*_once_the_org_policy_moved_on`,
+  `test_a_paused_run_on_the_current_policy_continues`).
+- F1 (tracker text says "compose org stack"): owner decision, recorded for the coordinator;
+  no code change. F2, F4-F7: Minor, returned as deferred items.
