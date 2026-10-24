@@ -139,15 +139,20 @@ class StepExtras:
             return CANNOT_RUN.format(why=f"the run's trees cannot be read ({error})")
         if not changes:
             return CANNOT_RUN.format(why="the run has no working tree yet")
+        try:
+            return self._scan(step, changes, rules.online_vulnerability_lookup)
+        except Exception as error:  # noqa: BLE001 - a broken scan never crashes the review
+            # (DF-533): the reviewer is told it did not run, and why
+            return CANNOT_RUN.format(why=f"it failed ({type(error).__name__}: {error})")
+
+    def _scan(self, step: StepContext, changes, online: bool) -> str:
         scanner = SecretScanner.from_policy(self.policy.secret_scan, on_event=lambda e: None)
         documents = []
         for component, tree, diff_text in changes:
             builtin = builtin_checks(
                 diff_text, scanner=scanner, blocked_licences=self.policy.blocked_licences
             )
-            external = external_checks(
-                tree, diff_text, self.locator, online=rules.online_vulnerability_lookup
-            )
+            external = external_checks(tree, diff_text, self.locator, online=online)
             document = merge(builtin, external)
             if len(changes) > 1:  # an estate: name each component's rows and paths
                 document = prefixed(document, component)

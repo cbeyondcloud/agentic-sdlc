@@ -18,8 +18,9 @@ run on every machine:
                       are hidden from `git add -A` and so from the review. Also any change
                       to a scanner's own configuration or ignore list (`SCANNER_CONFIG`).
 
-`merge` joins documents. A tool that did not run (`status` other than `ok`) has
-`findings: null`, never 0, and is listed in `not_run`. `render` writes the block an agent
+`merge` joins documents. A tool that did not run (`status` other than `ok`, or
+`nothing-scanned`: it ran and the change holds nothing it reads) has `findings: null`,
+never 0, and is listed in `not_run`. `render` writes the block an agent
 reads, with every machine-produced line fenced as untrusted data (M1-42).
 """
 
@@ -31,6 +32,10 @@ from agentic.security.untrusted import untrusted
 
 SCHEMA_VERSION = 1
 STATUS_OK = "ok"
+# a tool that ran and found nothing it reads in the change (osv-scanner: no dependency
+# manifest): it looked, so it is not "did not run" (DF-530)
+STATUS_NOTHING = "nothing-scanned"
+RAN = (STATUS_OK, STATUS_NOTHING)
 PRE_EXISTING_SUFFIX = " (pre-existing)"  # Zyroflo's marker for context, not gate material
 MAX_SHOWN = 50  # findings rendered per source; the rest are counted
 
@@ -222,7 +227,9 @@ def _ignore_rules(lines: list[AddedLine]) -> list[dict]:
 
 def _document(tools: list[dict], sources: list[dict]) -> dict:
     for row in tools:
-        if row.get("status") != STATUS_OK:
+        if row.get("status") == STATUS_NOTHING:
+            row["findings"] = 0  # it looked: the change has nothing it reads
+        elif row.get("status") not in RAN:
             row["findings"] = None  # could not look: never a count that reads as clean
     total = sum(row["findings"] for row in tools if isinstance(row.get("findings"), int))
     by_severity: dict[str, int] = {}
@@ -237,7 +244,7 @@ def _document(tools: list[dict], sources: list[dict]) -> dict:
         "tools": tools,
         "sources": sources,
         "summary": {"total": total, "by_severity": dict(sorted(by_severity.items()))},
-        "not_run": [str(row.get("name")) for row in tools if row.get("status") != STATUS_OK],
+        "not_run": [str(row.get("name")) for row in tools if row.get("status") not in RAN],
     }
 
 
@@ -285,7 +292,10 @@ def render(document: dict) -> str:
 
 def _status_line(row: dict) -> str:
     name = row.get("name")
-    if row.get("status") != STATUS_OK:
+    if row.get("status") == STATUS_NOTHING:
+        detail = f" ({row['detail']})" if row.get("detail") else ""
+        return f"- {name}: ran, nothing to scan{detail}"
+    if row.get("status") not in RAN:
         detail = f" - {row['detail']}" if row.get("detail") else ""
         return f"- {name}: DID NOT RUN ({row.get('status')}){detail}"
     count = row.get("findings") or 0

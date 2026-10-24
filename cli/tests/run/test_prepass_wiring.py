@@ -74,6 +74,23 @@ def test_a_run_without_trees_says_the_prepass_could_not_run(workspace, monkeypat
     assert "The pre-pass did not run" in text and "not a clean result" in text
 
 
+def test_a_prepass_that_breaks_is_a_could_not_run_block(workspace, monkeypatch):
+    """DF-533: an OSError while copying the change (or any other failure in a scanner
+    wrapper) gives the reviewer a 'could not run' block, never a crashed review step."""
+    from agentic_cli import step_extras
+
+    rt = Runtime(Workspace.load())
+    developed(rt, monkeypatch)
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(step_extras, "external_checks", broken)
+    review = StepContext(RUN, "review", 1, agent(rt, "code-review"), None, None)
+    text = StepExtras.for_runtime(rt)(review)
+    assert "The pre-pass did not run" in text and "disk full" in text
+
+
 def test_the_engine_gives_step_runners_the_extras(workspace, monkeypatch):
     from agentic_cli import runtime
 
