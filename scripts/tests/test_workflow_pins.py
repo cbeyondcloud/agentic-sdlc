@@ -84,6 +84,19 @@ def test_release_secrets_come_from_the_org_and_never_reach_the_command_line(rele
         assert "secrets." not in step.get("run", ""), step.get("name")
 
 
+def test_gitleaks_skips_only_findings_pinned_to_an_old_commit():
+    """The ignore file lets the history scan pass over fake keys old commits held; an
+    entry without a commit would also hide a finding in the current tree."""
+    entries = [
+        line
+        for line in (ROOT / ".gitleaksignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert entries
+    for entry in entries:
+        assert re.fullmatch(r"[0-9a-f]{40}:[^:]+:[a-z0-9-]+:\d+", entry), entry
+
+
 def test_release_scans_the_whole_history_with_a_checksummed_gitleaks(release: dict):
     """DF-96: the local check scans the working tree only; the release scans history."""
     scan = next(s for s in steps(release) if "gitleaks" in s.get("run", ""))

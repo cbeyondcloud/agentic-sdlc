@@ -1,0 +1,15 @@
+# Findings gitleaks may skip, one fingerprint per line (gitleaks reads this file itself).
+#
+# Only in old commits: fake credentials that tests once held literally, since rebuilt from
+# pieces or marked `# gitleaks:allow`. History is never rewritten, so the release
+# workflow's full-history scan (templates/release/release.yml, DF-96) would stop on them.
+# Every entry names its commit, so it can never hide a finding in the current tree or in
+# a new commit (scripts/tests/test_workflow_pins.py checks that).
+686245c447678f2dc5e47dcea2a148c065bf9d9e:core/tests/security/test_secret_scan.py:generic-api-key:56
+686245c447678f2dc5e47dcea2a148c065bf9d9e:core/tests/security/test_secret_scan.py:generic-api-key:119
+42f70abee0e8bd01559c71da714453a74349312e:commons/tests/test_redaction.py:generic-api-key:5
+42f70abee0e8bd01559c71da714453a74349312e:core/tests/engine/test_step_logs.py:generic-api-key:18
+42f70abee0e8bd01559c71da714453a74349312e:core/tests/telemetry/test_logs.py:generic-api-key:14
+a1158cd530af6db0c47f966964cf18a78191526c:commons/tests/test_guards.py:curl-auth-header:179
+19e52026deb29ce5ba2bf719768e21f36bd78ba5:commons/tests/test_guards.py:curl-auth-header:142
+5d9a925d458bebb4bb01297af3afb0614536b556:commons/tests/test_guards.py:curl-auth-header:70
