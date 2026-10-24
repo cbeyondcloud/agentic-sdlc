@@ -42,6 +42,7 @@ from rich import box
 from agentic.engine.engine import TERMINAL, EngineError, check_inputs
 from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
+from agentic_cli import housekeeping
 from agentic_cli.commands.catalog import show_definition_warnings
 from agentic_cli.commands.killswitch import resume_scope
 from agentic_cli.config import agentic_home, user_config
@@ -237,6 +238,8 @@ def register(app: typer.Typer) -> None:
         rt = Runtime(Workspace.load())
         if run_id is None:
             _list(out, rt, show_all=True, limit=10)
+            if warning := housekeeping.cap_warning(rt.ws):  # M3-08
+                out.warn(warning)
             return
         state = _load(rt, run_id)
         out.result(summary(state, rt.redact()), show_state(state, rt.redact()))

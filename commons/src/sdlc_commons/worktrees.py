@@ -109,6 +109,10 @@ class RunWorktrees:
         refused unless `force` (an agent's unfinished edit is the only copy of it)."""
         return _call(zyroflo.remove, self.target, self.run_id, force)
 
+    def root(self) -> Path:
+        """The folder holding this run's trees: `<worktrees_base>/<run-id>`."""
+        return _trees_root(self.target, self.run_id)
+
 
 def _names(components: Sequence[str] | None) -> list[str] | None:
     """A list of component names - never one name read letter by letter."""
@@ -367,10 +371,17 @@ def worktree_git(where: Path, *args: str, check: bool = True) -> str:
         raise WorktreeError(str(error)) from error
 
 
-def _trees_root(target: Path, run_id: str) -> Path:
-    """The folder holding a run's trees (the same as `Guard.trees_root`)."""
+def worktrees_base(target: Path) -> Path:
+    """The folder holding every run's trees: `<target>/<worktrees_root>` from the
+    repository's Zyroflo profile (`.sdlc-worktrees` by default). `agentic gc` and the disk
+    cap of `agentic status` measure and prune it (M3-08)."""
     try:
         repo = policy.load(Path(target))
     except policy.PolicyError as error:
         raise WorktreeError(str(error)) from error
-    return Path(target) / repo["worktrees_root"] / run_id
+    return Path(target) / repo["worktrees_root"]
+
+
+def _trees_root(target: Path, run_id: str) -> Path:
+    """The folder holding a run's trees (the same as `Guard.trees_root`)."""
+    return worktrees_base(target) / run_id
