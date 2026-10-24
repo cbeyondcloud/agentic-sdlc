@@ -9,9 +9,11 @@ same transaction. Another tenant's switch is unknown here (404, DR-5)."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Header, Query, Request, Response
 from sqlalchemy import select
 
 from agentic.killswitch import RunScope, run_level, scope_problem
@@ -142,25 +144,59 @@ async def list_switches(
     return [store.info(row) for row in found if row.team in teams]
 
 
-@router.get("/state")
+@router.get("/state", responses={304: {"description": "Not modified since the `ETag` sent"}})
 async def kill_state(
     request: Request,
+    response: Response,
     ctx: Caller,
     team: str | None = Query(default=None, max_length=64),
     repo: str | None = Query(default=None, max_length=300),
     pipeline: str | None = Query(default=None, max_length=128),
+    if_none_match: str | None = Header(default=None, max_length=1024),
 ) -> KillState:
     """The active switches that may apply to a run of the caller's with this team, repo and
     pipeline: agent, model and backend switches are always included (the CLI decides per
-    step). Any authenticated user of the tenant may ask; user switches are the caller's."""
+    step). Any authenticated user of the tenant may ask; user switches are the caller's.
+
+    `team`, `repo` and `pipeline` are what the client says (DF-518): they only narrow what
+    the caller is shown, so a client that omits its team is not shown team-qualified
+    switches. Stopping such a client's model calls anyway is the gateway deny rule's job
+    (spec §8.6 defence in depth, M2-30).
+
+    Conditional GET (DF-506): the answer carries an `ETag` over the tenant, the caller, the
+    query and the switches and TTL (never `checked_at`); a poll sending it back in
+    `If-None-Match` while nothing changed gets 304 with no body."""
     state = request.app.state
     scope = RunScope(team=team, user=ctx.email.lower(), repo=repo, pipeline=pipeline)
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         found = await store.rows(conn)
     applying = [store.info(row) for row in found if run_level(store.as_switch(row), scope)]
     state.metrics.observe_kill_state(bool(applying))
-    return KillState(
-        switches=applying,
-        checked_at=state.clock(),
-        ttl_seconds=state.settings.kill_ttl_seconds,
-    )
+    ttl = state.settings.kill_ttl_seconds
+    tag = _etag(ctx, scope, applying, ttl)
+    headers = {"ETag": tag, "Cache-Control": "private, no-cache"}
+    if if_none_match is not None and _not_modified(if_none_match, tag):
+        return Response(status_code=304, headers=headers)
+    response.headers.update(headers)
+    return KillState(switches=applying, checked_at=state.clock(), ttl_seconds=ttl)
+
+
+def _etag(ctx: TokenContext, scope: RunScope, applying: list[KillSwitchInfo], ttl: int) -> str:
+    """A strong tag for one caller's answer: equal answers to two callers (or tenants)
+    never share a tag (ruling R6)."""
+    basis = {
+        "tenant": str(ctx.tenant_id),
+        "user": scope.user,
+        "query": [scope.team, scope.repo, scope.pipeline],
+        "switches": [s.model_dump(mode="json") for s in applying],
+        "ttl": ttl,
+    }
+    canonical = json.dumps(basis, sort_keys=True, separators=(",", ":"))
+    return '"' + hashlib.sha256(canonical.encode("utf-8")).hexdigest() + '"'
+
+
+def _not_modified(header: str, tag: str) -> bool:
+    """Whether `If-None-Match` names `tag` (RFC 9110 §13.1.2: `*` matches any current
+    answer; a list is compared weakly, so a `W/` prefix compares equal)."""
+    tags = {part.strip().removeprefix("W/") for part in header.split(",") if part.strip()}
+    return "*" in tags or tag in tags
