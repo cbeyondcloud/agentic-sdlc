@@ -71,7 +71,7 @@ if ! org_compose "${UP_ARGS[@]}"; then
   org_die "compose up failed (cp-init's log is above)"
 fi
 
-CP=$(org_url ORG_CP_PORT 8090)
+CP=$(org_url ORG_CP_PORT 8280)
 GRAFANA=$(org_url ORG_GRAFANA_PORT 3300)
 TIMEOUT=${ORG_HEALTH_TIMEOUT:-240}
 wait_for() {   # URL, text the answer must contain

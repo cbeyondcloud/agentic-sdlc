@@ -7,7 +7,7 @@ Podman.
 
 | Service | What | Address |
 |---|---|---|
-| `control-plane` | `python -m agentic_cp serve` | http://127.0.0.1:8090 |
+| `control-plane` | `python -m agentic_cp serve` | http://127.0.0.1:8280 |
 | `grafana` | official Grafana image, provisioned with the framework dashboards (folder *Agentic*) and the gateway's LITE set (folder *Gateway*) | http://127.0.0.1:3300 |
 | `cp-postgres` | the control plane's database (Postgres 17, `postgres_fdw`) | stack network only |
 | `cp-init` | one-shot: migrate, runtime role, tenant `local`, gateway usage link, Grafana reader role | - |

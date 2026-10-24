@@ -57,7 +57,7 @@ if ((Invoke-OrgCompose $upArgs) -ne 0) {
     Stop-Org "compose up failed (cp-init's log is above)"
 }
 
-$cp = Get-OrgUrl 'ORG_CP_PORT' '8090'
+$cp = Get-OrgUrl 'ORG_CP_PORT' '8280'
 $grafana = Get-OrgUrl 'ORG_GRAFANA_PORT' '3300'
 $timeout = if ($env:ORG_HEALTH_TIMEOUT) { [int]$env:ORG_HEALTH_TIMEOUT } else { 240 }
 function Wait-OrgUrl([string]$Url, [string]$Expect) {

@@ -24,7 +24,7 @@ command -v curl >/dev/null 2>&1 || org_die "curl is required"
 [ -f "$ORG_ENV_FILE" ] || org_die ".env.org not found - run ./up.sh first"
 org_check_tokenlean
 
-CP=$(org_url ORG_CP_PORT 8090)
+CP=$(org_url ORG_CP_PORT 8280)
 GRAFANA=$(org_url ORG_GRAFANA_PORT 3300)
 LITE_PORT=$(org_lite_value LITE_PROXY_PORT)
 GATEWAY="http://127.0.0.1:${LITE_PORT:-4100}"

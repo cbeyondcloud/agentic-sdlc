@@ -16,7 +16,7 @@
 if (-not (Test-Path $OrgEnvFile)) { Stop-Org '.env.org not found - run up.ps1 first' }
 $TlDir = Get-OrgTlDir
 
-$cp = Get-OrgUrl 'ORG_CP_PORT' '8090'
+$cp = Get-OrgUrl 'ORG_CP_PORT' '8280'
 $grafana = Get-OrgUrl 'ORG_GRAFANA_PORT' '3300'
 $litePort = Get-OrgLiteValue $TlDir 'LITE_PROXY_PORT'
 if (-not $litePort) { $litePort = '4100' }
