@@ -419,12 +419,13 @@ class ControlPlaneClient:
                 )
             return KillStateReply(None, tag or etag)
         try:
-            found = response.json()
-        except ValueError:
+            state = KillState.model_validate(response.json())
+        except ValueError:  # not JSON, or JSON of another shape (a proxy's page): no answer
             raise ControlPlaneUnavailable(
-                f"{self._shown} answered something that is not JSON ({response.status_code})"
+                f"{self._shown} answered something that is not a kill-switch state "
+                f"({response.status_code})"
             ) from None
-        return KillStateReply(KillState.model_validate(found), tag)
+        return KillStateReply(state, tag)
 
     def set_switch(self, body: Mapping[str, object]) -> KillSwitchInfo:
         return KillSwitchInfo.model_validate(self._json("POST", "/killswitch", dict(body)))

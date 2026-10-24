@@ -75,28 +75,24 @@ def wait_for[T](probe: Callable[[], T], within_s: float, every_s: float = 0.05) 
 
 
 class StateLog:
-    """ASGI wrapper: the monotonic time each `GET /v1/killswitch/state` answer started -
-    when a CLI learned the switch state."""
+    """ASGI wrapper: the monotonic time each `GET /v1/killswitch/state` request arrived. A
+    request that arrived after a switch's `POST` returned reads the committed switch, so
+    the first one is when the CLI learned of it (one that arrived earlier may have read
+    the rows before the commit, however late its answer starts - review F3)."""
 
     PATH = "/v1/killswitch/state"
 
     def __init__(self, app) -> None:
         self.app = app
-        self.served: list[float] = []
+        self.arrived: list[float] = []
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["path"] != self.PATH:
-            return await self.app(scope, receive, send)
-
-        async def sending(message):
-            if message["type"] == "http.response.start":
-                self.served.append(time.monotonic())
-            await send(message)
-
-        return await self.app(scope, receive, sending)
+        if scope["type"] == "http" and scope["path"] == self.PATH:
+            self.arrived.append(time.monotonic())
+        return await self.app(scope, receive, send)
 
     def first_after(self, moment: float) -> float | None:
-        return next((t for t in self.served if t > moment), None)
+        return next((t for t in self.arrived if t > moment), None)
 
 
 class LiveServer:

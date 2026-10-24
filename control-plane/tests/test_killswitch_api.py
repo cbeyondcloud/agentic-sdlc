@@ -157,6 +157,9 @@ async def test_state_etag_and_304(api):
     assert same.status_code == 304 and same.content == b""
     assert same.headers["etag"] == tag and same.headers["cache-control"] == "private, no-cache"
     assert (await api.get(STATE, token, headers={"If-None-Match": '"other"'})).status_code == 200
+    listed = await api.get(STATE, token, headers={"If-None-Match": f'"other", W/{tag}'})
+    assert listed.status_code == 304  # a list, and the weak comparison (RFC 9110 §13.1.2)
+    assert (await api.get(STATE, token, headers={"If-None-Match": "*"})).status_code == 304
     await _set(api, token, scope_kind="pipeline", scope_value="deliver")
     changed = await api.get(STATE, token, headers={"If-None-Match": tag})
     assert changed.status_code == 200 and changed.headers["etag"] != tag

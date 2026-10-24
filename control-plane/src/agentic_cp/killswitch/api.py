@@ -175,7 +175,7 @@ async def kill_state(
     ttl = state.settings.kill_ttl_seconds
     tag = _etag(ctx, scope, applying, ttl)
     headers = {"ETag": tag, "Cache-Control": "private, no-cache"}
-    if if_none_match is not None and tag in _tags(if_none_match):
+    if if_none_match is not None and _not_modified(if_none_match, tag):
         return Response(status_code=304, headers=headers)
     response.headers.update(headers)
     return KillState(switches=applying, checked_at=state.clock(), ttl_seconds=ttl)
@@ -195,7 +195,8 @@ def _etag(ctx: TokenContext, scope: RunScope, applying: list[KillSwitchInfo], tt
     return '"' + hashlib.sha256(canonical.encode("utf-8")).hexdigest() + '"'
 
 
-def _tags(header: str) -> set[str]:
-    """The entity tags of an `If-None-Match` header (a weak `W/` prefix compares equal,
-    RFC 9110 §13.1.2: the weak comparison)."""
-    return {part.strip().removeprefix("W/") for part in header.split(",") if part.strip()}
+def _not_modified(header: str, tag: str) -> bool:
+    """Whether `If-None-Match` names `tag` (RFC 9110 §13.1.2: `*` matches any current
+    answer; a list is compared weakly, so a `W/` prefix compares equal)."""
+    tags = {part.strip().removeprefix("W/") for part in header.split(",") if part.strip()}
+    return "*" in tags or tag in tags

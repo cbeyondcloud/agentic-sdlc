@@ -171,5 +171,20 @@ def test_a_304_without_a_cached_answer_is_not_a_confirmation(plane, monkeypatch)
     assert verdict.action == "pause" and verdict.stale
 
 
+def test_an_answer_of_the_wrong_shape_is_unconfirmed(plane):
+    """Review F5: a proxy or captive portal answering 200 with other JSON is no answer:
+    the verdict is unconfirmed (hold), never an exception out of the port."""
+    import httpx2
+
+    def portal(request):
+        return httpx2.Response(200, json={"error": "sign in to the network"})
+
+    client = ControlPlaneClient(CP_URL, TOKEN, transport=httpx2.MockTransport(portal))
+    ks = ControlPlaneKillSwitch(client, user=None, team="payments", repo=None, clock=Clock())
+    verdict = ks.check(SCOPE)
+    assert verdict.action == "pause" and verdict.stale
+    assert "not a kill-switch state" in verdict.describe()
+
+
 def test_standalone_has_no_switches():
     assert NoKillSwitch().check(SCOPE).action == "run"

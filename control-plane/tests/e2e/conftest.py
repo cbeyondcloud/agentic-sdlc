@@ -189,12 +189,21 @@ class Workspace:
 
 
 @pytest.fixture
-def workspace(plane: Plane, tmp_path, monkeypatch) -> Workspace:
-    """An org-mode CLI workspace signed in to `plane` as the developer: the policy fetched
-    from the control plane (what `agentic init` does), the target repository as the current
-    folder, the scripted model as the gateway, no machine settings."""
+def empty_keyring():
+    """The empty keyring for one test, the previous one restored however the test ends."""
     previous = keyring.get_keyring()
     keyring.set_keyring(EmptyKeyring())
+    try:
+        yield
+    finally:
+        keyring.set_keyring(previous)
+
+
+@pytest.fixture
+def workspace(plane: Plane, empty_keyring, tmp_path, monkeypatch) -> Workspace:
+    """An org-mode CLI workspace signed in to `plane` as the developer: the policy fetched
+    from the control plane (what `agentic init` does), the target repository as the current
+    folder, the scripted model as the gateway, no machine settings or secrets."""
     for name in MACHINE_VARS:
         monkeypatch.delenv(name, raising=False)
     home = tmp_path / "home"
@@ -227,10 +236,7 @@ def workspace(plane: Plane, tmp_path, monkeypatch) -> Workspace:
     model = Model()
     monkeypatch.setattr(runtime, "network_transport", model.transport)
     monkeypatch.setattr(runtime, "machine_readiness", lambda: Readiness("windows", ()))
-    try:
-        yield Workspace(repo=repo, home=home, model=model)
-    finally:
-        keyring.set_keyring(previous)
+    return Workspace(repo=repo, home=home, model=model)
 
 
 @dataclass
