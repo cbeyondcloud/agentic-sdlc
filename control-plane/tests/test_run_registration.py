@@ -477,3 +477,53 @@ async def test_blocked_version_refused_by_server_clock(api, rolled):
     check = _check(after, "versions")
     assert not check["passed"] and after["registered"] is False
     assert "deliver@1.0.0 is deprecated and refused since" in check["detail"]
+
+
+@pytest.fixture
+async def pipeline_rolled(api, tmp_path):
+    """deliver 2.0.0 is rolled out to team web only (1.0.0 archived); team payments has
+    its own developer agent at the version the org rolls out."""
+    repo = make_policy_repo(tmp_path / "policy", teams=("payments", "web"))
+    write(repo, "pipelines/deliver.yaml", PIPELINE.replace("1.0.0", "2.0.0"))
+    write(repo, "pipelines/versions/deliver/1.0.0.yaml", PIPELINE)
+    write(repo, "agents/developer.md", _agent("1.1.0"))
+    write(repo, "agents/versions/developer/1.0.0.md", _agent("1.0.0"))
+    write(repo, "teams/payments/agents/developer.md", _agent("1.1.0"))
+    write(
+        repo,
+        "policy/rollout.yaml",
+        "rollout:\n  pipelines:\n    deliver: {version: 2.0.0, previous: 1.0.0, teams: [web]}\n"
+        "  agents:\n    developer: {version: 1.1.0, previous: 1.0.0, teams: [web]}\n",
+    )
+    commit(repo, "a pipeline rollout and a team's own agent")
+    return await _sync(api, api.a, repo)
+
+
+CURRENT_SHA = "sha256:" + hashlib.sha256(PIPELINE.replace("1.0.0", "2.0.0").encode()).hexdigest()
+
+
+async def test_the_current_pipeline_version_is_the_approved_files(api, pipeline_rolled):
+    """The control plane reads the version of an approved current file itself: a run that
+    claims the previous version while sending the new file is still outside the rollout."""
+    body = _body(
+        pipeline_rolled,
+        pipeline_sha256=CURRENT_SHA,
+        pipeline_version="1.0.0",
+        agents=["developer@1.1.0"],
+    )
+    check = _check(await _register(api, api.a.admin_token, body), "versions")
+    assert not check["passed"]
+    assert "pipeline deliver@2.0.0 is not rolled out to team payments" in check["detail"]
+
+
+async def test_a_team_owned_agent_is_not_held_by_the_org_rollout(api, pipeline_rolled):
+    """payments' own developer (its layer) is the team's to version: developer@1.1.0 is
+    not the org's rolled-out agent for it."""
+    body = _body(
+        pipeline_rolled,
+        pipeline_file="pipelines/versions/deliver/1.0.0.yaml",
+        pipeline_version="1.0.0",
+        agents=["developer@1.1.0"],
+    )
+    result = await _register(api, api.a.admin_token, body)
+    assert _check(result, "versions")["passed"], result["checks"]

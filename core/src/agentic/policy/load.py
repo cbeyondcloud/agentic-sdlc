@@ -28,6 +28,7 @@ from pydantic import ValidationError
 
 from agentic.definitions import DefinitionError
 from agentic.definitions.overlay import OVERLAYS, load_overlay
+from agentic.definitions.pipeline import load_pipeline
 from agentic.definitions.versions import ARCHIVE
 from agentic.policy.model import OrgPolicy
 from agentic.yamlio import YamlFileError, load_yaml, read_text
@@ -241,6 +242,37 @@ def overlay_index(root: Path) -> dict[str, dict]:
                 "pipelines": sorted(overlay.pipelines),
             }
     return found
+
+
+def version_index(root: Path) -> dict[str, dict]:
+    """What run registration needs to judge a run's versions without the bundle (M2-15):
+    `files`, POSIX path of each current pipeline file -> the version it declares (so the
+    control plane reads the version of the approved file itself), and `team_owned`, team ->
+    the `agents` and `pipelines` its own layer defines (the org rollout never holds those
+    back). A file that does not load is left out: the tree's validation rejects it."""
+    files: dict[str, str] = {}
+    owned: dict[str, dict[str, list[str]]] = {}
+    for folder in _pipeline_folders(root):
+        team = folder.parent.name if folder.parent.parent == root / "teams" else None
+        for path in sorted(folder.iterdir()):
+            if not (path.is_file() and path.suffix == ".yaml"):
+                continue
+            try:
+                pipeline = load_pipeline(path)
+            except DefinitionError:
+                continue
+            files[path.relative_to(root).as_posix()] = pipeline.version
+            if team is not None:
+                owned.setdefault(team, {"agents": [], "pipelines": []})["pipelines"].append(
+                    pipeline.name
+                )
+    teams = root / "teams"
+    for team_dir in _sorted_dirs(teams) if teams.is_dir() else []:
+        # an agent file's stem is its name (discovery refuses any other, DF-03)
+        agents = sorted(p.stem for p in (team_dir / "agents").glob("*.md") if p.is_file())
+        if agents:
+            owned.setdefault(team_dir.name, {"agents": [], "pipelines": []})["agents"] = agents
+    return {"files": files, "team_owned": dict(sorted(owned.items()))}
 
 
 def _pipeline_folders(root: Path) -> list[Path]:

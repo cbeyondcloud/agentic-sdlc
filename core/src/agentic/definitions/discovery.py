@@ -187,8 +187,10 @@ class DefinitionSet:
                 if root is None:  # a repo-layer definition is never versioned
                     continue
                 current = definition.version
+                # the rollout names org definitions; a team's own one is the team's to pin
+                rollout = rules.rollout if layer == "org" else Rollout()
                 version, reason = choose_version(
-                    kind, name, current, rollout=rules.rollout, pins=rules.pins, team=rules.team
+                    kind, name, current, rollout=rollout, pins=rules.pins, team=rules.team
                 )
                 if version != current:
                     path = archive_path(root, kind, name, version)

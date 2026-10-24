@@ -258,22 +258,28 @@ def _versions(body: RunRegistration, settings: dict | None, today: date) -> OrgC
     rollout = Rollout.model_validate(rules.get("rollout") or {})
     deprecated = Deprecations.model_validate(rules.get("deprecated") or {})
     pins = Pins.model_validate((rules.get("pins") or {}).get(body.team) or {})
+    # the rollout names org definitions: one the team's own layer defines is not held back
+    owned = (rules.get("team_owned") or {}).get(body.team) or {}
     used: list[tuple[Kind, str, str]] = []
     for agent in body.agents:
         name, _, version = agent.rpartition("@")
         if name and version:
             used.append(("agent", name, version))
     if body.pipeline_file is not None:  # a repo pipeline is never versioned
-        version = archived_version(body.pipeline_file, "pipeline", body.pipeline)
-        if version or body.pipeline_version:
-            used.append(("pipeline", body.pipeline, version or body.pipeline_version or ""))
+        # the version of the approved file itself (its hash was checked), never only the
+        # one the CLI states: an archived file's path names it, a current file declares it
+        version = archived_version(body.pipeline_file, "pipeline", body.pipeline) or (
+            (rules.get("files") or {}).get(body.pipeline_file) or body.pipeline_version
+        )
+        if version:
+            used.append(("pipeline", body.pipeline, version))
     problems, warnings = [], []
     for kind, name, version in used:
         if problem := version_problem(
             kind,
             name,
             version,
-            rollout=rollout,
+            rollout=Rollout() if name in owned.get(f"{kind}s", ()) else rollout,
             pins=pins,
             deprecated=deprecated,
             team=body.team,

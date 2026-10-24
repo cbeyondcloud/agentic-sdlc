@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from agentic.policy import PolicyError, load_policy
-from agentic.policy.load import overlay_index, pipeline_digests
+from agentic.policy.load import overlay_index, pipeline_digests, version_index
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "policy"
 
@@ -77,6 +77,33 @@ def test_overlay_index_lists_overlays(tmp_path):
             "repo": None,
             "pipelines": ["deliver"],
         },
+    }
+
+
+def test_version_index_reads_versions_and_team_owned_names(tmp_path):
+    """M2-15: the control plane judges a run's pipeline version from the approved file
+    itself (never only from what the CLI says), and knows which definitions a team's own
+    layer holds (the org rollout does not hold those back)."""
+    (tmp_path / "pipelines" / "versions" / "deliver").mkdir(parents=True)
+    (tmp_path / "pipelines" / "deliver.yaml").write_bytes(
+        b"name: deliver\r\nversion: 2.0.0\r\nsteps:\r\n  - {id: a, agent: dev}\r\n"
+    )
+    (tmp_path / "pipelines" / "versions" / "deliver" / "1.0.0.yaml").write_bytes(b"x: [\n")
+    (tmp_path / "pipelines" / "broken.yaml").write_bytes(b"name: [\n")  # the sync rejects it
+    team = tmp_path / "teams" / "payments"
+    (team / "pipelines").mkdir(parents=True)
+    (team / "pipelines" / "hotfix.yaml").write_bytes(
+        b"name: hotfix\nversion: 0.1.0\nsteps:\n  - {id: a, agent: dev}\n"
+    )
+    (team / "agents" / "versions" / "dev").mkdir(parents=True)
+    (team / "agents" / "dev.md").write_text("---\nname: dev\n---\n", encoding="utf-8")
+    (tmp_path / "teams" / "web").mkdir()
+    assert version_index(tmp_path) == {
+        "files": {
+            "pipelines/deliver.yaml": "2.0.0",
+            "teams/payments/pipelines/hotfix.yaml": "0.1.0",
+        },
+        "team_owned": {"payments": {"agents": ["dev"], "pipelines": ["hotfix"]}},
     }
 
 

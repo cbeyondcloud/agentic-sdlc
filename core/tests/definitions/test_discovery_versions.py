@@ -93,6 +93,26 @@ def test_team_in_rollout_gets_the_current_agent(tree: Path):
     assert ("agent", "developer") not in found.versions  # nothing to say about it
 
 
+def test_rollout_holds_back_org_definitions_only(tree: Path):
+    """The rollout is the org admins' and names org definitions: a team's own developer
+    (its layer shadows the org one) is the team's to version, never held back to an org
+    archive the team layer does not have."""
+    write(tree / "teams" / "platform" / "agents" / "developer.md", agent("developer", "1.3.0"))
+    found = discover(tree, "platform", rollout=ROLLOUT)
+    assert found.agent("developer").version == "1.3.0"
+    assert found.agent_source("developer") == "team"
+    assert ("agent", "developer") not in found.versions
+
+
+def test_a_team_pins_its_own_definition_from_its_archive(tree: Path):
+    team = tree / "teams" / "platform"
+    write(team / "agents" / "developer.md", agent("developer", "2.0.0"))
+    write(team / "agents" / "versions" / "developer" / "1.9.0.md", agent("developer", "1.9.0"))
+    found = discover(tree, "platform", pins=Pins(agents={"developer": "1.9.0"}))
+    assert found.agent("developer").version == "1.9.0"
+    assert found.agent_file("developer").is_relative_to(team)
+
+
 def test_pinned_pipeline_read_from_archive(tree: Path):
     found = discover(tree, "platform", pins=Pins(pipelines={"deliver": "1.0.0"}))
     assert found.pipeline("deliver").version == "1.0.0"
