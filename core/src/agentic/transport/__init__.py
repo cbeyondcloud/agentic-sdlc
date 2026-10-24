@@ -6,10 +6,12 @@ from agentic.transport.client import (
     ForbiddenHeaderError,
     ForeignHostError,
     GatewayKeyRejected,
+    GatewayProbe,
     IdentityHeaderError,
     make_async_client,
     make_client,
     make_network_transport,
+    probe_gateway,
     verify_gateway_key,
 )
 from agentic.transport.cost import (
@@ -40,6 +42,8 @@ __all__ = [
     "ForbiddenHeaderError",
     "ForeignHostError",
     "GatewayKeyRejected",
+    "GatewayProbe",
+    "probe_gateway",
     "IdentityError",
     "IdentityHeaderError",
     "verify_gateway_key",

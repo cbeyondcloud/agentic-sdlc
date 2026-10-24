@@ -1,0 +1,8 @@
+[
+  {
+    "type": "deletion",
+    "ruleset_source_type": "Repository",
+    "ruleset_source": "acme/agentic-org-policy",
+    "ruleset_id": 42
+  }
+]
