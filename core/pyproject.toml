@@ -2,6 +2,7 @@
 name = "agentic-core"
 version = "0.1.0"
 description = "Core library: definitions, policy, engine, agents"
+license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "cel-python==0.5.0",

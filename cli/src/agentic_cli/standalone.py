@@ -12,9 +12,9 @@ repo laid out like an org's, which init then installs once into
                              the type's own agent (qa, not qa-baseline), else the first by name
     README.md                templates/standalone/README.md
 
-The template and library are read from the framework checkout, or from
-`AGENTIC_FRAMEWORK_ROOT`. An installed wheel does not ship them yet (DF-138, DF-188):
-init then says so and how to proceed.
+The template and library are read from `AGENTIC_FRAMEWORK_ROOT`, the framework checkout,
+or (an installed wheel) the copy the release bundles into `agentic_cli/_framework/`
+(DF-138, DF-188, DF-341).
 """
 
 import json
@@ -35,14 +35,24 @@ STANDALONE_DIR = Path("policy") / "standalone"  # under the agentic home
 TEMPLATE = Path("templates") / "standalone"
 LIBRARY = Path("library")
 _CHECKOUT = Path(__file__).resolve().parents[3]  # cli/src/agentic_cli -> the repo root
+#: The template and library a release bundles into the CLI wheel (M3-21,
+#: scripts/agentic_release/build.py): an installed CLI has no checkout.
+BUNDLED = Path(__file__).resolve().parent / "_framework"
 #: In the template's tier models until the person picks real ones (init and preflight say so).
 PLACEHOLDER = "change-me"
 
 
 def framework_root(env: Mapping[str, str] = os.environ) -> Path:
-    """Where the framework's `templates/` and `library/` are."""
+    """Where the framework's `templates/` and `library/` are: AGENTIC_FRAMEWORK_ROOT, else
+    the checkout this CLI runs from, else the bundle in the installed wheel. With none of
+    them, the checkout path, so the error names what is missing."""
     given = env.get(FRAMEWORK_ENV, "").strip()
-    return Path(given).expanduser() if given else _CHECKOUT
+    if given:
+        return Path(given).expanduser()
+    for root in (_CHECKOUT, BUNDLED):
+        if (root / TEMPLATE).is_dir():
+            return root
+    return _CHECKOUT
 
 
 def assemble(dest: Path, root: Path | None = None) -> Path:

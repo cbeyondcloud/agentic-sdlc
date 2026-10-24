@@ -1,0 +1,129 @@
+"""Reproducible release builds of the four workspace packages.
+
+Each package is built from a staged copy holding only its committed files (`git ls-files`,
+so a stray untracked file never ships), plus the repo's LICENSE and THIRD_PARTY_NOTICES.md
+as the wheel's licence files. The CLI's copy also gets the standalone template and the
+default library under `agentic_cli/_framework/`, so an installed CLI needs no checkout
+(DF-138, DF-188, DF-341). `uv build` (the uv_build backend) then writes archives with fixed
+timestamps and sorted entries: two builds of one commit are byte-identical, and with
+`.gitattributes eol=lf` a Windows and a Linux build agree too.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
+from agentic_release.version import MEMBERS, check_versions
+
+#: The repo files every wheel carries as its licence files.
+LICENCE_FILES = ("LICENSE", "THIRD_PARTY_NOTICES.md")
+#: What the CLI wheel bundles, under agentic_cli/_framework/ (the paths kept as they are).
+BUNDLE = ("templates/standalone", "library/agents", "library/pipelines", "library/skills")
+BUNDLE_DEST = Path("src") / "agentic_cli" / "_framework"
+#: The parts of a member a build reads.
+MEMBER_PARTS = ("pyproject.toml", "src")
+
+
+class BuildError(RuntimeError):
+    """The release cannot be built from this tree."""
+
+
+def _git(repo: Path, *args: str) -> str:
+    done = subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, text=True, encoding="utf-8"
+    )
+    if done.returncode != 0:
+        raise BuildError(f"git {' '.join(args)} failed in {repo}: {done.stderr.strip()}")
+    return done.stdout
+
+
+def tracked_files(repo: Path, folder: str) -> list[str]:
+    """The committed files under `folder` (POSIX paths relative to `repo`), as they are in
+    the working tree; deleted ones are left out."""
+    listing = _git(repo, "ls-files", "--cached", "-z", "--", folder)
+    return sorted(name for name in listing.split("\0") if name and (repo / name).is_file())
+
+
+def dirty(repo: Path) -> bool:
+    """Whether a committed file has uncommitted changes (untracked files never ship)."""
+    return bool(_git(repo, "status", "--porcelain", "--untracked-files=no").strip())
+
+
+def commit_epoch(repo: Path) -> int:
+    """The HEAD commit's time: the release's SOURCE_DATE_EPOCH."""
+    return int(_git(repo, "log", "-1", "--format=%ct").strip())
+
+
+def _copy_tracked(repo: Path, folder: str, dest: Path, strip: str = "") -> None:
+    for name in tracked_files(repo, folder):
+        target = dest / name[len(strip) :] if strip else dest / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(repo / name, target)
+
+
+def stage(repo: Path, member: str, dest: Path) -> Path:
+    """A buildable copy of `member` at `dest`: its committed pyproject and src, the
+    licence files declared in its metadata, and (the CLI) the framework bundle."""
+    for part in MEMBER_PARTS:
+        _copy_tracked(repo, f"{member}/{part}", dest, strip=f"{member}/")
+    pyproject = dest / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    if '\nlicense = "' not in text:
+        raise BuildError(f"{member}/pyproject.toml: no `license = ...` line in [project]")
+    files = ", ".join(f'"{name}"' for name in LICENCE_FILES)
+    line = next(ln for ln in text.splitlines() if ln.startswith("license = "))
+    text = text.replace(line, f"{line}\nlicense-files = [{files}]", 1)
+    pyproject.write_text(text, encoding="utf-8", newline="\n")
+    for name in LICENCE_FILES:
+        if name not in tracked_files(repo, name):
+            raise BuildError(f"{name} is not committed at the repo root")
+        shutil.copyfile(repo / name, dest / name)
+    if member == "cli":
+        for folder in BUNDLE:
+            files_in = tracked_files(repo, folder)
+            if not files_in:
+                raise BuildError(f"{folder}: nothing committed to bundle into the CLI")
+            for name in files_in:
+                target = dest / BUNDLE_DEST / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(repo / name, target)
+    return dest
+
+
+def build_packages(repo: Path, out: Path, *, allow_dirty: bool = False) -> list[Path]:
+    """Build every member's sdist and wheel into `out`; returns the files, sorted by name.
+
+    Refuses version drift (see `version.check_versions`) and, unless `allow_dirty`,
+    uncommitted changes to committed files. `out` must not hold anything else."""
+    problems = check_versions(repo)
+    if problems:
+        raise BuildError("the versions disagree:\n  " + "\n  ".join(problems))
+    if dirty(repo) and not allow_dirty:
+        raise BuildError(
+            "the tree has uncommitted changes: commit them, or pass --allow-dirty for a "
+            "build that is not a release"
+        )
+    if out.exists() and any(out.iterdir()):
+        raise BuildError(f"{out} is not empty: give an empty or new folder")
+    env = dict(os.environ, SOURCE_DATE_EPOCH=str(commit_epoch(repo)))
+    with tempfile.TemporaryDirectory(prefix="agentic-release-") as scratch:
+        built = Path(scratch) / "dist"
+        for member in MEMBERS:
+            staged = stage(repo, member, Path(scratch) / "stage" / member)
+            _uv_build(staged, built, env)
+        out.mkdir(parents=True, exist_ok=True)
+        for path in sorted(built.iterdir()):
+            shutil.copyfile(path, out / path.name)
+    return sorted(out.iterdir(), key=lambda p: p.name)
+
+
+def _uv_build(source: Path, out: Path, env: dict[str, str]) -> None:
+    """`uv build` of one staged project: the sdist, then the wheel built from it."""
+    cmd = ["uv", "build", str(source), "--out-dir", str(out), "--no-create-gitignore", "-q"]
+    done = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8")
+    if done.returncode != 0:
+        raise BuildError(f"uv build failed for {source.name}:\n{done.stderr.strip()}")

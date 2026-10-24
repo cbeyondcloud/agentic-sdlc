@@ -2,6 +2,7 @@
 name = "agentic-cli"
 version = "0.1.0"
 description = "The agentic command-line tool"
+license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "agentic-core[eval]==0.1.0",

@@ -51,7 +51,7 @@ from agentic_cli.exit_codes import ExitCode
 from agentic_cli.policy_source import LoadedPolicy
 from agentic_cli.readiness import Item, Report
 from agentic_cli.repo_guard import RepoRoot
-from agentic_cli.standalone import PLACEHOLDER
+from agentic_cli.standalone import PLACEHOLDER, framework_root
 from agentic_cli.workspace import Workspace
 from sdlc_commons.tool_fetch import FetchResult, ToolFetcher, ToolFetchError
 
@@ -61,7 +61,11 @@ AUDIT_REL = Path("audit") / "init-events.jsonl"
 LOCAL_WRITES = tuple(
     Path(rel) for rel in ("audit", AUDIT_REL, "skills", "index", "init.json", ".gitignore")
 )
-BUNDLED_SKILLS = Path(__file__).resolve().parents[3] / "library" / "skills"  # dev checkout
+
+
+def bundled_skills() -> Path:
+    """The framework's default skill library: a checkout's, or the installed wheel's."""
+    return framework_root() / "library" / "skills"
 
 
 class IndexSkipped(Exception):
@@ -276,7 +280,7 @@ def _skills(
 ) -> list[Item]:
     source = loaded.root / "skills"
     if not (source / CATALOG_FILE).is_file() and loaded.mode == "standalone":
-        source = BUNDLED_SKILLS
+        source = bundled_skills()
     if not (source / CATALOG_FILE).is_file():
         fix = "add skills/catalog.yaml to the policy repo (start from the framework's library)"
         return [Item("skills", "warn", "no skill catalog found; agents run without skills", fix)]

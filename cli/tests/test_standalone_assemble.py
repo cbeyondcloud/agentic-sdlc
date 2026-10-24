@@ -69,3 +69,36 @@ def test_a_missing_framework_root_is_an_error_with_a_hint(tmp_path: Path):
 def test_the_framework_root_can_be_set(tmp_path: Path):
     assert standalone.framework_root({"AGENTIC_FRAMEWORK_ROOT": str(tmp_path)}) == tmp_path
     assert standalone.framework_root({}) == ROOT
+
+
+def _framework(folder: Path) -> Path:
+    (folder / "templates" / "standalone").mkdir(parents=True)
+    return folder
+
+
+def test_framework_root_prefers_env_then_checkout_then_bundle(tmp_path: Path, monkeypatch):
+    """An installed wheel has no checkout: it uses the template and library the release
+    bundles into agentic_cli/_framework (DF-138, DF-188, DF-341)."""
+    checkout, bundle = tmp_path / "checkout", _framework(tmp_path / "bundle")
+    checkout.mkdir()
+    monkeypatch.setattr(standalone, "_CHECKOUT", checkout)
+    monkeypatch.setattr(standalone, "BUNDLED", bundle)
+    assert standalone.framework_root({}) == bundle  # no checkout: the bundle
+    _framework(checkout)
+    assert standalone.framework_root({}) == checkout  # a dev checkout wins
+    given = {"AGENTIC_FRAMEWORK_ROOT": str(tmp_path / "mine")}
+    assert standalone.framework_root(given) == tmp_path / "mine"  # the env wins
+    monkeypatch.setattr(standalone, "BUNDLED", tmp_path / "absent")
+    (checkout / "templates" / "standalone").rmdir()
+    assert standalone.framework_root({}) == checkout  # neither: the error names it
+
+
+def test_bundled_skills_follow_the_framework_root(tmp_path: Path, monkeypatch):
+    from agentic_cli import dev_init
+
+    monkeypatch.setattr(standalone, "_CHECKOUT", tmp_path / "checkout")
+    monkeypatch.setattr(standalone, "BUNDLED", _framework(tmp_path / "bundle"))
+    monkeypatch.delenv("AGENTIC_FRAMEWORK_ROOT", raising=False)
+    assert dev_init.bundled_skills() == tmp_path / "bundle" / "library" / "skills"
+    monkeypatch.setattr(standalone, "_CHECKOUT", ROOT)
+    assert dev_init.bundled_skills() == ROOT / "library" / "skills"
