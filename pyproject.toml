@@ -131,12 +131,15 @@ allow_indirect_imports = true
 ignore_imports = ["agentic.backends.acp.runner -> acp"]
 
 [[tool.importlinter.contracts]]
-name = "code-review-graph only in its query subprocess (optional extra)"
+name = "code-review-graph only in its query and import subprocesses (optional extra)"
 type = "forbidden"
 source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
 forbidden_modules = ["code_review_graph"]
 allow_indirect_imports = true
-ignore_imports = ["agentic.codeintel._crg_query -> code_review_graph"]
+ignore_imports = [
+    "agentic.codeintel._crg_query -> code_review_graph",
+    "agentic.codeintel._crg_import -> code_review_graph",
+]
 
 [[tool.importlinter.contracts]]
 name = "Commons never imports the CLI or the control plane"

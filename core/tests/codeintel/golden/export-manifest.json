@@ -1,0 +1,52 @@
+{
+ "commit": "d86ef20be1bd863753e376d054f37e011904d071",
+ "edges": 15,
+ "files": {
+  "pkg/__init__.py": {
+   "edges": 0,
+   "nodes": 1,
+   "sha256": "2534d79eb809cd482faf39ef5b664f2ccc8ddc62a809ae981a1c9de865fd540a",
+   "shard": "shards/8b/764cb4d1395faae213fca171d3ac5a.jsonl"
+  },
+  "pkg/api.py": {
+   "edges": 3,
+   "nodes": 2,
+   "sha256": "2ca83b3312530b9335f2655dd5c1126274db30f9cfa7dc74148025a127272328",
+   "shard": "shards/79/95196df2886aa7ab6c5008f7f2b102.jsonl"
+  },
+  "pkg/models.py": {
+   "edges": 2,
+   "nodes": 3,
+   "sha256": "055e588518ccabb1bae5f2c985b25b65d3fb04d927b85fda8941085396b8259a",
+   "shard": "shards/a5/7cf0daddace27d102f774a594a5751.jsonl"
+  },
+  "pkg/service.py": {
+   "edges": 4,
+   "nodes": 2,
+   "sha256": "fbd096471ef6e5dc30a45779574a6b68c1d6750c2d53065ea1786f7f6c1fe8c4",
+   "shard": "shards/91/46767c4c3a865fe396fcbf3fe94a5c.jsonl"
+  },
+  "tests/__init__.py": {
+   "edges": 0,
+   "nodes": 1,
+   "sha256": "46bc9e955d0f3345fa407ee0e7f5748983011f0ffb848add152eca1eddb713c5",
+   "shard": "shards/00/1e61d97d9dee27d0c5aa1f23ba6c19.jsonl"
+  },
+  "tests/test_models.py": {
+   "edges": 6,
+   "nodes": 2,
+   "sha256": "873f917eaa755479e9ac48fa87681476a9894fe9bdee331f883f9a6dc298d390",
+   "shard": "shards/0a/db667cd397bd56edce10eec11e1b10.jsonl"
+  }
+ },
+ "format": 1,
+ "metadata": {
+  "cpp_identity_pending": "{\"version\": \"1\", \"files\": []}",
+  "cpp_identity_version": "1"
+ },
+ "nodes": 11,
+ "root_token": "${ROOT}",
+ "schema_version": 13,
+ "tool": "code-review-graph",
+ "tool_version": "2.3.9"
+}

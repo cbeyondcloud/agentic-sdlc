@@ -16,12 +16,14 @@ into core's `Candidates` and `CodeIntelError`. A missing graph or extra never
 refuses a run: preflight warns (`codeintel_warning`) and agents get what is there.
 """
 
+import json
 import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from agentic.codeintel import Candidates, CodeIntel, CodeIntelError, Combined
+from agentic.codeintel.export import MANIFEST, installed_tool_version
 from agentic.repoconfig import CodeIntelConfig
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
@@ -30,6 +32,15 @@ from sdlc_commons.domain_graph import DomainGraph, DomainGraphError
 from sdlc_commons.graph_codeintel import DomainGraphCodeIntel
 
 Factory = Callable[[Path, Path], CodeIntel]  # (run tree, data folder) -> adapter
+LOCAL_INDEX_REL = Path(".agentic") / "local" / "index"  # the developer's index (D39)
+#: The published index export `agentic index import` keeps (M2-44): every run's index
+#: starts from it and catches up with an incremental update.
+INDEX_EXPORT_REL = Path(".agentic") / "local" / "index-export"
+
+
+def seeded(repo: Path) -> bool:
+    """Whether `agentic index import` has kept a published export for this repo."""
+    return (repo / INDEX_EXPORT_REL / MANIFEST).is_file()
 
 
 def codeintel_settings(config: Mapping[str, Any]) -> CodeIntelConfig:
@@ -43,8 +54,26 @@ def codeintel_settings(config: Mapping[str, Any]) -> CodeIntelConfig:
         raise CliError(
             f"{REPO_CONFIG}: {where}: {problem['msg']}",
             ExitCode.INVALID,
-            hint="codeintel.adapter is code-review-graph, domain-graph or none",
+            hint=_hint(problem),
         ) from error
+
+
+#: What each codeintel setting is, for the hint under an invalid one (DF-464).
+_HINTS = {
+    "adapter": "codeintel.adapter is code-review-graph, domain-graph or none",
+    "graph": "codeintel.graph is the domain graph's folder: repo-relative, absolute or ~/...",
+    "component": "codeintel.component names this repo's component in the domain graph",
+}
+
+
+def _hint(problem: Mapping[str, Any]) -> str:
+    """The hint for one pydantic error of the codeintel section."""
+    loc = tuple(problem.get("loc") or ())
+    if not loc:  # the section itself is not a mapping (`codeintel: none`)
+        return "codeintel is a mapping of settings, for example `codeintel: {adapter: none}`"
+    if problem.get("type") == "extra_forbidden" or loc[0] not in _HINTS:
+        return f"codeintel takes only the settings {', '.join(_HINTS)}"
+    return _HINTS[str(loc[0])]
 
 
 def graph_dir(repo: Path, settings: CodeIntelConfig) -> Path:
@@ -63,12 +92,37 @@ def codeintel_warning(repo: Path, settings: CodeIntelConfig, *, crg_available: b
             f"the domain graph is not built at {graph_dir(repo, settings)} (codeintel.graph): "
             f"it runs with {fallback} until the graph is built there"
         )
+    if settings.adapter == "domain-graph":
+        try:  # DF-467: a damaged graph.jsonl would fail every domain-graph answer
+            DomainGraph(graph_dir(repo, settings)).status()
+        except DomainGraphError as error:
+            return (
+                f"the domain graph at {graph_dir(repo, settings)} cannot be read ({error}): "
+                "rebuild it; its answers fail until then"
+            )
     if settings.adapter == "code-review-graph" and not crg_available:
         return (
             "the code intelligence extra is not installed (agentic-core[codeintel]): it runs "
             "without it and uses search instead"
         )
+    if crg_available and seeded(repo):
+        made, installed = _seed_tool_version(repo), installed_tool_version()
+        if made != installed:  # every run's index would be refused the seed and built anew
+            return (
+                f"the imported index export ({INDEX_EXPORT_REL.as_posix()}) was made with "
+                f"code-review-graph {made} and this machine has {installed}: runs build the "
+                "index from scratch until `agentic index import` brings an export of this "
+                "version"
+            )
     return None
+
+
+def _seed_tool_version(repo: Path) -> str | None:
+    try:
+        manifest = json.loads((repo / INDEX_EXPORT_REL / MANIFEST).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return manifest.get("tool_version") if isinstance(manifest, dict) else None
 
 
 def codeintel_for(repo: Path, settings: CodeIntelConfig, *, crg_available: bool) -> Factory | None:
@@ -86,7 +140,11 @@ def codeintel_for(repo: Path, settings: CodeIntelConfig, *, crg_available: bool)
             from agentic.codeintel.crg import CodeReviewGraph
             from agentic.codeintel.index import LocalIndex
 
-            adapters.append(CodeReviewGraph(LocalIndex(tree, data, home_dir=data / "home")))
+            seed = repo / INDEX_EXPORT_REL  # a published export: seconds, not a full build
+            index = LocalIndex(
+                tree, data, home_dir=data / "home", seed=seed if seeded(repo) else None
+            )
+            adapters.append(CodeReviewGraph(index))
         if graph is not None:
             adapters.append(GraphIntel(DomainGraphCodeIntel(graph, tree, settings.component)))
         return Combined.of(*adapters)

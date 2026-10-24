@@ -3,7 +3,8 @@
 Agents can use both graph levels: the symbol graph (which functions and tests) and
 the domain graph (which services, topics and tables, across repositories). `Combined`
 asks every adapter that supports an operation, in order, and merges the answers:
-files best first without repeats, notes joined, the source naming the adapters that
+files best first without repeats, notes joined (an adapter that found nothing adds its
+note only when no adapter found anything, DF-465), the source naming the adapters that
 answered. Where the first adapter answers nothing the next one still does. (The domain
 graph answers only for files that cite an integration fact - endpoints, topics, tables,
 config, deploys - so it is not the file-level fallback DF-85 asks for.) An adapter
@@ -52,7 +53,8 @@ class Combined:
 
     def _ask(self, op: str, arg: str) -> Candidates:
         files: dict[str, None] = {}
-        notes, sources, failures = [], [], []
+        answers: list[Candidates] = []
+        sources, failures = [], []
         for adapter in self._supporting(op):
             try:
                 found = getattr(adapter, op)(arg)
@@ -62,10 +64,12 @@ class Combined:
             if found.files:
                 sources.append(found.source)
             files.update(dict.fromkeys(found.files))
-            if found.note:
-                notes.append(found.note)
+            answers.append(found)
         if failures and len(failures) == len(self._supporting(op)):
             raise CodeIntelError("; ".join(failures))
+        # the note of an adapter that found nothing is noise beside another's answer
+        # (DF-465); when none found anything, every note says why
+        notes = [found.note for found in answers if found.note and (found.files or not files)]
         notes += [f"{failure} (no answer from it)" for failure in failures]
         source = " + ".join(sources) or self.name
         return Candidates(tuple(files), source=source, note="\n".join(notes))

@@ -42,12 +42,39 @@ def test_a_domain_graph_that_is_not_built_is_a_preflight_warning(workspace, poli
     assert report.passed, report.text()
 
 
-def test_an_invalid_codeintel_section_is_refused(workspace, policy_repo):
+def test_an_invalid_codeintel_section_is_a_preflight_error_among_the_others(workspace, policy_repo):
+    # DF-467: listed as a problem, so the other preflight problems are listed too
+    configure(workspace, "{adapter: graphify}")
+
+    report = Runtime(Workspace.load()).preflight("deliver", live=False)
+
+    found = [p for p in report.problems if p.check == "codeintel"]
+    assert [p.severity for p in found] == ["error"] and not report.passed
+    assert "codeintel.adapter" in found[0].detail
+    assert "code-review-graph, domain-graph or none" in found[0].detail
+
+
+def test_the_run_itself_still_refuses_an_invalid_section(workspace):
     configure(workspace, "{adapter: graphify}")
 
     with pytest.raises(CliError) as refused:
-        Runtime(Workspace.load()).preflight("deliver", live=False)
+        Runtime(Workspace.load())._wiring(decision())
     assert refused.value.code == ExitCode.INVALID
+
+
+def test_a_domain_graph_that_does_not_parse_is_a_preflight_warning(workspace, policy_repo):
+    # DF-467: a graph.jsonl that will not parse no longer passes as built
+    configure(workspace, "{adapter: domain-graph}")
+    allow_codeintel(policy_repo)
+    graph = workspace / ".agentic" / "local" / "graph"
+    graph.mkdir(parents=True)
+    (graph / "graph.jsonl").write_text("{not json\n", encoding="utf-8")
+
+    report = Runtime(Workspace.load()).preflight("deliver", live=False)
+
+    found = [p for p in report.problems if p.check == "codeintel"]
+    assert found and all(p.severity == "warning" for p in found), report.text()
+    assert "cannot be read" in found[0].detail and report.passed
 
 
 def test_adapter_none_gives_the_steps_no_code_intelligence(workspace):

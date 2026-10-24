@@ -47,6 +47,25 @@ def test_an_invalid_section_is_refused_as_invalid(config):
     assert refused.value.code == ExitCode.INVALID and "codeintel" in str(refused.value)
 
 
+@pytest.mark.parametrize(
+    ("section", "where", "hint"),
+    [
+        ({"adapter": "graphify"}, "codeintel.adapter", "code-review-graph, domain-graph or none"),
+        ("none", "codeintel", "a mapping"),
+        ({"adapter": "none", "colour": "red"}, "codeintel.colour", "adapter, graph, component"),
+        ({"adapter": "domain-graph", "graph": ""}, "codeintel.graph", "domain graph's folder"),
+        ({"adapter": "domain-graph", "component": ""}, "codeintel.component", "component"),
+    ],
+)
+def test_each_invalid_section_gets_its_own_hint(section, where, hint):
+    # DF-464: the adapter hint was shown for every error, even a misspelt key
+    with pytest.raises(CliError) as refused:
+        codeintel.codeintel_settings({"codeintel": section})
+    assert f"{where}:" in str(refused.value) and hint in refused.value.hint
+    if where != "codeintel.adapter":
+        assert "code-review-graph, domain-graph or none" not in refused.value.hint
+
+
 def test_the_graph_folder_is_read_against_the_repo(tmp_path):
     assert codeintel.graph_dir(tmp_path, settings()) == tmp_path / ".agentic" / "local" / "graph"
     assert codeintel.graph_dir(tmp_path, settings(graph="../g")) == tmp_path / ".." / "g"
@@ -153,6 +172,20 @@ class Inner:
 
     def overview(self):
         raise DomainGraphError("no graph")
+
+
+def test_an_imported_export_of_another_tool_version_is_a_warning(tmp_path, monkeypatch):
+    # M2-44: every run would try the seed, be refused, and build from scratch
+    seed = tmp_path / ".agentic" / "local" / "index-export"
+    seed.mkdir(parents=True)
+    (seed / "manifest.json").write_text('{"tool_version": "2.3.1"}', encoding="utf-8")
+    monkeypatch.setattr(codeintel, "installed_tool_version", lambda: "2.3.9")
+
+    warning = codeintel.codeintel_warning(tmp_path, settings(), crg_available=True)
+
+    assert "2.3.1" in warning and "2.3.9" in warning and "agentic index import" in warning
+    monkeypatch.setattr(codeintel, "installed_tool_version", lambda: "2.3.1")
+    assert codeintel.codeintel_warning(tmp_path, settings(), crg_available=True) is None
 
 
 def test_a_commons_error_becomes_a_codeintel_error():

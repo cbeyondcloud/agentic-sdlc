@@ -43,11 +43,13 @@ from pathlib import Path
 from filelock import FileLock
 
 from agentic.backends.processes import run_contained
+from agentic.codeintel.export import MANIFEST, import_export
 from agentic.codeintel.interface import CodeIntelError
 from agentic.sandbox.process import safe_env
 
 DB_NAME = "graph.db"
 STATE_NAME = "indexed-state.json"
+IMPORT_NAME = "graph.db.import"  # an import in progress; renamed over DB_NAME when complete
 SCRATCH_INDEX = "git-index"
 LOCK_NAME = "build.lock"
 BUILD_TIMEOUT_S = 1800
@@ -90,10 +92,14 @@ class LocalIndex:
         *,
         home_dir: Path,
         cli: Sequence[str] | None = None,
+        seed: Path | None = None,
     ) -> None:
         self.tree, self.data_dir, self.home_dir = Path(tree), Path(data_dir), Path(home_dir)
         self._cli = list(cli) if cli is not None else None
         self._lock = _lock_for(self.data_dir)
+        # a published index export (M2-44) the first build starts from, when there is one
+        self.seed = Path(seed) if seed is not None else None
+        self.seed_note: str | None = None  # why the seed was not used
 
     @property
     def env(self) -> dict[str, str]:
@@ -135,6 +141,11 @@ class LocalIndex:
         with self._lock, FileLock(self.data_dir / LOCK_NAME):
             if self.db.is_file() and not self._readable():
                 self._discard()  # a crashed first build or a corrupt file (DF-89)
+            if not self.db.is_file() and self.seed and (self.seed / MANIFEST).is_file():
+                try:  # seconds instead of a full build; `update` catches it up below
+                    self._load(self.seed)
+                except CodeIntelError as error:
+                    self.seed_note = f"the published index export was not used: {error}"
             if self.fresh():
                 return
             state, dirty = self._state(), self._dirty()
@@ -142,6 +153,28 @@ class LocalIndex:
             reverted = state is not None and state.get("dirty") and not dirty
             self._run("build" if not self.db.is_file() or reverted else "update")
             self._save_state(dirty)
+
+    def load_export(self, folder: Path) -> dict:
+        """Replace the index with the published export in `folder` (M2-44): checked and
+        pinned to this tool's version; the old index stays unless the import completes.
+        Returns the export's manifest. Raises ExportError (ExportMismatch)."""
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        with self._lock, FileLock(self.data_dir / LOCK_NAME):
+            return self._load(folder)
+
+    def _load(self, folder: Path) -> dict:
+        staged = self.data_dir / IMPORT_NAME
+        self.home_dir.mkdir(parents=True, exist_ok=True)
+        manifest = import_export(folder, self.tree, staged, self.env, timeout=BUILD_TIMEOUT_S)
+        try:  # the old index's journal first: it must never be replayed into the new file
+            for name in (f"{DB_NAME}-wal", f"{DB_NAME}-shm"):
+                (self.data_dir / name).unlink(missing_ok=True)
+            os.replace(staged, self.db)
+        except OSError as error:  # Windows: another process has the old index open
+            staged.unlink(missing_ok=True)
+            raise CodeIntelError(f"the index could not be replaced: {error}") from error
+        (self.data_dir / STATE_NAME).unlink(missing_ok=True)  # checked afresh against HEAD
+        return manifest
 
     def indexed_files(self) -> set[str]:
         """The tree-relative files the index holds."""

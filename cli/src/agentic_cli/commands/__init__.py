@@ -12,6 +12,7 @@ from agentic_cli.commands import (
     cost,
     evals,
     gates,
+    index,
     init,
     killswitch,
     login,
@@ -30,6 +31,7 @@ COMMANDS: list[Callable[[typer.Typer], None]] = [
     skills.register,  # after catalog: it joins catalog's `skills` group
     runs.register,
     gates.register,
+    index.register,
     cost.register,
     evals.register,
     pr.register,

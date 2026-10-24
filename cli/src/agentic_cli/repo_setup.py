@@ -25,6 +25,7 @@ import os
 import subprocess
 import tempfile
 from collections import Counter
+from importlib.resources import files
 from pathlib import Path
 
 from agentic.policy import OrgPolicy
@@ -62,31 +63,10 @@ LANGUAGES = {
 }
 _GIT = ["git", "-c", "core.fsmonitor=false"]
 
-INDEX_EXPORT_WORKFLOW = """\
-# Nightly code-intelligence index export (spec 10.3, D39): built once by CI and published
-# outside main, as a workflow artifact, for developers to import. Added by
-# `agentic init --repo` because org policy sets index_export_workflow. The export
-# command and its pinned format are delivered by the framework's index export (M2-44).
-name: agentic-index-export
-on:
-  schedule:
-    - cron: "17 2 * * *"
-  workflow_dispatch: {}
-permissions:
-  contents: read
-jobs:
-  export:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - run: uv tool install agentic
-      - run: agentic index export --out agentic-index-export
-      - uses: actions/upload-artifact@v4
-        with:
-          name: agentic-index-export
-          path: agentic-index-export
-"""
+# The nightly index export job (M2-44, D39): the packaged template, the single source.
+INDEX_EXPORT_WORKFLOW = (
+    files("agentic_cli").joinpath("templates", "agentic-index-export.yml").read_text("utf-8")
+)
 
 
 def shared_files(repo: Path, policy: OrgPolicy, config: RepoConfig) -> dict[str, str]:

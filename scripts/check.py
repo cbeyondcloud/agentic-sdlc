@@ -53,12 +53,23 @@ CHECKS: list[tuple[str, list[str]]] = [
 # Checks that need the network (PyPI/OSV): `--offline` skips them and says so (DF-97).
 NETWORK_CHECKS = ("known vulnerabilities",)
 
+# The GitHub Actions workflows the framework ships to org repos (M2-44): actionlint-clean.
+WORKFLOW_TEMPLATES = (
+    "cli/src/agentic_cli/templates/agentic-index-export.yml",
+    "templates/policy-repo/.github/workflows/policy-check.yml",
+)
+
 # Checks that run only in the Linux container, where their pinned native binary is
 # installed (no unsigned binaries on developer laptops).
 LINUX_ONLY_CHECKS: list[tuple[str, list[str]]] = [
     ("secret scan", ["gitleaks", "dir", ".", "--no-banner", "--redact"]),
     # the control plane's Prometheus alert rules (M2-12); their unit tests run under pytest
     ("alert rules", ["promtool", "check", "rules", "control-plane/deploy/prometheus/alerts.yml"]),
+    # shellcheck and pyflakes integrations off: neither is in the image (GPL-3.0 / unused)
+    (
+        "workflow lint",
+        ["actionlint", "-no-color", "-shellcheck=", "-pyflakes=", *WORKFLOW_TEMPLATES],
+    ),
 ]
 
 
