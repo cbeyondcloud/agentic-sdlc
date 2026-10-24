@@ -151,6 +151,13 @@ def test_template_overlay_applies_to_the_library_pipeline(policy, tmp_path: Path
     """M2-23: the example overlay tightens the library's feature-delivery for one
     repository of team payments, keeping every org-required gate."""
     root = with_library(tmp_path)
+    overlay = root / "teams" / "payments" / "pipelines" / "overlays" / "payments-api.yaml"
+    text = read_text(overlay)
+    example = text[text.index("# pipelines:") :]  # the commented example, uncommented
+    overlay.write_text(
+        text.replace(example, "".join(line[2:] for line in example.splitlines(True))),
+        encoding="utf-8",
+    )
     assert {"requirements-approval", "review-approval"} <= set(
         policy.required_steps["feature-delivery"]
     )

@@ -99,7 +99,9 @@ control plane's sync and every laptop refuse it with the rule named. When a remo
 had a gate after it, the gate re-anchors to the previous remaining step (and the run's
 plan says so). The control plane checks the overlay's hash like the pipeline's: a run
 with an edited overlay, another team's overlay, or without the overlay that applies is
-refused. `teams/payments/pipelines/overlays/payments-api.yaml` is an example.
+refused. `teams/payments/pipelines/overlays/payments-api.yaml` is an example, commented
+out until the library's pipelines are copied in (an overlay of a missing pipeline is
+refused, and this template must sync as it is).
 
 ## Versions and rollout
 

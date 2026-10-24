@@ -123,7 +123,14 @@ def test_agents_list_and_search(workspace, cli):
 def test_pipelines_list_and_search(workspace, cli):
     rows = cli("--json", "pipelines", "list").json()
     assert rows == [
-        {"name": "deliver", "version": "1.0.0", "regime": "team", "layer": "org", "steps": 3}
+        {
+            "name": "deliver",
+            "version": "1.0.0",
+            "regime": "team",
+            "layer": "org",
+            "steps": 3,
+            "overlay": None,  # no overlay of this team applies to this repository (M2-23)
+        }
     ]
     assert cli("--json", "pipelines", "search", "nothing").json() == []
 
