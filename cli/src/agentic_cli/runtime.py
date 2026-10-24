@@ -666,6 +666,7 @@ class Runtime:
             codeintel_for=codeintel_for,
             scanner=production_scanner(self.ws.policy()),  # tool output, as model calls
             batch=self.ws.policy().review_batch,
+            checkpoint_exclude=tuple(self.ws.policy().checkpoint_exclude),
         )
 
     def _catalog_root(self) -> Path | None:

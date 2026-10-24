@@ -116,6 +116,20 @@ def test_tools_write_inside_the_run_tree_and_the_step_commit_holds_it(repo, tmp_
     assert not (repo / "src" / "new.py").exists()  # the developer's checkout is untouched
 
 
+def test_org_checkpoint_exclusions_reach_the_step_commit(repo, tmp_path, agent):
+    """DF-315: org policy's `checkpoint_exclude` adds to what a step's checkpoint leaves
+    out (a build folder); the framework's own exclusions stay."""
+    w = wiring(repo, tmp_path)
+    w.checkpoint_exclude = ("**/target/**",)
+    context = w.tools_for(step(agent))
+    for made in ("target/app.bin", "src/kept.py"):
+        (context.tree / made).parent.mkdir(parents=True, exist_ok=True)
+        (context.tree / made).write_text("x\n", encoding="utf-8")
+    commit = w.trees_for(RUN).finish("agentic: develop #1")
+    assert git(context.tree, "show", "--name-only", "--format=", commit["repo"]) == "src/kept.py"
+    assert "**/__pycache__/**" in w.trees_for(RUN).generated
+
+
 def test_tools_refuse_a_write_outside_the_tree(repo, tmp_path, agent):
     tools = build_tools(agent, wiring(repo, tmp_path).tools_for(step(agent)))
     assert call(tools, "write_file", path="../../escape.py", text="x").startswith("REFUSED")

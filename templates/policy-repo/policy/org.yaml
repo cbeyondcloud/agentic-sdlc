@@ -54,3 +54,17 @@ unhonoured: { temperature: warn, effort: warn }
 review_batch:
   max_files: 40
   max_lines: 1500
+
+# The deterministic review pre-pass before a reviewing agent sees a change: secrets,
+# blocked licences, new ignore rules, and gitleaks, ast-grep and osv-scanner when
+# tool-pins.yaml pins them. osv-scanner stays offline unless the online lookup is on,
+# which sends the change's dependency list to the OSV service.
+review_prepass:
+  enabled: true
+  agent_types: [code-review]
+  online_vulnerability_lookup: false
+
+# Untracked paths a step's checkpoint leaves out of the run branch, on top of the
+# framework's own (bytecode, tool caches, coverage data); each path left out is logged.
+# It only adds: git globs relative to the repository.
+# checkpoint_exclude: ["**/target/**", "**/build/**", "**/.gradle/**"]

@@ -59,6 +59,15 @@ def test_no_vendor_names():
     assert {name: hits for name, hits in found.items() if hits} == {}
 
 
+def test_template_shows_the_prepass_and_checkpoint_keys(policy):
+    """DF-533, DF-315: admins find `review_prepass` (set to its defaults) and the commented
+    `checkpoint_exclude` example in org.yaml."""
+    text = read_text(TEMPLATE / "policy" / "org.yaml")
+    assert "\nreview_prepass:\n" in text and "# checkpoint_exclude:" in text
+    assert policy.review_prepass.enabled and not policy.review_prepass.online_vulnerability_lookup
+    assert policy.checkpoint_exclude == []
+
+
 def test_tiers_are_placeholders(policy):
     for name, tier in policy.tiers.items():
         assert "change-me" in tier.model, name

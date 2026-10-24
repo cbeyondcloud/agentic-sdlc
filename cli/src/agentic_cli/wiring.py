@@ -79,12 +79,16 @@ class StepWiring:
     codeintel_for: Callable[[Path, Path], CodeIntel] | None = None  # (tree, data folder)
     batch: ReviewBatchPolicy = field(default_factory=ReviewBatchPolicy)  # org policy (M2-24)
     gateway_url: str | None = None  # TokenLean: the one model host an agent process reaches
+    # org policy's `checkpoint_exclude`: added to what a checkpoint leaves out (DF-315)
+    checkpoint_exclude: tuple[str, ...] = ()
     _trees: dict[str, StepCheckpoints] = field(default_factory=dict, repr=False)
     _homes: dict[str, Path] = field(default_factory=dict, repr=False)
 
     def trees_for(self, run_id: str) -> StepCheckpoints:
         if run_id not in self._trees:
-            self._trees[run_id] = StepCheckpoints(self.target, run_id)
+            self._trees[run_id] = StepCheckpoints(
+                self.target, run_id, exclude=self.checkpoint_exclude
+            )
         return self._trees[run_id]
 
     def batch_budget_for(self, run_id: str) -> ReviewBatchBudget:

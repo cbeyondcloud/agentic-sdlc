@@ -178,6 +178,15 @@ def test_steps_scan_tool_output_with_the_org_policy_scanner(workspace, policy_re
     assert wiring.scanner is not None and wiring.scanner.action == "mask"
 
 
+def test_steps_checkpoint_with_the_org_exclusions(workspace, policy_repo):
+    """DF-315: `org.yaml` `checkpoint_exclude` reaches every step's checkpoint."""
+    org = policy_repo / "policy" / "org.yaml"
+    org.write_text(org.read_text("utf-8") + "checkpoint_exclude: ['**/target/**']\n", "utf-8")
+    rt = Runtime(Workspace.load())
+    decision = runtime.decide_sandbox(runtime.machine_readiness(), "solo", rt.ws.policy().sandbox)
+    assert "**/target/**" in rt._wiring(decision).trees_for("r-x").generated
+
+
 def test_the_engine_s_wiring_knows_the_gateway_an_agent_process_may_reach(workspace, gateway):
     # M2-42: the TokenLean host is the one model host an agent CLI process under srt reaches
     engine = Runtime(Workspace.load()).engine(regime="solo")
