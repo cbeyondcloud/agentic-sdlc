@@ -15,6 +15,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+import tomllib
+from dataclasses import dataclass
 from pathlib import Path
 
 from agentic_release.version import MEMBERS, check_versions
@@ -119,6 +121,71 @@ def build_packages(repo: Path, out: Path, *, allow_dirty: bool = False) -> list[
         for path in sorted(built.iterdir()):
             shutil.copyfile(path, out / path.name)
     return sorted(out.iterdir(), key=lambda p: p.name)
+
+
+@dataclass(frozen=True)
+class GitSource:
+    """A locked package that comes from a git repository, not an index."""
+
+    name: str
+    version: str
+    url: str
+    commit: str
+
+
+def git_sources(lock: Path) -> list[GitSource]:
+    """The git-sourced packages in `lock` (uv.lock), with the commit each is pinned to."""
+    data = tomllib.loads(lock.read_text(encoding="utf-8"))
+    found = []
+    for package in data.get("package", []):
+        source = package.get("source", {}).get("git")
+        if not source:
+            continue
+        url, _, commit = source.partition("#")
+        found.append(
+            GitSource(package["name"], str(package["version"]), url.split("?", 1)[0], commit)
+        )
+    return sorted(found, key=lambda s: s.name)
+
+
+def build_git_sources(
+    lock: Path, out: Path, workdir: Path, url_map: dict[str, str] | None = None
+) -> list[Path]:
+    """Build every git-sourced package of `lock` at its locked commit into `out`: the org's
+    internal index needs them (they are on no public index). `url_map` points a locked URL
+    at a mirror. Git never prompts: a host that wants credentials fails the build."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    built: list[Path] = []
+    for source in git_sources(lock):
+        checkout = workdir / source.name
+        url = (url_map or {}).get(source.url, source.url)
+        # the files exactly as committed, whatever this machine's autocrlf says
+        clone = ["clone", "--quiet", "--no-checkout", "--config", "core.autocrlf=false"]
+        _run_git([*clone, url, str(checkout)], workdir, env, "clone")
+        _run_git(["checkout", "--quiet", "--detach", source.commit], checkout, env, "checkout")
+        found = tomllib.loads((checkout / "pyproject.toml").read_text(encoding="utf-8"))
+        version = str(found.get("project", {}).get("version", ""))
+        if version != source.version:
+            raise BuildError(
+                f"{source.name} at {source.commit[:12]} is version {version}, but uv.lock "
+                f"says {source.version}: run `uv lock` and commit it"
+            )
+        target = workdir / f"{source.name}-dist"
+        _uv_build(checkout, target, dict(os.environ))
+        out.mkdir(parents=True, exist_ok=True)
+        for path in sorted(target.iterdir()):
+            shutil.copyfile(path, out / path.name)
+            built.append(out / path.name)
+    return sorted(built, key=lambda p: p.name)
+
+
+def _run_git(args: list[str], cwd: Path, env: dict[str, str], what: str) -> None:
+    cwd.mkdir(parents=True, exist_ok=True)
+    done = subprocess.run(
+        ["git", *args], cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8"
+    )
+    if done.returncode != 0:
+        raise BuildError(f"git {what} failed: {done.stderr.strip()}")
 
 
 def _uv_build(source: Path, out: Path, env: dict[str, str]) -> None:
