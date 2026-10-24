@@ -92,6 +92,20 @@ def test_the_linux_stage_checks_the_alert_rules_with_promtool():
     assert "promtool" in dockerfile and "sha256sum -c" in dockerfile
 
 
+def test_the_linux_stage_lints_the_shipped_workflows_with_actionlint():
+    # M2-44: actionlint is a native binary, so it runs only in the Linux check image,
+    # pinned by version and sha256; every shipped workflow template is linted
+    from check import REPO_ROOT, WORKFLOW_TEMPLATES, checks_for, linux_steps
+
+    command = dict(linux_steps())["workflow lint"]
+    assert command[0] == "actionlint" and "workflow lint" not in dict(checks_for(offline=False))
+    assert "cli/src/agentic_cli/templates/agentic-index-export.yml" in WORKFLOW_TEMPLATES
+    assert all((REPO_ROOT / path).is_file() for path in WORKFLOW_TEMPLATES)
+    dockerfile = (REPO_ROOT / "scripts" / "linux-check.Dockerfile").read_text(encoding="utf-8")
+    assert "ACTIONLINT_VERSION=1.7.12" in dockerfile
+    assert dockerfile.count("sha256sum -c") >= 4  # gitleaks, promtool, codex and actionlint
+
+
 def _ran(returncode):
     return lambda *args, **kwargs: type("Done", (), {"returncode": returncode})()
 
