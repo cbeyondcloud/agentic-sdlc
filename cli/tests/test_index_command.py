@@ -2,6 +2,8 @@
 once and publishes the export outside `main`; developers and runs start from it."""
 
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -170,3 +172,115 @@ def test_runs_start_from_the_imported_export(tmp_path):
     (seed / MANIFEST).write_text("{}", encoding="utf-8")
     make = codeintel.codeintel_for(tmp_path, settings, crg_available=True)
     assert make(tmp_path / "tree", tmp_path / "data").index.seed == seed
+
+
+# ── publish: outside main only ───────────────────────────────────────────────
+
+
+@pytest.fixture
+def remote(ci, tmp_path) -> Path:
+    """A bare remote whose default branch is `trunk`, holding the CI checkout's history
+    on `main` and `trunk`; the checkout's `origin`."""
+    bare = tmp_path / "remote.git"
+    git(tmp_path, "init", "-q", "--bare", "-b", "trunk", str(bare))
+    git(ci, "remote", "set-url", "origin", str(bare))
+    git(ci, "push", "-q", "origin", "main", "main:trunk")
+    return bare
+
+
+def plumbing(where: Path, *args: str, stdin: str | None = None, env: dict | None = None) -> str:
+    done = subprocess.run(
+        ["git", "-C", str(where), *args],
+        input=stdin,
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, **(env or {})},
+    )
+    return done.stdout.strip()
+
+
+def refs(where: Path) -> str:
+    return git(where, "for-each-ref", "--format=%(refname) %(objectname)")
+
+
+def branches(where: Path) -> str:
+    """The local branches and tags (a push updates only remote-tracking refs)."""
+    return git(
+        where, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags"
+    )
+
+
+@needs_crg
+def test_publish_moves_only_the_index_ref(ci, exported, remote, capsys):
+    before_remote, before_local = refs(remote), branches(ci)
+    head = git(ci, "rev-parse", "HEAD")
+
+    code, data = run(capsys, "publish", str(exported), "--repo", str(ci))
+
+    assert code == ExitCode.OK, data
+    assert data["ref"] == "refs/heads/agentic-index" and data["pushed"] is True
+    after = refs(remote).splitlines()
+    assert sorted(set(after) - set(before_remote.splitlines())) == [
+        f"refs/heads/agentic-index {data['commit']}"
+    ]
+    assert set(before_remote.splitlines()) <= set(after)  # main and trunk unchanged
+    assert branches(ci) == before_local and git(ci, "rev-parse", "HEAD") == head
+    assert status(ci) == ""
+    published = git(remote, "ls-tree", "-r", "--name-only", "agentic-index").splitlines()
+    assert MANIFEST in published and ".gitattributes" in published
+    assert git(remote, "show", "agentic-index:.gitattributes") == "* -text"
+    assert git(remote, "rev-list", "--count", "agentic-index") == "1"  # no history kept
+
+
+@needs_crg
+def test_publish_dry_run_writes_nothing(ci, exported, remote, capsys):
+    before_remote, before_local = refs(remote), branches(ci)
+    code, data = run(capsys, "publish", str(exported), "--dry-run", "--repo", str(ci))
+    assert code == ExitCode.OK, data
+    assert data["dry_run"] is True and data["pushed"] is False and len(data["commit"]) == 40
+    assert refs(remote) == before_remote and branches(ci) == before_local and status(ci) == ""
+
+
+@needs_crg
+@pytest.mark.parametrize(
+    "ref",
+    ["main", "refs/heads/main", "master", "trunk", "feature", "refs/tags/v1", "refs/notes/x"],
+)
+def test_publish_never_targets_main_the_default_or_the_current_branch(
+    ci, exported, remote, capsys, ref
+):
+    git(ci, "switch", "-q", "-c", "feature")
+    before = refs(remote)
+    code, data = run(capsys, "publish", str(exported), "--ref", ref, "--repo", str(ci))
+    assert code == ExitCode.REFUSED, data
+    assert refs(remote) == before
+
+
+@needs_crg
+def test_import_from_a_fetched_ref_equals_the_folder(ci, exported, remote, tmp_path, capsys):
+    assert run(capsys, "publish", str(exported), "--repo", str(ci))[0] == ExitCode.OK
+    laptop = laptop_clone(remote, tmp_path)
+    git(laptop, "fetch", "-q", "origin", "agentic-index:refs/remotes/origin/agentic-index")
+
+    code, data = run(capsys, "import", "--ref", "origin/agentic-index", "--repo", str(laptop))
+
+    assert code == ExitCode.OK, data
+    seed = Path(data["seed"])
+    assert (seed / MANIFEST).read_bytes() == (exported / MANIFEST).read_bytes()
+    assert data["recorded_commit"] == git(laptop, "rev-parse", "HEAD")
+
+
+def test_import_from_a_ref_refuses_a_link(ci, tmp_path, capsys):
+    blob = plumbing(ci, "hash-object", "-w", "--stdin", stdin="../../outside")
+    scratch = {"GIT_INDEX_FILE": str(tmp_path / "scratch-index")}
+    plumbing(
+        ci, "update-index", "--add", "--cacheinfo", f"120000,{blob},manifest.json", env=scratch
+    )
+    tree = plumbing(ci, "write-tree", env=scratch)
+    commit_id = git(ci, "commit-tree", tree, "-m", "planted")
+    git(ci, "update-ref", "refs/remotes/origin/agentic-index", commit_id)
+
+    code, data = run(capsys, "import", "--ref", "origin/agentic-index", "--repo", str(ci))
+    assert code == ExitCode.INVALID and "manifest.json" in json.dumps(data)
+    assert not (ci / ".agentic").exists()
