@@ -9,6 +9,12 @@
                           re-align the runtime role's grants, seed every tenant's builtin
                           roles and report the database guarantees
     db grant-runtime      create or re-align the runtime role of AGENTIC_CP_DATABASE_URL
+    db link-usage --host H [--port P] --dbname D --user U [--password-env VAR]
+                          point the dashboards' usage views at the gateway's tables
+                          (postgres_fdw; the password only from the variable)
+    db dashboard-role --tenant S --role R [--password-env VAR]
+                          bind one Grafana reader role to one tenant: the dash_* views,
+                          that tenant's rows only
     admin audit verify --tenant S
                           verify one tenant's audit chain
     admin tenant create --slug S --name N --admin-email E [--policy-repo URL]
@@ -27,6 +33,8 @@
                           a recovery token for an existing user of one tenant
     openapi [--write | --check]
                           write or compare control-plane/openapi.json
+    dashboards (--write | --check)
+                          write or compare the Grafana dashboards' JSON with the catalog
 
 Settings come from AGENTIC_CP_* variables (see `agentic_cp.settings`). This is a server
 tool run by the platform team (kubectl exec, compose run), not the developers' CLI."""
@@ -74,6 +82,39 @@ def _openapi(args: argparse.Namespace) -> int:
         print("openapi.json is current")
         return 0
     sys.stdout.write(text)
+    return 0
+
+
+def _dashboards(args: argparse.Namespace) -> int:
+    """Write or compare the Grafana dashboards' JSON (M2-38) with the catalog."""
+    from agentic_cp.dashboards.catalog import GRAFANA_DIR, rendered_files
+
+    files = rendered_files()
+    if args.write:
+        GRAFANA_DIR.mkdir(exist_ok=True)
+        for stale in GRAFANA_DIR.glob("*.json"):
+            if stale.name not in files:
+                stale.unlink()
+        for name, text in files.items():
+            (GRAFANA_DIR / name).write_bytes(text.encode("utf-8"))
+        print(f"wrote {len(files)} dashboards to {GRAFANA_DIR}")
+        return 0
+    present = {path.name for path in GRAFANA_DIR.glob("*.json")}
+    stale = sorted(
+        name
+        for name in present | set(files)
+        if name not in files
+        or name not in present
+        or (GRAFANA_DIR / name).read_bytes().decode("utf-8").replace("\r\n", "\n") != files[name]
+    )
+    if stale:
+        print(
+            f"stale dashboards: {', '.join(stale)}: run "
+            "`uv run python -m agentic_cp dashboards --write`",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"{len(files)} dashboards are current")
     return 0
 
 
@@ -216,6 +257,99 @@ class CommandError(Exception):
     def __init__(self, message: str, code: int) -> None:
         super().__init__(message)
         self.code = code
+
+
+def _secret_from(variable: str, what: str) -> str:
+    """A password from the named environment variable: never from the command line, where a
+    process listing would show it."""
+    value = os.environ.get(variable, "")
+    if not value:
+        raise CommandError(f"set {variable} to {what} (it is never read from the command line)", 3)
+    return value
+
+
+def _link_usage(args: argparse.Namespace) -> int:
+    """Point the dashboards' usage views at the gateway's tables (M2-37, ruling L1)."""
+    from pydantic import SecretStr
+
+    from agentic_cp.app import utc_now
+    from agentic_cp.dashboards.link import GatewayDb, LinkError, audit_link, link_usage
+    from agentic_cp.db import make_owner_engine
+
+    settings = _settings()
+    _owner_dsn(settings)
+    password = _secret_from(args.password_env, "the gateway database password")
+    try:
+        gateway = GatewayDb(
+            host=args.host,
+            port=args.port,
+            dbname=args.dbname,
+            user=args.user,
+            password=SecretStr(password),
+            remote_schema=args.remote_schema,
+        )
+    except ValueError as error:
+        raise CommandError(str(error), 3) from None
+
+    async def run():
+        engine = make_owner_engine(settings)
+        try:
+            async with engine.begin() as conn:
+                result = await link_usage(conn, settings.db_schema, gateway)
+            await audit_link(engine, gateway, result, clock=utc_now)
+            return result
+        finally:
+            await engine.dispose()
+
+    try:
+        result = asyncio.run(run())
+    except LinkError as error:
+        raise CommandError(str(error), 1) from None
+    print(
+        f"gateway linked: {', '.join(result.linked)} read {gateway.remote_schema} in "
+        f"{gateway.dbname} on {gateway.host}:{gateway.port} (server {result.server})"
+    )
+    return 0
+
+
+def _dashboard_role(args: argparse.Namespace) -> int:
+    """Bind one Grafana reader role to one tenant (M2-37, ruling T1)."""
+    from agentic_cp.app import utc_now
+    from agentic_cp.dashboards.readers import (
+        PasswordNeeded,
+        ReaderError,
+        bind_reader,
+        checked_role,
+    )
+
+    settings = _settings()
+    _owner_dsn(settings)
+    try:
+        role = checked_role(args.role)
+    except ReaderError as error:
+        raise CommandError(str(error), 3) from None
+    password = os.environ.get(args.password_env) or None
+
+    async def work(conn, tenant):
+        await bind_reader(
+            conn,
+            settings.db_schema,
+            role,
+            password,
+            runtime_role=settings.runtime_role,
+            clock=utc_now,
+        )
+
+    try:
+        asyncio.run(_with_tenant(settings, args.tenant, work))
+    except PasswordNeeded as error:
+        raise CommandError(
+            f"{error}: set {args.password_env} (or name another variable with --password-env)", 2
+        ) from None
+    except ReaderError as error:
+        raise CommandError(str(error), 2) from None
+    print(f"tenant {args.tenant}: dashboard reader role {role} bound (the dash_* views only)")
+    return 0
 
 
 async def _with_tenant(settings: Settings, slug: str, work):
@@ -545,7 +679,12 @@ def _issue_token(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="python -m agentic_cp", description=__doc__)
+    # the docstring is laid out as a command table: print it as written, not reflowed
+    parser = argparse.ArgumentParser(
+        prog="python -m agentic_cp",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     commands = parser.add_subparsers(dest="command", required=True)
 
     serve = commands.add_parser("serve", help="run the API")
@@ -563,6 +702,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     grant = db.add_parser("grant-runtime", help="create or re-align the runtime role")
     grant.set_defaults(run=_grant_runtime)
+    link = db.add_parser(
+        "link-usage", help="read the gateway's usage through postgres_fdw (dashboards)"
+    )
+    link.add_argument("--host", required=True, help="the gateway database's host")
+    link.add_argument("--port", type=int, default=5432)
+    link.add_argument("--dbname", required=True, help="the gateway database")
+    link.add_argument("--user", required=True, help="a read-only gateway database role")
+    link.add_argument(
+        "--password-env",
+        default="GATEWAY_DB_PASSWORD",
+        help="the variable holding that role's password (default GATEWAY_DB_PASSWORD)",
+    )
+    link.add_argument("--remote-schema", default="public", help="the gateway tables' schema")
+    link.set_defaults(run=_link_usage)
+    reader = db.add_parser(
+        "dashboard-role", help="bind one Grafana reader role to one tenant (dashboards)"
+    )
+    reader.add_argument("--tenant", required=True, help="the tenant's slug")
+    reader.add_argument("--role", required=True, help="the login role Grafana connects as")
+    reader.add_argument(
+        "--password-env",
+        default="DASHBOARD_DB_PASSWORD",
+        help="the variable holding its password (default DASHBOARD_DB_PASSWORD; unset keeps "
+        "an existing role's password)",
+    )
+    reader.set_defaults(run=_dashboard_role)
 
     admin = commands.add_parser("admin", help="operator commands (owner role)")
     admin_commands = admin.add_subparsers(dest="admin_command", required=True)
@@ -621,6 +786,12 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
     openapi.set_defaults(run=_openapi)
+
+    dashboards = commands.add_parser("dashboards", help="write or check the Grafana dashboards")
+    dash_mode = dashboards.add_mutually_exclusive_group(required=True)
+    dash_mode.add_argument("--write", action="store_true")
+    dash_mode.add_argument("--check", action="store_true")
+    dashboards.set_defaults(run=_dashboards)
     return parser
 
 

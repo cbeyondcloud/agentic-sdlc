@@ -68,5 +68,8 @@ def test_step_span_lists_the_steps_tokenlean_trace_ids(
     run_once(resolved, identity, tokenlean, tmp_path, wrap_step=True)
     (step,) = [s for s in spans.get_finished_spans() if s.name.startswith("step ")]
     assert tuple(step.attributes["agentic.tokenlean.trace_ids"]) == (TRACE,)
-    assert step.attributes["agentic.cost_usd"] == "0.004321"
+    # DF-176: the step's total has its own name, so summing agentic.cost_usd over a trace
+    # (each model-call span's own cost) never counts a call twice
+    assert step.attributes["agentic.aggregated_cost_usd"] == "0.004321"
+    assert "agentic.cost_usd" not in step.attributes
     assert step.attributes["gen_ai.aggregated_usage.input_tokens"] == 1200

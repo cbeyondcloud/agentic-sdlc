@@ -121,6 +121,40 @@ and run `python auditproof.py export.jsonl` (exit 0 intact, 3 broken). Keep each
 end anchor: the next export's start must continue it. CSV cells that a spreadsheet would
 run as a formula carry one leading `'`, which the verifier strips.
 
+## Dashboards (M2-37, M2-38)
+
+Grafana reads the `dash_*` views (`agentic_cp/dashboards/views.py`): runs, steps, gates,
+limits, audit and repos, joined with the gateway's usage rows through their tags (run, step,
+agent, user, repo, pipeline, tier, policy version) and its authenticated team. Cost per run,
+step, agent and team shows the gateway's cost next to the cost the engine reported; calls
+without a run tag are the `(unattributed)` line; what was not measured is NULL, never 0.
+A step's agent is the one its run ledger records; the engine records none on step events
+yet, so until it does the agent is the tag of the step's first gateway call
+(`dash_step_runs.agent_source`). The gateway is asked for the tenant's rows only (the
+tenant filter is part of the SQL `postgres_fdw` sends).
+
+    python -m agentic_cp db link-usage --host H --dbname D --user U --password-env VAR
+    python -m agentic_cp db dashboard-role --tenant acme --role grafana_acme --password-env VAR
+    python -m agentic_cp dashboards --check     # the committed dashboard JSON is current
+
+- **The gateway link.** The views read two contract views, `usage_source` and
+  `gateway_audit_source`, empty until `db link-usage` points them at the gateway's
+  `usage_events` and `audit_events` through `postgres_fdw` (the gateway's database may be on
+  the same server or another; give the link a read-only gateway role). Run it again after a
+  gateway upgrade; a gateway without ST-1 (`team`) or ST-2 (`tags`) is refused.
+- **Reader roles.** One Grafana login role per tenant. It may select the `dash_*` views and
+  nothing else, its role default `app.tenant_id` is its tenant, and the views show it that
+  tenant's rows only, whatever it sets the setting to. A role a DBA made needs
+  `GRANT <role> TO <owner> WITH ADMIN OPTION` first. Each tenant's Grafana organisation
+  provisions the datasource uid `agentic-postgres` with its own reader, so every tenant uses
+  the same dashboard JSON (`agentic_cp/dashboards/grafana`, rendered from `catalog.py`).
+- **One-time DBA steps** (a superuser, once per database): `CREATE EXTENSION postgres_fdw`,
+  `GRANT USAGE ON FOREIGN DATA WRAPPER postgres_fdw TO <owner>` and
+  `GRANT SET ON PARAMETER app.tenant_id TO <owner>`. The owner role must be neither a
+  superuser nor `BYPASSRLS` (the views run with its rights; `db dashboard-role` checks).
+- `deploy/org-local` runs all of it on one machine (control plane, Postgres, Grafana and
+  the gateway's LITE stack).
+
 ## Tests and Postgres
 
 Database tests need Postgres 15 or later. They never use a Postgres installed on the host:

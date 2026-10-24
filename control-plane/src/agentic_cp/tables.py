@@ -75,6 +75,9 @@ tenants = Table(
     # the tenant's own sender for mails (M2-07, ruling P1); None: the deployment's
     Column("mail_from", Text, nullable=True),
     Column("mail_from_name", Text, nullable=True),
+    # the tenant's one Grafana reader role (M2-37, `db dashboard-role`): the dashboard
+    # views show this role that tenant's rows only
+    Column("dashboard_role", Text, nullable=True, unique=True),
     CheckConstraint(f"slug ~ '{SLUG_PATTERN}'", name="tenants_slug_format"),
     CheckConstraint("status in ('active', 'suspended')", name="tenants_status_known"),
 )
