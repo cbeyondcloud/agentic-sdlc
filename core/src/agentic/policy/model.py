@@ -74,6 +74,14 @@ class TierSpec(_Strict):
     family: str | None = None
 
 
+def gateway_model(model_id: str) -> str:
+    """The name the gateway knows a tier model by: the part after its route (`route/name`,
+    DF-394), or the whole id when it has none. The client sends this name and the control
+    plane's routing rules (M2-09) pin it, so the two never disagree."""
+    _, slash, name = model_id.partition("/")
+    return name if slash and name else model_id
+
+
 class ClassificationRule(_Strict):
     """What a repo of this sensitivity class may use."""
 
@@ -212,11 +220,27 @@ def _looser_auto_trip(team: str, own: TeamAutoTrip | None, org: AutoTripPolicy) 
     return problems
 
 
+class TeamRateLimit(_Strict):
+    """A team's request limits at the gateway (M2-09): requests per minute and per hour for
+    the team's keys together. The control plane writes them into the gateway's routing
+    overlay; at least one is set, and 0 (refuse everything) is not a limit."""
+
+    requests_per_minute: int | None = Field(default=None, ge=1)
+    requests_per_hour: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def names_a_limit(self) -> Self:
+        if self.requests_per_minute is None and self.requests_per_hour is None:
+            raise ValueError("rate_limit needs requests_per_minute or requests_per_hour")
+        return self
+
+
 class TeamPolicy(_Strict):
     """Team narrowing: may only tighten org policy (spec §12.2)."""
 
     allowed_tiers: list[str] | None = None  # None = every tier the org allows
     monthly_budget_usd: float | None = None
+    rate_limit: TeamRateLimit | None = None  # M2-09: the gateway's per-team request limits
     limits_max: dict[str, RoleLimits] = {}  # keyed by agent TYPE (D35)
     deny: DenyRules = DenyRules()
     skill_packs: list[str] = []  # opt-in skill packs from the org catalog (spec §11.2)

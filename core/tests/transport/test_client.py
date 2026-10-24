@@ -78,6 +78,18 @@ def test_optional_headers_are_omitted_when_unset():
     assert seen[0].headers["X-Agentic-Team"] == "payments"
 
 
+def test_the_classification_header_is_sent_only_when_set():
+    """The repo's classification rides with the tier, so the gateway's routing rules can
+    keep a restricted repo on its allowed models (M2-09)."""
+    c, seen = client(replace(IDENTITY, classification="restricted"))
+    c.get("/models")
+    assert seen[0].headers["X-Agentic-Classification"] == "restricted"
+
+    c, seen = client()
+    c.get("/models")
+    assert "X-Agentic-Classification" not in seen[0].headers
+
+
 def test_each_call_gets_its_own_traceparent():
     c, seen = client()
     c.get("/models")

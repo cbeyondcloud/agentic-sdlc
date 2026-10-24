@@ -1,4 +1,5 @@
-"""Who a model call is for: the ten `X-Agentic-*` identity headers (spec §14.2).
+"""Who a model call is for: the `X-Agentic-*` identity headers (spec §14.2), plus the repo's
+classification (M2-09), which the gateway's routing rules match.
 
 TokenLean stores allow-listed identity headers as usage tags, so every call can
 be attributed to a team, user, repo, pipeline, run, step and agent. Values are
@@ -22,6 +23,7 @@ HEADER_NAMES = {
     "parent_agent": "X-Agentic-Parent-Agent",
     "tier": "X-Agentic-Tier",
     "policy_version": "X-Agentic-Policy-Version",
+    "classification": "X-Agentic-Classification",
 }
 #: Printable ASCII, spaces allowed inside but not at either end, at most 256.
 _VALUE = re.compile(r"[\x21-\x7e](?:[\x20-\x7e]{0,254}[\x21-\x7e])?")
@@ -45,6 +47,9 @@ class CallIdentity:
     policy_version: str
     tier: str | None = None
     parent_agent: str | None = None  # "<name>@<version>" of the spawning agent
+    # the repo's sensitivity class: the gateway's routing rules keep a restricted repo's
+    # calls on its allowed models (M2-09)
+    classification: str | None = None
 
     def __post_init__(self) -> None:
         for field in fields(self):
@@ -60,7 +65,8 @@ class CallIdentity:
             raise IdentityError("identity field 'repo' must not carry credentials (user@host)")
 
     def headers(self) -> dict[str, str]:
-        """The identity headers; the optional tier and parent agent only when set."""
+        """The identity headers; the optional tier, parent agent and classification only
+        when set."""
         return {
             HEADER_NAMES[field.name]: getattr(self, field.name)
             for field in fields(self)

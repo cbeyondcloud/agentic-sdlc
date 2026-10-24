@@ -16,9 +16,11 @@ from agentic.policy.model import (
     SecretScanPolicy,
     TeamAutoTrip,
     TeamPolicy,
+    TeamRateLimit,
     TierSpec,
     ToolArtefact,
     ToolPin,
+    gateway_model,
 )
 from agentic.policy.resolve import ResolveContext, ResolvedAgent, Violation, resolve_agent
 
@@ -40,10 +42,12 @@ __all__ = [
     "SecretScanPolicy",
     "TeamAutoTrip",
     "TeamPolicy",
+    "TeamRateLimit",
     "TierSpec",
     "ToolArtefact",
     "ToolPin",
     "Violation",
+    "gateway_model",
     "load_policy",
     "policy_version",
     "resolve_agent",
