@@ -231,6 +231,46 @@ def test_resume_rechecks_and_stop_ends_it(make_harness, with_qa):
     assert state.status == "stopped"
 
 
+def test_a_pipeline_whose_product_is_a_failing_report_may_complete(make_harness, with_qa):
+    """DF-263/DF-269: `failing_handoff: complete` (set by the pipeline's owners in the
+    policy repo; an overlay cannot) ends the run `completed` on a failing report, naming
+    the failure in its end reason, instead of pausing on every resume."""
+    pipeline = QA_THEN_PUBLISH.replace(
+        "version: 1.0.0\n", "version: 1.0.0\nfailing_handoff: complete\n"
+    )
+    h = make_harness(pipeline, {**SCRIPT, "qa": [QA_FAILS]}, actions={"open_pr": str})
+
+    state = start(h)
+    assert state.status == "completed", state.pending
+    assert "verdict 'fail'" in state.end_reason and "failing_handoff" in state.end_reason
+    assert "run_closed" in [e["event"] for e in h.ledger("r-1").events()]
+
+
+def test_the_pause_reason_names_the_opt_out(make_harness, with_qa):
+    h = make_harness(QA_THEN_PUBLISH, {**SCRIPT, "qa": [QA_FAILS]}, actions={"open_pr": str})
+    assert "failing_handoff: complete" in start(h).pending.reason
+
+
+def test_failing_handoff_left_out_keeps_the_pipeline_digest():
+    """Runs started before the key existed resume: the default is not part of the
+    digest, so an unchanged pipeline file hashes as it did."""
+    import hashlib
+    import json
+
+    from agentic.definitions import PipelineDefinition
+    from agentic.engine.engine import pipeline_digest
+
+    pipeline = PipelineDefinition.model_validate(
+        {"name": "p", "version": "1.0.0", "steps": [{"id": "a", "agent": "dev"}]}
+    )
+    data = pipeline.model_dump(mode="json")
+    del data["failing_handoff"]
+    canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    assert pipeline_digest(pipeline) == "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+    opted = pipeline.model_copy(update={"failing_handoff": "complete"})
+    assert pipeline_digest(opted) != pipeline_digest(pipeline)
+
+
 def test_a_passing_run_completes_as_before(make_harness, with_qa):
     h = make_harness(QA_THEN_PUBLISH, {**SCRIPT, "qa": [QA_PASSES]}, actions={"open_pr": str})
 

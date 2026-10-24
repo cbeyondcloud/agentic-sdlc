@@ -8,6 +8,13 @@ allowed_repo_patterns: ["git.example.com/your-org/*"]
 # changed by pull requests the code owners approve. Repo-level pipelines are ignored.
 allow_repo_pipelines: false
 
+# Org-required steps and gates per pipeline (spec §6.1): a team's overlay
+# (teams/<team>/pipelines/overlays/<repo>.yaml) can never remove them or change a
+# required gate's approver, and a run whose pipeline lacks one is refused.
+required_steps:
+  feature-delivery: [requirements-approval, design-approval, review-approval]
+  bugfix: [intake-approval, review-approval]
+
 # Where `agentic init` fetches pinned tools from (tool-pins.yaml); an internal mirror.
 # tool_mirror_url: https://artifacts.example.com/agentic-tools/
 

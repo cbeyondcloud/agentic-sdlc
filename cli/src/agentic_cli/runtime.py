@@ -49,7 +49,6 @@ from agentic.killswitch import KillSwitch, NoKillSwitch
 from agentic.orgapi import Me
 from agentic.orgapi.rbac import OrgAuthorizer
 from agentic.policy import ResolvedAgent
-from agentic.policy.repos import normalise_remote
 from agentic.sandbox.readiness import Readiness, SandboxDecision, decide_sandbox, readiness
 from agentic.skills.catalog import CatalogError, load_catalog
 from agentic.skills.install import log_record, sync_skills
@@ -65,7 +64,6 @@ from agentic_cli.codeintel import codeintel_for as codeintel_factory
 from agentic_cli.codeintel import codeintel_settings, codeintel_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
-from agentic_cli.repo_guard import origin_url
 from agentic_cli.skill_activity import SkillActivity, StampingRecorder
 from agentic_cli.standalone import PLACEHOLDER
 from agentic_cli.step_extras import StepExtras
@@ -183,7 +181,6 @@ class Runtime:
         self._sinks: list[EventSink] | None = None
         self.sink_problem: str | None = None  # why runs are not reported (a warning)
         self._killswitch: KillSwitch | None = None
-        self._repo_key: str | None | bool = False  # False: not looked up yet
         self._me: Me | None | bool = False  # False: not asked yet
 
     @property
@@ -472,10 +469,20 @@ class Runtime:
                 steps.append(
                     {"kind": "action", "id": step.id, "action": step.action, "when": step.when}
                 )
+        definitions = self.ws.definitions()
+        applied = definitions.overlays.get(pipeline.name)
         return {
             "pipeline": pipeline.name,
             "version": pipeline.version,
-            "layer": self.ws.definitions().pipeline_source(pipeline.name),
+            "layer": definitions.pipeline_source(pipeline.name),
+            # the team's overlay for this repository (M2-23) and every version that is
+            # not simply the current one, or is deprecated (M2-15)
+            "overlay": (
+                {"file": self.ws.policy_path(applied.file), "changes": list(applied.notes)}
+                if applied is not None
+                else None
+            ),
+            "versions": [choice.describe() for _, choice in sorted(definitions.versions.items())],
             "org": self.ws.settings.get("org") or None,  # None: a standalone policy
             "regime": pipeline.regime,
             "max_minutes": pipeline.max_minutes,
@@ -584,10 +591,7 @@ class Runtime:
 
     def repo_key(self) -> str | None:
         """This repository as `host/owner/name` (its origin), or None without one."""
-        if self._repo_key is False:
-            remote = origin_url(self.ws.repo)
-            self._repo_key = normalise_remote(remote) if remote else None
-        return self._repo_key  # type: ignore[return-value]
+        return self.ws.repo_key
 
     def control_plane(self) -> control_plane.ControlPlaneClient | None:
         """The org's control plane client: None outside org mode or without a configured

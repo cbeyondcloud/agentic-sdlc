@@ -494,6 +494,11 @@ class OrgPolicy(_Strict):
     # M2-23 (spec §6.1): per pipeline, the steps, gates and loops no overlay may remove or
     # weaken; preflight refuses a pipeline missing one, whatever the cause
     required_steps: dict[str, list[str]] = {}
+    # DF-315/DF-317: untracked paths (git globs, relative to the tree) a step's checkpoint
+    # leaves out on top of the framework's list, e.g. "**/target/**"; it only ever adds
+    checkpoint_exclude: list[
+        Annotated[str, StringConstraints(min_length=1, pattern=r"^[^:!][^\n]*$")]
+    ] = []
     # M2-15 (spec §12.5, rollout.yaml): new versions team by team, and deprecations
     rollout: Rollout = Rollout()
     deprecated: Deprecations = Deprecations()

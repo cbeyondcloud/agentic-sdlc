@@ -511,6 +511,11 @@ def _show_plan(plan: dict):
         )
         if jira := plan.get("jira"):
             console.print(f"  request from Jira {jira['issue']}: {jira['title']}", markup=False)
+        if overlay := plan.get("overlay"):  # M2-23
+            changes = "; ".join(overlay["changes"]) or "no changes"
+            console.print(f"  overlay {overlay['file']}: {changes}", markup=False)
+        for version in plan.get("versions") or ():  # M2-15
+            console.print(f"  version: {version}", markup=False)
         for step in plan["steps"]:
             if step["kind"] == "agent":
                 console.print(agent_line(step, "  "), markup=False)

@@ -49,9 +49,9 @@ CLI shows with the run's plan.
 `after: X` puts the new step straight after X, before any gate that follows X - that gate
 then approves the new step's work too; `after: <the gate>` puts it after the gate."""
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -141,6 +141,22 @@ def overlay_applies(stem: str, repo: str | None, repo_key: str | None) -> bool:
     if stem.casefold() != repo_key.rstrip("/").rsplit("/", 1)[-1].casefold():
         return False
     return repo is None or repo.casefold() == repo_key.casefold()
+
+
+def approved_overlays(
+    index: Mapping[str, Mapping[str, Any]], *, team: str, repo: str | None, pipeline: str
+) -> list[str]:
+    """The overlays of `index` (`agentic.policy.load.overlay_index`: POSIX path -> its
+    `team`, bound `repo` and `pipelines`) that apply to a run of `team` on `pipeline` in
+    the repository whose origin key is `repo`: what the control plane expects a run to
+    have applied (M2-23, D33)."""
+    return [
+        rel
+        for rel, entry in sorted(index.items())
+        if entry.get("team") == team
+        and pipeline in (entry.get("pipelines") or ())
+        and overlay_applies(PurePosixPath(rel).stem, entry.get("repo"), repo)
+    ]
 
 
 def overlay_for(team_root: Path | None, repo_key: str | None) -> Path | None:

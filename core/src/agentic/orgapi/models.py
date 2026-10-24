@@ -372,6 +372,9 @@ class RunRegistration(RequestModel):
     concurrency slot when they pass. `pipeline_file` is the pipeline's path in the policy
     repo (None for a repo-layer pipeline) and `pipeline_sha256` the hash of its bytes (D33);
     `agents` (name@version), `models` and `backends` are what the run's steps resolved to.
+    `overlay_file` and `overlay_sha256` are the team's overlay applied to the pipeline, by
+    its policy repo path and the hash of its bytes (M2-23; None: no overlay), and
+    `pipeline_version` the version of the pipeline the team gets (M2-15).
     `dry_run` runs every check and registers nothing."""
 
     run_id: str = Field(min_length=1, max_length=128)
@@ -380,6 +383,9 @@ class RunRegistration(RequestModel):
     pipeline: str = Field(min_length=1, max_length=128)
     pipeline_file: str | None = Field(default=None, max_length=300)
     pipeline_sha256: str | None = Field(default=None, max_length=80)
+    pipeline_version: str | None = Field(default=None, max_length=64)
+    overlay_file: str | None = Field(default=None, max_length=300)
+    overlay_sha256: str | None = Field(default=None, max_length=80)
     policy_version: str = Field(min_length=1, max_length=80)
     agents: list[str] = Field(default_factory=list, max_length=200)
     models: list[str] = Field(default_factory=list, max_length=200)
@@ -390,7 +396,8 @@ class RunRegistration(RequestModel):
 
 
 class OrgCheck(BaseModel):
-    """One org check: `check` is rbac, killswitch, policy, pipeline, concurrency or budget."""
+    """One org check: `check` is rbac, killswitch, policy, pipeline, versions, concurrency
+    or budget."""
 
     check: str
     passed: bool

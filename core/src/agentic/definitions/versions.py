@@ -40,7 +40,7 @@ the definitions (never the other way round)."""
 
 from dataclasses import dataclass
 from datetime import date
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -207,6 +207,16 @@ def version_problem(
                 f"{entry.previous})"
             )
     return None
+
+
+def archived_version(rel: str, kind: Kind, name: str) -> str | None:
+    """The version an archive path (POSIX, relative to the policy repo) names for `name`:
+    `[teams/<team>/]<folder>/versions/<name>/<version><suffix>` -> version; else None."""
+    folder, suffix = FOLDERS[kind]
+    parts = PurePosixPath(rel).parts
+    if len(parts) < 4 or parts[-4:-1] != (folder, ARCHIVE, name):
+        return None
+    return parts[-1].removesuffix(suffix) if parts[-1].endswith(suffix) else None
 
 
 def archive_path(layer_root: Path, kind: Kind, name: str, version: str) -> Path:

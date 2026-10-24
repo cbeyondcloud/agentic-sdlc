@@ -105,6 +105,16 @@ def test_team_pins_load(policy_dir: Path):
     assert policy.teams["payments"].pins.pipelines == {}
 
 
+def test_checkpoint_exclusions_extend_from_org_yaml(policy_dir: Path):
+    """DF-315/DF-317: org policy adds generated folders a checkpoint leaves out (it cannot
+    remove the framework's); git pathspec magic is refused, so an entry cannot re-include."""
+    _append(policy_dir / "org.yaml", "checkpoint_exclude: ['**/target/**', 'build/**']\n")
+    assert load_policy(policy_dir).checkpoint_exclude == ["**/target/**", "build/**"]
+    _append(policy_dir / "org.yaml", "checkpoint_exclude: [':(top)src/**']\n")
+    with pytest.raises(PolicyError, match="checkpoint_exclude"):
+        load_policy(policy_dir)
+
+
 def test_required_steps_load_from_org_yaml(policy_dir: Path):
     _append(
         policy_dir / "org.yaml",

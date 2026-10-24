@@ -6,12 +6,14 @@ name no vendor or model, keep `restricted` code away from personal skills and me
 ship the org deny list, and pass the policy-repo gate (`agentic policy check`)."""
 
 import shutil
+from datetime import date
 from pathlib import Path
 
 import pytest
 from test_standalone_policy import VENDORS
 
 from agentic.definitions import DefinitionSet
+from agentic.definitions.versions import Deprecations, Pins, Rollout
 from agentic.policy import load_policy
 from agentic.skills import load_catalog
 from agentic.skills.gate import check_policy_repo
@@ -20,6 +22,7 @@ from agentic.yamlio import read_text
 REPO = Path(__file__).resolve().parents[3]
 TEMPLATE = REPO / "templates" / "policy-repo"
 LIBRARY = REPO / "library"
+TODAY = date(2026, 10, 24)
 
 
 @pytest.fixture(scope="module")
@@ -124,6 +127,38 @@ def test_the_gate_names_a_broken_team_catalog(tmp_path: Path):
     assert any(p.startswith("teams/payments/skills/catalog.yaml") for p in problems), problems
 
 
+def test_template_rollout_loads(policy):
+    """M2-15: the example rollout file loads with nothing rolled out (its examples are
+    comments: a live entry needs an archived previous version)."""
+    assert policy.rollout == Rollout() and policy.deprecated == Deprecations()
+    assert policy.teams["payments"].pins == Pins()
+    text = read_text(TEMPLATE / "policy" / "rollout.yaml")
+    for needed in ("previous:", "teams:", "blocked_from:", "versions/"):
+        assert needed in text, needed
+    assert "# pins:" in read_text(TEMPLATE / "policy" / "teams" / "payments.yaml")
+
+
+def test_template_overlay_applies_to_the_library_pipeline(policy, tmp_path: Path):
+    """M2-23: the example overlay tightens the library's feature-delivery for one
+    repository of team payments, keeping every org-required gate."""
+    root = with_library(tmp_path)
+    assert {"requirements-approval", "review-approval"} <= set(
+        policy.required_steps["feature-delivery"]
+    )
+    rules = policy.rules(team="payments", repo="git.example.com/your-org/payments-api", today=TODAY)
+    found = DefinitionSet.discover(
+        org=root, team=root / "teams" / "payments", repo=None, rules=rules
+    )
+    applied = found.overlays["feature-delivery"]
+    assert applied.file.name == "payments-api.yaml"
+    assert "gate review-approval four_eyes on" in applied.notes
+    other = policy.rules(team="payments", repo="git.example.com/your-org/billing", today=TODAY)
+    plain = DefinitionSet.discover(
+        org=root, team=root / "teams" / "payments", repo=None, rules=other
+    )
+    assert plain.overlays == {}
+
+
 def test_readme_covers_codeowners_branch_protection_and_bootstrap():
     text = read_text(TEMPLATE / "README.md")
     for needed in (
@@ -137,5 +172,11 @@ def test_readme_covers_codeowners_branch_protection_and_bootstrap():
         "backend_plugins",
         "restricted",
         "agentic skills submit",
+        "pipelines/overlays/<repo>.yaml",
+        "required_steps",
+        "re-anchor",
+        "rollout.yaml",
+        "pins:",
+        "Resolution order",
     ):
         assert needed in text, needed

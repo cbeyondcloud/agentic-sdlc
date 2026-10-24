@@ -314,6 +314,16 @@ def test_a_judging_step_outside_a_loop_is_warned_about(check):
     assert "review" in problem.detail and "failing-handoff" in problem.detail
 
 
+def test_a_review_only_pipeline_that_completes_on_failure_is_not_warned_about(check):
+    """DF-263/DF-269: a pipeline whose product is the report itself opts out of the
+    completion rule (`failing_handoff: complete`), so nothing needs routing back."""
+    pipeline = REVIEW_OUTSIDE_A_LOOP.replace(
+        "version: 1.0.0\n", "version: 1.0.0\nfailing_handoff: complete\n"
+    )
+    report = check(pipeline, extra_agents={"dev": "type: developer\nconsumes: [design]\n"})
+    assert "judging-step" not in checks(report)
+
+
 def test_a_judging_step_inside_a_loop_is_not_warned_about(check):
     assert "judging-step" not in checks(check(CLEAN))
 

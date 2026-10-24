@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from agentic.policy import PolicyError, load_policy
-from agentic.policy.load import pipeline_digests
+from agentic.policy.load import overlay_index, pipeline_digests
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "policy"
 
@@ -32,6 +32,52 @@ def test_org_and_team_pipelines_are_hashed_by_policy_repo_path(tmp_path):
 
 def test_no_pipelines_gives_an_empty_map(tmp_path):
     assert pipeline_digests(tmp_path) == {}
+
+
+def test_digests_cover_archived_versions(tmp_path):
+    """M2-15: a team held back by a rollout (or pinned) runs an archived pipeline version;
+    it is an approved pipeline too, by its path in the policy repo."""
+    archive = tmp_path / "pipelines" / "versions" / "deliver"
+    archive.mkdir(parents=True)
+    (archive / "1.0.0.yaml").write_bytes(b"name: deliver\nversion: 1.0.0\n")
+    team = tmp_path / "teams" / "payments" / "pipelines" / "versions" / "hotfix"
+    team.mkdir(parents=True)
+    (team / "2.0.0.yaml").write_bytes(b"name: hotfix\n")
+    overlays = tmp_path / "teams" / "payments" / "pipelines" / "overlays"
+    overlays.mkdir(parents=True)
+    (overlays / "app.yaml").write_bytes(b"pipelines: {}\n")
+    assert pipeline_digests(tmp_path) == {
+        "pipelines/versions/deliver/1.0.0.yaml": _sha(b"name: deliver\nversion: 1.0.0\n"),
+        "teams/payments/pipelines/versions/hotfix/2.0.0.yaml": _sha(b"name: hotfix\n"),
+    }  # an overlay is not a pipeline: `overlay_index` lists it
+
+
+def test_overlay_index_lists_overlays(tmp_path):
+    """M2-23 (D33): every approved overlay with the digest of its bytes, its team, the
+    repository it binds (None: any repository of that name) and the pipelines it changes."""
+    overlays = tmp_path / "teams" / "payments" / "pipelines" / "overlays"
+    overlays.mkdir(parents=True)
+    bound = b"repo: git.example.com/acme/App\npipelines:\n  deliver: {remove: [design]}\n"
+    (overlays / "app.yaml").write_bytes(bound)
+    crlf = b"pipelines:\r\n  deliver: {max_minutes: 9}\r\n"
+    (overlays / "web.yaml").write_bytes(crlf)
+    (overlays / "broken.yaml").write_bytes(b"pipelines: [\n")  # the sync rejects it
+    (tmp_path / "pipelines" / "overlays").mkdir(parents=True)  # never read: org layer
+    (tmp_path / "pipelines" / "overlays" / "app.yaml").write_bytes(b"pipelines: {}\n")
+    assert overlay_index(tmp_path) == {
+        "teams/payments/pipelines/overlays/app.yaml": {
+            "sha256": _sha(bound),
+            "team": "payments",
+            "repo": "git.example.com/acme/App",
+            "pipelines": ["deliver"],
+        },
+        "teams/payments/pipelines/overlays/web.yaml": {
+            "sha256": _sha(crlf),
+            "team": "payments",
+            "repo": None,
+            "pipelines": ["deliver"],
+        },
+    }
 
 
 def test_min_cli_version_is_read_from_org_yaml(tmp_path):

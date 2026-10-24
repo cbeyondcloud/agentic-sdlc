@@ -31,9 +31,10 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from agentic.definitions.versions import Pins
 from agentic.orgapi import API_PREFIX, ActivePolicy, SyncOutcome
 from agentic.policy import OrgPolicy, PolicyError, load_policy, tree_digest
-from agentic.policy.load import pipeline_digests
+from agentic.policy.load import overlay_index, pipeline_digests
 from agentic.policy.portable import portable_path_problems
 from agentic_cp.audit import AuditEvent, append
 from agentic_cp.gitops import GitError, GitRunner, RepoUrlError, check_repo_url
@@ -330,9 +331,10 @@ def _build(git: GitRunner, workdir: Path, tenant: TenantRow, commit: str, versio
         found, policy = validate_policy_tree(root, version)
         tree = tree_digest(root)
         pipelines = pipeline_digests(root)
+        overlays = overlay_index(root)
     teams = sorted(policy.teams) if policy is not None else []
     patterns = list(policy.allowed_repo_patterns) if policy is not None else []
-    settings = run_settings(policy, pipelines) if policy is not None else {}
+    settings = run_settings(policy, pipelines, overlays) if policy is not None else {}
     bundle = gzip_bytes(archive)
     digest = "sha256:" + hashlib.sha256(bundle).hexdigest()
     return Built(found, teams, patterns, bundle, digest, tree, settings)
@@ -346,12 +348,16 @@ RUN_SETTINGS_KEYS = (
     "allow_repo_pipelines",
     "pipelines",
     "team_budgets",
+    "overlays",
+    "versions",
 )
 
 
-def run_settings(policy: OrgPolicy, pipelines: dict[str, str]) -> dict:
+def run_settings(policy: OrgPolicy, pipelines: dict[str, str], overlays: dict[str, dict]) -> dict:
     """What run registration (M2-08, M2-21) and budget alerts (M2-16) read from an accepted
-    version. Team budgets are decimal strings, never floats (DF-26)."""
+    version. Team budgets are decimal strings, never floats (DF-26). `overlays` is the
+    tree's `overlay_index` (M2-23) and `versions` the rollout, deprecations and each team's
+    pins (M2-15), so registration checks both without the bundle."""
     return {
         "min_cli_version": policy.min_cli_version,
         "concurrency": dict(policy.concurrency),
@@ -361,6 +367,16 @@ def run_settings(policy: OrgPolicy, pipelines: dict[str, str]) -> dict:
             team: str(Decimal(str(team_policy.monthly_budget_usd)))
             for team, team_policy in sorted(policy.teams.items())
             if team_policy.monthly_budget_usd is not None
+        },
+        "overlays": overlays,
+        "versions": {
+            "rollout": policy.rollout.model_dump(mode="json"),
+            "deprecated": policy.deprecated.model_dump(mode="json"),
+            "pins": {
+                team: team_policy.pins.model_dump(mode="json")
+                for team, team_policy in sorted(policy.teams.items())
+                if team_policy.pins != Pins()
+            },
         },
     }
 
@@ -379,7 +395,7 @@ def settings_from_bundle(bundle: bytes, version: str) -> dict:
             policy = load_policy(root / "policy", version=version)
         except PolicyError:
             return {}
-        return run_settings(policy, pipeline_digests(root))
+        return run_settings(policy, pipeline_digests(root), overlay_index(root))
 
 
 def gzip_bytes(data: bytes) -> bytes:

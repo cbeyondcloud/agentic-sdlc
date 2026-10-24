@@ -36,6 +36,7 @@ digest, so a locally edited org policy is refused.
 """
 
 import gzip
+import hashlib
 import io
 import json
 import os
@@ -51,6 +52,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
+from agentic.definitions.overlay import OVERLAYS
 from agentic.orgapi import Me
 from agentic.policy import OrgPolicy, PolicyError, load_policy, tree_digest
 from agentic.policy.load import pipeline_digests
@@ -274,8 +276,10 @@ def _control_plane_policy(
         "tenant": me.tenant.slug,
         "digest": active.digest,
         "tree_digest": active.tree_digest,
-        # D33 (M2-21): the approved pipelines, hashed from the bundle the digest verified
+        # D33 (M2-21): the approved pipelines, hashed from the bundle the digest verified,
+        # and the approved overlays (M2-23)
         "pipelines": pipeline_digests(repo),
+        "overlays": overlay_digests(repo),
     }
     return loaded
 
@@ -329,19 +333,21 @@ def check_control_plane_cache(root: Path, stamp: dict, home: Path) -> None:
     named with the hash of its approved version (D33)."""
     if tree_digest(root) != stamp.get("tree_digest"):
         message = "the cached org policy was changed locally"
-        approved = stamp.get("pipelines")
-        if isinstance(approved, dict):
-            found = pipeline_digests(root)
+        for what, digests in (("pipeline", pipeline_digests), ("overlay", overlay_digests)):
+            approved = stamp.get(f"{what}s")
+            if not isinstance(approved, dict):
+                continue
+            found = digests(root)
             edited = [
                 f"{rel} (approved {digest}, this copy {found.get(rel, 'deleted')})"
                 for rel, digest in sorted(approved.items())
                 if found.get(rel) != digest
             ]
             edited += [
-                f"{rel} (not an approved pipeline)" for rel in sorted(set(found) - set(approved))
+                f"{rel} (not an approved {what})" for rel in sorted(set(found) - set(approved))
             ]
             if edited:
-                message += ": pipelines differ from the approved versions - " + "; ".join(edited)
+                message += f": {what}s differ from the approved versions - " + "; ".join(edited)
         raise CliError(message, ExitCode.REFUSED, hint="run `agentic init`")
     record = control_plane.login_record(home) or {}
     signed_in = record.get("tenant")
@@ -352,6 +358,17 @@ def check_control_plane_cache(root: Path, stamp: dict, home: Path) -> None:
             ExitCode.REFUSED,
             hint="run `agentic init` to fetch your tenant's policy",
         )
+
+
+def overlay_digests(root: Path) -> dict[str, str]:
+    """The overlays of a policy tree (M2-23): POSIX path of each
+    `teams/<team>/pipelines/overlays/*.yaml` -> `sha256:` of its bytes, whether or not it
+    still loads (an edit that breaks one is still named)."""
+    return {
+        path.relative_to(root).as_posix(): "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(root.glob(f"teams/*/{OVERLAYS.as_posix()}/*.yaml"))
+        if path.is_file()
+    }
 
 
 def _cached_from_control_plane(

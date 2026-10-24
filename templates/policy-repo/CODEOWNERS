@@ -13,7 +13,8 @@
 /.github/                        @your-org/agentic-org-admins
 
 # One block per team: its layer (agents, pipelines with per-repo overlays, skills) is the
-# team leads'. Its narrowing of org policy is the leads' or the org admins' (a team file
+# team leads'. Overlays (teams/<team>/pipelines/overlays/) can never remove an org-required
+# step or gate (policy/org.yaml, the admins'), so the leads own them alone. Its narrowing of org policy is the leads' or the org admins' (a team file
 # can only narrow; the loader refuses anything wider).
 /teams/payments/                 @your-org/payments-leads
 /policy/teams/payments.yaml      @your-org/payments-leads @your-org/agentic-org-admins

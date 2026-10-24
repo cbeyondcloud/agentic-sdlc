@@ -17,6 +17,8 @@ name: my-pipeline                         # required; lowercase-with-hyphens, un
 version: 0.1.0                            # required; MAJOR.MINOR.PATCH
 # regime: team                            # solo | team | regulated: how strict gates are   [team]
 # max_minutes: 240                        # wall-clock limit; then the run pauses for a person   [no limit]
+# failing_handoff: pause                  # a run ending on a failing review/test report pauses for a person;
+#                                         # `complete` only for a pipeline whose product is that report   [pause]
 # inputs:                                 # what a run starts from
 #   request: { from: [text, file, jira] }   # e.g. agentic run my-pipeline --from-jira PROJ-1
 

@@ -14,6 +14,7 @@ from agentic.definitions.versions import (
     VersionChoice,
     archive_path,
     archived,
+    archived_version,
     choose_version,
     deprecation_state,
     version_problem,
@@ -128,3 +129,15 @@ def test_archived_versions_listed(tmp_path: Path):
         .as_posix()
         .endswith("pipelines/versions/p/2.0.0.yaml")
     )
+
+
+def test_archived_version_read_from_a_policy_repo_path():
+    """The control plane learns a held-back pipeline's version from its approved path."""
+    assert archived_version("pipelines/versions/deliver/1.0.0.yaml", "pipeline", "deliver") == (
+        "1.0.0"
+    )
+    team = "teams/payments/pipelines/versions/deliver/2.1.0.yaml"
+    assert archived_version(team, "pipeline", "deliver") == "2.1.0"
+    assert archived_version("pipelines/deliver.yaml", "pipeline", "deliver") is None
+    assert archived_version("pipelines/versions/other/1.0.0.yaml", "pipeline", "deliver") is None
+    assert archived_version("agents/versions/deliver/1.0.0.md", "pipeline", "deliver") is None

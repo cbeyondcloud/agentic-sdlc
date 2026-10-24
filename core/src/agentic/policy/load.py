@@ -11,7 +11,8 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
     retention.yaml        days                      (placeholder until OR-01)
     tool-pins.yaml        tools (per-platform artefacts `init` fetches from the mirror)
     org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines,
-                          required_steps, index_export_workflow, sandbox, unhonoured,
+                          required_steps, checkpoint_exclude, index_export_workflow,
+                          sandbox, unhonoured,
                           secret_scan, publish_scan, review_prepass, review_batch
     eval.yaml             eval                      (agent evaluation defaults, M1-63)
     rollout.yaml          rollout, deprecated       (versions team by team, M2-15)
@@ -26,6 +27,8 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from agentic.definitions import DefinitionError
+from agentic.definitions.overlay import OVERLAYS, load_overlay
+from agentic.definitions.versions import ARCHIVE
 from agentic.policy.model import OrgPolicy
 from agentic.yamlio import YamlFileError, load_yaml, read_text
 
@@ -59,6 +62,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "tool_mirror_url": "tool_mirror_url",
         "allow_repo_pipelines": "allow_repo_pipelines",
         "required_steps": "required_steps",
+        "checkpoint_exclude": "checkpoint_exclude",
         "min_cli_version": "min_cli_version",
         "index_export_workflow": "index_export_workflow",
         "sandbox": "sandbox",
@@ -194,24 +198,65 @@ def tree_digest(root: Path) -> str:
 
 def pipeline_digests(root: Path) -> dict[str, str]:
     """The approved pipelines of a policy repo tree (D33): POSIX path -> `sha256:` of the
-    file's bytes exactly as stored, for `pipelines/*.yaml` and `teams/*/pipelines/*.yaml`.
+    file's bytes exactly as stored, for `pipelines/*.yaml` and `teams/*/pipelines/*.yaml`,
+    and their archived versions `.../pipelines/versions/<name>/<version>.yaml` (M2-15).
 
     The control plane records it for each version it validates and the CLI for the bundle
     it extracted (the same bytes on every platform, as for `tree_digest`), so a run can be
     refused when its pipeline is not byte for byte the approved one."""
+    found = {}
+    for folder in _pipeline_folders(root):
+        archive = folder / ARCHIVE
+        archived = (
+            [p for name in _sorted_dirs(archive) for p in sorted(name.iterdir())]
+            if archive.is_dir()
+            else []
+        )
+        for path in [*sorted(folder.iterdir()), *archived]:
+            if path.is_file() and path.suffix == ".yaml":
+                found[path.relative_to(root).as_posix()] = _sha256(path)
+    return found
+
+
+def overlay_index(root: Path) -> dict[str, dict]:
+    """The approved overlays of a policy repo tree (M2-23, D33): POSIX path of each
+    `teams/<team>/pipelines/overlays/*.yaml` -> its `sha256` (bytes as stored), `team`, the
+    `repo` it binds (None: every repository of its file name) and the `pipelines` it
+    changes. A file that does not load is left out: the tree's validation rejects it."""
+    found: dict[str, dict] = {}
+    teams = root / "teams"
+    for team in _sorted_dirs(teams) if teams.is_dir() else []:
+        folder = team / OVERLAYS
+        for path in sorted(folder.iterdir()) if folder.is_dir() else []:
+            if not (path.is_file() and path.suffix == ".yaml"):
+                continue
+            try:
+                overlay = load_overlay(path)
+            except DefinitionError:
+                continue
+            found[path.relative_to(root).as_posix()] = {
+                "sha256": _sha256(path),
+                "team": team.name,
+                "repo": overlay.repo,
+                "pipelines": sorted(overlay.pipelines),
+            }
+    return found
+
+
+def _pipeline_folders(root: Path) -> list[Path]:
     folders = [root / "pipelines"]
     teams = root / "teams"
     if teams.is_dir():
-        folders += [team / "pipelines" for team in sorted(teams.iterdir()) if team.is_dir()]
-    found = {}
-    for folder in folders:
-        if not folder.is_dir():
-            continue
-        for path in sorted(folder.iterdir()):
-            if path.is_file() and path.suffix == ".yaml":
-                rel = path.relative_to(root).as_posix()
-                found[rel] = "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
-    return found
+        folders += [team / "pipelines" for team in _sorted_dirs(teams)]
+    return [folder for folder in folders if folder.is_dir()]
+
+
+def _sorted_dirs(folder: Path) -> list[Path]:
+    return sorted(p for p in folder.iterdir() if p.is_dir())
+
+
+def _sha256(path: Path) -> str:
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _git(root: Path, *args: str) -> str:

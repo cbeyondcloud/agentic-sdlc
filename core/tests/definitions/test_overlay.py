@@ -14,6 +14,7 @@ from agentic.definitions.overlay import (
     OverlayRefused,
     PipelineOverlay,
     apply_overlay,
+    approved_overlays,
     load_overlay,
     overlay_applies,
     overlay_for,
@@ -315,3 +316,42 @@ def test_overlay_for_finds_the_team_file(tmp_path: Path):
     assert overlay_for(team, "git.example.com/acme/billing") is None
     assert overlay_for(team, None) is None
     assert overlay_for(None, "git.example.com/acme/payments-api") is None
+
+
+def test_an_overlay_cannot_change_failing_handoff(tmp_path: Path):
+    """DF-263/DF-269: the completion opt-out belongs to the pipeline's owners, never to an
+    overlay (it would let a failing QA report end a run `completed`)."""
+    path = write(tmp_path / "x.yaml", "pipelines:\n  p:\n    failing_handoff: complete\n")
+    with pytest.raises(OverlayRefused, match="failing_handoff"):
+        load_overlay(path)
+
+
+def test_approved_overlays_for_a_run():
+    """The control plane's view (`overlay_index` entries): the overlays of the run's team
+    that apply to its repository and change its pipeline."""
+    index = {
+        "teams/payments/pipelines/overlays/app.yaml": {
+            "team": "payments",
+            "repo": None,
+            "pipelines": ["deliver"],
+        },
+        "teams/web/pipelines/overlays/app.yaml": {
+            "team": "web",
+            "repo": None,
+            "pipelines": ["deliver"],
+        },
+        "teams/payments/pipelines/overlays/billing.yaml": {
+            "team": "payments",
+            "repo": "git.example.com/acme/billing",
+            "pipelines": ["deliver", "hotfix"],
+        },
+    }
+    key = "git.example.com/acme/App"
+    found = approved_overlays(index, team="payments", repo=key, pipeline="deliver")
+    assert found == ["teams/payments/pipelines/overlays/app.yaml"]
+    assert approved_overlays(index, team="payments", repo=key, pipeline="hotfix") == []
+    assert approved_overlays(index, team="payments", repo=None, pipeline="deliver") == []
+    billing = approved_overlays(
+        index, team="payments", repo="git.example.com/other/billing", pipeline="hotfix"
+    )
+    assert billing == []  # bound to acme/billing only

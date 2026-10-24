@@ -16,3 +16,9 @@ deny:
 # delegated to a backend that loads plugins - never the native loop (M2-47):
 skill_packs: []
 backend_plugins: []                     # e.g. [superpowers], once catalogued in skills/
+
+# Keep a version of an org agent or pipeline while the org rolls a new one out (see
+# policy/rollout.yaml); the version must be archived under agents|pipelines/versions/.
+# pins:
+#   agents: {developer: 1.2.0}
+#   pipelines: {feature-delivery: 1.4.0}

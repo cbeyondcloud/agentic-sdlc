@@ -308,7 +308,7 @@ def preflight(
                     )
                 )
 
-    for position, step, kind in outside:
+    for position, step, kind in outside if pipeline.failing_handoff == "pause" else ():
         if kind not in made[position + 1 :]:  # its handoff is the run's last word on `kind`
             judging(step, kind)
 
