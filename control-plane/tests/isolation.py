@@ -389,6 +389,60 @@ async def _personal_event_row(conn: AsyncConnection, tenant_id: UUID) -> dict[st
     }
 
 
+@register("feedback_events")
+async def _feedback_event_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    run = await _insert(conn, "runs", _run_row(tenant_id, user["id"]))
+    return {
+        "tenant_id": tenant_id,
+        "run_id": run["run_id"],
+        "seq": 1,
+        "hash": "sha256:" + "b" * 64,
+        "prev": "",
+        "event": "learning.feedback_captured",
+        "entry": {"seq": 1, "event": "learning.feedback_captured"},
+    }
+
+
+def _feedback_values(tenant_id: UUID, run_id: str, author_id: UUID) -> dict[str, Any]:
+    n = next(_sequence)
+    return {
+        "tenant_id": tenant_id,
+        "id": f"fb-{n:020x}",
+        "run_id": run_id,
+        "team": "payments",
+        "repo": "github.com/acme/app",
+        "signal": "gate-rejection",
+        "actor": "lead@example.test",
+        "given_at": datetime.now(UTC),
+        "author_id": author_id,
+        "record": {"text": f"use the existing queue {n}", "source": f"gate:g:reject:{n}"},
+        "agents": ["design"],
+        "lesson": f"Reuse the existing queue {n}.",
+    }
+
+
+@register("feedback")
+async def _feedback_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    run = await _insert(conn, "runs", _run_row(tenant_id, user["id"]))
+    return _feedback_values(tenant_id, run["run_id"], user["id"])
+
+
+@register("learning_proposals")
+async def _proposal_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    n = next(_sequence)
+    return {
+        "tenant_id": tenant_id,
+        "id": f"lp-{n:020x}",
+        "team": "payments",
+        "agent": "design",
+        "scope": "repo:github.com/acme/app",
+        "lesson": f"Reuse the existing queue {n}.",
+        "evidence": [f"fb-{n:020x}"],
+    }
+
+
 # ── endpoint cases ────────────────────────────────────────────────────────────
 
 
@@ -548,6 +602,26 @@ async def _notification_in_b(api) -> dict[str, str]:
     return {"id": str(made), "recipient": recipient}
 
 
+async def _feedback_in_b(api) -> dict[str, str]:
+    """A feedback record (and a proposal) of a run in tenant b only (written as owner)."""
+    from agentic_cp.tenancy.context import tenant_tx
+
+    run = await _run_in_b(api)
+    async with tenant_tx(api.db.owner, api.b.id) as conn:
+        row = _feedback_values(api.b.id, run["run_id"], api.b.admin_id)
+        await _insert(conn, "feedback", row)
+        proposal = await _proposal_row(conn, api.b.id)
+        proposal["lesson"] = f"b-only lesson {uuid.uuid4().hex}"
+        await _insert(conn, "learning_proposals", proposal)
+    return {
+        "feedback_id": row["id"],
+        "run_id": run["run_id"],
+        "lesson": row["lesson"],
+        "proposal": proposal["id"],
+        "proposal_lesson": proposal["lesson"],
+    }
+
+
 async def _service_account_in_b(api) -> dict[str, str]:
     name = f"bonly{next(_sequence)}"
     made = await api.post(
@@ -558,6 +632,23 @@ async def _service_account_in_b(api) -> dict[str, str]:
 
 
 ENDPOINT_CASES += [
+    EndpointCase(
+        # another tenant's run is unknown here: its feedback is refused as for any unknown run
+        "learning",
+        "POST",
+        "/v1/runs/{run_id}/feedback",
+        _feedback_in_b,
+        body={"entries": [{"seq": 1}]},
+    ),
+    EndpointCase(
+        "learning",
+        "PUT",
+        "/v1/learning/feedback/{feedback_id}/attribution",
+        _feedback_in_b,
+        body={"agents": ["developer"], "reason": "it was the code"},
+    ),
+    EndpointCase("learning", "GET", "/v1/learning/feedback", _feedback_in_b, must_not_list=True),
+    EndpointCase("learning", "GET", "/v1/learning/proposals", _feedback_in_b, must_not_list=True),
     EndpointCase(
         "service-accounts",
         "GET",

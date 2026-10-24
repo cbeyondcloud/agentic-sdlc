@@ -61,7 +61,13 @@ LOOKUP_POLICIES: dict[str, str] = {
 }
 
 #: Evidence tables: the runtime role may only SELECT and INSERT (M2-05).
-INSERT_ONLY: tuple[str, ...] = ("audit_log", "run_events", "policy_versions", "personal_events")
+INSERT_ONLY: tuple[str, ...] = (
+    "audit_log",
+    "run_events",
+    "policy_versions",
+    "personal_events",
+    "feedback_events",
+)
 
 TENANCY = "tenancy.unenforced"
 AUDIT = "audit.unenforced"

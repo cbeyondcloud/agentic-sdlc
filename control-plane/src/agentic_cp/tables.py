@@ -56,6 +56,9 @@ TENANT_TABLES: tuple[str, ...] = (
     "auto_trips",
     "routing_applies",
     "personal_events",
+    "feedback_events",
+    "feedback",
+    "learning_proposals",
 )
 
 #: A tenant's slug: lower-case, starts with a letter, 2-63 characters.
@@ -472,6 +475,80 @@ personal_events = Table(
         name="personal_events_event_known",
     ),
     CheckConstraint("kind in ('skill', 'memory')", name="personal_events_kind_known"),
+)
+
+#: The learning loop (M3-11): each run's feedback journal exactly as received (insert-only
+#: evidence; `entry` is the whole entry, so the stored chain re-verifies with Zyroflo's
+#: entry hash). The journal holds prose (a person's feedback, a diff), never the run ledger.
+FEEDBACK_EVENTS = (
+    "'learning.feedback_captured', 'learning.feedback_analysed', 'learning.attribution_corrected'"
+)
+FEEDBACK_SIGNALS = "'gate-rejection', 'gate-edit', 'pr-review', 'review-miss'"
+feedback_events = Table(
+    "feedback_events",
+    metadata,
+    _tenant_id(),
+    Column("run_id", Text, primary_key=True),
+    Column("seq", BigInteger, primary_key=True, autoincrement=False),
+    Column("hash", Text, nullable=False),
+    Column("prev", Text, nullable=False),
+    Column("event", Text, nullable=False),
+    Column("entry", JSONB, nullable=False),
+    Column("received_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    ForeignKeyConstraint(["tenant_id", "run_id"], ["runs.tenant_id", "runs.run_id"]),
+    CheckConstraint("seq > 0", name="feedback_events_seq_positive"),
+    CheckConstraint(f"event in ({FEEDBACK_EVENTS})", name="feedback_events_event_known"),
+)
+
+#: One row per feedback record (M3-11, M3-12): the record, its current attribution
+#: (`agents` mirrors the learners, for querying) and lesson. Read by its author (the user
+#: whose CLI sent it) and the team (D30); a correction is on the audit chain.
+feedback = Table(
+    "feedback",
+    metadata,
+    _tenant_id(),
+    Column("id", Text, primary_key=True),
+    Column("run_id", Text, nullable=False),
+    Column("team", Text, nullable=False),
+    Column("repo", Text, nullable=True),
+    Column("signal", Text, nullable=False),
+    Column("actor", Text, nullable=False),
+    Column("given_at", DateTime(timezone=True), nullable=False),
+    Column("author_id", UUID(as_uuid=True), nullable=False),
+    Column("record", JSONB, nullable=False),
+    Column("attribution", JSONB, nullable=True),
+    Column("agents", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("lesson", Text, nullable=False, server_default=""),
+    Column("corrected_by", Text, nullable=True),
+    Column("corrected_at", DateTime(timezone=True), nullable=True),
+    Column("captured_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    ForeignKeyConstraint(["tenant_id", "run_id"], ["runs.tenant_id", "runs.run_id"]),
+    ForeignKeyConstraint(["tenant_id", "author_id"], ["users.tenant_id", "users.id"]),
+    CheckConstraint(f"signal in ({FEEDBACK_SIGNALS})", name="feedback_signal_known"),
+    Index("feedback_tenant_id_team_given_at_idx", "tenant_id", "team", "given_at"),
+)
+
+#: Proposals made from repeated corrections (M3-13): created here, never applied here
+#: (L4-L6). `authors` are the users whose feedback is the evidence; a rejected proposal is
+#: kept so its lesson is not proposed again without new evidence.
+learning_proposals = Table(
+    "learning_proposals",
+    metadata,
+    _tenant_id(),
+    Column("id", Text, primary_key=True),
+    Column("team", Text, nullable=False),
+    Column("agent", Text, nullable=False),
+    Column("scope", Text, nullable=False),
+    Column("lesson", Text, nullable=False),
+    Column("evidence", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("sources", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("actors", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("authors", ARRAY(UUID(as_uuid=True)), nullable=False, server_default="{}"),
+    Column("status", Text, nullable=False, server_default="pending"),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("decided_at", DateTime(timezone=True), nullable=True),
+    Column("decided_by", Text, nullable=True),
+    CheckConstraint("status in ('pending', 'rejected')", name="learning_proposals_status_known"),
 )
 
 #: Unique constraints that deliberately span tenants: credential hashes, looked up before
