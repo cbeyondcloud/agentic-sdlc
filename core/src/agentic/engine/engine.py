@@ -91,6 +91,8 @@ from agentic.handoffs import (
     parse_handoff,
 )
 from agentic.killswitch import RUN, KillSwitch, RunKilled, RunScope, Verdict, unconfirmed
+from agentic.learning.capture import HandoffRef, gate_edit, gate_rejection
+from agentic.learning.records import FeedbackRecord
 from agentic.memory.agents_md import agents_md_knowledge, nearest_agents_md
 from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
 from agentic.telemetry.logs import StepLogs
@@ -230,6 +232,7 @@ class Engine:
         killswitch: KillSwitch | None = None,
         kill_poll_s: float = 5.0,
         repo: str | None = None,
+        feedback: Callable[[FeedbackRecord], None] | None = None,
     ) -> None:
         self.definitions, self.policy, self.context = definitions, policy, context
         self.store, self.recorder_for, self.gates_for = store, recorder_for, gates_for
@@ -251,6 +254,9 @@ class Engine:
         # the kill switch (M2-19); None: standalone, nothing can stop a run from outside.
         # `repo` (host/owner/name) is the repo dimension of every scope it is asked about
         self.killswitch, self.kill_poll_s, self.repo = killswitch, kill_poll_s, repo
+        # the learning loop (M3-11): each gate correction - a rejection with feedback, an
+        # edit's diff - is handed over as a feedback record; None: nothing is captured
+        self.feedback = feedback
 
     async def start(
         self, pipeline: str, inputs: dict[str, str], starter: str, run_id: str
@@ -773,6 +779,7 @@ class _Run:
         if refusal := self._loop_still_failing(pending, proposed):
             raise GateRefused(refusal)
         # every check passed: only now is a person's edit written and pinned (DF-50)
+        original = self._handoff_ref(proposed.path) if proposed is not None else None
         edited = self._write_edit(proposed) if proposed is not None else None
         self.gates.record(
             pending.id,
@@ -783,6 +790,22 @@ class _Run:
             notes=decision.notes,
             extra={"regime": state.regime, **(roles or {})},
         )
+        if proposed is not None and original is not None:
+            self._report(
+                pending.id,
+                lambda: gate_edit(
+                    run_id=state.run_id,
+                    gate=pending.id,
+                    step=self._step_of(original.path) or pending.step,
+                    approver=decision.approver,
+                    handoff=original,
+                    before=(self.recorder.run_dir / original.path).read_text(encoding="utf-8"),
+                    after=proposed.text,
+                    notes=decision.notes,
+                    at=self.e.clock.now(),
+                    repo=self.e.repo,
+                ),
+            )
         mark = ApprovalMark(
             gate=pending.id,
             approver=decision.approver,
@@ -863,6 +886,7 @@ class _Run:
             cursor = Cursor(index=state.cursor.index, loop_iteration=1, loop_index=0)
         else:
             target, cursor = self._reject_target(gate)
+        pinned = [self._handoff_ref(rel) for rel in pending.artefacts]
         self._rollback_for(target, cursor.loop_iteration or 1)  # the code goes back too
         self._supersede(target, cursor.loop_iteration or 1)
         self.gates.record(
@@ -873,6 +897,21 @@ class _Run:
             step=pending.step or pending.id,
             notes=decision.feedback,
             extra={"regime": state.regime},
+        )
+        written = self._written_by(target, pinned)
+        self._report(
+            pending.id,
+            lambda: gate_rejection(
+                run_id=state.run_id,
+                gate=pending.id,
+                step=target,
+                approver=decision.approver,
+                feedback=decision.feedback,
+                handoff=written,
+                pinned=pinned,
+                at=self.e.clock.now(),
+                repo=self.e.repo,
+            ),
         )
         if cursor.loop_iteration == 1 and cursor is not state.cursor:
             state.loop_pass_start = len(state.history)  # a new pass of the loop (I9)
@@ -928,6 +967,39 @@ class _Run:
             if isinstance(step, LoopStep):
                 return step.loop.steps[0].id, Cursor(index=position, loop_iteration=1)
         raise GateRefused(f"{gate.gate}: there is no step before the gate to send the work back to")
+
+    # ── feedback for the learning loop (M3-11) ──────────────────────────────
+
+    def _handoff_ref(self, rel: str) -> HandoffRef:
+        """A pinned handoff with the kind and agent its envelope names (None for both when
+        it cannot be read as a handoff: a gated diff, an invalid answer)."""
+        digest = self.state.pending.artefacts.get(rel, "") if self.state.pending else ""
+        try:
+            text = (self.recorder.run_dir / rel).read_text(encoding="utf-8")
+            envelope = parse_handoff(text.replace("\r\n", "\n"), self.catalog).envelope
+        except (OSError, UnicodeDecodeError, HandoffError, ValueError):
+            return HandoffRef(rel, None, None, digest)
+        return HandoffRef(rel, envelope.kind, envelope.agent, digest)
+
+    def _step_of(self, rel: str) -> str | None:
+        """The step whose attempt wrote the handoff at `rel`."""
+        return next((r.step for r in reversed(self.state.history) if r.handoff == rel), None)
+
+    def _written_by(self, step: str, pinned: list[HandoffRef]) -> HandoffRef | None:
+        """The pinned handoff a rejection is about: the one the step it sends the work back
+        to wrote, else the newest pinned one."""
+        mine = [ref for ref in pinned if self._step_of(ref.path) == step]
+        return (mine or pinned or [None])[-1]
+
+    def _report(self, gate: str, build: Callable[[], FeedbackRecord]) -> None:
+        """Hand a gate's correction to the feedback port. The decision is already in the
+        gate ledger, so a failure here is logged and never undoes or stops it."""
+        if self.e.feedback is None:
+            return
+        try:
+            self.e.feedback(build())
+        except Exception as error:  # the learning loop never blocks a person's decision
+            _LOG.warning("%s: the gate's feedback record was not kept (%s)", gate, error)
 
     # ── the run's trees (M1-30) ─────────────────────────────────────────────
 
