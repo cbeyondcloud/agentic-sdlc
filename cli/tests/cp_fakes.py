@@ -53,6 +53,8 @@ class FakeControlPlane:
     max_body: int | None = None  # bytes: a larger request body is answered 413 too_large
     max_entries: int | None = None  # entries per ingest: more is 413 ingest.too_large
     switches: list[dict] = field(default_factory=list)  # kill and pause switches (M2-06)
+    kill_ttl_seconds: int = 10  # the state answer's ttl_seconds (DF-516)
+    etags: bool = True  # the state answer carries an ETag and honours If-None-Match (DF-506)
     lead_teams: set[str] = field(default_factory=set)  # teams the user holds killswitch.team in
     registrations: list[dict] = field(default_factory=list)  # POST /v1/runs bodies (M2-21)
     failing_checks: dict[str, str] = field(default_factory=dict)  # check -> why it fails
@@ -430,13 +432,19 @@ class FakeControlPlane:
             )
         if path == "/v1/killswitch/state":
             active = [s for s in self.switches if s["active"]]
+            # a conditional GET as the control plane answers it (DF-506)
+            basis = json.dumps([active, self.kill_ttl_seconds], sort_keys=True)
+            tag = '"' + hashlib.sha256(basis.encode()).hexdigest() + '"'
+            if self.etags and request.headers.get("if-none-match") == tag:
+                return httpx2.Response(304, headers={"ETag": tag})
             return httpx2.Response(
                 200,
                 json={
                     "switches": active,
                     "checked_at": datetime.now(UTC).isoformat(),
-                    "ttl_seconds": 10,
+                    "ttl_seconds": self.kill_ttl_seconds,
                 },
+                headers={"ETag": tag} if self.etags else {},
             )
         if path == "/v1/audit" or path == "/v1/audit/export":
             return self._audit(request)

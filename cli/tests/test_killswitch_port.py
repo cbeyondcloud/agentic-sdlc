@@ -113,5 +113,63 @@ def test_an_unreachable_control_plane_is_not_asked_on_every_check(plane):
     assert len(state_requests(plane)) == 1  # retried once per TTL, not per check
 
 
+def test_the_server_ttl_shortens_the_cache(plane):
+    """DF-516: an operator shortens propagation with AGENTIC_CP_KILL_TTL_SECONDS."""
+    plane.kill_ttl_seconds = 3
+    clock = Clock()
+    ks = port(plane, clock)
+    assert ks.check(SCOPE).action == "run"
+    plane.add_switch("pipeline", "deliver", mode="kill", reason="stop now")
+    clock.now += 2.9
+    assert ks.check(SCOPE).action == "run"  # still the cached answer
+    clock.now += 0.1
+    assert ks.check(SCOPE).action == "kill"
+    assert len(state_requests(plane)) == 2
+
+
+def test_the_server_ttl_never_lengthens_the_cache(plane):
+    """DF-516 (ruling R5): the CLI's 10 s bound keeps the 30 s propagation target."""
+    plane.kill_ttl_seconds = 30
+    clock = Clock()
+    ks = port(plane, clock)
+    ks.check(SCOPE)
+    clock.now += CACHE_TTL_S
+    ks.check(SCOPE)
+    assert len(state_requests(plane)) == 2
+
+
+def test_a_304_confirms_the_cached_switches(plane):
+    """DF-506: the next poll sends the answer's ETag; a 304 keeps the switches the port
+    holds and counts as a confirmation, so it never goes stale while the server answers."""
+    plane.add_switch("team", "payments", mode="pause", reason="maintenance")
+    clock = Clock()
+    ks = port(plane, clock)
+    assert ks.check(SCOPE).action == "pause"
+    first = state_requests(plane)[0]
+    assert "if-none-match" not in first.headers
+    for _ in range(int(STALE_AFTER_S // CACHE_TTL_S) + 2):  # well past the stale window
+        clock.now += CACHE_TTL_S
+        verdict = ks.check(SCOPE)
+        assert verdict.action == "pause" and not verdict.stale
+    later = state_requests(plane)[1:]
+    assert later and all(r.headers["if-none-match"].startswith('"') for r in later)
+    plane.switches.clear()  # a change: a full answer again
+    clock.now += CACHE_TTL_S
+    assert ks.check(SCOPE).action == "run"
+
+
+def test_a_304_without_a_cached_answer_is_not_a_confirmation(plane, monkeypatch):
+    """A 304 the port did not ask for (no tag sent) confirms nothing: never "run"."""
+    import httpx2
+
+    def not_modified(request):
+        return httpx2.Response(304, headers={"ETag": '"x"'})
+
+    client = ControlPlaneClient(CP_URL, TOKEN, transport=httpx2.MockTransport(not_modified))
+    ks = ControlPlaneKillSwitch(client, user=None, team="payments", repo=None, clock=Clock())
+    verdict = ks.check(SCOPE)
+    assert verdict.action == "pause" and verdict.stale
+
+
 def test_standalone_has_no_switches():
     assert NoKillSwitch().check(SCOPE).action == "run"

@@ -22,7 +22,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, NamedTuple
 from urllib.parse import quote
 
 import httpx2
@@ -164,6 +164,13 @@ def _loopback(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+class KillStateReply(NamedTuple):
+    """A kill-switch poll's answer: the state (None when unchanged, a 304) and its ETag."""
+
+    state: KillState | None
+    etag: str | None
 
 
 class ControlPlaneClient:
@@ -382,14 +389,42 @@ class ControlPlaneClient:
 
     def kill_state(self, *, team: str | None, repo: str | None, pipeline: str | None) -> KillState:
         """The switches that may apply to a run of this team, repo and pipeline (M2-19)."""
+        reply = self.kill_state_reply(team=team, repo=repo, pipeline=pipeline)
+        assert reply.state is not None  # no tag was sent, so the answer is never a 304
+        return reply.state
+
+    def kill_state_reply(
+        self,
+        *,
+        team: str | None,
+        repo: str | None,
+        pipeline: str | None,
+        etag: str | None = None,
+    ) -> KillStateReply:
+        """`kill_state` as a conditional GET (DF-506): with the `etag` of the last answer,
+        an unchanged state comes back as `KillStateReply(None, etag)` (a 304, no body)."""
         params = {"team": team, "repo": repo, "pipeline": pipeline}
-        found = self._json(
+        response = self._send(
             "GET",
             "/killswitch/state",
             params={k: v for k, v in params.items() if v},
             timeout=KILL_STATE_TIMEOUT,
+            headers={"If-None-Match": etag} if etag else None,
         )
-        return KillState.model_validate(found)
+        tag = response.headers.get("etag")
+        if response.status_code == 304:
+            if not etag:  # a 304 to a question never asked confirms nothing
+                raise ControlPlaneUnavailable(
+                    f"{self._shown} answered 304 to a kill-switch poll that sent no ETag"
+                )
+            return KillStateReply(None, tag or etag)
+        try:
+            found = response.json()
+        except ValueError:
+            raise ControlPlaneUnavailable(
+                f"{self._shown} answered something that is not JSON ({response.status_code})"
+            ) from None
+        return KillStateReply(KillState.model_validate(found), tag)
 
     def set_switch(self, body: Mapping[str, object]) -> KillSwitchInfo:
         return KillSwitchInfo.model_validate(self._json("POST", "/killswitch", dict(body)))
@@ -445,10 +480,13 @@ class ControlPlaneClient:
         *,
         params: Mapping[str, str] | None = None,
         timeout: httpx2.Timeout | None = None,
+        headers: Mapping[str, str] | None = None,
     ) -> httpx2.Response:
         options: dict[str, Any] = {"json": body}
         if params:
             options["params"] = dict(params)
+        if headers:
+            options["headers"] = dict(headers)
         if timeout is not None:
             options["timeout"] = timeout
         kill_poll = timeout is KILL_STATE_TIMEOUT
