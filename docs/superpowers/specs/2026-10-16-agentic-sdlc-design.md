@@ -724,7 +724,7 @@ Tenant monthly cap (TokenLean) → team monthly cap (TokenLean enhancement + pol
 
 ### 14.2 Identity headers on every model call
 
-`X-Agentic-Team`, `X-Agentic-User`, `X-Agentic-Repo`, `X-Agentic-Pipeline`, `X-Agentic-Run-Id`, `X-Agentic-Step`, `X-Agentic-Agent` (name@version), `X-Agentic-Parent-Agent`, `X-Agentic-Tier`, `X-Agentic-Policy-Version`, plus W3C `traceparent`.
+`X-Agentic-Team`, `X-Agentic-User`, `X-Agentic-Repo`, `X-Agentic-Pipeline`, `X-Agentic-Run-Id`, `X-Agentic-Step`, `X-Agentic-Agent` (name@version), `X-Agentic-Parent-Agent`, `X-Agentic-Tier`, `X-Agentic-Policy-Version`, plus W3C `traceparent`; and, when the repo has one, `X-Agentic-Classification` (optional, so the gateway's generated routing keeps restricted repos on their allowed models; decision 96).
 
 **Never** reuse TokenLean's behaviour headers for identity: `X-Step-Name` enables TokenLean's step-level response cache (replays responses if `X-Step-Inputs-Hash` is not unique); `X-Workflow-ID` drives loop control and learned output caps; `X-Session-ID` drives memory. These may be used deliberately, only for the behaviour they trigger.
 
