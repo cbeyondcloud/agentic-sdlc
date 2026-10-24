@@ -15,7 +15,15 @@ from agentic.yamlio import load_yaml, read_text
 from agentic_cli import standalone
 from agentic_cli.errors import CliError
 
-LIBRARY_AGENTS = {"business-analyst", "code-review", "design", "developer", "qa", "qa-baseline"}
+LIBRARY_AGENTS = {
+    "business-analyst",
+    "code-review",
+    "design",
+    "developer",
+    "qa",
+    "qa-baseline",
+    "learning-analyst",
+}
 
 
 @pytest.fixture(scope="module")

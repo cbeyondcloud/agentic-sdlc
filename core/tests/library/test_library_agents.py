@@ -25,7 +25,10 @@ BUILTINS = {
     "code-review": ("code-review", "review"),
     "qa": ("qa", "test-report"),
     "qa-baseline": ("qa", "test-report"),  # the baseline test run at intake (Zyroflo P0/P5)
+    "learning-analyst": ("learning-analyst", None),  # the learning loop's analyst (M3-12)
 }
+#: the built-ins that write a handoff (the analyst answers with a JSON verdict instead)
+HANDOFF_WRITERS = sorted(name for name, (_, kind) in BUILTINS.items() if kind)
 VENDORS = re.compile(VENDOR_NAMES, re.IGNORECASE)
 FIXED = datetime(2026, 10, 21, 9, 0, tzinfo=UTC)
 
@@ -49,7 +52,14 @@ def test_every_builtin_agent_resolves_against_the_standalone_policy(
     assert agent.definition.status == "active"
 
 
-@pytest.mark.parametrize("name", sorted(BUILTINS))
+def test_the_learning_analyst_reads_only_what_it_is_given(library, standalone_policy):
+    """M3-12: a fast-tier agent with no tools and no handoff; its answer is checked by the
+    analyst's own contract (agentic.learning.analyst)."""
+    agent = resolved(library, standalone_policy, "learning-analyst")
+    assert (agent.tier, agent.tools, agent.produces, agent.consumes) == ("fast", [], None, [])
+
+
+@pytest.mark.parametrize("name", HANDOFF_WRITERS)
 def test_testmodel_smoke_produces_a_valid_handoff(library, standalone_policy, name, tmp_path):
     """Each agent, resolved, run with its real instructions and its step's output
     contract on a TestModel that answers with its kind's template: the answer is

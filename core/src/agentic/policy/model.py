@@ -21,6 +21,7 @@ from pydantic import (
 from agentic.definitions import ChildLimits, DenyRules, Limits
 from agentic.definitions.discovery import PolicyRules
 from agentic.definitions.versions import Deprecations, Pins, Rollout
+from agentic.learning.clustering import LearningSettings
 
 
 class _Strict(BaseModel):
@@ -220,6 +221,50 @@ def _looser_auto_trip(team: str, own: TeamAutoTrip | None, org: AutoTripPolicy) 
     return problems
 
 
+class TeamLearning(_Strict):
+    """A team's learning-loop thresholds (M3-13): it may only tighten the org's - more
+    similar corrections before a proposal, a shorter window."""
+
+    threshold: int | None = Field(default=None, ge=2, le=100)
+    window_days: int | None = Field(default=None, ge=1, le=365)
+
+
+class LearningPolicy(_Strict):
+    """`org.yaml: learning` (M3-13, spec §24): a cluster of `threshold` similar corrections
+    within `window_days` becomes a proposal; `similarity` is how alike two lessons must be
+    (the lexical measure, 0-1). One correction is never a pattern: a person asks for it to
+    be taught with `agentic learn propose --from` (L5)."""
+
+    threshold: int = Field(default=3, ge=2, le=100)
+    window_days: int = Field(default=30, ge=1, le=365)
+    similarity: float = Field(default=0.5, gt=0, le=1)
+
+    def settings_for(self, team: TeamLearning | None) -> LearningSettings:
+        own = team or TeamLearning()
+        return LearningSettings(
+            threshold=max(self.threshold, own.threshold or self.threshold),
+            window_days=min(self.window_days, own.window_days or self.window_days),
+            similarity=self.similarity,
+        )
+
+
+def _looser_learning(team: str, own: TeamLearning | None, org: LearningPolicy) -> list[str]:
+    if own is None:
+        return []
+    problems = []
+    if own.threshold is not None and own.threshold < org.threshold:
+        problems.append(
+            f"teams.{team}.learning.threshold {own.threshold} is lower than the org's "
+            f"{org.threshold}: a team may only tighten it"
+        )
+    if own.window_days is not None and own.window_days > org.window_days:
+        problems.append(
+            f"teams.{team}.learning.window_days {own.window_days} is longer than the org's "
+            f"{org.window_days}: a team may only tighten it"
+        )
+    return problems
+
+
 class TeamRateLimit(_Strict):
     """A team's request limits at the gateway (M2-09): requests per minute and per hour for
     the team's keys together. The control plane writes them into the gateway's routing
@@ -249,6 +294,7 @@ class TeamPolicy(_Strict):
     # (never the native loop; M2-47, D28)
     backend_plugins: list[str] = []
     auto_trip: TeamAutoTrip | None = None  # M2-11: tighter thresholds only
+    learning: TeamLearning | None = None  # M3-13: tighter thresholds only
     # versions this team keeps whatever the rollout says (M2-15); each must exist in the
     # policy repo and is still refused once deprecated past its date
     pins: Pins = Pins()
@@ -653,6 +699,7 @@ class OrgPolicy(_Strict):
     review_batch: ReviewBatchPolicy = ReviewBatchPolicy()  # M2-24
     eval: EvalPolicy = EvalPolicy()  # M1-63
     auto_trip: AutoTripPolicy = AutoTripPolicy()  # M2-11
+    learning: LearningPolicy = LearningPolicy()  # M3-13
     # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
     # (`secret_scan`: the backend calls the model itself, past the framework's scanner;
     # `shell_default_deny`: its shell runs unlisted commands, and its prefix rules miss
@@ -681,6 +728,11 @@ class OrgPolicy(_Strict):
         lowered = model.lower()
         matches = [name for name in self.prices if name.lower() in lowered]
         return self.prices[max(matches, key=len)] if matches else None
+
+    def learning_settings(self, team: str | None) -> LearningSettings:
+        """The learning thresholds `team` works under (the org's, tightened by the team's)."""
+        team_policy = self.teams.get(team) if team else None
+        return self.learning.settings_for(team_policy.learning if team_policy else None)
 
     def rules(self, *, team: str | None, repo: str | None, today: date) -> PolicyRules:
         """What discovery needs to give `team`, in the repository whose origin key is
@@ -750,6 +802,7 @@ class OrgPolicy(_Strict):
                         f"teams.{team}.limits_max names unknown agent type '{type_name}'"
                     )
             problems += _looser_auto_trip(team, team_policy.auto_trip, self.auto_trip)
+            problems += _looser_learning(team, team_policy.learning, self.learning)
         for team in self.team_overrides:
             if team not in self.teams:
                 problems.append(f"team_overrides names unknown team '{team}'")
