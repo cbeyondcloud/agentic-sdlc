@@ -172,6 +172,20 @@ async def test_other_gateway_tenants_never_counted(linked_db):
     assert {r["request_id"] for r in rows} == {c.request_id for c in calls_of(GW_A)}
 
 
+async def test_a_shared_gateway_tenant_shows_no_gateway_rows(linked_db):
+    """Two tenants mapped to one gateway tenant (a misconfiguration) cannot tell whose calls
+    are whose: neither sees any, rather than each seeing the other's."""
+    db, seeded, _ = linked_db
+    async with db.owner.begin() as conn:
+        await conn.execute(
+            text("update tenants set gateway_tenant = :gw where id = :id"),
+            {"gw": GW_A, "id": seeded.b},
+        )
+    for tenant in (seeded.a, seeded.b):
+        assert await _rows(db.owner, tenant, "select request_id from dash_calls") == []
+        assert await _rows(db.owner, tenant, "select action from dash_gateway_safety") == []
+
+
 async def test_agent_quality_counts_executions_gates_and_cost(linked_db):
     db, seeded, _ = linked_db
     rows = await _rows(

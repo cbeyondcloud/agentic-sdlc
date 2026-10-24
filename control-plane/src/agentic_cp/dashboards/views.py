@@ -11,7 +11,8 @@ owner too. `dash_scope` adds the binding: the session's `app.tenant_id` tenant, 
 when the session is that tenant's registered reader (`tenants.dashboard_role`) or a role
 that may already read the tenant tables directly (runtime, owner), whose RLS the GUC
 governs anyway. A reader that sets `app.tenant_id` to another tenant gets no rows. Every
-`dash_*` view joins `dash_scope`; gateway rows match on the tenant's `gateway_tenant`.
+`dash_*` view joins `dash_scope`; gateway rows match on the tenant's `gateway_tenant`, and
+on none when another tenant has the same one.
 
 **Measures.** Unmeasured is NULL, never 0: a sum over no gateway call, a step without a
 reported cost. A call without a run tag is the `(unattributed)` line of each cost view
@@ -140,8 +141,14 @@ SAFETY_ACTIONS = ("guardrail.%", "redaction.%", "context_trust.%", "tool_eligibi
 
 
 def _scope(schema: str) -> str:
+    """The session's tenant, if the session may see it. Its `gateway_tenant` only when no
+    other tenant has the same one: a shared gateway tenant cannot tell whose calls are
+    whose, so neither tenant sees any (fail closed)."""
     return (
-        "SELECT t.id AS tenant_id, t.slug, t.gateway_tenant FROM tenants t "
+        "SELECT t.id AS tenant_id, t.slug, "
+        "CASE WHEN NOT EXISTS (SELECT 1 FROM tenants o "
+        "WHERE o.gateway_tenant = t.gateway_tenant AND o.id <> t.id) "
+        "THEN t.gateway_tenant END AS gateway_tenant FROM tenants t "
         "WHERE t.id = CAST(NULLIF(current_setting('app.tenant_id', true), '') AS uuid) "
         "AND (t.dashboard_role = current_user "
         f"OR has_table_privilege(current_user, '{schema}.runs', 'SELECT'))"
