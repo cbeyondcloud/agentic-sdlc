@@ -54,6 +54,8 @@ TENANT_TABLES: tuple[str, ...] = (
     "invites",
     "proxy_keys",
     "auto_trips",
+    "routing_applies",
+    "personal_events",
 )
 
 #: A tenant's slug: lower-case, starts with a letter, 2-63 characters.
@@ -408,6 +410,68 @@ auto_trips = Table(
     ),
     CheckConstraint("kind in ('spend', 'errors')", name="auto_trips_kind_known"),
     CheckConstraint("state in ('armed', 'tripped', 'disarmed')", name="auto_trips_state_known"),
+)
+
+#: The routing outbox (M2-09): one row per accepted policy version to apply to the gateway's
+#: routing overlay, queued in the activation's transaction. `pending` rows are leased by the
+#: worker (`next_attempt_at`); the outcome records which gateway version applied which
+#: policy version (`gateway_version`, `previous_gateway_version`, `plan_sha256`) and the
+#: `rate_limit.per_team` entries this apply wrote (`per_team`), so the next one replaces only
+#: those. `superseded`: a newer version was queued before this one was applied.
+routing_applies = Table(
+    "routing_applies",
+    metadata,
+    _tenant_id(),
+    Column("id", UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid()),
+    Column("policy_version", Text, nullable=False),
+    Column("status", Text, nullable=False, server_default="pending"),
+    Column("attempts", Integer, nullable=False, server_default="0"),
+    Column("next_attempt_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("last_error", Text, nullable=True),
+    Column("problems", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("warnings", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("plan_sha256", Text, nullable=True),
+    Column("gateway_version", BigInteger, nullable=True),
+    Column("previous_gateway_version", BigInteger, nullable=True),
+    Column("per_team", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("requested_by", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("applied_at", DateTime(timezone=True), nullable=True),
+    ForeignKeyConstraint(
+        ["tenant_id", "policy_version"], ["policy_versions.tenant_id", "policy_versions.version"]
+    ),
+    CheckConstraint(
+        "status in ('pending', 'applied', 'invalid', 'failed', 'superseded', 'skipped')",
+        name="routing_applies_status_known",
+    ),
+)
+
+#: Personal skill and note backups (M2-20): each user's per-device chain of file events
+#: exactly as received (insert-only evidence). Only `personal.saved` carries `content`; the
+#: rows are read back by their owner only (`user_id`), never by another user of the tenant.
+personal_events = Table(
+    "personal_events",
+    metadata,
+    _tenant_id(),
+    Column("user_id", UUID(as_uuid=True), primary_key=True),
+    Column("device", Text, primary_key=True),
+    Column("seq", BigInteger, primary_key=True, autoincrement=False),
+    Column("hash", Text, nullable=False),
+    Column("prev", Text, nullable=False),
+    Column("event", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("path", Text, nullable=False),
+    Column("sha256", Text, nullable=False),
+    Column("content", Text, nullable=True),
+    Column("entry", JSONB, nullable=False),
+    Column("received_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    ForeignKeyConstraint(["tenant_id", "user_id"], ["users.tenant_id", "users.id"]),
+    CheckConstraint("seq > 0", name="personal_events_seq_positive"),
+    CheckConstraint(
+        "event in ('personal.saved', 'personal.removed', 'personal.held')",
+        name="personal_events_event_known",
+    ),
+    CheckConstraint("kind in ('skill', 'memory')", name="personal_events_kind_known"),
 )
 
 #: Unique constraints that deliberately span tenants: credential hashes, looked up before

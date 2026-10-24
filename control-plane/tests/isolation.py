@@ -356,7 +356,50 @@ async def _auto_trip_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, An
     }
 
 
+@register("routing_applies")
+async def _routing_apply_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    version = await _insert(conn, "policy_versions", _version_row(tenant_id))
+    return {
+        "tenant_id": tenant_id,
+        "id": uuid.uuid4(),
+        "policy_version": version["version"],
+        "status": "applied",
+        "gateway_version": next(_sequence),
+        "plan_sha256": "sha256:" + "b" * 64,
+        "requested_by": "system:test",
+    }
+
+
+@register("personal_events")
+async def _personal_event_row(conn: AsyncConnection, tenant_id: UUID) -> dict[str, Any]:
+    user = await _insert(conn, "users", await _user_row(conn, tenant_id))
+    return {
+        "tenant_id": tenant_id,
+        "user_id": user["id"],
+        "device": uuid.uuid4().hex,
+        "seq": 1,
+        "hash": "sha256:" + "a" * 64,
+        "prev": "",
+        "event": "personal.saved",
+        "kind": "memory",
+        "path": "memory/notes.md",
+        "sha256": "sha256:" + "c" * 64,
+        "content": "a note",
+        "entry": {"seq": 1, "event": "personal.saved"},
+    }
+
+
 # ── endpoint cases ────────────────────────────────────────────────────────────
+
+
+async def _routing_apply_in_b(api) -> dict[str, str]:
+    """A routing apply of a policy version in tenant b only (written as the owner role)."""
+    from agentic_cp.tenancy.context import tenant_tx
+
+    async with tenant_tx(api.db.owner, api.b.id) as conn:
+        row = await _routing_apply_row(conn, api.b.id)
+        await _insert(conn, "routing_applies", row)
+    return {"id": str(row["id"]), "version": row["policy_version"]}
 
 
 async def _token_in_b(api) -> dict[str, str]:
@@ -571,6 +614,7 @@ ENDPOINT_CASES += [
         _user_in_b,
         body={"handles": ["git.example.test:someone"]},
     ),
+    EndpointCase("routing", "GET", "/v1/routing", _routing_apply_in_b, must_not_list=True),
     EndpointCase("runs", "GET", "/v1/runs/{run_id}", _run_in_b),
     EndpointCase("runs", "GET", "/v1/runs/{run_id}/events", _run_in_b),
     EndpointCase(
