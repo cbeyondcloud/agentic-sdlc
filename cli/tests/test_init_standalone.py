@@ -16,12 +16,12 @@ from cli_helpers import commit_file
 
 from agentic.auth import Credentials
 from agentic.sandbox.readiness import Readiness
-from agentic_cli import dev_init, runtime
+from agentic_cli import __version__, dev_init, runtime
 from agentic_cli.config import agentic_home
 from agentic_cli.dev_init import InitDeps
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.main import main
-from agentic_cli.standalone import STANDALONE_DIR
+from agentic_cli.standalone import STAMP, STANDALONE_DIR, framework_root, template_digest
 from agentic_cli.workspace import Workspace
 
 CONFIG = "version: 1\nclassification: internal\npipelines: [feature-delivery]\n"
@@ -124,6 +124,53 @@ def test_an_edited_copy_is_kept_and_init_is_then_ready(setup_repo, deps, monkeyp
     assert item(report, "policy: standalone") is None  # nothing new was installed
     runs = item(report, "policy: runs")
     assert runs["status"] == "info" and str(installed()) in runs["detail"]
+
+
+def test_the_installed_copy_records_the_template_it_came_from(
+    setup_repo, deps, monkeypatch, capsys
+):
+    """DF-273: so a later CLI can tell the person their copy is from an older template."""
+    init(setup_repo, monkeypatch, capsys)
+    stamp = json.loads((installed() / STAMP).read_text(encoding="utf-8"))
+    assert stamp == {"agentic": __version__, "template": template_digest(framework_root())}
+
+
+def _newer_framework(tmp_path: Path) -> Path:
+    """A copy of the framework's template and library with one agent changed: what an
+    upgraded CLI bundles."""
+    root = tmp_path / "framework"
+    for rel in ("templates/standalone", "library/agents", "library/pipelines", "library/skills"):
+        shutil.copytree(framework_root() / rel, root / rel)
+    agent = root / "library" / "agents" / "developer.md"
+    agent.write_text(agent.read_text(encoding="utf-8") + "\nA newer instruction.\n", "utf-8")
+    return root
+
+
+def test_a_newer_template_is_announced_and_the_copy_kept(
+    setup_repo, deps, monkeypatch, capsys, tmp_path
+):
+    init(setup_repo, monkeypatch, capsys)
+    edit_models()
+    edited = (installed() / "policy" / "tiers.yaml").read_text(encoding="utf-8")
+    monkeypatch.setenv("AGENTIC_FRAMEWORK_ROOT", str(_newer_framework(tmp_path)))
+    code, report = init(setup_repo, monkeypatch, capsys)
+    assert code == ExitCode.OK, report
+    news = item(report, "policy: standalone")
+    assert news["status"] == "info"
+    assert f"agentic {__version__}" in news["detail"] and str(installed()) in news["detail"]
+    assert "move" in news["detail"] and "aside" in news["detail"]
+    assert (installed() / "policy" / "tiers.yaml").read_text(encoding="utf-8") == edited
+    assert "A newer instruction" not in (installed() / "agents" / "developer.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_a_copy_installed_before_stamps_is_told_too(setup_repo, deps, monkeypatch, capsys):
+    init(setup_repo, monkeypatch, capsys)
+    edit_models()
+    (installed() / STAMP).unlink()
+    _, report = init(setup_repo, monkeypatch, capsys)
+    assert "an earlier agentic" in item(report, "policy: standalone")["detail"]
 
 
 def test_a_guard_refusal_installs_nothing(setup_repo, deps, monkeypatch, capsys):

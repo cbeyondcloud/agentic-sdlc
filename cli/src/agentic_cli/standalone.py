@@ -11,12 +11,15 @@ repo laid out like an org's, which init then installs once into
     templates/agents/<type>.md   a starter per library agent type, for `agents new` (DF-217):
                              the type's own agent (qa, not qa-baseline), else the first by name
     README.md                templates/standalone/README.md
+    .agentic-template.json   the CLI version and template digest the copy came from: a
+                             later CLI with another template says so (DF-273)
 
 The template and library are read from `AGENTIC_FRAMEWORK_ROOT`, the framework checkout,
 or (an installed wheel) the copy the release bundles into `agentic_cli/_framework/`
 (DF-138, DF-188, DF-341).
 """
 
+import hashlib
 import json
 import os
 import shutil
@@ -27,6 +30,7 @@ from agentic.definitions import DefinitionError, load_agent
 from agentic.skills import CatalogError, load_catalog
 from agentic.skills.catalog import CATALOG_FILE
 from agentic.yamlio import YamlFileError, load_yaml, read_text
+from agentic_cli import __version__
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 
@@ -40,6 +44,9 @@ _CHECKOUT = Path(__file__).resolve().parents[3]  # cli/src/agentic_cli -> the re
 BUNDLED = Path(__file__).resolve().parent / "_framework"
 #: In the template's tier models until the person picks real ones (init and preflight say so).
 PLACEHOLDER = "change-me"
+#: Written into an assembled copy: the CLI version and template digest it came from, so a
+#: later CLI can say the copy is from another template (DF-273).
+STAMP = ".agentic-template.json"
 
 
 def framework_root(env: Mapping[str, str] = os.environ) -> Path:
@@ -81,7 +88,52 @@ def assemble(dest: Path, root: Path | None = None) -> Path:
         shutil.copytree(library / folder, dest / folder)
     _apply_preload(dest / "skills", template / "skills" / "preload.yaml")
     _agent_templates(dest / "agents", dest / "templates" / "agents")
+    stamp = {"agentic": __version__, "template": template_digest(root)}
+    (dest / STAMP).write_text(json.dumps(stamp, indent=2) + "\n", encoding="utf-8", newline="\n")
     return dest
+
+
+def template_digest(root: Path) -> str:
+    """The content hash of what `assemble` copies from `root` (line endings ignored)."""
+    template, library = root / TEMPLATE, root / LIBRARY
+    parts = (
+        template / "policy",
+        template / "README.md",
+        template / "skills" / "preload.yaml",
+        library / "agents",
+        library / "pipelines",
+        library / "skills",
+    )
+    digest = hashlib.sha256()
+    for base in parts:
+        found = [base] if base.is_file() else sorted(p for p in base.rglob("*") if p.is_file())
+        for path in found:
+            digest.update(path.relative_to(root).as_posix().encode() + b"\0")
+            digest.update(path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    return "sha256:" + digest.hexdigest()
+
+
+def template_news(installed: Path, root: Path | None = None) -> str | None:
+    """What to tell a person whose installed copy came from another template than the
+    one this CLI ships (DF-273), or None. Their copy is theirs: never replaced."""
+    root = framework_root() if root is None else Path(root)
+    if not (root / TEMPLATE).is_dir():
+        return None
+    try:
+        stamp = json.loads((installed / STAMP).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        stamp = {}
+    if not isinstance(stamp, dict):
+        stamp = {}
+    if stamp.get("template") == template_digest(root):
+        return None
+    came = f"agentic {stamp['agentic']}" if stamp.get("agentic") else "an earlier agentic"
+    return (
+        f"your standalone policy came from {came}; agentic {__version__} ships a different "
+        f"template (agents, pipelines, skills). init never overwrites your copy: to take the "
+        f"new one, move {installed} aside, run `agentic init --standalone`, then copy your "
+        "edits (policy/tiers.yaml at least) across"
+    )
 
 
 def _apply_preload(skills: Path, rule_file: Path) -> None:

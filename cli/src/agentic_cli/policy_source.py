@@ -61,7 +61,7 @@ from agentic_cli import control_plane
 from agentic_cli.config import local_policy_setting
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
-from agentic_cli.standalone import STANDALONE_DIR, assemble
+from agentic_cli.standalone import STANDALONE_DIR, assemble, template_news
 
 DEFAULT_CACHE_HOURS = 24
 _ORG = re.compile(r"[a-z][a-z0-9-]{0,63}")
@@ -183,7 +183,10 @@ def _standalone_template(home: Path) -> LoadedPolicy:
     target = home / STANDALONE_DIR
     if target.is_dir():
         root, folder = _layout(target)
-        return LoadedPolicy(_load(folder), root, "standalone", str(target))
+        loaded = LoadedPolicy(_load(folder), root, "standalone", str(target))
+        if news := template_news(target):  # an upgraded CLI: say so, never replace (DF-273)
+            loaded.notes.append(news)
+        return loaded
     scratch = Path(tempfile.mkdtemp(prefix="agentic-standalone-"))
     try:
         built = assemble(scratch / "repo")
