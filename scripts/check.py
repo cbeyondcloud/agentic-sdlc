@@ -53,10 +53,12 @@ CHECKS: list[tuple[str, list[str]]] = [
 # Checks that need the network (PyPI/OSV): `--offline` skips them and says so (DF-97).
 NETWORK_CHECKS = ("known vulnerabilities",)
 
-# The GitHub Actions workflows the framework ships to org repos (M2-44): actionlint-clean.
+# The GitHub Actions workflows the framework ships to org repos (M2-44) and the release
+# workflow the org adopts (M3-21): actionlint-clean, actions pinned by SHA (DF-689).
 WORKFLOW_TEMPLATES = (
     "cli/src/agentic_cli/templates/agentic-index-export.yml",
     "templates/policy-repo/.github/workflows/policy-check.yml",
+    "templates/release/release.yml",
 )
 
 # Checks that run only in the Linux container, where their pinned native binary is

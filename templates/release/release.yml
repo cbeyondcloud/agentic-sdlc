@@ -1,0 +1,106 @@
+# The agentic-sdlc release workflow (M3-21), for the org's own copy of this repository.
+#
+# ADOPT: copy this file to .github/workflows/release.yml in the org's mirror. This repo
+# itself runs no GitHub Actions (its CI is scripts/check.py on a laptop); the workflow only
+# runs scripts/release.py, the command a release manager can run locally
+# (docs/runbooks/release.md).
+#
+# WHEN: pushing a tag vX.Y.Z (it must equal the version in pyproject.toml, or the build
+# refuses), or by hand with publish off to build, sign and verify without uploading.
+#
+# SETTINGS (Settings > Secrets and variables > Actions, in the `release` environment;
+# protect that environment with required reviewers so no one releases alone):
+#   secrets.AGENTIC_RELEASE_SIGNING_KEY   the org's Ed25519 release key (OpenSSH private
+#                                         key text; ssh-keygen -t ed25519)
+#   secrets.UV_PUBLISH_USERNAME / secrets.UV_PUBLISH_PASSWORD   the internal index upload
+#                                         account (or set UV_PUBLISH_TOKEN instead)
+#   secrets.AGENTIC_RELEASE_GIT_TOKEN     read access to the private Zyroflo repository
+#                                         (sdlc-harness), built at its locked commit
+#   vars.AGENTIC_RELEASE_INDEX_URL        the internal index's upload URL
+#   vars.AGENTIC_RELEASE_CHECK_URL        its simple URL (skip files already uploaded; the
+#                                         smoke install reads from it)
+#   vars.AGENTIC_RELEASE_IDENTITY         the signer principal in release/allowed_signers
+# and commit release/allowed_signers (the public keys that may sign a release).
+#
+# PINNED: every action by commit SHA (DF-689); uv at the version the repo is locked with.
+name: agentic-release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Upload to the internal index (a tag push always does)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentic-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the whole history: the changelog range and the secret scan
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+      - name: Secret scan over the full history (DF-96)
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/gitleaks.tgz" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/gitleaks.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tgz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git . --no-banner --redact
+      - name: Git access to the private Zyroflo dependency
+        env:
+          GIT_TOKEN: ${{ secrets.AGENTIC_RELEASE_GIT_TOKEN }}
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/".insteadOf "https://github.com/"
+      - name: Install exactly as locked
+        run: uv sync --locked
+      - name: Checks
+        run: uv run python scripts/check.py
+      - name: Write the signing key to a private file
+        env:
+          SIGNING_KEY: ${{ secrets.AGENTIC_RELEASE_SIGNING_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$SIGNING_KEY" > "$RUNNER_TEMP/release_key"
+      - name: Build, sign, verify, publish, smoke
+        env:
+          AGENTIC_RELEASE_SIGNING_KEY: ${{ runner.temp }}/release_key
+          AGENTIC_RELEASE_ALLOWED_SIGNERS: release/allowed_signers
+          AGENTIC_RELEASE_IDENTITY: ${{ vars.AGENTIC_RELEASE_IDENTITY }}
+          AGENTIC_RELEASE_INDEX_URL: ${{ vars.AGENTIC_RELEASE_INDEX_URL }}
+          AGENTIC_RELEASE_CHECK_URL: ${{ vars.AGENTIC_RELEASE_CHECK_URL }}
+          UV_PUBLISH_USERNAME: ${{ secrets.UV_PUBLISH_USERNAME }}
+          UV_PUBLISH_PASSWORD: ${{ secrets.UV_PUBLISH_PASSWORD }}
+          PUBLISH: ${{ (startsWith(github.ref, 'refs/tags/v') || inputs.publish) && '1' || '' }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        run: |
+          uv run python scripts/release.py release --out "$RUNNER_TEMP/release" \
+            ${TAG:+--tag "$TAG"} ${PUBLISH:---no-publish}
+      - name: Remove the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release_key"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agentic-release
+          path: ${{ runner.temp }}/release
+          retention-days: 30
+          if-no-files-found: error
