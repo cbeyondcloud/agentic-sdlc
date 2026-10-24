@@ -460,8 +460,11 @@ class FakeControlPlane:
             device = path.split("/")[4]
             entries = json.loads(request.content)["entries"]
             return self._ingest(f"personal:{device}", entries)
-        if path == "/v1/personal/files":
-            return httpx2.Response(200, json=self.personal_files())
+        if path == "/v1/personal/files":  # a page in path order, as the control plane
+            after = request.url.params.get("after", "")
+            limit = int(request.url.params.get("limit", "50"))
+            ordered = sorted(self.personal_files(), key=lambda item: item["path"])
+            return httpx2.Response(200, json=[f for f in ordered if f["path"] > after][:limit])
         if path.startswith("/v1/runs/") and path.endswith("/events"):
             if self.max_body is not None and len(request.content) > self.max_body:
                 return _problem(413, "too_large", f"the body is over {self.max_body} bytes")

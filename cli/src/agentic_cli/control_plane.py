@@ -32,6 +32,7 @@ from agentic.hosting.base import scrub_url_credentials
 from agentic.orgapi import (
     API_PREFIX,
     CLI_VERSION_HEADER,
+    MAX_FILES_PAGE,
     ActivePolicy,
     Assignment,
     AuditEntry,
@@ -358,8 +359,17 @@ class ControlPlaneClient:
         return IngestResult.model_validate(found)
 
     def personal_files(self) -> list[PersonalFile]:
-        """The caller's newest backed-up copy of each personal skill file and note."""
-        return [PersonalFile.model_validate(item) for item in self._json("GET", "/personal/files")]
+        """The caller's newest backed-up copy of each personal skill file and note, read a
+        page at a time (a page shorter than asked for is the last)."""
+        found: list[PersonalFile] = []
+        while True:
+            params = {"limit": str(MAX_FILES_PAGE)}
+            if found:
+                params["after"] = found[-1].path
+            page = self._json("GET", "/personal/files", params=params)
+            found += [PersonalFile.model_validate(item) for item in page]
+            if len(page) < MAX_FILES_PAGE:
+                return found
 
     def run(self, run_id: str) -> RunSummary:
         """The run as the control plane holds it (its chain head included)."""

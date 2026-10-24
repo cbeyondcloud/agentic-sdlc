@@ -8,13 +8,20 @@ someone's personal content here. The audit chain shows each event's path and sha
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
-from agentic.orgapi import API_PREFIX, IngestResult, PersonalFile, PersonalIngestRequest
+from agentic.orgapi import (
+    API_PREFIX,
+    MAX_FILES_PAGE,
+    IngestResult,
+    PersonalFile,
+    PersonalIngestRequest,
+)
 from agentic_cp.auth.deps import Caller
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem
-from agentic_cp.personal.store import ingest_personal, latest_files
+from agentic_cp.personal.store import Quota, ingest_personal, latest_files
 from agentic_cp.rbac.authz import effective_permissions
 from agentic_cp.tenancy.context import tenant_tx
 
@@ -70,15 +77,26 @@ async def ingest(
             device=device_id,
             entries=body.entries,
             clock=state.clock,
+            quota=Quota(
+                devices=state.settings.personal_max_devices,
+                stored_bytes=state.settings.personal_max_bytes,
+                daily_bytes=state.settings.personal_daily_bytes,
+            ),
         )
 
 
 @router.get("/files")
-async def files(request: Request, ctx: Caller) -> list[PersonalFile]:
+async def files(
+    request: Request,
+    ctx: Caller,
+    after: Annotated[str, Query(max_length=1024)] = "",
+    limit: Annotated[int, Query(ge=1, le=MAX_FILES_PAGE)] = MAX_FILES_PAGE,
+) -> list[PersonalFile]:
     """The caller's newest backed-up copy of each personal file (for `agentic skills
-    restore`)."""
+    restore`), a page at a time in path order: at most `limit` paths after `after`; a page
+    shorter than `limit` is the last (review F4)."""
     state = request.app.state
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         await _require(ctx, conn, state.enforcers)
-        found = await latest_files(conn, ctx.user_id)
+        found = await latest_files(conn, ctx.user_id, after=after, limit=limit)
     return [PersonalFile(**item) for item in found]

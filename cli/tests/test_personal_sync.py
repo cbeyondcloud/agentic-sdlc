@@ -271,6 +271,40 @@ def test_a_fork_from_the_fake_is_refused_like_the_server(fake):
     assert refused.value.code_name == "ingest.fork" and refused.value.head == (1, "h1")
 
 
+def test_a_full_quota_keeps_the_journal_queued_on_the_same_device(agentic, guard, fake):
+    """Review F4: the control plane's 429 personal.quota is reported; nothing is lost and
+    it is not mistaken for a fork (no new device)."""
+    write(agentic, "memory/a.md", "a")
+    record_changes(agentic, guard)
+    before = personal_sync.device_id(agentic)
+    fake.refuse_ingest = {
+        "status": 429,
+        "title": "x",
+        "code": "personal.quota",
+        "detail": "your personal backups would pass 67108864 bytes",
+        "hint": "an operator raises AGENTIC_CP_PERSONAL_MAX_BYTES",
+    }
+    delivered = deliver(agentic, client(fake))
+    assert delivered.error and "67108864" in delivered.error
+    assert (delivered.queued, delivered.new_device) == (1, None)
+    assert personal_sync.device_id(agentic) == before
+
+
+def test_restore_reads_every_page_of_files(agentic, guard, fake, monkeypatch):
+    """Review F4: the control plane answers the files list a page at a time."""
+    monkeypatch.setattr(control_plane, "MAX_FILES_PAGE", 2)
+    names = [f"memory/n{n}.md" for n in range(5)]
+    for name in names:
+        write(agentic, name, name)
+    record_changes(agentic, guard)
+    deliver(agentic, client(fake))
+    fake.requests.clear()
+    assert [f.path for f in client(fake).personal_files()] == names
+    pages = [r for r in fake.requests if r.url.path == "/v1/personal/files"]
+    assert [r.url.params.get("after", "") for r in pages] == ["", names[1], names[3]]
+    assert {r.url.params["limit"] for r in pages} == {"2"}
+
+
 def test_each_control_plane_and_user_has_its_own_cursor(agentic, guard, fake):
     write(agentic, "memory/a.md", "a")
     record_changes(agentic, guard)

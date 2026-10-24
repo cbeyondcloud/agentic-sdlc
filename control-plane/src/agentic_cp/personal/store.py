@@ -17,7 +17,8 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -26,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from agentic.orgapi import ChainHead, IngestResult
 from agentic.skills.personal import backup_path_problem
 from agentic_cp.audit import AuditEvent, append
+from agentic_cp.errors import ApiProblem
 from agentic_cp.ingest.store import broken, head_problem
 from agentic_cp.tables import personal_events
 from agentic_cp.tenancy.context import require_tenant_id
@@ -38,6 +40,8 @@ SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 #: The largest file a backup carries (UTF-8 bytes); the CLI skips bigger ones.
 MAX_CONTENT_BYTES = 256 * 1024
 MAX_AT_CHARS = 64
+#: What one stored event counts for besides its content (its row, entry and audit record).
+EVENT_BYTES = 1024
 #: A laptop's journal that no longer continues its device chain (a copied or reset home
 #: folder): the CLI sends it again as a new device's chain (review F3).
 FORK_HINT = (
@@ -105,6 +109,76 @@ def _counts(value: object) -> bool:
     )
 
 
+@dataclass(frozen=True)
+class Quota:
+    """What one user's personal backups may take (review F4; `Settings.personal_*`):
+    device chains, stored bytes over every version and device, and bytes added in any
+    24 hours. Bytes are content bytes plus `EVENT_BYTES` per event."""
+
+    devices: int = 20
+    stored_bytes: int = 64 * 1024 * 1024
+    daily_bytes: int = 16 * 1024 * 1024
+
+
+DEFAULT_QUOTA = Quota()
+
+
+def _event_bytes(entry: Mapping) -> int:
+    content = entry.get("content")
+    size = len(content.encode("utf-8", errors="surrogatepass")) if content else 0
+    return size + EVENT_BYTES
+
+
+def _quota_problem(detail: str, setting: str) -> ApiProblem:
+    return ApiProblem(
+        429,
+        "personal.quota",
+        detail,
+        hint=f"nothing more is backed up until an operator raises {setting}; your laptop "
+        "keeps the journal queued, so nothing is lost",
+    )
+
+
+async def _check_quota(
+    conn: AsyncConnection,
+    user_id: UUID,
+    *,
+    new_device: bool,
+    fresh: list[dict],
+    quota: Quota,
+    now: datetime,
+) -> None:
+    """Refuse a batch that would take the user past a quota (429 `personal.quota`); the
+    caller holds the user's lock, so two devices cannot both slip under it."""
+    content = func.coalesce(func.octet_length(personal_events.c.content), 0) + EVENT_BYTES
+    recent = personal_events.c.received_at > now - timedelta(days=1)
+    used = (
+        await conn.execute(
+            select(
+                func.count(func.distinct(personal_events.c.device)).label("devices"),
+                func.coalesce(func.sum(content), 0).label("stored"),
+                func.coalesce(func.sum(content).filter(recent), 0).label("today"),
+            ).where(personal_events.c.user_id == user_id)
+        )
+    ).one()
+    adding = sum(_event_bytes(entry) for entry in fresh)
+    if new_device and used.devices >= quota.devices:
+        raise _quota_problem(
+            f"you already back up from {used.devices} devices, the most allowed",
+            "AGENTIC_CP_PERSONAL_MAX_DEVICES",
+        )
+    if used.stored + adding > quota.stored_bytes:
+        raise _quota_problem(
+            f"your personal backups would pass {quota.stored_bytes} bytes",
+            "AGENTIC_CP_PERSONAL_MAX_BYTES",
+        )
+    if used.today + adding > quota.daily_bytes:
+        raise _quota_problem(
+            f"your personal backups would pass {quota.daily_bytes} bytes in 24 hours",
+            "AGENTIC_CP_PERSONAL_DAILY_BYTES",
+        )
+
+
 async def ingest_personal(
     conn: AsyncConnection,
     *,
@@ -114,12 +188,14 @@ async def ingest_personal(
     device: str,
     entries: list,
     clock: Callable[[], datetime],
+    quota: Quota = DEFAULT_QUOTA,
 ) -> IngestResult:
     problems = [p for n, e in enumerate(entries, 1) for p in entry_problems(e, f"entry {n}")]
     if problems:
         raise broken(problems)
     tenant_id = await require_tenant_id(conn)
-    key = func.hashtextextended(f"agentic.personal:{tenant_id}:{user_id}:{device}", 0)
+    # one lock per user, not per device: the user's quota is checked and used atomically
+    key = func.hashtextextended(f"agentic.personal:{tenant_id}:{user_id}", 0)
     await conn.execute(select(func.pg_advisory_xact_lock(key)))
     mine = (personal_events.c.user_id == user_id) & (personal_events.c.device == device)
     last = (
@@ -171,6 +247,9 @@ async def ingest_personal(
         prev = entry["hash"]
     if chain_problems:
         raise broken(chain_problems)
+    await _check_quota(
+        conn, user_id, new_device=head.seq == 0, fresh=fresh, quota=quota, now=clock()
+    )
     now = clock()
     for entry in fresh:
         await conn.execute(
@@ -212,20 +291,33 @@ async def ingest_personal(
     )
 
 
-async def latest_files(conn: AsyncConnection, user_id: UUID) -> list[dict]:
+async def latest_files(
+    conn: AsyncConnection, user_id: UUID, *, after: str = "", limit: int = 100
+) -> list[dict]:
     """The newest saved-or-removed copy of each of the user's paths (by when the control
     plane received it, across devices), each marked `held` when a newer version of the
-    file was held back on a laptop."""
+    file was held back on a laptop: at most `limit` paths after `after`, in path order (a
+    page; review F4)."""
     newest = personal_events.c.received_at.desc(), personal_events.c.seq.desc()
-    stored = await conn.execute(
-        select(personal_events)
-        .where(personal_events.c.user_id == user_id, personal_events.c.event != "personal.held")
-        .distinct(personal_events.c.path)
-        .order_by(personal_events.c.path, *newest)
+    mine = (personal_events.c.user_id == user_id) & (personal_events.c.path > after)
+    stored = list(
+        await conn.execute(
+            select(personal_events)
+            .where(mine, personal_events.c.event != "personal.held")
+            .distinct(personal_events.c.path)
+            .order_by(personal_events.c.path, *newest)
+            .limit(limit)
+        )
     )
+    if not stored:
+        return []
     held = await conn.execute(
         select(personal_events.c.path, personal_events.c.received_at, personal_events.c.seq)
-        .where(personal_events.c.user_id == user_id, personal_events.c.event == "personal.held")
+        .where(
+            mine,
+            personal_events.c.path <= stored[-1].path,
+            personal_events.c.event == "personal.held",
+        )
         .distinct(personal_events.c.path)
         .order_by(personal_events.c.path, *newest)
     )

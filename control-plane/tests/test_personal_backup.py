@@ -213,3 +213,65 @@ async def test_rows_are_the_owners(api, dev):
     await send(api, dev, chain([saved("memory/a.md", "a")]))
     async with tenant_tx(api.db.app, api.b.id) as conn:
         assert list(await conn.execute(select(personal_events))) == []
+
+
+# ── bounds (review F4): personal_events is insert-only, so what one user stores is capped ──
+
+
+def _quota_refusal(reply) -> None:
+    assert reply.status_code == 429, reply.text
+    assert reply.json()["code"] == "personal.quota" and reply.json()["hint"]
+
+
+async def test_a_user_backs_up_from_a_bounded_number_of_devices(api, dev):
+    capped = api.with_settings(personal_max_devices=2)
+    first = chain([saved("memory/a.md", "a")])
+    for _ in range(2):
+        laptop = uuid.uuid4().hex
+        reply = await send(capped, dev, first, device=laptop)
+        assert reply.status_code == 200, reply.text
+    third = await send(capped, dev, first, device=uuid.uuid4().hex)
+    _quota_refusal(third)
+    assert "device" in third.json()["detail"]
+    # a known device keeps backing up, and another user has their own devices
+    more = chain([saved("memory/b.md", "b")], start=(1, first[0]["hash"]))
+    assert (await send(capped, dev, more, device=laptop)).status_code == 200
+    other, _ = await member(api, api.a, "other@a.example.test", "developer", "payments")
+    assert (await send(capped, other, chain([saved("memory/a.md", "a")]))).status_code == 200
+
+
+async def test_what_a_user_stores_is_capped(api, dev):
+    capped = api.with_settings(personal_max_bytes=4000)
+    first = chain([saved("memory/a.md", "x" * 1000)])  # 1000 bytes + 1 KiB per event
+    assert (await send(capped, dev, first)).status_code == 200
+    second = chain([saved("memory/b.md", "y" * 1000)], start=(1, first[0]["hash"]))
+    refused = await send(capped, dev, second)
+    _quota_refusal(refused)
+    assert set(await files(api, dev)) == {"memory/a.md"}
+    # the cap counts every device of the user, and a replay of stored events is still fine
+    elsewhere = chain([saved("memory/c.md", "z" * 1000)])
+    _quota_refusal(await send(capped, dev, elsewhere, device=uuid.uuid4().hex))
+    assert (await send(capped, dev, first)).json()["duplicates"] == 1
+
+
+async def test_what_a_user_sends_in_a_day_is_capped(api, dev):
+    capped = api.with_settings(personal_daily_bytes=4000)
+    first = chain([saved("memory/a.md", "x" * 1000)])
+    assert (await send(capped, dev, first)).status_code == 200
+    second = chain([saved("memory/b.md", "y" * 1000)], start=(1, first[0]["hash"]))
+    _quota_refusal(await send(capped, dev, second))
+    api.clock.advance(timedelta(hours=25))
+    assert (await send(capped, dev, second)).status_code == 200
+
+
+async def test_the_files_list_comes_in_pages(api, dev):
+    names = [f"memory/n{n}.md" for n in range(5)]
+    assert (await send(api, dev, chain([saved(name, name) for name in names]))).is_success
+    first = await api.get("/v1/personal/files?limit=2", dev)
+    assert [f["path"] for f in first.json()] == names[:2]
+    after = names[1]
+    second = await api.get(f"/v1/personal/files?limit=2&after={after}", dev)
+    assert [f["path"] for f in second.json()] == names[2:4]
+    last = await api.get(f"/v1/personal/files?limit=2&after={names[3]}", dev)
+    assert [f["path"] for f in last.json()] == names[4:]
+    assert (await api.get("/v1/personal/files?limit=100000", dev)).status_code == 422

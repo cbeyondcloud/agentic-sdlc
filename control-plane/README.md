@@ -161,7 +161,13 @@ Both need `skills.personal.edit`, and a service account never has it. Content is
 only to its owner, never to another user (an org admin included). The audit chain records
 each event (`personal.saved`, `.removed`, `.held`) with its path and sha256, never its
 content. A file the publish scan flags stays on the laptop (`personal.held`). Stored events
-are insert-only.
+are insert-only, so each user's share is capped: `AGENTIC_CP_PERSONAL_MAX_DEVICES` (20
+laptops), `AGENTIC_CP_PERSONAL_MAX_BYTES` (64 MiB over every version and device, counting
+content plus 1 KiB per event) and `AGENTIC_CP_PERSONAL_DAILY_BYTES` (16 MiB in any 24 hours).
+A batch past a cap is refused with 429 `personal.quota`; the laptop keeps it queued.
+`GET /v1/personal/files` answers a page at a time (`?after=<path>&limit=<n>`, at most 50).
+A laptop whose journal no longer continues its chain (a copied or reset `~/.agentic`) sends
+it again under a new device id, which counts toward the device cap.
 
 ## Dashboards (M2-37, M2-38)
 

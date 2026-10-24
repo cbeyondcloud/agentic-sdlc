@@ -584,6 +584,11 @@ class PersonalIngestRequest(RequestModel):
     entries: list[dict[str, Any]] = Field(min_length=1, max_length=5000)
 
 
+#: The most files one `GET /v1/personal/files` page returns (each up to 256 KiB of text);
+#: a shorter page is the last.
+MAX_FILES_PAGE = 50
+
+
 class PersonalFile(BaseModel):
     """The newest backed-up copy of one personal skill file or note (M2-20). A removed file
     is `deleted`; a held-back one (`held`: the publish scan found a secret or personal
