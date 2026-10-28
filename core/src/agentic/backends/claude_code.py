@@ -47,7 +47,7 @@ from agentic.agents.runner import (
 )
 from agentic.agents.tools import ToolContext
 from agentic.backends.capabilities import CAPABILITIES
-from agentic.backends.environment import withheld
+from agentic.backends.environment import passes, withheld
 from agentic.backends.processes import ProcessTree, session_leader
 from agentic.backends.turns import TurnCheck, TurnGuard
 from agentic.killswitch import RunKilled
@@ -74,6 +74,20 @@ QUIET = {
     "DISABLE_AUTOUPDATER": "1",
 }
 
+#: The Claude Code settings a step does not blank: Windows needs the bash path, and the SDK
+#: manages the others itself (it sets the entry point, drops CLAUDECODE, and defaults the
+#: session-state switch only when it is absent). Any other `CLAUDE*` variable is the user's
+#: own setup or a parent Claude Code session's (its id, its messaging socket), and is
+#: blanked unless policy passes it.
+KEEP_CLAUDE = frozenset(
+    {
+        "CLAUDE_CODE_GIT_BASH_PATH",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDECODE",
+        "CLAUDE_CODE_SDK_READS_SESSION_STATE",
+    }
+)
+
 
 #: The token counts of one model call's usage, as Claude Code streams them.
 _USAGE_KEYS = (
@@ -92,6 +106,13 @@ class ClaudeCodeSettings:
     cli_path: Path | None = None  # None: the SDK's bundled (Anthropic-signed) binary
     # secret-named variables org policy lets through (`sandbox.pass_env`, DF-541)
     pass_env: tuple[str, ...] = ()
+
+
+def _inherited_claude(name: str, pass_env: tuple[str, ...]) -> bool:
+    """Whether `name` is a Claude Code setting the step must not inherit (`KEEP_CLAUDE`)."""
+    upper = name.upper()
+    claude = upper.startswith(("CLAUDE", "_CLAUDE"))
+    return claude and upper not in KEEP_CLAUDE and not passes(name, pass_env)
 
 
 def lock_down(
@@ -128,7 +149,9 @@ def lock_down(
         **QUIET,
     }
     for name in environ if environ is not None else os.environ:
-        if name not in env and withheld(name, settings.pass_env):
+        if name not in env and (
+            withheld(name, settings.pass_env) or _inherited_claude(name, settings.pass_env)
+        ):
             env[name] = ""  # the SDK merges the user's environment under ours (review I1)
     options: dict = {
         "cwd": str(cwd),

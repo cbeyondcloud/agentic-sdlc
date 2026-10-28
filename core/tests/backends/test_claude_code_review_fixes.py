@@ -164,6 +164,7 @@ def test_a_hostile_environment_cannot_bypass_tokenlean(resolved, world, tmp_path
         "AWS_REGION": "us-east-1",
         "ANTHROPIC_AUTH_TOKEN": "auth-token-leak",
         "CLAUDE_CODE_OAUTH_TOKEN": "oauth-token-leak",
+        "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL": "1",  # a parent Claude Code session
     }
     for name, value in hostile.items():
         monkeypatch.setenv(name, value)
