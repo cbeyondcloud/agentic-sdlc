@@ -4,7 +4,8 @@
 # an agent inherits every setting it leaves out, and anything it sets must stay
 # within the type (a subset of tools, a lower budget...). Caps are required, so
 # nothing is unlimited by omission. The library agents (library/agents/) use the
-# first five types; `general` is for anything else.
+# first six types (`learning-analyst` is the learning loop's built-in analyst);
+# `general` is for anything else.
 # =============================================================================
 types:
   business-analyst:
@@ -94,6 +95,17 @@ types:
     produces: test-report
     limits:
       max: { budget_usd: 3, max_turns: 60, max_minutes: 45 }
+      children_max: { max_total: 0, max_concurrent: 0, max_depth: 0,
+                      per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }
+
+  learning-analyst:
+    description: Says which agents learn from a human correction, and the one-line lesson (learning loop).
+    tier: fast                          # one short answer per correction; `balanced` also works
+    backends: [native]
+    tools: []                           # it reads the correction it is given, nothing else
+    consumes: []
+    limits:
+      max: { budget_usd: 0.2, max_turns: 3, max_minutes: 5 }
       children_max: { max_total: 0, max_concurrent: 0, max_depth: 0,
                       per_child: { budget_usd: 0, max_turns: 0, max_minutes: 0 } }
 

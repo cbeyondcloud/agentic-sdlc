@@ -425,6 +425,7 @@ def report_sinks(out: Output, rt: Runtime) -> None:
             f"{left} event(s) of run {run_id} are queued for the control plane; "
             "`agentic sync` sends them"
         )
+    rt.deliver_feedback(out.warn)  # M3-11: the gate feedback, after the run's events
 
 
 def _all_runs(rt: Runtime) -> list[RunState]:

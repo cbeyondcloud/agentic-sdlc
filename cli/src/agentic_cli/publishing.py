@@ -37,6 +37,7 @@ from time import monotonic, sleep
 
 from agentic.engine.state import RunState
 from agentic.hosting import CheckRun, HostingError
+from agentic.hosting.base import CheckLogHost
 from agentic.hosting.git import push_branch
 from agentic.memory.agents_md import proposals
 from agentic.orgapi import API_PREFIX
@@ -49,7 +50,7 @@ from agentic_cli.hosting import Connection, connect
 from agentic_cli.workspace import RUNS, Workspace
 from sdlc_commons.guards import Guard, GuardError
 from sdlc_commons.redaction import redactor
-from sdlc_commons.release import NONE, PENDING, ci_verdict
+from sdlc_commons.release import GREEN, NONE, PENDING, ci_verdict
 from sdlc_commons.worktrees import RunWorktrees, Tree, WorktreeError
 
 PR_FILE = "pr.json"
@@ -186,9 +187,11 @@ def run_checks(
     watch: bool,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     interval: float = DEFAULT_INTERVAL_SECONDS,
+    logs: bool = False,
 ) -> dict:
     """The CI verdict over every pull request the run opened (read once, or watched until
-    it settles); recorded in `ci.json`."""
+    it settles); recorded in `ci.json`. With `logs`, a verdict that is not green also
+    carries the end of each failed check's log (DF-290: what a route back hands on)."""
     record = published(store_root, run_id)
     try:
         trees = RunWorktrees(ws.repo, run_id).trees()
@@ -201,16 +204,20 @@ def run_checks(
             where = tree.path if tree is not None and tree.path.is_dir() else ws.repo
             connections.append((entry, connect(where, ws.settings, remote=REMOTE)))
         commits: list[dict] = []
+        sources: list[tuple[CheckRun, Connection]] = []  # each row of the last read, and where
 
         def read() -> list[CheckRun]:
             commits.clear()
+            sources.clear()
             rows: list[CheckRun] = []
             for entry, conn in connections:
                 with conn.errors(keep_transient=True):  # `watch_ci` may try again
                     current = conn.provider.find_pull_request(conn.repo, entry["branch"])
                     sha = current.head_sha if current is not None else entry["head_sha"]
                     commits.append({"component": entry["component"], "sha": sha})
-                    rows += conn.provider.checks(conn.repo, sha)
+                    found = conn.provider.checks(conn.repo, sha)
+                    sources.extend((row, conn) for row in found)
+                    rows += found
             return rows
 
         try:
@@ -221,6 +228,8 @@ def run_checks(
                     **watch_ci(read, timeout=0, interval=0, none_grace=0),
                     "timed_out": False,
                 }
+            if logs and verdict["state"] != GREEN:
+                verdict["logs"] = failed_logs(sources, set(verdict["failed"]))
         except HostingError as error:
             raise CliError(
                 str(error),
@@ -240,6 +249,32 @@ def run_checks(
     }
     _write_json(store_root / run_id / CI_FILE, result)
     return result
+
+
+def failed_logs(sources: list[tuple[CheckRun, Connection]], failed: set[str]) -> list[dict]:
+    """The end of each failed check's log, through the commons redactor (the host token
+    too). A check whose host keeps no log, or whose log could not be read, says so in
+    `note` with `log` None - never a message that could pass for the log (Zyroflo's
+    lesson: a plausible string that is not the log is worse than none)."""
+    found: list[dict] = []
+    for row, conn in sources:
+        if row.name not in failed:
+            continue
+        entry: dict = {"name": row.name, "link": row.link, "log": None, "note": ""}
+        if not isinstance(conn.provider, CheckLogHost):
+            entry["note"] = "no log: this host's adapter does not read check logs"
+        else:
+            try:
+                text = conn.provider.check_log(conn.repo, row)
+            except HostingError as error:
+                entry["note"] = f"the log could not be read: {error}"
+            else:
+                if text is None:
+                    entry["note"] = "no log: the host keeps none for this check (or it expired)"
+                else:
+                    entry["log"] = redactor(extra=[conn.token])(text)
+        found.append(entry)
+    return found
 
 
 def watch_ci(

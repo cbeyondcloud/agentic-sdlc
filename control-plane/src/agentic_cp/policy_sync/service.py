@@ -362,6 +362,7 @@ RUN_SETTINGS_KEYS = (
     "auto_trip",
     "overlays",
     "versions",
+    "learning",
 )
 
 
@@ -389,6 +390,21 @@ def auto_trip_settings(policy: OrgPolicy) -> dict:
     }
 
 
+def learning_settings(policy: OrgPolicy) -> dict:
+    """`org.yaml: learning` with each policy team's effective thresholds (M3-13)."""
+    org = policy.learning
+    teams = {}
+    for team in sorted(policy.teams):
+        found = policy.learning_settings(team)
+        teams[team] = {"threshold": found.threshold, "window_days": found.window_days}
+    return {
+        "threshold": org.threshold,
+        "window_days": org.window_days,
+        "similarity": format(org.similarity, "g"),
+        "teams": teams,
+    }
+
+
 def run_settings(policy: OrgPolicy, root: Path) -> dict:
     """What run registration (M2-08, M2-21), budget alerts (M2-16) and auto-trip (M2-11)
     read from an accepted version of the policy repo tree at `root`. Team budgets are
@@ -398,6 +414,7 @@ def run_settings(policy: OrgPolicy, root: Path) -> dict:
     checks them all without the bundle."""
     return {
         "auto_trip": auto_trip_settings(policy),
+        "learning": learning_settings(policy),
         "min_cli_version": policy.min_cli_version,
         "concurrency": dict(policy.concurrency),
         "allow_repo_pipelines": policy.allow_repo_pipelines,
