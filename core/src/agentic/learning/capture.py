@@ -178,13 +178,16 @@ def pr_feedback(
     agent_logins: Iterable[str],
     at: datetime,
     tdd_skipped: bool | None = None,
+    pr_author: str | None = None,
 ) -> list[FeedbackRecord]:
     """The corrections in a pull request's reviews: every inline comment that opens a
     thread (a reply is the same conversation), and every review that requested changes or
-    commented with a body. Approvals, empty reviews and anything written by the agent's
-    own host login (`agent_logins`) or by any app account (a login ending in `[bot]`) are
-    not corrections."""
-    bots = {login.lower() for login in agent_logins if login}
+    commented with a body. Approvals, empty reviews and anything written by the pull
+    request's own author (`pr_author`: the agent-made pull request is opened with the
+    developer's token, so their notes there explain the change), by the agent's own host
+    login (`agent_logins`) or by any app account (a login ending in `[bot]`) are not
+    corrections."""
+    bots = {login.lower() for login in [*agent_logins, pr_author or ""] if login}
     states = {review.id: review.state.lower() for review in reviews}
     found: list[FeedbackRecord] = []
     for review in reviews:

@@ -3,13 +3,17 @@ through the feedback sink (after the run's own events), and an attribution corre
 to the control plane's audited endpoint. A fake control plane answers from memory."""
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 from _cli_support import FakeGateway, answer, git
 from cp_fakes import CP_URL, TOKEN, FakeControlPlane
 
-from agentic_cli import control_plane, runtime
+from agentic.learning.records import FeedbackRecord, feedback_id
+from agentic_cli import control_plane, learning, runtime
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.runtime import Runtime
+from agentic_cli.workspace import Workspace
 
 KEY = "tl-" + "fake-gateway-key-0312"  # gitleaks:allow (not a real key)
 
@@ -43,6 +47,29 @@ def test_feedback_is_forwarded_to_the_control_plane(org, cli):
     assert entry["actor"] == "dev@example.invalid"  # an identity field: never masked
     assert entry["repo"] == "github.com/acme/app"
     assert cli("--json", "learn", "sync", run_id).json()["sent"] == {run_id: 0}  # once only
+
+
+def test_a_masked_source_gets_an_id_derived_from_what_is_sent(org, workspace):
+    """The control plane checks that a record's id is derived from its run, signal and
+    source. When the publish scan masks part of the source (an email in a file name), the
+    id is derived again from the masked source, so the run's feedback is not refused."""
+    rt = Runtime(Workspace.load())
+    source = "gate:design-approval:edit:docs/bob.smith@example.com.md:9b8c7d6e5f4a3b2c"
+    record = FeedbackRecord(
+        id=feedback_id("run-masked", "gate-edit", source),
+        signal="gate-edit",
+        run_id="run-masked",
+        actor="dev@example.invalid",
+        given_at=datetime(2026, 10, 25, 9, 0, tzinfo=UTC),
+        text="Name the columns.",
+        source=source,
+    )
+    learning.FeedbackCapture(rt, deferred=True).capture("run-masked", [record])
+
+    (entry,) = learning.journal(rt, "run-masked").entries()
+    assert "masked-email" in entry["source"]
+    assert entry["feedback"] == feedback_id("run-masked", "gate-edit", entry["source"])
+    assert entry["id"] == entry["feedback"]
 
 
 def test_feedback_refused_now_is_sent_by_agentic_sync(org, cli):

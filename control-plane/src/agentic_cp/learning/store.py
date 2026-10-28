@@ -8,7 +8,9 @@ whose events have not arrived yet, is 404 - the CLI's sink retries later); the c
 the run's starter or holds `run.cancel.any` in its team (as for the run's own events);
 entries at or below the stored head must equal what is stored (replays: `duplicates`) or
 the batch is a fork; the rest must start right after the head, link to it, hash to their
-contents and carry a valid payload. A refusal raises before anything is written.
+contents and carry a valid payload - a captured record of this run whose id is derived from
+this run (`feedback_id`), so no run can claim another run's record. A refusal raises before
+anything is written.
 
 The stored entries are then folded into `feedback` rows: a captured record becomes a row
 (author: the caller), an analysis sets its lesson and - unless a person corrected it - its
@@ -35,8 +37,11 @@ from agentic.learning.records import (
     CAPTURED,
     CORRECTED,
     EVENTS,
+    MAX_LESSON,
     Attribution,
     FeedbackRecord,
+    cap,
+    feedback_id,
     record_from,
 )
 from agentic.orgapi import ChainHead, IngestResult
@@ -74,6 +79,9 @@ def _payload_problems(where: str, entry: Mapping, run_id: str) -> list[str]:
             record = record_from(entry)
             if record.run_id != run_id:
                 return [f"{where}: the record names run {record.run_id!r}, not {run_id!r}"]
+            if record.id != feedback_id(record.run_id, record.signal, record.source):
+                # the id is a primary key: one derived from another run would claim its record
+                return [f"{where}: the record id {record.id} is not derived from its run"]
         elif not isinstance(entry.get("feedback"), str):
             return [f"{where}: names no feedback record"]
         if event == CORRECTED and not entry.get("attribution"):
@@ -209,6 +217,11 @@ def _agents(value: object) -> list[str]:
     return Attribution.model_validate(value).agents if value else []
 
 
+def _lesson(entry: Mapping, default: str) -> str:
+    """The entry's lesson, cut to one lesson's length (the CLI caps it too)."""
+    return cap(str(entry.get("lesson") or default), MAX_LESSON)
+
+
 async def _fold(conn, ctx: TokenContext, run, entries: Iterable[Mapping], clock) -> set[str]:
     """Apply the stored entries to `feedback`; returns the agents whose lessons changed."""
     touched: set[str] = set()
@@ -233,7 +246,7 @@ async def _fold(conn, ctx: TokenContext, run, entries: Iterable[Mapping], clock)
                     record=record.model_dump(mode="json"),
                     attribution=attribution,
                     agents=agents,
-                    lesson=str(entry.get("lesson") or ""),
+                    lesson=_lesson(entry, ""),
                 )
                 .on_conflict_do_nothing()
             )
@@ -245,7 +258,7 @@ async def _fold(conn, ctx: TokenContext, run, entries: Iterable[Mapping], clock)
         if row is None or row.run_id != run.run_id:
             continue  # about a record this run never captured: kept as evidence only
         if event == ANALYSED:
-            values: dict = {"lesson": str(entry.get("lesson") or row.lesson)}
+            values: dict = {"lesson": _lesson(entry, row.lesson)}
             if attribution is not None and row.corrected_by is None:
                 values.update(attribution=attribution, agents=agents)
             await conn.execute(update(feedback).where(feedback.c.id == row.id).values(**values))

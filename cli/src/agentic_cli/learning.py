@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING
 
 from agentic.handoffs import parse_handoff
 from agentic.handoffs.kinds import DevReportData, ReviewData
-from agentic.learning.analyst import AnalystContract, LearningAnalyst, analyse
+from agentic.learning.analyst import AnalystContract, AnalystError, LearningAnalyst, analyse
 from agentic.learning.attribution import RunAgents, rules
 from agentic.learning.clustering import Lesson, Proposal, propose
 from agentic.learning.lessons import heuristic_lesson
@@ -45,6 +45,7 @@ from agentic.learning.records import (
     analysed_fields,
     captured_fields,
     corrected_fields,
+    feedback_id,
     fold,
 )
 from agentic.learning.store import LocalLearningStore
@@ -144,13 +145,19 @@ class FeedbackCapture:
     def capture(
         self, run_id: str, records: Iterable[FeedbackRecord], agents: RunAgents | None = None
     ) -> list[FeedbackRecord]:
-        """Chain each new record; returns the ones recorded (a repeat is not)."""
+        """Chain each new record; returns the ones recorded (a repeat is not). The control
+        plane refuses a record whose id is not derived from its run, signal and source, so
+        when the publish scan masks part of the source the id is derived again from it."""
         if agents is None:
             agents = run_agents(self.rt, run_id)[0]
         log, landed = journal(self.rt, run_id), []
         for record in records:
             fields = captured_fields(record, rules(record, agents), heuristic_lesson(record))
-            if log.append(CAPTURED, self._screen(CAPTURED, fields), row_id=record.id, clock=_now):
+            fields = self._screen(CAPTURED, fields)
+            if fields["source"] != record.source:  # masked: the id follows what is sent
+                fid = feedback_id(record.run_id, record.signal, str(fields["source"]))
+                fields, record = {**fields, "feedback": fid}, record.model_copy(update={"id": fid})
+            if log.append(CAPTURED, fields, row_id=record.id, clock=_now):
                 landed.append(record)
         self.after(run_id)
         return landed
@@ -275,23 +282,32 @@ def learning_analyst(rt: Runtime, run_id: str) -> LearningAnalyst:
     return LearningAnalyst(runner_for, definition.instructions)
 
 
-def analyse_run(rt: Runtime, run_id: str, capture: FeedbackCapture) -> list[str]:
-    """Run the analyst on the run's records it has not seen; returns their ids."""
+def analyse_run(rt: Runtime, run_id: str, capture: FeedbackCapture) -> tuple[list[str], list[str]]:
+    """Run the analyst on the run's records it has not seen; returns (the ids analysed,
+    the ids it gave no verdict for). A record without a verdict gets no analysis event, so
+    the next `agentic learn analyse` tries it again."""
     found = [s for s in states(rt, run_id).values() if not s.analysed and s.corrected_by is None]
     if not found:
-        return []
+        return [], []
     analyst = learning_analyst(rt, run_id)
     agents = run_agents(rt, run_id)[0]
-    log, done = journal(rt, run_id), []
+    log, done, failed = journal(rt, run_id), [], []
     for state in found:
-        attribution, lesson = asyncio.run(analyse(state.record, agents, analyst))
+        try:
+            attribution, lesson = asyncio.run(
+                analyse(state.record, agents, analyst, fallback=False)
+            )
+        except AnalystError as error:
+            capture.warn(f"the Learning Analyst gave {state.record.id} no verdict: {error}")
+            failed.append(state.record.id)
+            continue
         decided = attribution if state.attribution is None else None
         fields = analysed_fields(state.record.id, decided, lesson)
         row = f"{state.record.id}:analysed"
         if log.append(ANALYSED, capture._screen(ANALYSED, fields), row_id=row, clock=_now):
             done.append(state.record.id)
     capture.after(run_id)
-    return done
+    return done, failed
 
 
 __all__ = [

@@ -10,7 +10,9 @@ Similarity is deterministic and testable - no model is called (owner decision 73
   * `tokens` - lower-case words and code identifiers (`with_retry`), stop words dropped,
     each word reduced by a small suffix stemmer (`wrapping` -> `wrap`, `calls` -> `call`);
   * `LexicalSimilarity` - the Dice coefficient of two token sets
-    (2|A n B| / (|A| + |B|)), alike at or above the policy's `similarity` (default 0.5);
+    (2|A n B| / (|A| + |B|)), and 0 when they share fewer than two words;
+  * `alike` - a score above the policy's `similarity` (default 0.5), so "Add tests" and
+    "Add logging" (exactly 0.5) are not the same correction;
   * `EmbeddingSimilarity` - cosine similarity over vectors from an `Embedder` port, for an
     org that wires an embedding model; nothing in the framework wires one by default.
 """
@@ -31,6 +33,8 @@ STOP_WORDS = frozenset(
     could should just also any all more some use using used""".split()
 )
 _SUFFIXES = ("ing", "ed", "es", "s")
+#: How many content words two lessons must share to be alike at all.
+MIN_SHARED = 2
 
 
 def _one_line(text: str) -> str:
@@ -82,10 +86,19 @@ class LexicalSimilarity:
         self.threshold = threshold
 
     def score(self, a: str, b: str) -> float:
+        """Dice, or 0 when the lessons share fewer than `MIN_SHARED` words (fewer only
+        when one of them has fewer words): one generic word in common is no match."""
         left, right = tokens(a), tokens(b)
-        if not left or not right:
+        shared = len(left & right)
+        if not left or not right or shared < min(MIN_SHARED, len(left), len(right)):
             return 0.0
-        return 2 * len(left & right) / (len(left) + len(right))
+        return 2 * shared / (len(left) + len(right))
+
+
+def alike(similarity: Similarity, a: str, b: str) -> bool:
+    """Whether two lessons are the same correction: a score above the threshold (at it is
+    not enough - two short lessons sharing one word of two score exactly 0.5)."""
+    return similarity.score(a, b) > similarity.threshold
 
 
 class Embedder(Protocol):
@@ -117,6 +130,7 @@ __all__ = [
     "EmbeddingSimilarity",
     "LexicalSimilarity",
     "Similarity",
+    "alike",
     "first_sentence",
     "heuristic_lesson",
     "tokens",

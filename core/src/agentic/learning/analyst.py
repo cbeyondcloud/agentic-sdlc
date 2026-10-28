@@ -145,9 +145,16 @@ def candidates_for(record: FeedbackRecord, agents: RunAgents) -> list[str]:
 
 
 async def analyse(
-    record: FeedbackRecord, agents: RunAgents, analyst: LearningAnalyst | None
+    record: FeedbackRecord,
+    agents: RunAgents,
+    analyst: LearningAnalyst | None,
+    *,
+    fallback: bool = True,
 ) -> tuple[Attribution | None, str]:
-    """(attribution, lesson) for one record: rules first, then the analyst."""
+    """(attribution, lesson) for one record: rules first, then the analyst. When the
+    analyst gives no verdict, `fallback` degrades to the rules and a heuristic lesson;
+    without it `AnalystError` is raised, so a caller that records the analysis can leave
+    the record to be analysed again instead of marking it done."""
     decided = rules(record, agents)
     if analyst is None:
         return decided, heuristic_lesson(record)
@@ -155,6 +162,8 @@ async def analyse(
         verdict = await analyst.verdict(record, candidates_for(record, agents))
     except Exception as error:  # the loop degrades to rules and a heuristic lesson
         _LOG.warning("the Learning Analyst gave no verdict for %s: %s", record.id, error)
+        if not fallback:
+            raise AnalystError(f"no verdict for {record.id}: {error}") from error
         return decided, heuristic_lesson(record)
     if decided is None:
         decided = Attribution(

@@ -22,13 +22,14 @@ from typing import Annotated
 
 import typer
 
+from agentic.hosting import RepoRef
 from agentic.hosting.base import FeedbackHost
 from agentic.learning.capture import pr_feedback, review_misses
 from agentic.learning.store import LocalLearningStore
 from agentic_cli import learning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
-from agentic_cli.hosting import connect
+from agentic_cli.hosting import connect, connect_to
 from agentic_cli.output import Output, table
 from agentic_cli.publishing import REMOTE, published
 from agentic_cli.runtime import Runtime
@@ -91,9 +92,20 @@ def register(app: typer.Typer) -> None:
         rt = Runtime(Workspace.load())
         capture = learning.FeedbackCapture(rt, warn=out.warn)
         done: list[str] = []
+        failed: list[str] = []
         for run in [run_id] if run_id else run_ids(rt.ws.repo):
-            done += learning.analyse_run(rt, run, capture)
-        out.result({"analysed": done}, lambda c: c.print(f"analysed {len(done)} record(s)"))
+            analysed, missed = learning.analyse_run(rt, run, capture)
+            done, failed = done + analysed, failed + missed
+        out.result(
+            {"analysed": done, "failed": failed},
+            lambda c: c.print(f"analysed {len(done)} record(s), {len(failed)} without a verdict"),
+        )
+        if failed:  # kept unanalysed: the next `learn analyse` tries them again
+            out.warn(
+                f"the Learning Analyst gave {len(failed)} record(s) no verdict; run "
+                "`agentic learn analyse` again later, or `agentic learn attribute` them"
+            )
+            raise typer.Exit(ExitCode.ERROR)
 
     @group.command("attribute")
     def attribute(
@@ -164,14 +176,27 @@ def _client(rt: Runtime):
     return client
 
 
+def _connection(rt: Runtime, entry: dict):
+    """The host connection for one recorded pull request: the repository `pr.json` names
+    for it (a component's pull request may live in another repository than the
+    workspace's), or - for a record without one - the workspace's own remote."""
+    host, slug = str(entry.get("host") or ""), str(entry.get("repo") or "")
+    if host and "/" in slug:
+        owner, name = slug.rsplit("/", 1)
+        return connect_to(RepoRef(host, owner, name), rt.ws.settings, remote=REMOTE)
+    return connect(rt.ws.repo, rt.ws.settings, remote=REMOTE)
+
+
 def _pr_records(rt: Runtime, run_id: str) -> list:
-    """The run's pull request feedback and review misses, read through the host adapter."""
+    """The run's pull request feedback and review misses, read through the host adapter.
+    The pull request's author is never a reviewer of it; `learning_bot_logins` (settings)
+    names further accounts whose comments are not corrections."""
     record = published(rt.store.runs_root, run_id)
     agents, tdd_skipped, findings, reviewer = learning.run_agents(rt, run_id)
     bots = [str(login) for login in rt.ws.settings.get("learning_bot_logins") or []]
     found = []
     for entry in record.get("pull_requests") or []:
-        with connect(rt.ws.repo, rt.ws.settings, remote=REMOTE) as conn, conn.errors():
+        with _connection(rt, entry) as conn, conn.errors():
             host = conn.provider
             if not isinstance(host, FeedbackHost):
                 raise CliError(
@@ -186,6 +211,7 @@ def _pr_records(rt: Runtime, run_id: str) -> list:
                 reviews=host.pull_request_reviews(conn.repo, number),
                 comments=host.pull_request_review_comments(conn.repo, number),
                 agent_logins=bots,
+                pr_author=host.get_pull_request(conn.repo, number).author,
                 at=learning._now(),
                 tdd_skipped=tdd_skipped,
             )

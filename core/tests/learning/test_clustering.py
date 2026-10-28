@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from agentic.learning.clustering import LearningSettings, Lesson, propose
-from agentic.learning.lessons import EmbeddingSimilarity, LexicalSimilarity
+from agentic.learning.lessons import EmbeddingSimilarity, LexicalSimilarity, alike
 
 NOW = datetime(2026, 10, 25, 9, 0, tzinfo=UTC)
 APP, WEB = "github.com/acme/app", "github.com/acme/web"
@@ -129,6 +129,43 @@ def test_pending_proposal_is_updated_not_duplicated():
     ]
 
 
+def test_short_unrelated_lessons_sharing_one_word_do_not_cluster():
+    """Lessons that share a single generic word ('add', 'rename', 'use the existing') are
+    not the same correction, however short they are."""
+    similarity = LexicalSimilarity()
+    pairs = [
+        ("Add tests", "Add logging"),
+        ("Add a docstring", "Add a test"),
+        ("Rename the variable", "Rename the endpoint"),
+        ("Wrap HTTP calls in with_retry()", "Wrap DB calls in a transaction"),
+        ("Use the existing queue", "Use the existing cache"),
+    ]
+    for a, b in pairs:
+        assert not alike(similarity, a, b), (a, b)
+    assert alike(similarity, "Retry.", "retry")  # one word each, the same word
+    lessons = [lesson("Add tests"), lesson("Add logging"), lesson("Add a docstring")]
+    assert propose(lessons, SETTINGS, NOW) == []
+
+
+def test_older_evidence_arriving_late_grows_the_pending_proposal():
+    """A correction made before the proposal's first lesson, delivered later (another
+    developer's CLI, a capture-pr of an older comment), joins the pending proposal."""
+    lessons = [lesson(t, days_ago=d) for t, d in zip(RETRY[:3], (10, 9, 8), strict=True)]
+    pending = propose(lessons, SETTINGS, NOW)[0]
+    older = lesson(RETRY[3], days_ago=20)
+    grown = propose([older, *lessons], SETTINGS, NOW, existing=[pending])
+    assert [(p.id, p.lesson, len(p.evidence)) for p in grown] == [(pending.id, pending.lesson, 4)]
+
+
+def test_the_seed_leaving_the_window_keeps_the_pending_proposal():
+    lessons = [lesson(t, days_ago=d) for t, d in zip(RETRY[:3], (10, 9, 8), strict=True)]
+    pending = propose(lessons, SETTINGS, NOW)[0]
+    later = NOW + timedelta(days=20.5)  # the 10-day-old seed is now outside the window
+    newer = Lesson(**{**vars(lesson(RETRY[3])), "at": later - timedelta(days=1)})
+    grown = propose([*lessons, newer], SETTINGS, later, existing=[pending])
+    assert [(p.id, len(p.evidence)) for p in grown] == [(pending.id, 4)]
+
+
 def test_lexical_similarity_is_deterministic():
     similarity = LexicalSimilarity()
     assert similarity.score(RETRY[0], RETRY[1]) >= 0.5
@@ -139,9 +176,9 @@ def test_lexical_similarity_is_deterministic():
 def test_embedding_similarity_is_optional():
     class FakeEmbedder:
         def embed(self, texts):
-            alike = ("retry", "again", "backoff")
+            words = ("retry", "again", "backoff")
             return [
-                [1.0, 0.0] if any(w in text.lower() for w in alike) else [0.0, 1.0]
+                [1.0, 0.0] if any(w in text.lower() for w in words) else [0.0, 1.0]
                 for text in texts
             ]
 

@@ -5,9 +5,9 @@ create or update out. The same input gives the same clusters and ids on every ma
 
   * **Window.** Only lessons from the last `window_days` count (default 30).
   * **Clusters, per agent and scope.** A lesson joins the first cluster (in time order)
-    whose seed - its first lesson - it is similar to (`Similarity`, default lexical, at
-    the policy's `similarity`); otherwise it seeds a new one. Seed-based rather than
-    chained, so one bridging lesson cannot merge two unrelated clusters.
+    whose seed - its first lesson - it resembles (`alike`: a `Similarity` score, default
+    lexical, above the policy's `similarity`); otherwise it seeds a new one. Seed-based
+    rather than chained, so one bridging lesson cannot merge two unrelated clusters.
   * **Threshold.** A cluster is a pattern when it holds `threshold` distinct corrections
     (default 3): distinct `source`s, so one pull request comment captured as a review
     comment and as a review miss counts once.
@@ -17,8 +17,11 @@ create or update out. The same input gives the same clusters and ids on every ma
   * **Rejected lessons are remembered.** A cluster similar to a rejected proposal of the
     same agent and scope is proposed again only when its corrections made after the
     rejection reach the threshold by themselves; that proposal gets a new id.
-  * **Pending proposals grow.** A cluster matching a pending proposal (same id) updates
-    its evidence instead of making a second one.
+  * **Pending proposals grow.** A cluster matching a pending proposal updates its
+    evidence instead of making a second one. It matches by id, and - since the id comes
+    from the cluster's first lesson, which changes when an older correction arrives late
+    or the first one leaves the window - by shared evidence or a lesson alike the
+    proposal's, in the same agent and scope. A pending proposal keeps its id and lesson.
 
 Creating a proposal changes nothing else: what it proposes is applied only after a person
 approves it (L4-L6, M3-14..M3-16; D29).
@@ -30,7 +33,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Literal
 
-from agentic.learning.lessons import LexicalSimilarity, Similarity, tokens
+from agentic.learning.lessons import LexicalSimilarity, Similarity, alike, tokens
 
 ProposalStatus = Literal["pending", "rejected"]
 
@@ -97,10 +100,7 @@ def proposal_id(agent: str, scope: str, lesson: str, generation: int = 0) -> str
 def _clusters(lessons: Iterable[Lesson], similarity: Similarity) -> list[_Cluster]:
     found: list[_Cluster] = []
     for item in sorted(lessons, key=lambda x: (x.at, x.feedback_id)):
-        home = next(
-            (c for c in found if similarity.score(c.seed.text, item.text) >= similarity.threshold),
-            None,
-        )
+        home = next((c for c in found if alike(similarity, c.seed.text, item.text)), None)
         if home is None:
             found.append(_Cluster(item, [item]))
         else:
@@ -125,7 +125,25 @@ def propose(
     start = now - timedelta(days=settings.window_days)
     recent = [item for item in lessons if start <= item.at <= now]
     by_id = {p.id: p for p in existing}
-    out: list[Proposal] = []
+    pending = sorted(
+        (p for p in existing if p.status == "pending"), key=lambda p: (p.created_at, p.id)
+    )
+    out: dict[str, Proposal] = {}  # by id: one cluster's update never hides another's
+
+    def held_for(agent: str, scope: str, pid: str, members: list[Lesson]) -> Proposal | None:
+        """The pending proposal this pattern already is: the same id, or - when the
+        cluster's first lesson changed (an older correction arrived late, the first one
+        left the window) - one of the same agent and scope sharing evidence with it or
+        alike its lesson. A proposal keeps its id for as long as it is pending."""
+        if pid in by_id:
+            return by_id[pid]
+        ids = {m.feedback_id for m in members}
+        for p in pending:
+            if (p.agent, p.scope) != (agent, scope):
+                continue
+            if ids & set(p.evidence) or any(alike(similarity, p.lesson, m.text) for m in members):
+                return p
+        return None
 
     def consider(agent: str, scope: str, cluster: _Cluster) -> bool:
         """Propose `cluster` if it is a pattern; True when it is one (made or not)."""
@@ -134,7 +152,7 @@ def propose(
             for p in existing
             if p.status == "rejected"
             and (p.agent, p.scope) == (agent, scope)
-            and similarity.score(p.lesson, cluster.seed.text) >= similarity.threshold
+            and alike(similarity, p.lesson, cluster.seed.text)
         ]
         after = max((p.decided_at or p.created_at for p in rejected), default=None)
         members = [m for m in cluster.members if after is None or m.at > after]
@@ -152,14 +170,16 @@ def propose(
             actors=_unique(m.actor for m in members),
             created_at=now,
         )
-        held = by_id.get(pid)
+        held = held_for(agent, scope, pid, members)
         if held is None:
-            out.append(made)
-        elif held.status == "pending" and set(made.evidence) - set(held.evidence):
+            out.setdefault(pid, made)
+            return True
+        held = out.get(held.id, held)
+        if held.status == "pending" and set(made.evidence) - set(held.evidence):
             evidence = _unique([*held.evidence, *made.evidence])
             sources = _unique([*held.sources, *made.sources])
             actors = _unique([*held.actors, *made.actors])
-            out.append(replace(held, evidence=evidence, sources=sources, actors=actors))
+            out[held.id] = replace(held, evidence=evidence, sources=sources, actors=actors)
         return True
 
     groups: dict[tuple[str, str], list[Lesson]] = {}
@@ -181,7 +201,7 @@ def propose(
             if len(per_repo) < 2 or max(len(s) for s in per_repo.values()) >= settings.threshold:
                 continue  # one repo: the repo proposal is the narrower one
             consider(agent, scope, cluster)
-    return out
+    return list(out.values())
 
 
 __all__ = ["LearningSettings", "Lesson", "Proposal", "proposal_id", "propose"]

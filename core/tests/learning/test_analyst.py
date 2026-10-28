@@ -15,7 +15,7 @@ from pydantic_ai.models.test import TestModel
 
 from agentic.agents.runner import PydanticAIRunner
 from agentic.definitions import DefinitionSet
-from agentic.learning.analyst import AnalystContract, LearningAnalyst, analyse
+from agentic.learning.analyst import AnalystContract, AnalystError, LearningAnalyst, analyse
 from agentic.learning.attribution import RunAgents
 from agentic.learning.records import FeedbackRecord, feedback_id
 from agentic.policy import ResolveContext, load_policy, resolve_agent
@@ -122,6 +122,15 @@ def test_an_analyst_that_never_answers_validly_falls_back(analyst_agent, tmp_pat
     assert attribution is None  # undecided: a person attributes it
     assert lesson == "Not sure about this."
     assert "Learning Analyst" in caplog.text
+
+
+def test_without_fallback_a_missing_verdict_is_an_error(analyst_agent, tmp_path):
+    def respond(messages, info):
+        return ModelResponse(parts=[TextPart('{"learners": []}')])
+
+    analyst = analyst_with(analyst_agent, FunctionModel(respond), tmp_path)
+    with pytest.raises(AnalystError, match="no verdict"):
+        asyncio.run(analyse(record("Not sure about this."), AGENTS, analyst, fallback=False))
 
 
 def test_unknown_agent_in_verdict_is_refused():

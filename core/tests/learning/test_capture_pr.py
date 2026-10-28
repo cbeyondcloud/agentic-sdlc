@@ -85,6 +85,21 @@ def test_app_accounts_are_never_corrections_even_unnamed():
     assert "agentic-bot[bot]" not in {r.actor for r in found}
 
 
+def test_the_pull_request_authors_own_words_are_not_corrections():
+    reviews, comments = recorded_pr()
+    found = pr_feedback(
+        run_id="r-1",
+        repo=REPO,
+        number=7,
+        reviews=reviews,
+        comments=comments,
+        agent_logins=[],
+        pr_author="Carol",  # logins compare without case
+        at=AT,
+    )
+    assert [r.actor for r in found] == ["alice", "alice"]
+
+
 def test_capturing_twice_gives_the_same_ids():
     assert [r.id for r in records()] == [r.id for r in records()]
 

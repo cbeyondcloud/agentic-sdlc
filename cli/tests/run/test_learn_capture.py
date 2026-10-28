@@ -153,6 +153,42 @@ def test_analyse_uses_the_learning_analyst(workspace, policy_repo, monkeypatch, 
     assert again.json()["analysed"] == []  # nothing new to analyse
 
 
+def test_a_failed_analysis_is_retried_by_the_next_analyse(workspace, policy_repo, monkeypatch, cli):
+    """An analyst that gives no verdict (the gateway down, two invalid answers) leaves the
+    record unanalysed: the command says so and fails, and the next `learn analyse` tries
+    again instead of skipping the record for good."""
+    types = policy_repo / "policy" / "agent-types.yaml"
+    types.write_text(types.read_text("utf-8") + ANALYST_TYPE, encoding="utf-8")
+    write(policy_repo / "agents" / "learning-analyst.md", f"---\n{ANALYST}---\nYou analyse.\n")
+    verdict = {
+        "learners": [{"agent": "ba", "confidence": 0.9}],
+        "lesson": "List every CSV column in the acceptance criteria.",
+        "reason": "a requirements gap",
+    }
+    attempts = [answer("requirements", summary=f"Attempt {n}.") for n in range(1, 4)]
+    gateway_with(
+        monkeypatch,
+        {
+            "ba": attempts,
+            "architect": [answer("design")],
+            "learning-analyst": ["not json", "not json", json.dumps(verdict)],
+        },
+    )
+    run_id = started(cli)
+    cli("--json", "reject", run_id, "--feedback", "Columns are missing. Add them.")
+    fid = journal(workspace, run_id)[0]["id"]
+
+    failed = cli("--json", "learn", "analyse", run_id)
+    assert failed.code == ExitCode.ERROR, failed.err
+    assert failed.json() == {"analysed": [], "failed": [fid]}
+    assert [e["event"] for e in journal(workspace, run_id)] == ["learning.feedback_captured"]
+
+    again = cli("--json", "learn", "analyse", run_id)
+    assert again.code == ExitCode.OK, again.err
+    assert again.json() == {"analysed": [fid], "failed": []}
+    assert cli("--json", "learn", "feedback").json()[0]["lesson"] == verdict["lesson"]
+
+
 def test_analyse_without_the_analyst_agent_explains(workspace, gateway, cli):
     run_id = started(cli)
     cli("--json", "reject", run_id, "--feedback", "x")
@@ -214,3 +250,52 @@ def test_capture_pr_records_reviews_and_misses(workspace, github, cli):
     assert tests["agents"][0] == "qa"
     again = cli("--json", "learn", "capture-pr", run_id)
     assert again.json()["recorded"] == []  # the same comments are recorded once
+
+
+def test_capture_pr_reads_each_pull_request_in_its_own_repository(workspace, github, cli):
+    """A component's pull request may live in another repository than the workspace's:
+    it is read there, and its records name that repository."""
+    result = cli("--json", "run", "ship", "--input", "request=CSV export")
+    assert result.code == ExitCode.OK, result.err
+    run_id = result.json()["run_id"]
+    pr_file = workspace / ".agentic" / "local" / "runs" / run_id / "pr.json"
+    record = json.loads(pr_file.read_text("utf-8"))
+    record["pull_requests"][0]["repo"] = "acme/web"
+    pr_file.write_text(json.dumps(record), encoding="utf-8")
+    pull = github.pulls[0]
+    pull["recorded_comments"] = json.loads((RECORDED / "pr-7-comments.json").read_text("utf-8"))
+
+    done = cli("--json", "learn", "capture-pr", run_id)
+    assert done.code == ExitCode.OK, done.err
+    assert done.json()["recorded"]
+    assert "GET /repos/acme/web/pulls/1/comments" in github.paths()
+    assert "GET /repos/acme/app/pulls/1/comments" not in github.paths()
+    assert {e["repo"] for e in journal(workspace, run_id)} == {f"{HOST}/acme/web"}
+
+
+def test_the_pull_request_authors_own_comments_are_not_corrections(workspace, github, cli):
+    """The agent-made pull request is opened with the developer's own token: what its
+    author writes there explains the change, it does not correct an agent."""
+    result = cli("--json", "run", "ship", "--input", "request=CSV export")
+    assert result.code == ExitCode.OK, result.err
+    run_id = result.json()["run_id"]
+    pull = github.pulls[0]
+    own = {"user": {"login": github.login}, "submitted_at": "2026-10-24T09:00:00Z"}
+    pull["recorded_reviews"] = [
+        {**own, "id": 901, "state": "COMMENTED", "body": "I split this into two commits."}
+    ]
+    pull["recorded_comments"] = [
+        {
+            "id": 902,
+            "pull_request_review_id": 901,
+            "user": {"login": github.login},
+            "body": "note: renamed this helper",
+            "path": "a.py",
+            "line": 3,
+            "created_at": "2026-10-24T09:00:00Z",
+        }
+    ]
+
+    done = cli("--json", "learn", "capture-pr", run_id)
+    assert done.code == ExitCode.OK, done.err
+    assert done.json()["recorded"] == []

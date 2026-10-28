@@ -175,7 +175,10 @@ class ReviewComment:
 @runtime_checkable
 class FeedbackHost(Protocol):
     """Reading what people said about a pull request (M3-11: the learning loop's review
-    signals). Read only; separate from publishing and from reviewing."""
+    signals). Read only; separate from publishing and from reviewing. The pull request
+    itself is read for its author, whose own comments there are not corrections."""
+
+    def get_pull_request(self, repo: RepoRef, number: int) -> PullRequest: ...
 
     def pull_request_reviews(self, repo: RepoRef, number: int) -> list[PullRequestReview]: ...
 

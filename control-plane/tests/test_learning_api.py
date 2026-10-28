@@ -15,6 +15,7 @@ from sqlalchemy import func, select, update
 
 from agentic.learning.records import (
     CAPTURED,
+    MAX_LESSON,
     Attribution,
     FeedbackRecord,
     Learner,
@@ -347,3 +348,35 @@ def test_learning_settings_come_from_the_policy_version():
     assert learning_settings(stored, "billing").threshold == 4
     assert learning_settings(stored, "billing").similarity == 0.6
     assert learning_settings(None, "payments").threshold == 3  # a version without them
+
+
+async def test_a_record_id_of_another_run_is_refused(api, dev, tmp_path):
+    """A record's id is derived from its run, signal and source. A member who may send
+    feedback for their own run cannot claim another run's record id and so drop it."""
+    await open_run(api, dev, tmp_path)  # the victim's run
+    attacker, _ = await member(api, api.a, "dev2@a.example.test", "developer", "payments")
+    await open_run(api, attacker, tmp_path, run_id="run-2")
+    genuine = record(api, "Wrap this call.", path="a.py", line=3)
+    forged = record(api, "ATTACKER TEXT", run_id="run-2", source=genuine.source)
+    forged = forged.model_copy(update={"id": genuine.id})
+    theirs = Journal(tmp_path, "run-2")
+    theirs.capture(forged, rules("developer"), "x")
+    refused = await send(api, attacker, theirs.pending(), run_id="run-2")
+    assert refused.status_code == 422 and genuine.id in refused.text
+
+    mine = Journal(tmp_path)
+    mine.capture(genuine, rules("developer"), "Wrap this call.")
+    assert (await send(api, dev, mine.pending())).status_code == 200
+    rows = (await api.get("/v1/learning/feedback", dev)).json()
+    assert [(r["id"], r["run_id"]) for r in rows] == [(genuine.id, "run-1")]
+
+
+async def test_a_lesson_is_capped_on_the_server(api, dev, tmp_path):
+    await open_run(api, dev, tmp_path)
+    journal = Journal(tmp_path)
+    rec = record(api, "Wrap this call.", path="a.py", line=3)
+    fields = {**captured_fields(rec, rules("developer"), "x"), "lesson": "y" * 5000}
+    journal.journal.append(CAPTURED, fields, row_id=rec.id, clock=lambda: rec.given_at)
+    assert (await send(api, dev, journal.pending())).status_code == 200
+    rows = (await api.get("/v1/learning/feedback", dev)).json()
+    assert len(rows[0]["lesson"]) <= MAX_LESSON
