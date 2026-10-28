@@ -20,7 +20,7 @@ from pathlib import Path
 
 from agentic.backends.processes import KILL_WAIT_S, ProcessTree, spawn_group
 from agentic.policy.model import FRAMEWORK_ENV_PREFIX, ResourceLimits
-from agentic.sandbox.limits import POLL_S, Watchdog, kernel_limit, launcher
+from agentic.sandbox.limits import POLL_S, Watchdog, job_limit, kernel_limit, launcher
 
 MAX_OUTPUT = 50_000
 # Environment variables a command never sees: API keys, tokens, passwords, agent sockets
@@ -226,15 +226,17 @@ async def run_process(
     if not done:
         await _stop(tree, finished)
         return ShellResult(exit_code=None, stdout=out.text(), stderr=err.text(), timed_out=True)
+    hits = tree.limits_hit()  # Windows: what its job enforced (before the job is closed)
     if tree.settle():  # nothing left in the background: finished now, not at step end
         tree.close()
     stderr = err.text()
+    code = process.returncode
     return ShellResult(
-        exit_code=process.returncode,
+        exit_code=code,
         stdout=out.text(),
         stderr=stderr,
         timed_out=False,
-        limited=kernel_limit(limits, process.returncode, stderr),
+        limited=kernel_limit(limits, code, stderr) or job_limit(limits, code, hits),
     )
 
 

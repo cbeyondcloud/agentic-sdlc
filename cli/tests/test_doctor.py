@@ -447,6 +447,24 @@ def test_policy_repo_protection_without_admin_cannot_tell(home, monkeypatch, cap
     assert "cannot check" in protection["detail"]
 
 
+def test_policy_repo_protection_unreadable_classic_with_a_weaker_ruleset_cannot_tell(
+    home, monkeypatch, capsys
+):
+    """A non-admin token cannot read classic protection, which may well require code
+    owners; a ruleset that requires a pull request without them proves nothing."""
+    org_config(home)
+    monkeypatch.setenv("AGENTIC_GITHUB_TOKEN", GITHUB_TOKEN)
+    github_answers(
+        monkeypatch, (404, "protection-no-admin.json"), (200, "rules-review-no-code-owners.json")
+    )
+    code, data = run_doctor(capsys)
+    protection = check(data, "policy repo protection")
+    assert protection["status"] == "skip", protection
+    assert "cannot check" in protection["detail"]
+    assert "admin" in protection["fix"]
+    assert code == ExitCode.OK
+
+
 def test_policy_repo_protection_from_rulesets(home, monkeypatch, capsys):
     org_config(home)
     monkeypatch.setenv("AGENTIC_GITHUB_TOKEN", GITHUB_TOKEN)

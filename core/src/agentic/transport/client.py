@@ -177,6 +177,8 @@ def probe_gateway(
             )
     except httpx2.HTTPError as error:
         return GatewayProbe("unknown", None, None, f"cannot reach it ({type(error).__name__})")
+    except (httpx2.InvalidURL, ValueError):  # a typo in the configured URL: doctor reports it
+        return GatewayProbe("unknown", None, None, "gateway_url is not a valid URL")
     date = _date(response.headers.get("Date"))
     status = response.status_code
     if status in (401, 403):

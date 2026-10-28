@@ -164,6 +164,22 @@ def plan_gc(ws: Workspace, settings: GcSettings, now: datetime | None = None) ->
                 Candidate(folder.name, "unknown", None, folder, None, keep=f"kept: {error}")
             )
             continue
+        if state.run_id != folder.name:
+            # A copied or restored folder: its trees, and every path, are the folder's own
+            # run, never the one its run.json names (that run may be live).
+            keep = f"kept: its run.json names another run ({state.run_id!r})"
+            found.append(
+                Candidate(
+                    folder.name,
+                    state.status,
+                    state.updated_at,
+                    folder,
+                    None,
+                    bytes=tree_size(folder),
+                    keep=keep,
+                )
+            )
+            continue
         if state.updated_at > cutoff:
             continue  # young enough: not mentioned
         found.append(_consider(ws, state, folder))
@@ -171,9 +187,10 @@ def plan_gc(ws: Workspace, settings: GcSettings, now: datetime | None = None) ->
 
 
 def _consider(ws: Workspace, state: RunState, folder: Path) -> Candidate:
-    candidate = Candidate(state.run_id, state.status, state.updated_at, folder, None)
+    """`folder.name` (a valid run id: `RunStore.load` checked it) drives every path."""
+    candidate = Candidate(folder.name, state.status, state.updated_at, folder, None)
     try:
-        worktrees = RunWorktrees(ws.repo, state.run_id)
+        worktrees = RunWorktrees(ws.repo, folder.name)
         trees_root = worktrees.root()
         live = worktrees.trees()
     except WorktreeError as error:

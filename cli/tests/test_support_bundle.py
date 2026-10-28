@@ -5,7 +5,9 @@ of them may reach any member of the zip, and a hit left after redaction fails cl
 
 from __future__ import annotations
 
+import base64
 import json
+import os
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -213,6 +215,43 @@ def test_home_folder_is_shortened(repo: Path, tmp_path: Path, home: Path, monkey
     for text in members(output).values():
         assert str(home) not in text
         assert json.dumps(str(home))[1:-1] not in text
+
+
+def test_home_folder_in_another_spelling_is_shortened(
+    repo: Path, tmp_path: Path, home: Path, monkeypatch, capsys
+):
+    """Windows and macOS paths are case-insensitive, and tools write either slash: every
+    spelling of the home folder carries the account name."""
+    monkeypatch.setattr(support_bundle, "_home", lambda: home)
+    spellings = [str(home).lower(), home.as_posix().upper(), str(home).upper()]
+    make_run(repo, "r-1", 1, [log(f"opened {spelling}{os.sep}x.txt") for spelling in spellings])
+    output = tmp_path / "bundle.zip"
+    assert main(["support-bundle", "--output", str(output)]) == ExitCode.OK, capsys.readouterr()
+    for name, text in members(output).items():
+        for spelling in spellings:
+            for form in (spelling, json.dumps(spelling)[1:-1]):
+                assert form not in text, f"{form!r} reached {name}"
+
+
+def test_http_authorization_credentials_never_reach_the_bundle(repo: Path, tmp_path: Path, capsys):
+    """HTTP Basic credentials are base64 of user:password - no shape a scanner knows."""
+    basic = base64.b64encode(b"deploy-user:" + b"hunter" + b"2-correct").decode()
+    digest = "q" * 12 + "Zp0" + "x" * 9
+    make_run(
+        repo,
+        "r-1",
+        1,
+        [
+            log(f"Authorization: Basic {basic}"),
+            log("request", headers={"Proxy-Authorization": f"Basic {basic}"}),
+            log(f"authorization={digest}"),
+        ],
+    )
+    output = tmp_path / "bundle.zip"
+    assert main(["support-bundle", "--output", str(output)]) == ExitCode.OK, capsys.readouterr()
+    for name, text in members(output).items():
+        assert basic not in text, f"Basic credentials reached {name}"
+        assert digest not in text, f"an authorization value reached {name}"
 
 
 def test_outside_a_repository_still_makes_a_bundle(tmp_path: Path, monkeypatch):

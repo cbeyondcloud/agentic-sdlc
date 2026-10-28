@@ -474,12 +474,16 @@ def _policy_repo_protection(settings: Mapping[str, Any], credentials: Credential
         approvals = f"{found.required_approvals} approval(s)"
         detail = f"{where}: code-owner review required ({found.source}, {approvals})"
         return Check(name, "ok", detail)
-    if not found.protected and not found.classic_readable:
+    if not found.classic_readable:
+        # Classic protection unread (no admin rights) may well require code owners: only a
+        # readable classic protection, or a ruleset that requires them, decides.
+        rulesets = "no ruleset requires review"
+        if found.protected:
+            rulesets = "a ruleset requires review, but not by code owners"
         return Check(
             name,
             "skip",
-            f"cannot check {where}: the token cannot read its branch protection and no "
-            "ruleset requires review",
+            f"cannot check {where}: the token cannot read its branch protection and {rulesets}",
             "use a token with admin read access to the policy repo, or ask an org admin to "
             "run doctor",
         )

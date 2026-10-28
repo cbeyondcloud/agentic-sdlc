@@ -18,7 +18,8 @@ Every text goes through three passes before it is written:
      plane and hosting tokens) and credential shapes;
   2. the M2-49 publish scan in `mask` mode, with no field exempt: every secret detector and
      every personal-data kind (an email, a phone or card number) becomes `masked-<kind>`;
-  3. the home folder's path becomes `~` (it carries the person's account name).
+  3. an HTTP authorization header's credentials become `<removed>`, and the home folder's
+     path - in any case, with either slash - becomes `~` (it carries the account name).
 
 The finished texts are then scanned once more, by both. Anything still found stops the
 command and nothing is written (fail closed): a zip is written to a temporary file beside
@@ -29,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import zipfile
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
@@ -124,10 +126,32 @@ def build(
 # ── redaction ─────────────────────────────────────────────────────────────────
 
 
+#: An HTTP authorization header's credentials (Basic is base64 of user:password, a shape
+#: no secret detector knows): the scheme stays, the credentials go.
+AUTHORIZATION = re.compile(
+    r"\b((?:proxy-)?authorization[\"']?\s*[:=]\s*[\"']?"
+    r"(?:(?:basic|bearer|digest|token|negotiate|ntlm)\s+)?)[A-Za-z0-9+/=._~-]{6,}",
+    re.IGNORECASE,
+)
+#: Between the parts of a path: either slash, JSON-escaped backslashes included.
+_SEPARATOR = r"(?:\\|/)+"
+
+
+def home_pattern(home: Path) -> re.Pattern[str] | None:
+    """Every spelling of the home folder: either slash style, JSON-escaped, any case
+    (Windows and macOS paths are case-insensitive, so tools write them either way)."""
+    parts = [part for part in re.split(r"[\\/]+", str(home)) if part]
+    if not parts:
+        return None
+    lead = _SEPARATOR if str(home)[:1] in ("/", "\\") else ""
+    body = _SEPARATOR.join(re.escape(part) for part in parts)
+    return re.compile(rf"{lead}{body}(?![\w.-])", re.IGNORECASE)
+
+
 class _Cleaner:
     def __init__(self, redact: Callable[[str], str], guard: PublishGuard, home: Path) -> None:
         self.redact, self.guard = redact, guard
-        self.homes = sorted({str(home), home.as_posix(), json.dumps(str(home))[1:-1]}, key=len)
+        self.home = home_pattern(home)
 
     def text(self, text: str) -> str:
         """Each line on its own: the scan's time limit applies per line, not per file."""
@@ -136,10 +160,8 @@ class _Cleaner:
     def _line(self, line: str) -> str:
         masked = self.guard.screen("support_bundle", {"text": self.redact(line)})["text"]
         masked = self.redact(masked)  # a scan marker can complete a shape the redactor masks
-        for home in reversed(self.homes):  # the longest spelling first
-            if home and home not in ("/", "\\"):
-                masked = masked.replace(home, "~")
-        return masked
+        masked = AUTHORIZATION.sub(rf"\1{REMOVED}", masked)
+        return self.home.sub("~", masked) if self.home is not None else masked
 
     def check(self, text: str) -> str | None:
         """What the redactor or the scan still finds in `text`, as kinds, or None."""
@@ -148,6 +170,10 @@ class _Cleaner:
                 return "a known secret value"
             if found := self.guard.findings({"text": line}):
                 return ", ".join(sorted(found))
+            if AUTHORIZATION.search(line):
+                return "an authorization header's credentials"
+            if self.home is not None and self.home.search(line):
+                return "the home folder's path"
         return None
 
 

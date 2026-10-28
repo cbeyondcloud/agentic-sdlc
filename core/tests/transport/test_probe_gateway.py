@@ -60,6 +60,16 @@ def test_unreachable():
     assert probe.server_date is None
 
 
+def test_a_malformed_gateway_url_is_unknown_not_a_crash():
+    """`agentic doctor` is what people run when the config is wrong: a typo in
+    gateway_url is a finding, never a traceback."""
+    for url in ("http://[::1", "https://gw.example.invalid:44x3"):
+        probe = probe_gateway(url, KEY, transport=transport(200, MODELS))
+        assert probe.verdict == "unknown", url
+        assert "not a valid URL" in probe.detail
+        assert KEY not in probe.detail
+
+
 def test_a_body_without_a_model_list_still_accepts_the_key():
     probe = probe_gateway("https://gw.example.invalid", KEY, transport=transport(200, ["odd"]))
     assert probe.verdict == "accepted"

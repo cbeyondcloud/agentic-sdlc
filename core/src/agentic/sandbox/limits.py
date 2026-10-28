@@ -15,9 +15,11 @@ How each is enforced (the ruling; the CLI operations runbook says the same):
     the command - inside `srt`, so srt's own Node process is never limited. Hard limits
     (soft = hard, CPU's hard one second later for SIGXCPU to land): the command cannot
     raise them. `-I` keeps a module an agent planted in its tree from being imported.
-    `RLIMIT_NPROC` counts every process of the user, so it is set to the user's current
-    count plus the limit (a backstop against a fork bomb taking the laptop down; root,
-    as in a CI container, is exempt from it, and the watchdog's count applies).
+    `RLIMIT_NPROC` counts every task of the user - each thread on Linux, each process on
+    macOS - so it is set to what the user runs now plus wide fork-bomb-only headroom
+    (`nproc_backstop`): a backstop against a fork bomb taking the laptop down, never the
+    limit itself. Root, as in a CI container, is exempt from it; the watchdog's count of
+    the tree is the limit everywhere.
   * **No `RLIMIT_AS`**: Node (V8) and the JVM reserve far more address space than they
     use, so an address-space limit would break `npm test` long before memory ran out.
     cgroups v2 (`memory.max`, `pids.max`) would be exact, but are not delegated inside
@@ -29,7 +31,8 @@ How each is enforced (the ruling; the CLI operations runbook says the same):
     sandbox's two or three helper processes.
   * **Windows**: the limits are set on the Job Object every command's tree already runs
     in (M2-22). A process started in the moment before the job holds the child escapes
-    them. There is no file-size limit.
+    them. There is no file-size limit. The job's completion port names each limit it
+    enforced (`job_limit`), so the agent is told when a command failed at one.
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from pathlib import Path
 
 from agentic.backends.processes import descendants
@@ -47,6 +50,9 @@ from agentic.policy.model import ResourceLimits
 MB = 1024 * 1024
 #: How often the watchdog reads the tree: /proc is cheap; elsewhere each read runs `ps`.
 POLL_S = 0.1 if Path("/proc").is_dir() else 0.5
+#: The least room `RLIMIT_NPROC` leaves above what the user already runs: it only stops a
+#: fork bomb, and Linux charges every thread of the user (an IDE or browser holds hundreds).
+NPROC_HEADROOM = 4096
 #: setrlimit each given limit (soft, hard), never above the hard limit already in place,
 #: then become the command. argv: cpu seconds, file bytes, processes ("-": none), command.
 LAUNCHER = (
@@ -76,10 +82,8 @@ def launcher(
     posix = os.name != "nt" if posix is None else posix
     if not posix or not (limits.cpu_seconds or limits.max_file_mb or limits.processes):
         return list(argv)
-    nproc = "-"
-    if limits.processes:
-        running = user_processes()
-        nproc = "-" if running is None else str(running + limits.processes)
+    backstop = nproc_backstop(limits.processes) if limits.processes else None
+    nproc = "-" if backstop is None else str(backstop)
     return [
         interpreter(),
         "-I",
@@ -99,21 +103,34 @@ def interpreter() -> str:
     return os.path.realpath(sys.executable)
 
 
-def user_processes() -> int | None:
-    """How many processes this user runs now; None for root (exempt from RLIMIT_NPROC)
-    or when it cannot be counted."""
+def nproc_backstop(processes: int) -> int | None:
+    """The `RLIMIT_NPROC` for a command allowed `processes`: what the user runs now plus
+    fork-bomb-only headroom (`NPROC_HEADROOM`, or ten times the limit if larger), so the
+    user's other programs can start threads meanwhile. The watchdog's count of the tree is
+    the real limit. None for root (exempt) or when it cannot be counted."""
     if not hasattr(os, "getuid") or os.getuid() == 0:
         return None
-    uid = os.getuid()
-    proc = Path("/proc")
+    running = user_tasks(os.getuid())
+    if running is None:
+        return None
+    return running + max(10 * processes, NPROC_HEADROOM)
+
+
+def user_tasks(uid: int, proc: Path = Path("/proc")) -> int | None:
+    """What `uid` runs now as the kernel charges it to `RLIMIT_NPROC`: every task (thread)
+    on Linux, every process on macOS (`ps`); None when it cannot be counted."""
     if proc.is_dir():
         count = 0
         for entry in proc.iterdir():
             try:
-                if entry.name.isdigit() and entry.stat().st_uid == uid:
-                    count += 1
+                if not entry.name.isdigit() or entry.stat().st_uid != uid:
+                    continue
             except OSError:
                 continue
+            try:
+                count += max(1, len(os.listdir(entry / "task")))
+            except OSError:
+                count += 1  # it ended meanwhile, or hides its tasks: one at least
         return count
     try:
         listing = subprocess.run(
@@ -138,6 +155,21 @@ def kernel_limit(limits: ResourceLimits, returncode: int | None, stderr: str = "
         return f"cpu time ({limits.cpu_seconds} s)"
     if kind == "file size" and limits.max_file_mb:
         return f"file size ({limits.max_file_mb} MB)"
+    return None
+
+
+def job_limit(limits: ResourceLimits, returncode: int | None, hits: Collection[str]) -> str | None:
+    """The Job Object limit (native Windows) a failed command ran into, or None. `hits`:
+    what the job enforced (`ProcessTree.limits_hit`). A command that coped with a refused
+    allocation or process start and still exited 0 keeps its exit code."""
+    if returncode is None or returncode == 0:
+        return None
+    if "cpu" in hits and limits.cpu_seconds:
+        return f"cpu time ({limits.cpu_seconds} s)"
+    if "memory" in hits and limits.memory_mb:
+        return f"memory ({limits.memory_mb} MB)"
+    if "processes" in hits and limits.processes:
+        return f"processes ({limits.processes})"
     return None
 
 

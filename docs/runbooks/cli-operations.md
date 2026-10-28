@@ -58,7 +58,7 @@ it.
 
 ```text
 agentic doctor          # every check, with a fix for each problem
-agentic doctor --json   # the same, for a script or the platform team
+agentic --json doctor   # the same, for a script or the platform team
 ```
 
 Doctor changes nothing. It exits 0 when no check fails and 1 when one does. Each check
@@ -132,7 +132,10 @@ sandbox:
 A limit that is left out is not applied.
 
 When a limit stops a command, the agent is told `stopped at the memory (8192 MB) limit
-(org policy sandbox.limits)`. The run itself goes on.
+(org policy sandbox.limits)`. The run itself goes on. On native Windows the Job Object
+reports which of its limits it enforced; the agent is told when the command then failed.
+A command that copes with a refused allocation or process start and still exits 0 keeps
+its exit code. There is no file-size limit on Windows to report.
 
 ### How each limit is enforced (ruling)
 
@@ -145,10 +148,12 @@ When a limit stops a command, the agent is told `stopped at the memory (8192 MB)
 
 **How the Linux and macOS rlimits are applied.** A small launcher sets them before the
 command starts: `python -I -S`, inside the srt sandbox, so srt itself is not limited.
-They are hard limits, so the command cannot raise them. `RLIMIT_NPROC` counts all of
-your processes, so it is set to your current count plus the limit. It is a backstop
-against a fork bomb, not an exact count. Root, as in a CI container, is exempt from it,
-and there the watchdog's count holds alone.
+They are hard limits, so the command cannot raise them. `RLIMIT_NPROC` counts
+everything you run: every thread on Linux (an IDE or a browser holds hundreds), every
+process on macOS. So it is set to what you run now plus wide headroom: 4096, or ten times
+the `processes` limit if that is larger. It only stops a fork bomb from taking the laptop
+down; the watchdog's count of the command's processes is the real limit. Root, as in a CI
+container, is exempt from it, and there the watchdog's count holds alone.
 
 **Why there is no address-space limit.** Node and the JVM reserve far more address space
 than they use. An `RLIMIT_AS` limit would break `npm test` or a Gradle build long before

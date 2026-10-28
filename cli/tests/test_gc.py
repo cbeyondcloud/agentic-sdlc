@@ -269,6 +269,27 @@ def test_trees_are_removed_with_the_run(repo: Path, capsys):
     assert git(repo, "branch", "--list", "sdlc/r-1")  # the branch is kept: a PR may name it
 
 
+def test_a_run_json_naming_another_run_never_touches_that_run(repo: Path, capsys):
+    """An old copy of a folder (a restored backup, an edited file) whose run.json names a
+    live run must not remove that run's trees: the folder name is the run."""
+    make_run(repo, "live", "running", days_old=0.1, events=1)
+    tree = tree_for(repo, "live")
+    copy = make_run(repo, "old-copy", "completed", days_old=30)
+    state = json.loads((copy / "run.json").read_text("utf-8"))
+    state["run_id"] = "live"
+    (copy / "run.json").write_text(json.dumps(state), encoding="utf-8")
+
+    code, data = gc(capsys)
+
+    assert code == ExitCode.OK
+    assert tree.is_dir()
+    assert data["removed"] == []
+    (kept,) = data["kept"]
+    assert kept["run_id"] == "old-copy"
+    assert "names another run" in kept["reason"]
+    assert (copy / "run.json").is_file()
+
+
 def test_dirty_tree_keeps_the_run(repo: Path, capsys):
     make_run(repo, "r-1", "completed", days_old=30, events=1)
     tree = tree_for(repo, "r-1")
