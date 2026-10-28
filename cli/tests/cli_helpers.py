@@ -2,7 +2,10 @@
 
 import os
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "core" / "tests" / "fixtures"
@@ -70,3 +73,11 @@ def link_dir(link: Path, target: Path) -> None:
         )
     else:
         link.symlink_to(target, target_is_directory=True)
+
+
+def skip_unless_graph_required(reason: str, environ: Mapping[str, str] = os.environ) -> None:
+    """Skip a domain-graph test for `reason`, or fail it where scripts/check.py sets
+    AGENTIC_REQUIRE_ZYROFLO_GRAPH=1 (DF-463; as commons/tests/graph_ci.py)."""
+    if environ.get("AGENTIC_REQUIRE_ZYROFLO_GRAPH", "").strip() == "1":
+        pytest.fail(f"{reason} (AGENTIC_REQUIRE_ZYROFLO_GRAPH=1)")
+    pytest.skip(reason)

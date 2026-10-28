@@ -1,6 +1,6 @@
 """CI verdict adapter over Zyroflo's release flow (M1-58; D34: reuse, never rewrite).
 
-Zyroflo's `tools.sdlc.release` is the P8 flow the framework follows: push through the
+Zyroflo's `zyroflo.sdlc.release` is the P8 flow the framework follows: push through the
 wall, open the pull request, watch the real CI - and never click merge. Its `gh` calls
 are not used (the framework talks to the hosting API itself, so `gh` is never needed);
 its judgement is, unchanged:
@@ -17,7 +17,7 @@ Rows are plain mappings (`name`, `status`, `conclusion`, `link`) - what
 
 from collections.abc import Iterable, Mapping
 
-from tools.sdlc import release as zyroflo
+from zyroflo.sdlc import release as zyroflo
 
 GREEN, RED, PENDING, NONE, UNKNOWN = (
     zyroflo.GREEN,

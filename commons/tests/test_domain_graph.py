@@ -1,4 +1,4 @@
-"""Tests for domain-graph access over Zyroflo's `tools.graph` (M2-28).
+"""Tests for domain-graph access over Zyroflo's `zyroflo.graph` (M2-28).
 
 The estate is Zyroflo's `pantry` fixture (EXPECTED.md is its answer key): pantry-api
 publishes `restock-events-v2`, restock-worker consumes it, calls pantry-api's items
@@ -10,7 +10,7 @@ import os
 import shutil
 
 import pytest
-from tools.graph import build as zyroflo_build
+from zyroflo.graph import build as zyroflo_build
 
 from sdlc_commons import domain_graph
 from sdlc_commons.domain_graph import DomainGraph, DomainGraphError
@@ -166,7 +166,7 @@ def test_the_mcp_server_serves_zyroflos_eight_tools(pantry):
 
 
 def test_the_mcp_server_is_refused_without_fastmcp(pantry, monkeypatch):
-    from tools.graph import mcp_server
+    from zyroflo.graph import mcp_server
 
     _, graph = pantry
     monkeypatch.setattr(mcp_server, "FastMCP", None)

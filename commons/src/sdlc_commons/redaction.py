@@ -14,8 +14,8 @@ asks for (core never imports this package).
 import os
 from collections.abc import Callable, Iterable, Mapping
 
-from tools import provider_smoke
-from tools.sdlc.guard import scrub as scrub_shapes
+from zyroflo import provider_smoke
+from zyroflo.sdlc.guard import scrub as scrub_shapes
 
 
 def redactor(

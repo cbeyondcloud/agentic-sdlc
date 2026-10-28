@@ -2050,12 +2050,12 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "sdlc-harness", git = "https://github.com/cbeyondcloud/sdlc-harness?rev=ce4ab12bd17e82d882aba07676259c5d3f0e1638" }]
+requires-dist = [{ name = "sdlc-harness", git = "https://github.com/cbeyondcloud/zyroflo?rev=66cd4e56f2749c7f3bd34ff2db2109058af037a7" }]
 
 [[package]]
 name = "sdlc-harness"
 version = "0.1.0"
-source = { git = "https://github.com/cbeyondcloud/sdlc-harness?rev=ce4ab12bd17e82d882aba07676259c5d3f0e1638#ce4ab12bd17e82d882aba07676259c5d3f0e1638" }
+source = { git = "https://github.com/cbeyondcloud/zyroflo?rev=66cd4e56f2749c7f3bd34ff2db2109058af037a7#66cd4e56f2749c7f3bd34ff2db2109058af037a7" }
 dependencies = [
     { name = "neo4j" },
     { name = "python-dotenv" },
