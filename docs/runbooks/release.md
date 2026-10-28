@@ -128,12 +128,16 @@ verified and adopted, never before:
    already recorded is still accepted.
 
 **Standalone users.** `init` never overwrites an installed standalone policy copy
-(`~/.agentic/policy/standalone`), so an upgraded CLI keeps the old agents, pipelines and
-skills there; `agentic init` says so when the copy came from another template (the copy
-records its CLI version and template digest in `.agentic-template.json`). To take the new
-template: move that folder aside, run `agentic init --standalone`, and copy your
-`policy/tiers.yaml` choices (and any other edits) across from the old copy. A refresh that
-merges the edits for you is not built yet.
+(`~/.agentic/policy/standalone`) on its own, so an upgraded CLI keeps the old agents,
+pipelines and skills there; `agentic init` says so when the copy came from another
+template (the copy records its CLI version and template digest in
+`.agentic-template.json`). To take the new template run
+`agentic init --standalone --refresh-template`: your `policy/` files (tiers, limits,
+classifications) are carried over, everything else becomes the new template's, the report
+lists what changed, and the old copy is kept whole as
+`~/.agentic/policy/standalone.previous-<UTC time>` (copy any edits you made outside
+`policy/` back from there). If the repository guard refuses, nothing is replaced. To roll
+back, move the new folder aside and rename the `.previous-...` one back.
 
 ## Roll back
 

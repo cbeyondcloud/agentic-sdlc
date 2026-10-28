@@ -64,6 +64,12 @@ def register(app: typer.Typer) -> None:
             help="Also install the org's on-request user-space tools (shows them, then asks).",
         ),
         yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask before installing."),
+        refresh_template: bool = typer.Option(
+            False,
+            "--refresh-template",
+            help="With --standalone: replace your copy of the framework's template with "
+            "this version's, keeping your policy/ files (the old copy is saved beside it).",
+        ),
         open_pr: bool = typer.Option(
             True,
             "--pr/--no-pr",
@@ -81,11 +87,22 @@ def register(app: typer.Typer) -> None:
                 ExitCode.USAGE,
                 hint="add --yes after reviewing the tools with a plain `agentic init`",
             )
+        if refresh_template and repo:
+            raise CliError(
+                "--refresh-template refreshes your own standalone copy, not the repository",
+                ExitCode.USAGE,
+                hint="run `agentic init --standalone --refresh-template` without --repo",
+            )
         recorded = None
         if standalone and policy is None and (found := recorded_policy(Path.cwd())):
             recorded = recorded_root(found, Path.cwd())  # what init chose last time
         loaded = resolve_policy(
-            standalone=standalone, policy_path=policy, home=home, config=config, recorded=recorded
+            standalone=standalone,
+            policy_path=policy,
+            home=home,
+            config=config,
+            recorded=recorded,
+            refresh_template=refresh_template,
         )
         try:
             if repo:

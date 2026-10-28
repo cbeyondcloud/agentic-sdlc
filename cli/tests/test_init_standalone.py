@@ -158,7 +158,7 @@ def test_a_newer_template_is_announced_and_the_copy_kept(
     news = item(report, "policy: standalone")
     assert news["status"] == "info"
     assert f"agentic {__version__}" in news["detail"] and str(installed()) in news["detail"]
-    assert "move" in news["detail"] and "aside" in news["detail"]
+    assert "agentic init --standalone --refresh-template" in news["detail"]
     assert (installed() / "policy" / "tiers.yaml").read_text(encoding="utf-8") == edited
     assert "A newer instruction" not in (installed() / "agents" / "developer.md").read_text(
         encoding="utf-8"
@@ -171,6 +171,80 @@ def test_a_copy_installed_before_stamps_is_told_too(setup_repo, deps, monkeypatc
     (installed() / STAMP).unlink()
     _, report = init(setup_repo, monkeypatch, capsys)
     assert "an earlier agentic" in item(report, "policy: standalone")["detail"]
+
+
+def backups() -> list[Path]:
+    return sorted(installed().parent.glob("standalone.previous-*"))
+
+
+def test_refresh_template_takes_the_new_template_and_keeps_policy_edits(
+    setup_repo, deps, monkeypatch, capsys, tmp_path
+):
+    """DF-273: an upgraded CLI's template replaces the copy; the person's policy/ files
+    stay; the old copy is kept whole beside it, never deleted."""
+    init(setup_repo, monkeypatch, capsys)
+    edit_models()
+    edited = (installed() / "policy" / "tiers.yaml").read_text(encoding="utf-8")
+    agent = installed() / "agents" / "developer.md"
+    agent.write_text(agent.read_text(encoding="utf-8") + "\nMy local tweak.\n", "utf-8")
+    newer = _newer_framework(tmp_path)
+    monkeypatch.setenv("AGENTIC_FRAMEWORK_ROOT", str(newer))
+
+    code, report = init(setup_repo, monkeypatch, capsys, "--refresh-template")
+
+    assert code == ExitCode.OK, report
+    assert (installed() / "policy" / "tiers.yaml").read_text(encoding="utf-8") == edited
+    text = (installed() / "agents" / "developer.md").read_text(encoding="utf-8")
+    assert "A newer instruction" in text and "My local tweak" not in text
+    stamp = json.loads((installed() / STAMP).read_text(encoding="utf-8"))
+    assert stamp["template"] == template_digest(newer)
+    [backup] = backups()
+    assert "My local tweak" in (backup / "agents" / "developer.md").read_text(encoding="utf-8")
+    detail = item(report, "policy: standalone")["detail"]
+    assert str(backup) in detail and "agents/developer.md" in detail
+    assert "policy/tiers.yaml" in detail
+    assert [p.name for p in installed().parent.iterdir() if p.name.startswith(".")] == []
+    _, again = init(setup_repo, monkeypatch, capsys)
+    assert item(again, "policy: standalone") is None  # the copy is now the current template
+
+
+def test_refresh_template_with_the_current_template_changes_nothing(
+    setup_repo, deps, monkeypatch, capsys
+):
+    init(setup_repo, monkeypatch, capsys)
+    edit_models()
+    code, report = init(setup_repo, monkeypatch, capsys, "--refresh-template")
+    assert code == ExitCode.OK, report
+    assert "nothing to refresh" in item(report, "policy: standalone")["detail"]
+    assert backups() == []
+
+
+def test_a_guard_refusal_refreshes_nothing(setup_repo, deps, monkeypatch, capsys, tmp_path):
+    init(setup_repo, monkeypatch, capsys)
+    edit_models()
+    monkeypatch.setenv("AGENTIC_FRAMEWORK_ROOT", str(_newer_framework(tmp_path)))
+    (setup_repo / "sub").mkdir()
+    code, _ = init(setup_repo / "sub", monkeypatch, capsys, "--refresh-template")
+    assert code == ExitCode.REFUSED
+    assert backups() == []
+    assert "A newer instruction" not in (installed() / "agents" / "developer.md").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_refresh_template_is_only_for_the_standalone_template(
+    setup_repo, deps, monkeypatch, capsys, tmp_path
+):
+    monkeypatch.chdir(setup_repo)
+    assert main(["--json", "init", "--refresh-template"]) == ExitCode.USAGE
+    other = tmp_path / "mine"
+    shutil.copytree(framework_root() / "templates" / "standalone" / "policy", other / "policy")
+    code = main(["--json", "init", "--standalone", "--policy", str(other), "--refresh-template"])
+    assert code == ExitCode.USAGE
+    assert "--refresh-template" in capsys.readouterr().err
+    assert main(["--json", "init", "--repo", "--standalone", "--refresh-template"]) == (
+        ExitCode.USAGE
+    )
 
 
 def test_a_guard_refusal_installs_nothing(setup_repo, deps, monkeypatch, capsys):

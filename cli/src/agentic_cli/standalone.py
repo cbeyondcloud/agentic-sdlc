@@ -24,6 +24,7 @@ import json
 import os
 import shutil
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from agentic.definitions import DefinitionError, load_agent
@@ -129,11 +130,60 @@ def template_news(installed: Path, root: Path | None = None) -> str | None:
         return None
     came = f"agentic {stamp['agentic']}" if stamp.get("agentic") else "an earlier agentic"
     return (
-        f"your standalone policy came from {came}; agentic {__version__} ships a different "
-        f"template (agents, pipelines, skills). init never overwrites your copy: to take the "
-        f"new one, move {installed} aside, run `agentic init --standalone`, then copy your "
-        "edits (policy/tiers.yaml at least) across"
+        f"your standalone policy ({installed}) came from {came}; agentic {__version__} ships "
+        "a different template (agents, pipelines, skills). init never overwrites your copy "
+        "on its own: run `agentic init --standalone --refresh-template` to take the new one "
+        "(your policy/ files are kept and the old copy is saved beside it)"
     )
+
+
+@dataclass(frozen=True)
+class Refresh:
+    """What `refresh` changed, as paths relative to the copy (POSIX form)."""
+
+    kept: tuple[str, ...]  # the person's policy/ files carried over (theirs differ or are new)
+    added: tuple[str, ...]  # in the new template only
+    removed: tuple[str, ...]  # in the old copy only (outside policy/: dropped)
+    changed: tuple[str, ...]  # outside policy/, different in the new template
+
+    @property
+    def template_changed(self) -> bool:
+        return bool(self.added or self.removed or self.changed)
+
+
+def refresh(installed: Path, dest: Path, root: Path | None = None) -> Refresh:
+    """Assemble the current template into `dest` (DF-273), then carry the person's
+    policy/ files over from `installed` (their tiers, classifications and limits are
+    theirs). Everything else is the template's; `installed` is not touched. The caller
+    keeps the old copy: edits outside policy/ are in it, and `changed` names them."""
+    assemble(dest, root)
+    old, new = _contents(installed), _contents(dest)
+    kept = []
+    for rel, body in old.items():
+        if rel.startswith("policy/") and new.get(rel) != body:
+            target = dest / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(installed / rel, target)
+            kept.append(rel)
+    outside = {rel for rel in old.keys() | new.keys() if not rel.startswith("policy/")}
+    return Refresh(
+        kept=tuple(sorted(kept)),
+        added=tuple(sorted(rel for rel in new.keys() - old.keys())),
+        removed=tuple(sorted(rel for rel in outside if rel not in new)),
+        changed=tuple(sorted(rel for rel in outside if rel in old and old[rel] != new.get(rel))),
+    )
+
+
+def _contents(folder: Path) -> dict[str, str]:
+    """Each file under `folder` (but the stamp) by relative path, to a hash of its bytes
+    with line endings ignored."""
+    found = {}
+    for path in folder.rglob("*"):
+        rel = path.relative_to(folder).as_posix()
+        if path.is_file() and rel != STAMP:
+            body = path.read_bytes().replace(b"\r\n", b"\n")
+            found[rel] = hashlib.sha256(body).hexdigest()
+    return found
 
 
 def _apply_preload(skills: Path, rule_file: Path) -> None:
