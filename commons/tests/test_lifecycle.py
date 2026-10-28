@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from tools.sdlc import content, state
+from zyroflo.sdlc import content, state
 
 from sdlc_commons import lifecycle
 from sdlc_commons.ledger import RunIdentity, RunLedger

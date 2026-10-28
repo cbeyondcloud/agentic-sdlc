@@ -1,4 +1,4 @@
-"""Hash-verified tool fetcher over Zyroflo's `tools/third_party.py` (M1-51; D34: reuse).
+"""Hash-verified tool fetcher over Zyroflo's `zyroflo.third_party` (M1-51; D34: reuse).
 
 `agentic init` fetches user-space tools (gitleaks, osv-scanner, ast-grep, ...) from the
 org's internal mirror, each pinned by version and sha256 per platform in org policy
@@ -86,7 +86,7 @@ class FetchResult:
 def _zyroflo():
     # Imported on first use: the module reconfigures stdout/stderr to UTF-8 on import
     # (idempotent, never fatal), which only a fetch needs.
-    from tools import third_party
+    from zyroflo import third_party
 
     return third_party
 

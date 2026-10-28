@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from tools.sdlc import worktree as zyroflo_worktree
+from zyroflo.sdlc import worktree as zyroflo_worktree
 
 from sdlc_commons.guards import Guard
 from sdlc_commons.ledger import RunIdentity, RunLedger

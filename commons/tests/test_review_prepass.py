@@ -1,4 +1,4 @@
-"""The review pre-pass scanners (M2-48) through Zyroflo's `tools.review` and the verified
+"""The review pre-pass scanners (M2-48) through Zyroflo's `zyroflo.review` and the verified
 tool cache (M1-51). No real scanner runs here: Zyroflo's `run_tool` seam answers as the
 tools do, so the parse paths are Zyroflo's own. A missing or refused tool is a stated
 status with its reason, never a clean result."""
@@ -9,8 +9,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
-from tools.review import prepass as zyroflo_prepass
-from tools.review import sca as zyroflo_sca
+from zyroflo.review import prepass as zyroflo_prepass
+from zyroflo.review import sca as zyroflo_sca
 
 from sdlc_commons.ledger import RunIdentity, RunLedger
 from sdlc_commons.review_prepass import OFFLINE_FLAGS, ToolLocator, external_checks

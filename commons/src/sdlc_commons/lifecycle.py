@@ -3,7 +3,7 @@
 Zyroflo ships its lifecycle as content (Z2): one SOP per stage (`sdlc/stages/`,
 front matter + instructions) and the review rubric (`sdlc_templates/`). This
 module reads them from the installed package, through Zyroflo's own accessor
-(`tools.sdlc.content`) and stage parser (`stage.parse_step_spec`):
+(`zyroflo.sdlc.content`) and stage parser (`stage.parse_step_spec`):
 
   * stages()       - the 12 stages in order, each with its front matter and its
                      instructions (what the built-in agents start from, M1-60);
@@ -20,8 +20,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.sdlc import content
-from tools.sdlc import stage as zyroflo_stage
+from zyroflo.sdlc import content
+from zyroflo.sdlc import stage as zyroflo_stage
 
 #: Run folders live here, relative to the repository - git-ignored, never committed.
 RUNS_ROOT = ".agentic/local/runs"

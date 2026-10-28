@@ -91,14 +91,20 @@ include_external_packages = true
 name = "Core stays standalone: it never imports commons, the CLI, the control plane or Zyroflo"
 type = "forbidden"
 source_modules = ["agentic"]
-forbidden_modules = ["sdlc_commons", "agentic_cli", "agentic_cp", "tools"]
+forbidden_modules = ["sdlc_commons", "agentic_cli", "agentic_cp", "tools", "zyroflo"]
 
 [[tool.importlinter.contracts]]
 name = "Zyroflo (sdlc-harness) is used only through sdlc_commons (D34)"
 type = "forbidden"
 source_modules = ["agentic", "agentic_cli", "agentic_cp"]
-forbidden_modules = ["tools"]
+forbidden_modules = ["tools", "zyroflo"]
 allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "sdlc_commons imports Zyroflo by its product name zyroflo.*, never tools.* (M2-29)"
+type = "forbidden"
+source_modules = ["sdlc_commons"]
+forbidden_modules = ["tools"]
 
 [[tool.importlinter.contracts]]
 name = "Provider SDKs only in agentic.transport (provider-agnostic core, D2)"

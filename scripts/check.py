@@ -215,7 +215,10 @@ def run_native(offline: bool = False) -> str:
     Returns PASSED, INCOMPLETE or FAILED."""
     label = f"{platform.system()} (native)"
     _warn_stale_exceptions(label)
-    env = dict(os.environ, UV_OFFLINE="1") if offline else None
+    # The Zyroflo domain-graph tests must run here, not skip (DF-463).
+    env = dict(os.environ, AGENTIC_REQUIRE_ZYROFLO_GRAPH="1")
+    if offline:
+        env["UV_OFFLINE"] = "1"
     for name, cmd in checks_for(offline):
         print(f"[{label}] {name}: {' '.join(cmd)}", flush=True)
         if subprocess.run(cmd, cwd=REPO_ROOT, env=env).returncode != 0:
@@ -275,7 +278,8 @@ def run_linux(run=subprocess.run) -> bool:
     The files are streamed into the container (never mounted), so the Windows
     virtualenv and scratch folders on the host are never seen or touched. A Postgres
     sidecar on a private network serves the control plane's database tests, which must
-    run here (AGENTIC_CP_REQUIRE_PG=1 turns a missing database into a failure).
+    run here (AGENTIC_CP_REQUIRE_PG=1 turns a missing database into a failure), as must
+    the Zyroflo domain-graph tests (AGENTIC_REQUIRE_ZYROFLO_GRAPH=1, DF-463).
     """
     engine = container_engine()
     if engine is None:
@@ -313,6 +317,7 @@ def run_linux(run=subprocess.run) -> bool:
         POSTGRES_PASSWORD=password,
         AGENTIC_CP_TEST_DSN=f"postgresql://postgres:{password}@pg:5432/postgres",
         AGENTIC_CP_REQUIRE_PG="1",
+        AGENTIC_REQUIRE_ZYROFLO_GRAPH="1",
     )
     network = f"agentic-check-{os.getpid()}"
     sidecar = f"agentic-check-pg-{os.getpid()}"
@@ -357,6 +362,8 @@ def run_linux(run=subprocess.run) -> bool:
             "AGENTIC_CP_TEST_DSN",
             "-e",
             "AGENTIC_CP_REQUIRE_PG",
+            "-e",
+            "AGENTIC_REQUIRE_ZYROFLO_GRAPH",
             *SANDBOX_OPTS,
             image,
             "sh",

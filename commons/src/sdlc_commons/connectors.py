@@ -3,7 +3,7 @@
 An external item - a Jira issue, a GitHub issue, a firing alert - becomes a run's
 title and specification through a *mapping*: a JSON file saying where in the
 payload the title, body, id and link are (`{"title": "fields.summary", ...}`).
-Zyroflo (`tools.sdlc.connect`) owns the format and every rule about it; this
+Zyroflo (`zyroflo.sdlc.connect`) owns the format and every rule about it; this
 module only puts it behind the framework's names:
 
   * shipped_mappings() - the Jira, GitHub-issue and alert mappings Zyroflo ships
@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tools.sdlc import connect, content, intake
+from zyroflo.sdlc import connect, content, intake
 
 ABSENT = connect.ABSENT
 dig = connect.dig
