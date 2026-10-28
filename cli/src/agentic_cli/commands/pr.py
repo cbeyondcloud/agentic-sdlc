@@ -1,7 +1,7 @@
 """The run's pull request (M1-58; spec §16):
 
     agentic pr open <run>                                  push the branch, open or update
-    agentic pr checks <run> [--watch] [--timeout S] [--interval S]     what CI says
+    agentic pr checks <run> [--watch] [--timeout S] [--interval S] [--logs]     what CI says
 
 A pipeline normally opens its pull request itself (`action: github.open_pr`); `pr open`
 does it for a completed run that has no such step, or refreshes the body. `pr checks`
@@ -28,6 +28,8 @@ from agentic_cli.publishing import (
 from agentic_cli.runtime import Runtime
 from agentic_cli.workspace import Workspace
 from sdlc_commons.release import GREEN
+
+LOG_LINES_SHOWN = 60  # of each failed log, on screen; --json and ci.json keep the whole tail
 
 pr_app = typer.Typer(help="The run's pull request: open it, read its CI.", no_args_is_help=True)
 
@@ -71,6 +73,10 @@ def checks(
     interval: Annotated[
         int, typer.Option("--interval", min=1, help="With --watch: seconds between reads.")
     ] = DEFAULT_INTERVAL_SECONDS,
+    logs: Annotated[
+        bool,
+        typer.Option("--logs", help="When CI is not green, read the end of each failed log."),
+    ] = False,
 ) -> None:
     """What CI says about the run's pull request: exit 0 only when green; exit 1 when CI
     is not green or the host could not be read (with --json, a result with `state` means
@@ -79,7 +85,13 @@ def checks(
     rt = Runtime(Workspace.load())
     _load(rt, run_id)
     result = run_checks(
-        rt.ws, rt.store.runs_root, run_id, watch=watch, timeout=timeout, interval=interval
+        rt.ws,
+        rt.store.runs_root,
+        run_id,
+        watch=watch,
+        timeout=timeout,
+        interval=interval,
+        logs=logs,
     )
 
     def show(console) -> None:
@@ -91,6 +103,14 @@ def checks(
             if row["name"] in failing:
                 link = f" {row['link']}" if row["link"] else ""
                 console.print(f"  {row['name']}: {row['conclusion'] or row['status']}{link}")
+        for entry in result.get("logs") or []:
+            if entry["log"] is None:
+                console.print(f"  {entry['name']}: {entry['note']}", markup=False)
+                continue
+            shown = entry["log"].splitlines()[-LOG_LINES_SHOWN:]
+            console.print(f"  -- {entry['name']}: the last {len(shown)} lines --", markup=False)
+            for line in shown:
+                console.print(f"    {line}", markup=False, highlight=False)
 
     out.result(result, show)
     if result["state"] != GREEN:

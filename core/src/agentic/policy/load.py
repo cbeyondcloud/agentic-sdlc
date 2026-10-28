@@ -13,7 +13,7 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
     org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines,
                           required_steps, checkpoint_exclude, index_export_workflow,
                           sandbox, unhonoured, secret_scan, publish_scan,
-                          review_prepass, review_batch, auto_trip
+                          review_prepass, review_batch, auto_trip, learning
     eval.yaml             eval                      (agent evaluation defaults, M1-63)
     rollout.yaml          rollout, deprecated       (versions team by team, M2-15)
     teams/<team>.yaml     one TeamPolicy per team
@@ -73,6 +73,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "review_prepass": "review_prepass",
         "review_batch": "review_batch",
         "auto_trip": "auto_trip",
+        "learning": "learning",
     },
     "eval.yaml": {"eval": "eval"},
     "rollout.yaml": {"rollout": "rollout", "deprecated": "deprecated"},

@@ -78,3 +78,8 @@ review_prepass:
 # framework's own (bytecode, tool caches, coverage data); each path left out is logged.
 # It only adds: git globs relative to the repository.
 # checkpoint_exclude: ["**/target/**", "**/build/**", "**/.gradle/**"]
+
+# The learning loop (spec 24): this many similar human corrections of one agent, within
+# this many days, become a proposal a person approves or rejects; nothing changes an
+# agent without that approval. A team may only tighten (a higher threshold, fewer days).
+# learning: { threshold: 3, window_days: 30, similarity: 0.5 }

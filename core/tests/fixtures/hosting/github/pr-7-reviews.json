@@ -1,0 +1,50 @@
+[
+  {
+    "id": 101,
+    "node_id": "PRR_kwDOAAAAAc4AAAAA",
+    "user": {"login": "alice", "id": 5001, "type": "User"},
+    "body": "Please wrap the HTTP calls in our with_retry() helper.",
+    "state": "CHANGES_REQUESTED",
+    "html_url": "https://github.com/acme/app/pull/7#pullrequestreview-101",
+    "pull_request_url": "https://api.github.com/repos/acme/app/pulls/7",
+    "author_association": "MEMBER",
+    "submitted_at": "2026-10-24T10:00:00Z",
+    "commit_id": "1111111111111111111111111111111111111111"
+  },
+  {
+    "id": 102,
+    "node_id": "PRR_kwDOAAAAAc4AAAAB",
+    "user": {"login": "agentic-bot[bot]", "id": 5002, "type": "Bot"},
+    "body": "Addressed the review.",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/acme/app/pull/7#pullrequestreview-102",
+    "pull_request_url": "https://api.github.com/repos/acme/app/pulls/7",
+    "author_association": "NONE",
+    "submitted_at": "2026-10-24T11:00:00Z",
+    "commit_id": "2222222222222222222222222222222222222222"
+  },
+  {
+    "id": 103,
+    "node_id": "PRR_kwDOAAAAAc4AAAAC",
+    "user": {"login": "bob", "id": 5003, "type": "User"},
+    "body": "LGTM",
+    "state": "APPROVED",
+    "html_url": "https://github.com/acme/app/pull/7#pullrequestreview-103",
+    "pull_request_url": "https://api.github.com/repos/acme/app/pulls/7",
+    "author_association": "MEMBER",
+    "submitted_at": "2026-10-24T12:00:00Z",
+    "commit_id": "2222222222222222222222222222222222222222"
+  },
+  {
+    "id": 104,
+    "node_id": "PRR_kwDOAAAAAc4AAAAD",
+    "user": {"login": "carol", "id": 5004, "type": "User"},
+    "body": "",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/acme/app/pull/7#pullrequestreview-104",
+    "pull_request_url": "https://api.github.com/repos/acme/app/pulls/7",
+    "author_association": "MEMBER",
+    "submitted_at": "2026-10-24T12:30:00Z",
+    "commit_id": "2222222222222222222222222222222222222222"
+  }
+]

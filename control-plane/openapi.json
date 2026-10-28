@@ -188,6 +188,70 @@
         "title": "AssignmentRequest",
         "type": "object"
       },
+      "Attribution": {
+        "additionalProperties": false,
+        "description": "Which agents learn from a record, how that was decided, and why.",
+        "properties": {
+          "learners": {
+            "items": {
+              "$ref": "#/components/schemas/Learner"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Learners",
+            "type": "array"
+          },
+          "method": {
+            "enum": [
+              "rules",
+              "analyst",
+              "human"
+            ],
+            "title": "Method",
+            "type": "string"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "learners",
+          "method"
+        ],
+        "title": "Attribution",
+        "type": "object"
+      },
+      "AttributionCorrection": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/learning/feedback/{id}/attribution`: a person's correction (M3-12).",
+        "properties": {
+          "agents": {
+            "items": {
+              "pattern": "^[a-z][a-z0-9-]{0,63}$",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Agents",
+            "type": "array"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agents",
+          "reason"
+        ],
+        "title": "AttributionCorrection",
+        "type": "object"
+      },
       "AuditEntry": {
         "description": "One audit record exactly as hashed (spec §14.5).",
         "properties": {
@@ -473,6 +537,174 @@
           }
         },
         "title": "EffectivePermissions",
+        "type": "object"
+      },
+      "FeedbackInfo": {
+        "description": "One feedback record as the control plane holds it (M3-11, M3-12): read by its author\n(the user whose CLI sent it) and by holders of `dashboard.view.team` in its team.",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "attribution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Attribution"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "corrected_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Corrected By"
+          },
+          "gate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate"
+          },
+          "given_at": {
+            "format": "date-time",
+            "title": "Given At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "lesson": {
+            "default": "",
+            "title": "Lesson",
+            "type": "string"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "signal": {
+            "title": "Signal",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "team",
+          "signal",
+          "actor",
+          "given_at",
+          "source",
+          "author"
+        ],
+        "title": "FeedbackInfo",
+        "type": "object"
+      },
+      "FeedbackIngestRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/runs/{run_id}/feedback`: a batch of the run's feedback-journal entries\nexactly as chained (M3-11), in order.",
+        "properties": {
+          "entries": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 1000,
+            "minItems": 1,
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "FeedbackIngestRequest",
         "type": "object"
       },
       "HandlesInfo": {
@@ -941,6 +1173,28 @@
           "reason"
         ],
         "title": "KillSwitchRequest",
+        "type": "object"
+      },
+      "Learner": {
+        "additionalProperties": false,
+        "properties": {
+          "agent": {
+            "pattern": "^[a-z][a-z0-9-]{0,63}$",
+            "title": "Agent",
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Confidence",
+            "type": "number"
+          }
+        },
+        "required": [
+          "agent",
+          "confidence"
+        ],
+        "title": "Learner",
         "type": "object"
       },
       "Me": {
@@ -1434,6 +1688,75 @@
           "code"
         ],
         "title": "Problem",
+        "type": "object"
+      },
+      "ProposalInfo": {
+        "description": "A proposal made from repeated corrections (M3-13). Created only: approving and\napplying it are later steps (L4-L6), so nothing has changed because it exists.",
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "evidence": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "lesson": {
+            "title": "Lesson",
+            "type": "string"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "team",
+          "agent",
+          "scope",
+          "lesson",
+          "evidence",
+          "status",
+          "created_at"
+        ],
+        "title": "ProposalInfo",
         "type": "object"
       },
       "ProxyKeyIssued": {
@@ -3118,6 +3441,233 @@
         ]
       }
     },
+    "/v1/learning/feedback": {
+      "get": {
+        "description": "The newest feedback records the caller may read, optionally of one team or run.",
+        "operationId": "list_feedback_v1_learning_feedback_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          },
+          {
+            "in": "query",
+            "name": "run_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Run Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FeedbackInfo"
+                  },
+                  "title": "Response List Feedback V1 Learning Feedback Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Feedback",
+        "tags": [
+          "learning"
+        ]
+      }
+    },
+    "/v1/learning/feedback/{feedback_id}/attribution": {
+      "put": {
+        "description": "Set which agents learn from a record (method `human`), audited as\n`learning.attribution_corrected`. The record's author, or `agent.approve.repo` in its\nteam; a record the caller cannot read is 404.",
+        "operationId": "correct_attribution_v1_learning_feedback__feedback_id__attribution_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "feedback_id",
+            "required": true,
+            "schema": {
+              "title": "Feedback Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AttributionCorrection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedbackInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Correct Attribution",
+        "tags": [
+          "learning"
+        ]
+      }
+    },
+    "/v1/learning/proposals": {
+      "get": {
+        "description": "The proposals the caller may read, newest first. Proposals are created only: nothing\nhas been applied because one is listed here.",
+        "operationId": "list_proposals_v1_learning_proposals_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(pending|rejected)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProposalInfo"
+                  },
+                  "title": "Response List Proposals V1 Learning Proposals Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Proposals",
+        "tags": [
+          "learning"
+        ]
+      }
+    },
     "/v1/me": {
       "get": {
         "description": "Who the token belongs to, in which tenant, and the roles they hold.",
@@ -4568,6 +5118,65 @@
         "summary": "Ingest",
         "tags": [
           "runs"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/feedback": {
+      "post": {
+        "description": "Append a batch of the run's chained feedback entries: verified, stored all or\nnothing; replayed entries are no-ops (`duplicates`). The run's own events come first:\na run the control plane does not hold yet is 404 (the CLI sends the feedback later).",
+        "operationId": "ingest_v1_runs__run_id__feedback_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackIngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ingest",
+        "tags": [
+          "learning"
         ]
       }
     },

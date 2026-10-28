@@ -2046,11 +2046,15 @@ name = "sdlc-commons"
 version = "0.1.0"
 source = { editable = "commons" }
 dependencies = [
+    { name = "filelock" },
     { name = "sdlc-harness" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "sdlc-harness", git = "https://github.com/cbeyondcloud/zyroflo?rev=66cd4e56f2749c7f3bd34ff2db2109058af037a7" }]
+requires-dist = [
+    { name = "filelock", specifier = "==4.2.1" },
+    { name = "sdlc-harness", git = "https://github.com/cbeyondcloud/zyroflo?rev=66cd4e56f2749c7f3bd34ff2db2109058af037a7" },
+]
 
 [[package]]
 name = "sdlc-harness"

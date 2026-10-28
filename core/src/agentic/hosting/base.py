@@ -23,6 +23,7 @@ There is deliberately no merge operation: a person merges.
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 
@@ -82,6 +83,7 @@ class CheckRun:
     status: str
     conclusion: str | None
     link: str = ""
+    log_ref: str = ""  # the host's handle for the check's log; empty when it keeps none
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,17 @@ class HostingProvider(Protocol):
 
 
 @runtime_checkable
+class CheckLogHost(Protocol):
+    """Reading a failed check's log (DF-290): "CI is red" is not actionable, the log is.
+    Read only; separate from publishing."""
+
+    def check_log(self, repo: RepoRef, check: CheckRun) -> str | None:
+        """The end of the check's log; None when the host keeps no log for it (not a job
+        of the host's own CI, or the log has expired)."""
+        ...
+
+
+@runtime_checkable
 class ReviewHost(Protocol):
     """Reading and reviewing pull requests (M2-46: skill submissions). Separate from
     `HostingProvider`, so publishing a run needs none of it. Still no merge: a person
@@ -149,6 +162,48 @@ class ReviewHost(Protocol):
     ) -> None:
         """Approve or request changes; with `commit`, the review is of that commit."""
         ...
+
+
+@dataclass(frozen=True)
+class PullRequestReview:
+    """A review of a pull request. `state` is lower case: `changes_requested`,
+    `commented`, `approved`, `dismissed` or `pending`."""
+
+    id: int
+    author: str  # the host's login
+    state: str
+    body: str
+    submitted_at: datetime | None = None
+    commit: str = ""  # the commit it reviewed
+
+
+@dataclass(frozen=True)
+class ReviewComment:
+    """An inline review comment. `line` is None when the line is gone from the newest diff
+    (an outdated comment); `in_reply_to` names the comment that opened its thread."""
+
+    id: int
+    review_id: int | None
+    author: str
+    body: str
+    path: str
+    line: int | None
+    created_at: datetime | None = None
+    in_reply_to: int | None = None
+    commit: str = ""
+
+
+@runtime_checkable
+class FeedbackHost(Protocol):
+    """Reading what people said about a pull request (M3-11: the learning loop's review
+    signals). Read only; separate from publishing and from reviewing. The pull request
+    itself is read for its author, whose own comments there are not corrections."""
+
+    def get_pull_request(self, repo: RepoRef, number: int) -> PullRequest: ...
+
+    def pull_request_reviews(self, repo: RepoRef, number: int) -> list[PullRequestReview]: ...
+
+    def pull_request_review_comments(self, repo: RepoRef, number: int) -> list[ReviewComment]: ...
 
 
 _SCHEME = re.compile(r"^([A-Za-z][A-Za-z0-9+.-]*)://(.*)$", re.DOTALL)

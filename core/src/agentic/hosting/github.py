@@ -9,7 +9,10 @@ The token is kept to the API:
 
   * it is sent only to the configured API origin: https, or plain http to a loopback
     host (a local fake in tests); redirects are never followed, and a pagination link
-    to any other origin is refused;
+    to any other origin is refused. The one exception is a job log (DF-290): GitHub
+    answers with a redirect to a short-lived signed download URL, which is followed
+    once, over https, by a client that carries no token, and whose signature is never
+    put in a message;
   * it is never in a repr, and every error message is scrubbed of it, even when the
     server echoes the request back.
 
@@ -20,6 +23,7 @@ commit statuses (Jenkins, many older integrations), mapped into the one vocabula
 
 import base64
 import ipaddress
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -31,7 +35,9 @@ from agentic.hosting.base import (
     HostingError,
     ListingIncomplete,
     PullRequest,
+    PullRequestReview,
     RepoRef,
+    ReviewComment,
     splice_body,
 )
 from agentic.transport.network import NetworkSettings, ssl_context
@@ -41,6 +47,9 @@ GITHUB_COM_API = "https://api.github.com"
 API_VERSION = "2022-11-28"
 MAX_PAGES = 20  # 2000 checks on one commit is far past any real pipeline
 MAX_FILE_PAGES = 30  # GitHub lists at most 3000 files of a pull request
+LOG_LIMIT = 20_000  # characters of a job log kept: its end, where the failure is
+_LOG_CUT = "[... the start of the log was cut ...]\n"
+_ACTIONS_APP = "github-actions"  # a check run of this app is an Actions job, same id
 #: commit status `state` -> (check `status`, `conclusion`)
 _STATUS_STATES = {
     "success": ("completed", "success"),
@@ -90,6 +99,9 @@ class GitHubHost:
         self.api_url = _checked_api_url(api_url)
         self._origin = httpx2.URL(self.api_url)
         self._token = token
+        self._network = network
+        self._timeout = timeout
+        self._transport = transport
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
@@ -166,6 +178,7 @@ class GitHubHost:
                 status=str(row.get("status") or ""),
                 conclusion=row.get("conclusion") or None,
                 link=str(row.get("html_url") or ""),
+                log_ref=_job_id(row),
             )
             for page in self._pages(f"{commit}/check-runs")
             for row in page.get("check_runs") or []
@@ -186,6 +199,58 @@ class GitHubHost:
                     )
                 )
         return runs
+
+    def check_log(self, repo: RepoRef, check: CheckRun) -> str | None:
+        """The end of an Actions job's log (at most LOG_LIMIT characters); None when the
+        check is not an Actions job or GitHub no longer keeps its log (404, 410)."""
+        if not check.log_ref.isdigit():
+            return None
+        url = f"{self.api_url}{self._repo_path(repo)}/actions/jobs/{check.log_ref}/logs"
+        try:
+            response = self._send("GET", url, redirect=True)
+        except HostingApiError as error:
+            if error.status in (404, 410):
+                return None
+            raise
+        if response.is_redirect:
+            response = self._download(response.headers.get("location", ""))
+        return _tail(response.content.decode("utf-8", errors="replace"), LOG_LIMIT)
+
+    def _download(self, location: str) -> httpx2.Response:
+        """GET a signed download URL the API redirected to: https only (plain http only
+        to a loopback host when the API itself is one), no token, no further redirect.
+        Messages name its host and path, never its query (the signature)."""
+        try:
+            target = httpx2.URL(location)
+        except Exception:  # noqa: BLE001 - any unparsable URL is the same refusal
+            raise HostingError("GitHub API: the log download link is not a URL") from None
+        local = target.scheme == "http" and _loopback(target.host) and _loopback(self._origin.host)
+        if not ((target.scheme == "https" and target.host) or local):
+            raise HostingError(
+                f"GitHub API: refused to download a log over {target.scheme or '?'} from "
+                f"{target.host or '?'}"
+            )
+        where = f"GET {target.host}{target.path}"
+        if self._transport is not None:
+            client = httpx2.Client(timeout=self._timeout, transport=self._transport)
+        else:
+            settings = self._network or NetworkSettings()
+            client = httpx2.Client(
+                timeout=self._timeout, verify=ssl_context(settings), trust_env=settings.trust_env
+            )
+        with client:
+            try:
+                response = client.get(target)
+            except httpx2.HTTPError as error:
+                message = f"GitHub log {where}: could not reach it ({type(error).__name__})"
+                raise HostingError(message, transient=True) from None
+        if response.status_code >= 300:
+            raise HostingApiError(
+                f"GitHub log {where}: HTTP {response.status_code}",
+                response.status_code,
+                transient=_transient(response),
+            )
+        return response
 
     # ── reviews (ReviewHost, M2-46) ──────────────────────────────────────────
 
@@ -337,6 +402,43 @@ class GitHubHost:
             classic_readable=classic_readable,
         )
 
+    # ── what people said (FeedbackHost, M3-11) ───────────────────────────────
+
+    def pull_request_reviews(self, repo: RepoRef, number: int) -> list[PullRequestReview]:
+        """Every review of the pull request, oldest first (every page)."""
+        path = f"{self._repo_path(repo)}/pulls/{int(number)}/reviews"
+        return [
+            PullRequestReview(
+                id=int(row["id"]),
+                author=_login(row),
+                state=str(row.get("state") or "").lower(),
+                body=str(row.get("body") or ""),
+                submitted_at=_moment(row.get("submitted_at")),
+                commit=str(row.get("commit_id") or ""),
+            )
+            for row in self._rows(path)
+            if isinstance(row.get("id"), int)
+        ]
+
+    def pull_request_review_comments(self, repo: RepoRef, number: int) -> list[ReviewComment]:
+        """Every inline review comment of the pull request, oldest first (every page)."""
+        path = f"{self._repo_path(repo)}/pulls/{int(number)}/comments"
+        return [
+            ReviewComment(
+                id=int(row["id"]),
+                review_id=_int(row.get("pull_request_review_id")),
+                author=_login(row),
+                body=str(row.get("body") or ""),
+                path=str(row.get("path") or ""),
+                line=_int(row.get("line")),
+                created_at=_moment(row.get("created_at")),
+                in_reply_to=_int(row.get("in_reply_to_id")),
+                commit=str(row.get("commit_id") or ""),
+            )
+            for row in self._rows(path)
+            if isinstance(row.get("id"), int)
+        ]
+
     # ── HTTP ─────────────────────────────────────────────────────────────────
 
     def _repo_path(self, repo: RepoRef) -> str:
@@ -345,14 +447,27 @@ class GitHubHost:
         return f"/repos/{quote(repo.owner, safe='')}/{quote(repo.name, safe='')}"
 
     def _pages(self, path: str) -> list[dict]:
+        """Every page of a paginated GET whose pages are objects."""
+        return [data if isinstance(data, dict) else {} for data in self._raw_pages(path)]
+
+    def _rows(self, path: str) -> list[dict]:
+        """Every row of a paginated GET whose pages are lists."""
+        return [
+            row
+            for data in self._raw_pages(path)
+            if isinstance(data, list)
+            for row in data
+            if isinstance(row, dict)
+        ]
+
+    def _raw_pages(self, path: str) -> list[Any]:
         """Every page of a paginated GET, following `Link: next` on the API origin only."""
-        pages: list[dict] = []
+        pages: list[Any] = []
         url: str | None = self.api_url + path
         params: dict | None = {"per_page": "100"}
         for _ in range(MAX_PAGES):
             response = self._send("GET", url, params=params)
-            data = _body(response)
-            pages.append(data if isinstance(data, dict) else {})
+            pages.append(_body(response))
             url = response.links.get("next", {}).get("url")
             if not url:
                 break
@@ -362,7 +477,11 @@ class GitHubHost:
     def _json(self, method: str, path: str, **kwargs: Any) -> Any:
         return _body(self._send(method, self.api_url + path, **kwargs))
 
-    def _send(self, method: str, url: str, **kwargs: Any) -> httpx2.Response:
+    def _send(
+        self, method: str, url: str, *, redirect: bool = False, **kwargs: Any
+    ) -> httpx2.Response:
+        """One API request; any answer of 300 or above is a HostingApiError, except a
+        redirect when `redirect` is set (returned unfollowed, for the caller to judge)."""
         target = httpx2.URL(url)
         if not self._same_origin(target):
             raise HostingError(
@@ -375,7 +494,7 @@ class GitHubHost:
             reason = f"{type(error).__name__}: {error}"
             message = f"GitHub API {where}: could not reach {self._origin.host} ({reason})"
             raise HostingError(self._scrub(message), transient=True) from None
-        if response.status_code >= 300:
+        if response.status_code >= 300 and not (redirect and response.is_redirect):
             raise HostingApiError(
                 self._scrub(_explain(where, response)),
                 response.status_code,
@@ -485,6 +604,44 @@ def _explain(where: str, response: httpx2.Response) -> str:
     else:
         meaning = "the API refused the request"
     return f"GitHub API {where}: HTTP {status} - {meaning}" + (f" ({said})" if said else "")
+
+
+def _login(row: dict) -> str:
+    return str((row.get("user") or {}).get("login") or "")
+
+
+def _job_id(row: dict) -> str:
+    """A check run's Actions job id (the same number as the check run's), as its log
+    handle; empty for a check of any other app, whose log GitHub does not hold."""
+    app = row.get("app") if isinstance(row.get("app"), dict) else {}
+    number = _int(row.get("id"))
+    return str(number) if app.get("slug") == _ACTIONS_APP and number is not None else ""
+
+
+def _tail(text: str, limit: int) -> str:
+    """The last `limit` characters of a log, from a line start, marked when cut."""
+    if len(text) <= limit:
+        return text
+    kept = text[-limit:]
+    newline = kept.find("\n")
+    if 0 <= newline < len(kept) - 1:
+        kept = kept[newline + 1 :]
+    return _LOG_CUT + kept
+
+
+def _int(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _moment(value: Any) -> datetime | None:
+    """An API time stamp (ISO 8601, `Z` for UTC), or None."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
 def _pull_request(data: Any) -> PullRequest:

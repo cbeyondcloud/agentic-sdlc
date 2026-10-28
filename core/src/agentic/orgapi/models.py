@@ -10,8 +10,9 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
+from agentic.learning.records import AGENT_NAME, Attribution
 from agentic.orgapi.rbac import EffectivePermissions
 
 #: Every route lives under this prefix.
@@ -603,6 +604,61 @@ class PersonalFile(BaseModel):
     device: str
     seq: int
     at: str
+
+
+class FeedbackIngestRequest(RequestModel):
+    """`POST /v1/runs/{run_id}/feedback`: a batch of the run's feedback-journal entries
+    exactly as chained (M3-11), in order."""
+
+    entries: list[dict[str, Any]] = Field(min_length=1, max_length=1000)
+
+
+class FeedbackInfo(BaseModel):
+    """One feedback record as the control plane holds it (M3-11, M3-12): read by its author
+    (the user whose CLI sent it) and by holders of `dashboard.view.team` in its team."""
+
+    id: str
+    run_id: str
+    team: str
+    repo: str | None = None
+    signal: str
+    actor: str  # who gave the correction (an email, or a host login for a review comment)
+    given_at: datetime
+    text: str = ""
+    source: str
+    gate: str | None = None
+    kind: str | None = None
+    agent: str | None = None
+    path: str | None = None
+    line: int | None = None
+    attribution: Attribution | None = None
+    lesson: str = ""
+    author: str  # the user whose CLI sent it
+    corrected_by: str | None = None
+
+
+class AttributionCorrection(RequestModel):
+    """`PUT /v1/learning/feedback/{id}/attribution`: a person's correction (M3-12)."""
+
+    agents: list[Annotated[str, StringConstraints(pattern=AGENT_NAME)]] = Field(
+        min_length=1, max_length=8
+    )
+    reason: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+
+
+class ProposalInfo(BaseModel):
+    """A proposal made from repeated corrections (M3-13). Created only: approving and
+    applying it are later steps (L4-L6), so nothing has changed because it exists."""
+
+    id: str
+    team: str
+    agent: str
+    scope: str
+    lesson: str
+    evidence: list[str]
+    status: Literal["pending", "rejected"]
+    created_at: datetime
+    decided_at: datetime | None = None
 
 
 def invite_url(public_url: str, token: str) -> str:

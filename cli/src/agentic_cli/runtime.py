@@ -64,6 +64,7 @@ from agentic_cli.codeintel import codeintel_for as codeintel_factory
 from agentic_cli.codeintel import codeintel_settings, codeintel_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.learning import FeedbackCapture
 from agentic_cli.skill_activity import SkillActivity, StampingRecorder
 from agentic_cli.standalone import PLACEHOLDER
 from agentic_cli.step_extras import StepExtras
@@ -182,6 +183,8 @@ class Runtime:
         self.sink_problem: str | None = None  # why runs are not reported (a warning)
         self._killswitch: KillSwitch | None = None
         self._me: Me | None | bool = False  # False: not asked yet
+        # runs whose feedback journal grew during this command (M3-11): delivered at its end
+        self.feedback_runs: set[str] = set()
 
     @property
     def user(self) -> str:
@@ -284,6 +287,15 @@ class Runtime:
             if left:
                 queued[run_id] = left
         return queued
+
+    def deliver_feedback(self, warn: Callable[[str], None]) -> None:
+        """Send the feedback journals that grew during this command (after `close_sinks`,
+        so the control plane holds each run's events first); a failure stays queued."""
+        from agentic_cli.learning import deliver
+
+        for run_id in sorted(self.feedback_runs):
+            deliver(self, run_id, warn)
+        self.feedback_runs.clear()
 
     def gates(self, run_id: str) -> ZyrofloGates:
         if run_id not in self._gates:
@@ -593,6 +605,8 @@ class Runtime:
             step_logs=StepLogs(self.redact(gateway)),
             redact=self.redact(gateway),  # pause reasons and step details in run.json
             handoff_prefix=RUNS.as_posix(),  # repo-relative Agentic-Handoff trailers (DF-174)
+            # gate corrections -> the run's feedback journal, sent when the command ends (M3-11)
+            feedback=FeedbackCapture(self, deferred=True),
         )
 
     def repo_key(self) -> str | None:
