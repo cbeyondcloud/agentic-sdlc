@@ -74,10 +74,19 @@ QUIET = {
     "DISABLE_AUTOUPDATER": "1",
 }
 
-#: The one Claude Code setting a step keeps from the user's environment: Windows needs it
-#: to find bash. Any other `CLAUDE*` variable is the user's own setup or a parent Claude
-#: Code session's (its id, its messaging socket), and is blanked unless policy passes it.
-KEEP_CLAUDE = frozenset({"CLAUDE_CODE_GIT_BASH_PATH"})
+#: The Claude Code settings a step does not blank: Windows needs the bash path, and the SDK
+#: manages the others itself (it sets the entry point, drops CLAUDECODE, and defaults the
+#: session-state switch only when it is absent). Any other `CLAUDE*` variable is the user's
+#: own setup or a parent Claude Code session's (its id, its messaging socket), and is
+#: blanked unless policy passes it.
+KEEP_CLAUDE = frozenset(
+    {
+        "CLAUDE_CODE_GIT_BASH_PATH",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDECODE",
+        "CLAUDE_CODE_SDK_READS_SESSION_STATE",
+    }
+)
 
 
 #: The token counts of one model call's usage, as Claude Code streams them.
