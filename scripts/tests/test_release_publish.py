@@ -57,6 +57,16 @@ def creds(index: LocalIndex) -> dict[str, str]:
         "https://PyPI.org/simple",
         "http://packages.example.internal/upload",  # credentials in clear text
         "ftp://packages.example.internal/",
+        # spellings of a public host that resolve to it
+        "https://pypi.org./legacy/",
+        "https://upload.pypi.org../legacy/",
+        "https://test.pypi.org./legacy/",
+        "https://files.pythonhosted.org./",
+        "https://pypi.org%2e/legacy/",
+        "https://%70ypi.org/legacy/",
+        "https://ｐｙｐｉ.org/legacy/",  # fullwidth letters, IDNA-mapped
+        "https://mirror.files.pythonhosted.org/",
+        "https://pypi.org:443/legacy/",
     ],
 )
 def test_public_or_insecure_index_refused(url: str):
@@ -68,6 +78,20 @@ def test_internal_and_loopback_indexes_accepted():
     publish.check_index_url("https://pypi.example-corp.internal/legacy/")
     publish.check_index_url("http://127.0.0.1:8080/")
     publish.check_index_url("http://localhost:3141/root/dev/")
+
+
+def test_credentials_in_the_url_are_refused_and_never_echoed():
+    """Credentials come only from the environment; a URL carrying them is refused, and the
+    refusal (which a CI log keeps) does not repeat them."""
+    secret = "pa" + "ss-in-url"
+    for url in (
+        f"https://user:{secret}@pypi.example-corp.internal/legacy/",
+        f"https://user:{secret}@pypi.org/legacy/",
+    ):
+        with pytest.raises(publish.PublishError) as refused:
+            publish.check_index_url(url)
+        assert secret not in str(refused.value)
+        assert "UV_PUBLISH_" in str(refused.value)
 
 
 def test_uploads_to_a_local_index(index: LocalIndex, tmp_path: Path):

@@ -17,7 +17,7 @@ import shutil
 import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from agentic_release import signing
 
@@ -33,19 +33,44 @@ class PublishError(RuntimeError):
     """The release cannot be published there."""
 
 
-def check_index_url(url: str) -> None:
-    """Refuse a public index, a non-http(s) URL, and plain http off loopback."""
+def shown(url: str) -> str:
+    """`url` without any user:password part, for messages and logs."""
     parts = urlsplit(url)
-    host = (parts.hostname or "").lower()
+    return parts._replace(netloc=parts.netloc.rpartition("@")[2]).geturl()
+
+
+def _host(url: str) -> str:
+    """The host `url` names as DNS resolves it: percent-decoded, without the trailing dots
+    of a fully qualified name, IDNA-mapped (fullwidth letters fold to ASCII), lowercase.
+    '' when it cannot be read, which the caller refuses."""
+    host = unquote(urlsplit(url).hostname or "").rstrip(".")
+    if not host:
+        return ""
+    try:
+        return host.encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        return ""
+
+
+def check_index_url(url: str) -> None:
+    """Refuse a public index (however its host is spelled), a non-http(s) URL, a URL that
+    carries credentials, and plain http off loopback. Messages never repeat credentials."""
+    parts = urlsplit(url)
+    host, safe = _host(url), shown(url)
     if parts.scheme not in ("http", "https") or not host:
-        raise PublishError(f"{url}: give the internal index's http(s) upload URL")
-    if host in PUBLIC_HOSTS or host.endswith(".pypi.org"):
+        raise PublishError(f"{safe}: give the internal index's http(s) upload URL")
+    if "@" in parts.netloc:
         raise PublishError(
-            f"{url} is a public index: agentic-sdlc releases go only to the org's internal "
+            f"{safe}: take the user name and password out of the URL and set "
+            f"{' and '.join(CREDENTIAL_VARS[:2])} (or {CREDENTIAL_VARS[2]}) instead"
+        )
+    if host in PUBLIC_HOSTS or host.endswith((".pypi.org", ".pythonhosted.org")):
+        raise PublishError(
+            f"{safe} is a public index: agentic-sdlc releases go only to the org's internal "
             "index (set AGENTIC_RELEASE_INDEX_URL or --url)"
         )
     if parts.scheme == "http" and host not in LOOPBACK:
-        raise PublishError(f"{url}: plain http would send the index credentials in clear text")
+        raise PublishError(f"{safe}: plain http would send the index credentials in clear text")
 
 
 def publish(
