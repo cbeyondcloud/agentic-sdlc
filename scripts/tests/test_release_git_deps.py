@@ -65,7 +65,7 @@ def lock(tmp_path: Path, commit: str, version: str = "0.3.0") -> Path:
 def test_the_real_lock_names_sdlc_harness_at_a_commit():
     found = {s.name: s for s in build.git_sources(REPO / "uv.lock")}
     assert set(found) == {"sdlc-harness"}
-    assert found["sdlc-harness"].url == "https://github.com/cbeyondcloud/sdlc-harness"
+    assert found["sdlc-harness"].url == "https://github.com/cbeyondcloud/zyroflo"
     assert len(found["sdlc-harness"].commit) == 40
 
 

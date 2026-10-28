@@ -64,8 +64,8 @@ def test_sbom_has_licences(bom: dict):
     assert "Apache" in found["python-dateutil"]["licenses"][0]["license"]["name"]
     # no licence metadata in the wheel: the reason recorded in licence-exceptions.toml
     assert found["cel-python"]["licenses"] == [{"expression": "Apache-2.0"}]
-    harness = found["sdlc-harness"]["licenses"][0]["license"]["name"]
-    assert "Zyroflo" in harness
+    # Zyroflo declares MIT since the Z4/Z5 merge pinned by M2-29 (before: the exception text)
+    assert found["sdlc-harness"]["licenses"] == [{"expression": "MIT"}]
     unchecked = [
         c["name"]
         for c in bom["components"]
