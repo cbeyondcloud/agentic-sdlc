@@ -30,6 +30,8 @@ class FakeGitHub:
         self.pulls: list[dict] = []
         self.check_runs: list[list[dict]] = [[]]  # one list per read; the last one repeats
         self.statuses: list[dict] = []
+        #: Actions job id -> its log, served through a redirect to a token-free download
+        self.job_logs: dict[str, str] = {}
         self.requests: list[dict] = []
         self.fail: dict[str, tuple[int, str]] = {}  # "POST pulls" -> (status, message)
         #: like `fail`, but each matching request uses up the first answer in the list
@@ -63,6 +65,11 @@ class FakeGitHub:
             self.requests.append(
                 {"method": method, "path": path, "query": query, "body": body, "auth": auth}
             )
+            blob = re.fullmatch(r"/_blob/jobs/(?P<id>\d+)", path)
+            if blob and method == "GET":  # the signed download: no token needed, or wanted
+                if query.get("sig") != ["fake-signature"]:
+                    return 403, b"AuthenticationFailed"
+                return 200, self.job_logs.get(blob["id"], "").encode("utf-8")
             if auth != f"Bearer {self.token}":
                 return 401, {"message": f"Bad credentials (got {auth})"}
             for key, answers in self.fail_next.items():
@@ -134,6 +141,12 @@ class FakeGitHub:
         if method == "GET" and re.fullmatch(_REPO + r"/commits/[^/]+/check-runs", path):
             runs = self.check_runs.pop(0) if len(self.check_runs) > 1 else self.check_runs[0]
             return 200, {"total_count": len(runs), "check_runs": runs}
+        job = re.fullmatch(_REPO + r"/actions/jobs/(?P<id>\d+)/logs", path)
+        if job and method == "GET":  # DF-290: GitHub redirects to a short-lived download
+            if job["id"] not in self.job_logs:
+                return 404, {"message": "Not Found"}
+            where = f"{self.url}/_blob/jobs/{job['id']}?sig=fake-signature"
+            return 302, b"", {"location": where}
         if method == "GET" and re.fullmatch(_REPO + r"/commits/[^/]+/status", path):
             return 200, {"state": "pending", "statuses": self.statuses}
         return 404, {"message": "Not Found"}
@@ -237,16 +250,19 @@ class FakeGitHub:
                 length = int(self.headers.get("content-length") or 0)
                 raw = self.rfile.read(length) if length else b""
                 body = json.loads(raw) if raw else None
-                status, data = fake.handle(
+                status, data, *extra = fake.handle(
                     self.command,
                     parts.path,
                     parse_qs(parts.query),
                     body,
                     self.headers.get("authorization", ""),
                 )
-                payload = json.dumps(data).encode("utf-8")
+                raw_body = isinstance(data, bytes)  # a log download, not JSON
+                payload = data if raw_body else json.dumps(data).encode("utf-8")
                 self.send_response(status)
-                self.send_header("content-type", "application/json")
+                self.send_header("content-type", "text/plain" if raw_body else "application/json")
+                for name, value in (extra[0] if extra else {}).items():
+                    self.send_header(name, value)
                 self.send_header("content-length", str(len(payload)))
                 self.end_headers()
                 self.wfile.write(payload)

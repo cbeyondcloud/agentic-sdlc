@@ -83,6 +83,7 @@ class CheckRun:
     status: str
     conclusion: str | None
     link: str = ""
+    log_ref: str = ""  # the host's handle for the check's log; empty when it keeps none
 
 
 class HostingProvider(Protocol):
@@ -99,6 +100,17 @@ class HostingProvider(Protocol):
     def update_pull_request(self, repo: RepoRef, number: int, *, body: str) -> PullRequest: ...
 
     def checks(self, repo: RepoRef, sha: str) -> list[CheckRun]: ...
+
+
+@runtime_checkable
+class CheckLogHost(Protocol):
+    """Reading a failed check's log (DF-290): "CI is red" is not actionable, the log is.
+    Read only; separate from publishing."""
+
+    def check_log(self, repo: RepoRef, check: CheckRun) -> str | None:
+        """The end of the check's log; None when the host keeps no log for it (not a job
+        of the host's own CI, or the log has expired)."""
+        ...
 
 
 @runtime_checkable
