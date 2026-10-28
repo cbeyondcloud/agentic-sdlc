@@ -1,0 +1,32 @@
+# The org skills catalog: every approved skill, pinned by content hash (spec §11.3).
+# Start from the framework's default catalog (library/skills/: catalog.yaml plus one
+# folder per skill, <source>/<name>/) - see README.md. A skill promoted with
+# `agentic skills submit --to org` arrives as a pull request adding
+# internal/<name>/ and its entry below.
+licences: [MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, internal]
+
+excluded:
+  using-superpowers: duplicates the orchestrator (spec 11.4)
+  subagent-driven-development: duplicates the orchestrator (spec 11.4)
+  executing-plans: duplicates the orchestrator (spec 11.4)
+  using-git-worktrees: worktree and branch workflow belong to the engine (spec 11.4)
+  finishing-a-development-branch: worktree and branch workflow belong to the engine (spec 11.4)
+
+skills: {}
+
+# Agent-CLI plugins a team may opt into for steps delegated to a backend that loads
+# plugins (never the native loop; M2-47). Vendor the plugin at a pinned commit into
+# plugins/<name>/, have a person review its scripts and hooks, then catalogue it and let
+# teams list it in policy/teams/<team>.yaml `backend_plugins`. The visual companion of
+# the brainstorming skill is excluded: it is never installed.
+# plugins:
+#   superpowers:
+#     source: https://github.com/obra/superpowers
+#     commit: <40-hex commit, released at least two weeks ago>
+#     licence: MIT
+#     owner: platform-team
+#     version: <its version>
+#     sha256: sha256:<the folder's digest; `agentic policy check` prints the one it found>
+#     scripts_reviewed_by: <the person who reviewed its scripts and hooks>
+#     backends: []                     # empty: every agent-CLI backend that loads plugins
+#     exclude: [skills/brainstorming/visual-companion/**]

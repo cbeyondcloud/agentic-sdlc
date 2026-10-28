@@ -1,0 +1,18 @@
+id: design-webhook-retries
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: Design the webhook delivery retries described in the approved requirements.
+  handoff_files:
+    requirements: golden/requirements/03-webhook-retries.md
+expected:
+  golden: golden/design/03-webhook-retries.md
+  key_points:
+    - retries survive a restart (persisted, not in-process sleeps)
+    - outcomes are classified into success, temporary and permanent
+    - jitter or another guard against retry bursts
+    - one record of attempts serves the list and replay
+rubric: design
+tags: [integrations, fixture]

@@ -1,0 +1,17 @@
+id: ba-bulk-tagging
+agent: business-analyst
+case_class: scoping
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    The catalogue team tags products one at a time and wants to tag many products at
+    once from the product list. Write the requirements.
+expected:
+  key_points:
+    - select many products and add or remove a tag in one action
+    - a limit on how many products one action may change
+    - partial failure is reported per product
+    - only catalogue editors may bulk-tag
+rubric: ba-requirements
+tags: [catalogue, fixture]

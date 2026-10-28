@@ -1,0 +1,27 @@
+# Versions team by team (spec §12.5). Org admins roll a new version of an agent or a
+# pipeline out to some teams first; every other team keeps the previous version until
+# the entry is removed. Keep each previous version beside the current file:
+#
+#   agents/versions/<name>/<version>.md        pipelines/versions/<name>/<version>.yaml
+#
+# (`agentic policy check` refuses an entry whose previous version is not archived, or
+# whose version is not the current file's.) A team's leads may pin a version instead,
+# in policy/teams/<team>.yaml `pins:`. Which version a team gets: its pin, else the
+# previous version when the team is not in the rollout, else the current file.
+rollout: {}
+# rollout:
+#   agents:
+#     developer: {version: 1.3.0, previous: 1.2.0, teams: [payments]}
+#   pipelines:
+#     feature-delivery: {version: 2.0.0, previous: 1.4.0, teams: [payments]}
+
+# Deprecated versions: runs are warned until blocked_from, and refused from that day
+# (UTC) - by the CLI and by the control plane's own clock. Skills too, by catalog version.
+deprecated: {}
+# deprecated:
+#   agents:
+#     developer:
+#       "1.1.0": {blocked_from: 2026-12-01, note: use 1.2.0 or later}
+#   skills:
+#     test-driven-development:
+#       "1.0.0": {blocked_from: 2027-01-15}

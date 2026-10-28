@@ -1,0 +1,3 @@
+# Licences agents must not introduce as new dependencies.
+blocked: [AGPL-3.0, GPL-3.0, SSPL-1.0]
+scan: true

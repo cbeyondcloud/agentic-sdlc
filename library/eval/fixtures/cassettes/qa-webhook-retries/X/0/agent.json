@@ -1,0 +1,15 @@
+{
+ "key": "qa-webhook-retries/X/0/agent",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:bdbb0b794c6ce040aecfeaa9747c9c783cbbf22a2a87382fd80f9ff7de5f5400",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"agent-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nkind: test-report\\nschema_version: 1\\nrun_id: golden-03\\nstep: qa\\nagent: qa@1.0.0\\nproduced_at: 2026-10-21T13:20:00Z\\nstatus: complete\\nsummary: Retries and the deliveries list pass, but replay with the original signature scheme is unverified because its test is skipped.\\nverdict: fail\\ntests: {passed: 156, failed: 0, skipped: 1}\\nacceptance_results:\\n  - {criterion_id: REQ-1.1, passed: true, evidence: \\\"tests/webhooks/test_retry.py::test_schedule_steps\\\"}\\n  - {criterion_id: REQ-1.2, passed: true, evidence: \\\"tests/webhooks/test_retry.py::test_permanent_errors_not_retried\\\"}\\n  - {criterion_id: REQ-2.1, passed: true, evidence: \\\"tests/api/test_deliveries.py::test_lists_failed_deliveries\\\"}\\n  - {criterion_id: REQ-3.1, passed: false, evidence: \\\"test_replay_keeps_signature_scheme is skipped: no test shows the original signature scheme is used\\\"}\\ndependency_scan: {blocked_licences: [], vulnerabilities: []}\\nopen_questions: []\\n---\\n# Test report: webhook delivery retries\\n\\n## Summary\\nThree of four criteria pass. REQ-3.1 (replay keeps the original signature scheme) has no passing test: the only test for it is skipped until the signing-key fixture exists.\\n\\n## Verdict\\nFail: REQ-3.1 is not shown to be met.\\n\\n## Test results\\n156 passed, 0 failed, 1 skipped.\\n\\n## Acceptance criteria\\n| Criterion | Result | Evidence |\\n|---|---|---|\\n| REQ-1.1 | pass | test_schedule_steps |\\n| REQ-1.2 | pass | test_permanent_errors_not_retried |\\n| REQ-2.1 | pass | test_lists_failed_deliveries |\\n| REQ-3.1 | fail | its test is skipped |\\n\\n## Dependency scan\\nNo new dependencies.\\n\\n## Open questions\\nNone.\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

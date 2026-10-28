@@ -1,0 +1,50 @@
+id: qa-pickup-slots
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the collection slot work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Shoppers pick a collection slot with per-store capacity."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "Only slots with capacity are offered."
+          acceptance_criteria:
+            - "WHEN a slot has reached its capacity THE system SHALL not offer it."
+            - "WHEN payment fails THE system SHALL release the held slot within 10 minutes."
+        - id: REQ-2
+          statement: "Slots are shown in store time."
+          acceptance_criteria:
+            - "WHEN slots are listed THE system SHALL show times in the store's local time zone."
+        - id: REQ-3
+          statement: "Shoppers can change their slot."
+          acceptance_criteria:
+            - "WHEN a shopper changes their slot before the cut-off THE system SHALL move the order to the new slot."
+      ---
+      # Requirements: collection slots
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Slot listing, holds during payment, slot change."
+      files_changed: [pickup/slots.py, checkout/hold.py, web/SlotPicker.vue]
+      tests_run: {passed: 64, failed: 0, skipped: 0}
+      deviations_from_design:
+        - "Slot times are rendered with the browser's time zone."
+        - "Holds are released by a nightly clean-up job."
+      ---
+      # Development report: collection slots
+
+      ## What changed
+      The slot picker lists slots that still have capacity. Choosing a slot places a hold; a
+      successful payment converts it into a booking. Shoppers can change their slot from the
+      order page until the cut-off, which moves the booking.
+expected:
+  failing_criteria: [REQ-1.2, REQ-2.1]
+tags: [retail]

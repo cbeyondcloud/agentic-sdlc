@@ -1,0 +1,59 @@
+{
+  "_source": "TokenLean src/proxy/main.py:1394-1404,1587 (live stream, no headers, provider usage chunk relayed)",
+  "headers": {
+    "x-trace-id": "4bf92f3577b34da6a3ce929d0e0e4736"
+  },
+  "events": [
+    {
+      "id": "c1",
+      "model": "gpt-5-mini",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "role": "assistant"
+          }
+        }
+      ],
+      "usage": null
+    },
+    {
+      "id": "c1",
+      "model": "gpt-5-mini",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {
+            "content": "done"
+          }
+        }
+      ],
+      "usage": null
+    },
+    {
+      "id": "c1",
+      "model": "gpt-5-mini",
+      "choices": [
+        {
+          "index": 0,
+          "delta": {},
+          "finish_reason": "stop"
+        }
+      ],
+      "usage": null
+    },
+    {
+      "id": "c1",
+      "model": "gpt-5-mini",
+      "choices": [],
+      "usage": {
+        "prompt_tokens": 800,
+        "completion_tokens": 150,
+        "total_tokens": 950,
+        "prompt_tokens_details": {
+          "cached_tokens": 200
+        }
+      }
+    }
+  ]
+}

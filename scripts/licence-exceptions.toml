@@ -1,0 +1,10 @@
+# Packages allowed despite failing scripts/licence_check.py, each with the reason.
+# Add an entry only after checking the licence at the source; remove it when the
+# package is no longer locked (the check fails on stale entries).
+
+[allow]
+agent-client-protocol = "Apache-2.0 (licenses/LICENSE in the 0.12.1 wheel; github.com/agentclientprotocol/python-sdk); the wheel carries no licence metadata (spike S7, M2-57)"
+cel-python = "Apache-2.0 (LICENSE in github.com/cloud-custodian/cel-python); the wheel carries no licence metadata"
+tiktoken = "MIT (LICENSE in github.com/openai/tiktoken); the wheel carries no licence metadata"
+sdlc-harness = "The owner's own Zyroflo library, reused as a pinned internal dependency (D34)"
+certifi = "MPL-2.0, used unmodified (Mozilla CA bundle; file-level copyleft applies only to modified files). Transitive via httpx/requests; overnight decision 2026-10-21"

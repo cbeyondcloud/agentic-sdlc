@@ -1,0 +1,24 @@
+# The framework dashboards' one datasource (ruling D1): uid agentic-postgres, logged in as
+# the tenant's dashboard reader role (`python -m agentic_cp db dashboard-role`), which may
+# read only the dash_* views and sees only its own tenant's rows. In a multi-tenant
+# deployment each tenant's Grafana organisation provisions this uid with its own reader.
+# Values come from the container's environment (deploy/org-local/.env.org), never this file.
+apiVersion: 1
+
+datasources:
+  - name: Agentic
+    type: grafana-postgresql-datasource
+    uid: agentic-postgres
+    orgId: 1
+    url: ${AGENTIC_DASH_DB_HOST}
+    user: ${AGENTIC_DASH_READER}
+    secureJsonData:
+      password: ${AGENTIC_DASH_READER_PASSWORD}
+    jsonData:
+      database: ${AGENTIC_DASH_DB_NAME}
+      sslmode: disable
+      postgresVersion: 1700
+      maxOpenConns: 5
+      maxIdleConns: 2
+    isDefault: true
+    editable: false

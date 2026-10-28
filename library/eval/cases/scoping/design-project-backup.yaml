@@ -1,0 +1,32 @@
+id: design-project-backup
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the project backup described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "A local backup and restore of a project folder that copes with locked files."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "Backups are complete or say what is missing."
+          acceptance_criteria:
+            - "WHEN a file cannot be read because another process locks it THE system SHALL retry, then list it as skipped in the report."
+            - "WHEN the backup finishes THE system SHALL write a manifest with each file's relative path and SHA-256."
+        - id: REQ-2
+          statement: "Restores are safe."
+          acceptance_criteria:
+            - "WHEN a file to restore is newer locally than in the archive THE system SHALL ask before overwriting it."
+      ---
+      # Requirements: project backup
+expected:
+  key_points:
+    - "the archive stores POSIX relative paths and is restored with the target's separator"
+    - "locked-file reads are retried with a short backoff before being reported"
+    - "restore compares hashes and modification times before writing"
+rubric: design
+tags: [developer-tools, windows, file-locking]

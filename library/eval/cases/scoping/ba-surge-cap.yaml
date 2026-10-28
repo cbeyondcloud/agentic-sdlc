@@ -1,0 +1,18 @@
+id: ba-surge-cap
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Regulators in two cities now cap surge pricing for ride hailing at twice the base fare
+    during declared emergencies. Write the requirements for enforcing the cap.
+expected:
+  key_points:
+    - "a city operator can declare and end an emergency for an area"
+    - "fares quoted during an emergency never exceed the cap"
+    - "a quote made before the emergency is honoured or re-quoted, by rule"
+    - "the cap applies to the whole fare including surge components"
+    - "every capped quote is logged for regulator reports"
+rubric: ba-requirements
+tags: [mobility, pricing]

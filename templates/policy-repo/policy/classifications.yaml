@@ -1,0 +1,21 @@
+# Repo sensitivity classes and what each may use (spec §12.4). A repo names its class
+# in .agentic/config.yaml (`agentic init --repo` asks); a repo that names none gets the
+# default. allowed_backends: `native` runs agents in the framework itself; to let a class
+# use an agent-CLI backend, add its name here AND to the agent type in agent-types.yaml.
+default_classification: internal
+classifications:
+  public:
+    allowed_tiers: [deep-reasoning, balanced, fast, local]
+    allowed_backends: [native]
+  internal:
+    allowed_tiers: [deep-reasoning, balanced, fast, local]
+    allowed_backends: [native]
+    trace_capture: false                # full prompts and responses stay off the control plane
+  confidential:
+    allowed_tiers: [deep-reasoning, balanced, local]
+    allowed_backends: [native]
+  restricted:                           # code that must never leave the org's machines
+    allowed_tiers: [local]
+    allowed_backends: [native]
+    personal_skills: false              # only reviewed, shared skills and memory here
+    personal_memory: false              # (decision 89)

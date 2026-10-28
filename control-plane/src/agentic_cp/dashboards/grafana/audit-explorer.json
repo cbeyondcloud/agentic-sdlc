@@ -1,0 +1,166 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Who did what and why: the tenant's audit chain, by actor, team and event.",
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT seq, at, actor, actor_kind, event, team, target, reason, run_id, policy_version FROM dash_audit WHERE $__timeFilter(at) AND event IN ($event) AND actor IN ($actor) ORDER BY seq DESC LIMIT 1000",
+          "refId": "A"
+        }
+      ],
+      "title": "Audit records",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "id": 2,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT event, COUNT(*) AS records FROM dash_audit WHERE $__timeFilter(at) AND event IN ($event) AND actor IN ($actor) GROUP BY event ORDER BY records DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Records by event",
+      "type": "barchart"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 3,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(at, '1d'), actor_kind AS metric, COUNT(*) AS value FROM dash_audit WHERE $__timeFilter(at) AND event IN ($event) AND actor IN ($actor) GROUP BY 1, 2 ORDER BY 1",
+          "refId": "A"
+        }
+      ],
+      "title": "Records per day by actor kind",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "agentic"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "agentic-postgres"
+        },
+        "definition": "SELECT DISTINCT event FROM dash_audit ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Event",
+        "multi": true,
+        "name": "event",
+        "options": [],
+        "query": "SELECT DISTINCT event FROM dash_audit ORDER BY 1",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "agentic-postgres"
+        },
+        "definition": "SELECT DISTINCT actor FROM dash_audit ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Actor",
+        "multi": true,
+        "name": "actor",
+        "options": [],
+        "query": "SELECT DISTINCT actor FROM dash_audit ORDER BY 1",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Agentic - Audit explorer",
+  "uid": "agentic-audit-explorer",
+  "version": 1
+}

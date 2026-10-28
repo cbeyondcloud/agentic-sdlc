@@ -1,0 +1,32 @@
+id: design-pickup-slots
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the collection slots described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Shoppers pick a 30-minute in-store collection slot with per-store capacity."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "Only slots with capacity are offered."
+          acceptance_criteria:
+            - "WHEN a slot has reached its capacity THE system SHALL not offer it."
+            - "WHEN payment fails THE system SHALL release the held slot within 10 minutes."
+        - id: REQ-2
+          statement: "Stores configure their slots."
+          acceptance_criteria:
+            - "WHEN a store changes its capacity THE system SHALL keep existing bookings and apply the new limit to new ones."
+      ---
+      # Requirements: collection slots
+expected:
+  key_points:
+    - "capacity is enforced with an atomic counter or a conditional update per slot"
+    - "holds expire automatically so abandoned checkouts free capacity"
+    - "slot times are generated in the store's time zone and stored in UTC"
+rubric: design
+tags: [retail]

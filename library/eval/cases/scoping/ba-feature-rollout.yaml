@@ -1,0 +1,18 @@
+id: ba-feature-rollout
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Teams switch features on for everyone at once and roll back by redeploying. Give them
+    percentage rollouts with an instant kill switch. Write the requirements.
+expected:
+  key_points:
+    - "a flag can be on for a percentage of users, and the same user always gets the same answer"
+    - "a kill switch turns a flag off everywhere within seconds"
+    - "changes to flags are audited with who and why"
+    - "services keep working with the last known flags if the flag service is down"
+    - "targeting by tenant or region in addition to percentage"
+rubric: ba-requirements
+tags: [platform]

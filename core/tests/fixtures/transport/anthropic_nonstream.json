@@ -1,0 +1,24 @@
+{
+  "_source": "TokenLean src/proxy/main.py:2560-2561 (_token_opt dropped), protocols/anthropic_ingress.py:267-270 (usage)",
+  "headers": {
+    "x-tokenlean-request-id": "req-2",
+    "x-tokenlean-routed-model": "claude-sonnet-5-5",
+    "x-tokenlean-cache": "miss",
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "msg_1",
+    "type": "message",
+    "model": "claude-sonnet-5-5",
+    "content": [
+      {
+        "type": "text",
+        "text": "done"
+      }
+    ],
+    "usage": {
+      "input_tokens": 1000,
+      "output_tokens": 200
+    }
+  }
+}

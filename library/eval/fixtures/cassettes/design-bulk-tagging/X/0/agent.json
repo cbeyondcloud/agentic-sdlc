@@ -1,0 +1,15 @@
+{
+ "key": "design-bulk-tagging/X/0/agent",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:44c8872bf2732bdc9797e5e1c9b2f4e1257ebd6aaf15d615fd14ee5d8d06e048",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"agent-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: Bulk tagging is one API call that applies the tag per product in a background job and reports failures per product.\\ndecisions:\\n  - id: D1\\n    choice: Apply the tag per product inside one background job\\n    rationale: One failure must not undo the other products (REQ-2), and 500 updates can exceed a request's time budget.\\n  - id: D2\\n    choice: Enforce the 500-product limit in the API before enqueueing\\n    rationale: The limit protects the database; a client-side check alone can be bypassed.\\nimpact:\\n  modules: [catalogue/tags.py, catalogue/jobs.py, api/routes/tags.py]\\n  interfaces: [\\\"POST /v1/products/tags/bulk\\\"]\\n  tests: [tests/catalogue/test_bulk_tags.py]\\n  confidence: candidate\\nrisks:\\n  - Two bulk actions on the same products can interleave; the last write wins.\\nopen_questions: []\\n---\\n# Design: bulk tagging\\n\\n## Summary\\n`POST /v1/products/tags/bulk` checks the limit and enqueues a job that applies the tag product by product and records failures.\\n\\n## Context and problem statement\\nEditors tag up to 500 products at once (REQ-1) and need to see which failed (REQ-2).\\n\\n## Decision drivers\\nPartial failure must be reported per product; bounded request time.\\n\\n## Considered options\\n- One database transaction for all products: a single failure undoes every change.\\n- Per-product updates in a background job: chosen.\\n\\n## Decision outcome\\n### D1: Apply the tag per product inside one background job\\nOne failure must not undo the others, and 500 updates can exceed a request's time budget.\\n\\n### D2: Enforce the limit in the API\\nA client-side check alone can be bypassed.\\n\\n## Impact\\n`catalogue/tags.py`, `catalogue/jobs.py`, `api/routes/tags.py` (candidates).\\n\\n## Risks\\nInterleaved bulk actions: last write wins, accepted for tags.\\n\\n## Confirmation\\n`tests/catalogue/test_bulk_tags.py` covers 500 products, 501 refused, and one failing product.\\n\\n## Open questions\\nNone.\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

@@ -1,0 +1,19 @@
+id: ba-reset-limits
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Security reports that someone is flooding users' inboxes with password reset emails,
+    and that the reset form tells you whether an email has an account. Write the
+    requirements for fixing this.
+expected:
+  golden: golden/requirements/02-password-reset-rate-limit.md
+  key_points:
+    - a limit per account stops inbox flooding
+    - a limit per client address stops bulk scripted requests
+    - responses must be identical whether or not the account exists, limited or not
+    - refused requests are recorded for the security team
+rubric: ba-requirements
+tags: [auth, security, fixture]

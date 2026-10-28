@@ -1,0 +1,199 @@
+"""What each backend honours, and what org policy does when it cannot (M1-27, spec §9.1).
+
+A resolved agent asks for a backend, tool capabilities and sampling settings. Not
+every backend can honour all of them: Claude Code never sends a temperature and has
+no child agents; Pydantic AI drops temperature for reasoning models (DF-25). Before
+any spend, `backend_issues` names each gap. A missing backend or tool always blocks;
+an unhonoured setting follows `OrgPolicy.unhonoured` (ignore, warn or block).
+
+The matrix is data: vendor-specific tool names live here as values only, so the
+engine, policy and protocols stay provider-agnostic.
+"""
+
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass, field, replace
+from typing import Literal
+
+from agentic.policy import OrgPolicy, ResolvedAgent
+
+Action = Literal["ignore", "warn", "block"]
+
+#: Our tool capabilities, as policy names them (agentic.agents.tools).
+TOOL_CAPABILITIES = (
+    "read_files",
+    "search",
+    "edit_files",
+    "run_shell",
+    "codeintel",
+    "activate_skill",
+    "spawn_agent",
+)
+#: Model names Pydantic AI sends no temperature to: reasoning models (DF-25).
+REASONING_MODEL_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+@dataclass(frozen=True)
+class BackendCapabilities:
+    name: str
+    tools: Mapping[str, tuple[str, ...]]  # our capability -> the backend's tool names
+    temperature: bool
+    effort: bool
+    approvals: bool  # can pause for a person's approval of a tool call
+    children: bool  # can spawn child agents
+    stuck_check: bool
+    # its model calls go through agentic.transport, so the secret scan (M1-41) sees them
+    secret_scan: bool = True
+    # an unlisted shell command is refused (our guard's allow-list; Claude Code's
+    # don't-ask mode). False: it runs, and prefix rules miss a command behind a redirect
+    shell_default_deny: bool = True
+    # it starts an agent process of its own (an agent CLI), which the step's process scope
+    # must contain (M2-22) - what the runner conformance `containment` tier checks (M2-41)
+    own_process: bool = True
+    # it can load an org-catalog plugin into its own per-step config (M2-47): only an agent
+    # CLI with a plugin or skills folder of its own; never the native loop, whose skills
+    # come from the catalog and leave out the orchestration ones (spec §11.4)
+    plugins: bool = False
+    notes: tuple[str, ...] = field(default=())
+
+
+CAPABILITIES: dict[str, BackendCapabilities] = {
+    "native": BackendCapabilities(
+        name="native",
+        tools={name: (name,) for name in TOOL_CAPABILITIES},
+        temperature=True,
+        effort=True,
+        approvals=True,
+        children=True,
+        stuck_check=True,
+        own_process=False,  # Pydantic AI runs in this process; its shell commands are scoped
+    ),
+    "claude-code": BackendCapabilities(
+        name="claude-code",
+        # what Claude Code offers in --bare mode: Read, Edit, Bash (review I5) - no
+        # Grep/Glob/Write, so `search` is unavailable there and preflight blocks it
+        tools={"read_files": ("Read",), "edit_files": ("Edit",), "run_shell": ("Bash",)},
+        temperature=False,
+        effort=True,
+        approvals=False,
+        children=False,
+        stuck_check=False,
+        # Claude Code calls the model itself; only TokenLean sees its egress (DF-149)
+        secret_scan=False,
+        plugins=True,  # a local plugin folder, explicit even in --bare mode
+        notes=("spike S2",),
+    ),
+    "codex": BackendCapabilities(
+        name="codex",
+        # Codex reads, searches and runs commands through one shell tool; it edits with
+        # apply_patch when its model catalog offers it (every model, DF-115), else by shell
+        tools={
+            "read_files": ("exec_command",),
+            "search": ("exec_command",),
+            "run_shell": ("exec_command",),
+            "edit_files": ("apply_patch", "exec_command"),
+        },
+        temperature=False,  # Codex never sends one (S3 Q10)
+        effort=True,  # model_reasoning_effort -> reasoning.effort
+        approvals=False,  # approval_policy = never: a prompt rule is refused
+        children=False,  # multi_agent is off
+        stuck_check=False,
+        secret_scan=False,  # Codex calls the model itself
+        shell_default_deny=False,  # execpolicy has no default-deny (S3 Q6, decision 22)
+        plugins=True,  # the plugin's skills in the step's own CODEX_HOME (DF-118)
+        notes=("spike S3",),
+    ),
+    "opencode": BackendCapabilities(
+        name="opencode",
+        # OpenCode's own permission keys (1.18.35): the ACP profile sets every key and
+        # denies those no capability maps to, which also hides their tools (M2-57, S7)
+        tools={
+            "read_files": ("read", "list"),
+            "search": ("glob", "grep"),
+            "edit_files": ("edit",),
+            "run_shell": ("bash",),
+        },
+        temperature=True,  # set on OpenCode's agent; reasoning models still drop it
+        effort=False,
+        approvals=False,  # the ACP permission callback refuses; no pause yet
+        children=False,
+        stuck_check=False,
+        secret_scan=False,  # OpenCode calls TokenLean itself, past agentic.transport
+        notes=("spike S7", "ACP profile, OpenCode 1.18.35"),
+    ),
+}
+
+
+@dataclass(frozen=True)
+class Issue:
+    setting: str  # backend | tools | ask | temperature | effort | secret_scan | shell_default_deny
+    action: Action
+    detail: str
+
+
+def backend_issues(
+    agent: ResolvedAgent,
+    policy: OrgPolicy,
+    *,
+    available: Collection[str],
+    honoured: Mapping[str, Collection[str]] | None = None,
+) -> list[Issue]:
+    """Every way `agent`'s backend falls short of what the agent asks for. `honoured`
+    names, per backend, the settings the caller's wiring makes good although the static
+    matrix says otherwise (DF-426: codex with the guard hook refuses unlisted commands)."""
+    caps = CAPABILITIES.get(agent.backend)
+    if caps is not None and honoured and honoured.get(agent.backend):
+        wired = {s: True for s in honoured[agent.backend] if s in _WIRABLE}
+        caps = replace(caps, **wired)
+    if caps is None or agent.backend not in available:
+        why = f"backend {agent.backend!r} is not available here (available: {sorted(available)})"
+        return [Issue("backend", "block", why)]
+    found: list[Issue] = []
+    missing = [t for t in agent.tools if t not in caps.tools]
+    if missing:
+        found.append(Issue("tools", "block", f"{agent.backend} cannot offer {missing}"))
+    if agent.ask_shell and not caps.approvals:
+        found.append(
+            Issue(
+                "ask",
+                "warn",
+                f"ask-listed commands are refused (no approval pause on {agent.backend})",
+            )
+        )
+    if agent.temperature is not None and not _temperature_honoured(agent, caps):
+        found += _unhonoured(policy, "temperature", f"{agent.backend} / {agent.model}")
+    if agent.effort is not None and not caps.effort:
+        found += _unhonoured(policy, "effort", agent.backend)
+    if not caps.secret_scan:
+        found += _unhonoured(
+            policy, "secret_scan", f"{agent.backend} (it sends model calls itself, unscanned)"
+        )
+    shell = {name for cap in agent.tools for name in caps.tools.get(cap, ())}
+    if not caps.shell_default_deny and shell & set(caps.tools.get("run_shell", ())):
+        found += _unhonoured(
+            policy,
+            "shell_default_deny",
+            f"{agent.backend} (an unlisted command runs, and a deny rule matches only a "
+            "command that starts with the listed words: a redirect chain, `env git push` or "
+            "`git -C . push` escapes it; the sandbox is the boundary)",
+        )
+    return found
+
+
+#: The matrix flags a wiring may make good (`backend_issues(honoured=...)`): a guard hook
+#: can add the shell's default-deny; a tool the backend lacks, a model setting it drops or
+#: a scan of calls it sends itself, no wiring adds - those are never overridden.
+_WIRABLE = frozenset({"shell_default_deny"})
+
+
+def _temperature_honoured(agent: ResolvedAgent, caps: BackendCapabilities) -> bool:
+    if not caps.temperature:
+        return False
+    name = agent.model.partition("/")[2] or agent.model
+    return not name.lower().startswith(REASONING_MODEL_PREFIXES)
+
+
+def _unhonoured(policy: OrgPolicy, setting: str, where: str) -> list[Issue]:
+    action = policy.unhonoured.get(setting, "warn")
+    if action == "ignore":
+        return []
+    return [Issue(setting, action, f"{setting} is not honoured by {where}")]

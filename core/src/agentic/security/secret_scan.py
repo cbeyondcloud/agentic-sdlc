@@ -1,0 +1,381 @@
+"""Secret scan before content leaves the machine (M1-41, spec §15).
+
+What a model is sent - a request body, a tool's output - is scanned first; a
+secret blocks the call or is masked, as org policy says (`SecretScanPolicy`),
+and every hit is reported as an audit event naming detector types and counts,
+never a value.
+
+The detectors are detect-secrets' (Yelp, Apache-2.0): its regex-based plugins'
+`denylist` patterns. They are run here over whole strings rather than through
+detect-secrets' `scan_line`, which reports only a pattern's first group (`ghp`
+for a GitHub token, the header of a private key - too little to mask) and costs
+about half a millisecond a line. A mask covers the whole match, runs on over
+token characters (a pattern may stop early), and a private key's header masks
+through its END line. The entropy and keyword plugins need line heuristics and
+are not offered. Matching uses `regex` with a deadline; text that cannot be
+scanned in time is treated as a secret (fail closed).
+
+Beside them are detectors of our own (`key_formats`): current provider key
+formats detect-secrets 1.5.0 predates, and narrow password-assignment rules
+(review F1). Documented example values (AWS's `...EXAMPLE` key) and a policy's
+`allow_values` are never findings (review F2).
+
+Content a model wrote itself - its text, its tool calls' arguments - is not
+blocked when it is sent back: `scrub` masks it whatever the action, as resending
+it leaks nothing from this machine and blocking it would end the run on every
+later call. A tool call carrying a secret is refused before it runs (`refusal`).
+"""
+
+import copy
+import dataclasses
+import json
+import logging
+import re
+import time
+from collections import Counter
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
+from functools import cache
+from typing import Literal
+
+import regex
+from detect_secrets.core.plugins.util import get_mapping_from_secret_type_to_class
+from detect_secrets.plugins.base import RegexBasedDetector
+
+from agentic.security.key_formats import DOCUMENTED_EXAMPLES, KEY_FORMATS
+
+Action = Literal["block", "mask"]
+MIN_ALLOWED = 8  # an allowed value shorter than this would let real secrets through
+#: Not secrets: a public IP address is reported by detect-secrets but leaks nothing.
+NOT_SECRETS = frozenset({"IPPublicDetector"})
+UNSCANNABLE = "Unscannable"  # the finding for text the deadline stopped
+#: What a mask looks like, to recognise one coming back (the model may copy it).
+MASKED = re.compile(r"\[MASKED(?: SECRET)?: ")
+_KEY_DETECTOR = "PrivateKeyDetector"
+_KEY_END = re.compile(r"-----END[^\n]{0,64}?-----")
+_TOKEN_TAIL = re.compile(r"[A-Za-z0-9_\-+/=.]*")
+_TOKEN = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-+/=.")
+_FLAGS = ((re.IGNORECASE, regex.IGNORECASE), (re.VERBOSE, regex.VERBOSE))
+DEADLINE_S = 10.0  # per scanned text, across all detectors
+# Detectors whose patterns cannot match without a literal, and backtrack over long lines
+# when run everywhere: they are run only within ANCHOR_WINDOW characters of it (DF-155).
+_ANCHORS = {"NpmDetector": re.compile("_authToken", re.IGNORECASE)}
+ANCHOR_WINDOW = 4096
+
+log = logging.getLogger("agentic.audit")
+
+
+@dataclass(frozen=True)
+class _Detector:
+    name: str  # the detect-secrets plugin class name, as policy names it
+    kind: str  # what it finds, in words ("AWS Access Key")
+    patterns: tuple[regex.Pattern, ...]
+
+
+@cache
+def _catalogue() -> dict[str, _Detector]:
+    found: dict[str, _Detector] = {}
+    for kind, plugin in get_mapping_from_secret_type_to_class().items():
+        if not issubclass(plugin, RegexBasedDetector):
+            continue
+        patterns = tuple(
+            regex.compile(p.pattern, sum(ours for theirs, ours in _FLAGS if p.flags & theirs))
+            for p in plugin().denylist
+        )
+        found[plugin.__name__] = _Detector(plugin.__name__, kind, patterns)
+    for name, (kind, sources) in KEY_FORMATS.items():
+        found[name] = _Detector(name, kind, tuple(regex.compile(p) for p in sources))
+    return dict(sorted(found.items()))
+
+
+def known_detectors() -> list[str]:
+    """Every detector a policy may name: detect-secrets' regex-based plugins and ours."""
+    return list(_catalogue())
+
+
+DEFAULT_DETECTORS = tuple(name for name in _catalogue() if name not in NOT_SECRETS)
+
+
+@dataclass(frozen=True)
+class Finding:
+    detector: str
+    kind: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class SecretScanEvent:
+    """One scan that found something: the audit record. Every value is an id. A scanner
+    bound to a step (`SecretScanner.for_step`) fills in whose scan it was (DF-154)."""
+
+    action: Literal["blocked", "masked"]
+    where: str  # "model-call", "tool:read_file", ...
+    findings: dict[str, int]  # detector -> how many
+    run_id: str = ""
+    step: str = ""
+    agent: str = ""  # <name>@<version>
+
+    def fields(self) -> dict[str, object]:
+        found: dict[str, object] = {
+            "action": self.action,
+            "where": self.where,
+            "findings": dict(self.findings),
+        }
+        for name in ("run_id", "step", "agent"):
+            if value := getattr(self, name):
+                found[name] = value
+        return found
+
+
+class SecretBlocked(Exception):
+    """Content held a secret and policy blocks it. Names kinds and counts, never values."""
+
+    def __init__(self, event: SecretScanEvent, kinds: Iterable[str]) -> None:
+        self.event, self.kinds = event, sorted(set(kinds))
+        self.total = sum(event.findings.values())
+        super().__init__(
+            f"{event.where}: refused before sending - it holds {self.total} secret(s) "
+            f"({', '.join(self.kinds)}) and the secret_scan policy is 'block'. "
+            f"Remove the secret, or ask an admin for secret_scan action 'mask'."
+        )
+
+
+def audit_log(event: SecretScanEvent) -> None:
+    """The default `on_event`: a structured record on the `agentic.audit` logger, its
+    `audit` attribute the event (the run's audit sink, M1-44, takes it from there). The
+    same data goes in `fields`, which the step log keeps: the event is written into the
+    run folder in structured form (DF-147)."""
+    audit = {"event": "secret_scan", **event.fields()}
+    log.warning(
+        "secret scan %s %s: %s",
+        event.action,
+        event.where,
+        event.findings,
+        extra={"audit": audit, "fields": audit},
+    )
+
+
+class SecretScanner:
+    def __init__(
+        self,
+        action: Action = "block",
+        detectors: Iterable[str] | None = None,
+        *,
+        on_event: Callable[[SecretScanEvent], None] | None = None,
+        deadline_s: float = DEADLINE_S,
+        allow: Iterable[str] = (),
+    ) -> None:
+        if action not in ("block", "mask"):
+            raise ValueError(f"action is 'block' or 'mask', not {action!r}")
+        allowed = set(allow)
+        if short := sorted(value for value in allowed if len(value) < MIN_ALLOWED):
+            raise ValueError(
+                f"allow values must be at least {MIN_ALLOWED} characters - a shorter one "
+                f"would let real secrets through ({len(short)} too short)"
+            )
+        self.allowed = frozenset(allowed | DOCUMENTED_EXAMPLES)
+        names = list(DEFAULT_DETECTORS if detectors is None else detectors)
+        catalogue = _catalogue()
+        if unknown := sorted(set(names) - set(catalogue)):
+            raise ValueError(f"unknown detectors {unknown}; known: {list(catalogue)}")
+        if not names:
+            raise ValueError("a scanner needs at least one detector")
+        self.action, self.deadline_s = action, deadline_s
+        self.detectors = [catalogue[name] for name in names]
+        self.on_event = on_event or audit_log
+
+    @classmethod
+    def from_policy(
+        cls, policy, on_event: Callable[[SecretScanEvent], None] | None = None
+    ) -> "SecretScanner":
+        """From `OrgPolicy.secret_scan` (a `SecretScanPolicy`)."""
+        return cls(policy.action, policy.detectors, on_event=on_event, allow=policy.allow_values)
+
+    def for_step(self, run_id: str, step: str, agent: str) -> "SecretScanner":
+        """This scanner with every event naming the run, step and agent it came from
+        (DF-154). Binding again replaces the identity; it never wraps twice."""
+        sink = getattr(self, "_unbound", None) or self.on_event
+        bound = copy.copy(self)
+        bound._unbound = sink
+        identity = {"run_id": run_id, "step": step, "agent": agent}
+        bound.on_event = lambda event: sink(dataclasses.replace(event, **identity))
+        return bound
+
+    # ── finding and masking ───────────────────────────────────────────────────
+
+    def findings(self, text: str, deadline: float | None = None) -> list[Finding]:
+        """Every secret in `text`, as merged spans in order. Raises TimeoutError once
+        `deadline` (a `time.monotonic()` value; default: `deadline_s` from now) passes."""
+        deadline = deadline if deadline is not None else time.monotonic() + self.deadline_s
+        spans: list[Finding] = []
+        for detector in self.detectors:
+            windows = _windows(detector.name, text)
+            for pattern in detector.patterns:
+                group = "secret" if "secret" in pattern.groupindex else 0
+                for start_at, end_at in windows:
+                    left = max(deadline - time.monotonic(), 0.001)
+                    for match in pattern.finditer(text, start_at, end_at, timeout=left):
+                        start, end = match.span(group)
+                        if end > start:
+                            span = _span(detector, text, start, end)
+                            if not self._allowed(text[span.start : span.end]):
+                                spans.append(span)
+        return _merged(spans)
+
+    def _allowed(self, found: str) -> bool:
+        return any(value in found for value in self.allowed)
+
+    def mask(self, text: str, deadline: float | None = None) -> tuple[str, Counter]:
+        """`text` with each secret replaced by a marker, and how many of each detector."""
+        try:
+            found = self.findings(text, deadline)
+        except TimeoutError:
+            return "[MASKED: not scanned in time]", Counter({UNSCANNABLE: 1})
+        if not found:
+            return text, Counter()
+        parts, last = [], 0
+        for finding in found:
+            parts += [text[last : finding.start], f"[MASKED SECRET: {finding.kind}]"]
+            last = finding.end
+        parts.append(text[last:])
+        return "".join(parts), Counter(f.detector for f in found)
+
+    # ── applying policy ───────────────────────────────────────────────────────
+
+    def check_text(self, text: str, where: str) -> str:
+        """`text` itself if clean; else the masked text, or SecretBlocked - with an event."""
+        masked, counts = self.mask(text)
+        return masked if self._decide(counts, where) else text
+
+    def check_body(self, content: bytes, where: str) -> bytes:
+        """A request body: `content` itself if clean, else masked or SecretBlocked.
+        In JSON every string is scanned decoded (escapes cannot hide a secret) and the
+        body re-encoded only when masked; any other body is scanned as latin-1, so
+        the bytes around a mask are kept exactly. One deadline covers the whole body."""
+        try:
+            data = json.loads(content) if content else None
+        except (ValueError, UnicodeDecodeError):
+            text = content.decode("latin-1")
+            masked = self.check_text(text, where)
+            return content if masked is text else masked.encode("latin-1")
+        counts: Counter = Counter()
+        deadline = time.monotonic() + self.deadline_s
+
+        def mask(value: str) -> str:
+            masked, found = self.mask(value, deadline)
+            counts.update(found)
+            return masked
+
+        rebuilt = _walk(data, mask)
+        if not self._decide(counts, where):
+            return content
+        # ASCII escapes: a lone surrogate (valid JSON) has no UTF-8 encoding
+        return json.dumps(rebuilt, separators=(",", ":")).encode("ascii")
+
+    def scrub[T](self, value: T, where: str) -> T:
+        """`value` - text, or JSON-like data - with every secret masked WHATEVER the
+        action, and a `masked` event; `value` itself when clean. For content a model
+        wrote itself, sent back to it (see the module)."""
+        masked, counts = self._masked_all(value)
+        if not counts:
+            return value
+        self.on_event(SecretScanEvent("masked", where, dict(sorted(counts.items()))))
+        return masked
+
+    def refusal(self, value: object, where: str) -> SecretBlocked | None:
+        """A SecretBlocked - returned, not raised - when any string in `value` holds a
+        secret, WHATEVER the action, with a `blocked` event; None when clean. For what
+        must never carry a secret: a tool call's arguments (written to a file, run as a
+        command, or given to a child agent)."""
+        _, counts = self._masked_all(value)
+        if not counts:
+            return None
+        event = SecretScanEvent("blocked", where, dict(sorted(counts.items())))
+        self.on_event(event)
+        return SecretBlocked(event, (self._kind(name) for name in counts))
+
+    def _masked_all[T](self, value: T) -> tuple[T, Counter]:
+        counts: Counter = Counter()
+        deadline = time.monotonic() + self.deadline_s
+
+        def mask(text: str) -> str:
+            masked, found = self.mask(text, deadline)
+            counts.update(found)
+            return masked
+
+        return _walk(value, mask), counts  # type: ignore[return-value]
+
+    def _decide(self, counts: Counter, where: str) -> bool:
+        """True when masked text is to be used; raises when blocked; False when clean."""
+        if not counts:
+            return False
+        action = "blocked" if self.action == "block" else "masked"
+        event = SecretScanEvent(action, where, dict(sorted(counts.items())))
+        self.on_event(event)
+        if self.action == "block":
+            raise SecretBlocked(event, (self._kind(name) for name in counts))
+        return True
+
+    def _kind(self, detector: str) -> str:
+        found = _catalogue().get(detector)
+        return found.kind if found else "content that could not be scanned in time"
+
+
+def _windows(detector: str, text: str) -> list[tuple[int, int]]:
+    """Where in `text` a detector's patterns are run: everywhere, or - for a pattern that
+    backtracks over every `//` of a long line - only around its required literal (DF-155).
+    A token is found whenever its literal lies within ANCHOR_WINDOW of it."""
+    anchor = _ANCHORS.get(detector)
+    if anchor is None:
+        return [(0, len(text))]
+    windows: list[tuple[int, int]] = []
+    for hit in anchor.finditer(text):
+        start, end = max(0, hit.start() - ANCHOR_WINDOW), hit.end() + ANCHOR_WINDOW
+        if windows and start <= windows[-1][1]:
+            windows[-1] = (windows[-1][0], end)
+        else:
+            windows.append((start, end))
+    return [(start, min(end, len(text))) for start, end in windows]
+
+
+def _span(detector: _Detector, text: str, start: int, end: int) -> Finding:
+    if detector.name == _KEY_DETECTOR:
+        while start > 0 and text[start - 1] == "-":
+            start -= 1
+        closing = _KEY_END.search(text, end)
+        end = closing.end() if closing else len(text)
+    elif text[end - 1] in _TOKEN:
+        end = _TOKEN_TAIL.match(text, end).end()
+    return Finding(detector.name, detector.kind, start, end)
+
+
+def _merged(spans: list[Finding]) -> list[Finding]:
+    merged: list[Finding] = []
+    for span in sorted(spans, key=lambda s: (s.start, -s.end)):
+        if merged and span.start < merged[-1].end:
+            last = merged[-1]
+            if span.end > last.end:
+                merged[-1] = Finding(last.detector, last.kind, last.start, span.end)
+            continue
+        merged.append(span)
+    return merged
+
+
+def _walk(value: object, fn: Callable[[str], str]) -> object:
+    """`value` with `fn` applied to every string in it, keys included. Two keys that
+    mask alike stay two entries (numbered), so no value is dropped."""
+    if isinstance(value, str):
+        return fn(value)
+    if isinstance(value, list):
+        return [_walk(item, fn) for item in value]
+    if isinstance(value, dict):
+        rebuilt: dict[str, object] = {}
+        for key, item in value.items():
+            new, n = fn(key), 1
+            while new in rebuilt:
+                n += 1
+                new = f"{fn(key)} #{n}"
+            rebuilt[new] = _walk(item, fn)
+        return rebuilt
+    return value

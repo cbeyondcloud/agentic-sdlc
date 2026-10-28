@@ -1,0 +1,18 @@
+id: ba-multi-currency
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    We are opening our web shop to customers in the euro area and the UK. Prices must be
+    shown and charged in the customer's currency. Write the requirements.
+expected:
+  key_points:
+    - "prices are shown in the customer's currency with local formatting"
+    - "the charged amount equals the shown amount (rate fixed at checkout)"
+    - "exchange rates come from a named source and are refreshed daily"
+    - "rounding rules per currency are explicit"
+    - "refunds use the original charge currency and amount"
+rubric: ba-requirements
+tags: [retail, billing]

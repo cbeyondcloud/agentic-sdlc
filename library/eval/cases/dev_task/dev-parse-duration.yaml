@@ -1,0 +1,19 @@
+id: dev-parse-duration
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    parse_duration() accepts '1h30m' but not seconds ('45s', '2m30s'), which the
+    job scheduler config now uses. Add seconds and reject unknown units clearly. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-parse-duration
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_durations.py::test_seconds"
+      - "tests/test_durations.py::test_unknown_units_are_refused"
+    pass_to_pass:
+      - "tests/test_durations.py::test_hours_and_minutes"
+  solution: solutions/dev-parse-duration
+tags: [python, parsing]

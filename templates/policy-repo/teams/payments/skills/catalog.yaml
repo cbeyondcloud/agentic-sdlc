@@ -1,0 +1,5 @@
+# The payments team's own skills, pinned by content hash: owned by the team's leads
+# (CODEOWNERS). A skill promoted with `agentic skills submit --to team --team payments`
+# arrives as a pull request adding internal/<name>/ and its entry below. The org's
+# licences and size limits apply (policy/licences.yaml, policy/limits.yaml).
+skills: {}

@@ -1,0 +1,376 @@
+"""Worktree adapter over Zyroflo's run trees (M1-09; D34: reuse, never rewrite).
+
+A run never works in the developer's checkout: it gets its own branch and
+linked git worktree per component (`tools.sdlc.worktree`). Zyroflo does the
+work and keeps the guarantees; this module gives the framework a small,
+typed surface over it:
+
+  * plan    - the trees `create` would make, without making any (every
+              refusal collected first, Zyroflo's rule);
+  * create  - all or nothing: a failure part-way takes back the trees already
+              made (Zyroflo's unwind), so a run never holds half its components;
+  * trees   - the run's live trees, from Zyroflo's record in the run folder;
+  * remove  - at closure; refuses to lose uncommitted work unless forced.
+
+`StepCheckpoints` adds the per-step view the engine needs (M1-30, spec §9.2):
+each agent step starts from the previous step's commit, ends in a checkpoint
+commit on the run branch (the step's reviewable diff), and a rejection rolls
+the tree back to the step's base. Checkpoint commits run OUTSIDE the sandbox
+on files an agent wrote, so they never run the repository's git hooks.
+
+Components come from the repository's Zyroflo profile (`.sdlc/profile.yml`);
+a repository without one is a single component.
+"""
+
+import json
+import logging
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+
+from tools.sdlc import policy, state
+from tools.sdlc import worktree as zyroflo
+
+from sdlc_commons.ledger import run_id_refusal
+
+_LOG = logging.getLogger("sdlc_commons.worktrees")
+
+#: Untracked files a checkpoint never commits: what running a repository's tests or
+#: linters leaves in the tree (bytecode, tool caches, coverage data, installed packages).
+#: A repository that ignores them in .gitignore is unaffected; one that does not would
+#: otherwise get them on the run branch and in its pull request (M1-68). The checkpoint
+#: then deletes them (the next run regenerates them), as a fresh attempt already does.
+#: Tracked files under these paths are still committed. Git glob pathspecs, relative to
+#: the tree. Org policy adds to them (`org.yaml` `checkpoint_exclude`), never removes
+#: one; each path left out is logged (DF-315, DF-317).
+GENERATED: tuple[str, ...] = (
+    "**/__pycache__/**",
+    "**/*.py[co]",  # not .pyd: a native extension is work
+    "**/.pytest_cache/**",
+    "**/.mypy_cache/**",
+    "**/.ruff_cache/**",
+    "**/.hypothesis/**",
+    "**/.tox/**",
+    "**/.nox/**",
+    "**/.coverage",
+    "**/.coverage.*",
+    "**/node_modules/**",
+)
+
+
+class WorktreeError(Exception):
+    """A worktree operation was refused or failed; the message says what is left on disk."""
+
+
+@dataclass(frozen=True)
+class Tree:
+    """Where one component of a run is worked on."""
+
+    component: str
+    path: Path  # the component's folder inside the run's tree - agents work here
+    branch: str  # e.g. "sdlc/<run-id>"
+    base: str  # the commit the tree was made from; every later diff is against it
+    mode: str  # "worktree", or "in-place" for a component Zyroflo cannot give a tree
+
+
+class RunWorktrees:
+    """The trees of one run."""
+
+    def __init__(self, target: Path, run_id: str) -> None:
+        if why := run_id_refusal(run_id):
+            raise WorktreeError(why)
+        self.target = Path(target)
+        self.run_id = run_id
+
+    def plan(self, components: Sequence[str] | None = None) -> dict[str, Tree]:
+        """The trees `create` would make, by component. Raises with EVERY problem found."""
+        result = _call(zyroflo.plan, self.target, self.run_id, _names(components))
+        problems = [f"{step['name']}: {p}" for step in result["steps"] for p in step["problems"]]
+        if problems:
+            raise WorktreeError("; ".join(problems))
+        return {step["name"]: _tree(step["name"], step) for step in result["steps"]}
+
+    def create(self, components: Sequence[str] | None = None) -> dict[str, Tree]:
+        """Make the run's branches and trees (all components, or the named ones).
+        Making them again is harmless: trees the run already has are kept."""
+        if not (state.runs_dir(self.target) / self.run_id).is_dir():
+            raise WorktreeError(
+                f"run {self.run_id} is not open - open its ledger before making its trees"
+            )
+        record = _call(zyroflo.create, self.target, self.run_id, _names(components))
+        return _live(record)
+
+    def trees(self) -> dict[str, Tree]:
+        """The run's live trees (removed ones are left out)."""
+        return _live(_call(zyroflo.load_record, self.target, self.run_id))
+
+    def remove(self, force: bool = False) -> list[str]:
+        """Take the run's trees away; returns what was done. Uncommitted work is
+        refused unless `force` (an agent's unfinished edit is the only copy of it)."""
+        return _call(zyroflo.remove, self.target, self.run_id, force)
+
+
+def _names(components: Sequence[str] | None) -> list[str] | None:
+    """A list of component names - never one name read letter by letter."""
+    if isinstance(components, str):
+        raise WorktreeError(f"components is a list of names, not one string ({components!r})")
+    return None if components is None else list(components)
+
+
+def _call(function, *args):
+    try:
+        return function(*args)
+    except (zyroflo.WorktreeError, policy.PolicyError, ValueError, OSError) as error:
+        raise WorktreeError(str(error)) from error
+
+
+def _tree(name: str, row: dict) -> Tree:
+    # An in-place component has no tree; before it is made, its checkout is `where`.
+    home = row.get("home") or row.get("where")
+    return Tree(
+        component=name,
+        path=Path(home),
+        branch=row.get("branch") or "",
+        base=row.get("base") or "",
+        mode=row["mode"],
+    )
+
+
+def _live(record: dict) -> dict[str, Tree]:
+    return {
+        name: _tree(name, row)
+        for name, row in record.get("components", {}).items()
+        if not row.get("removed_at")
+    }
+
+
+class StepCheckpoints:
+    """Per-step checkpoints on one run's trees (all components at once)."""
+
+    def __init__(self, target: Path, run_id: str, *, exclude: Sequence[str] = ()) -> None:
+        self.worktrees = RunWorktrees(target, run_id)
+        self.target, self.run_id = self.worktrees.target, run_id
+        # the framework's exclusions plus the org's (`exclude`): only ever more
+        self.generated = tuple(dict.fromkeys((*GENERATED, *exclude)))
+
+    def prepare(self) -> Path:
+        """Make the run's trees (harmless when they exist) and return where agents
+        work: a single component's own tree, or the folder holding every tree."""
+        trees = self.worktrees.create()
+        if in_place := sorted(name for name, tree in trees.items() if tree.mode != "worktree"):
+            raise WorktreeError(
+                f"component(s) {', '.join(in_place)} cannot get a tree (vcs.deny_raw_git): code "
+                f"steps need one to be checkpointed and rolled back"
+            )
+        if len(trees) == 1:
+            return next(iter(trees.values())).path
+        return _trees_root(self.target, self.run_id)
+
+    def begin(self, *, fresh: bool) -> dict[str, str]:
+        """Where a step starts, by component. A fresh attempt first discards what an
+        earlier, unfinished attempt left (tracked edits, untracked files and any commit an
+        agent made in the tree: it returns to that attempt's base; files git ignores, such
+        as `.venv/`, are kept). The step's base is kept in the run folder until the step
+        is checkpointed or rolled back, so `changed` and a retry measure from it - in
+        another process too (review F1)."""
+        kept = self._kept_base()
+        heads = {}
+        for name, path in self._trees().items():
+            if fresh:
+                _git(path, "reset", "-q", "--hard", kept.get(name, "HEAD"))
+                _git(path, "clean", "-q", "-ffd")  # -ff: nested repositories too (review I4)
+            heads[name] = _git(path, "rev-parse", "HEAD")
+        self._keep_base(heads if fresh or not kept else kept)
+        return heads
+
+    def finish(self, message: str) -> dict[str, str]:
+        """Commit the step's work in every tree that changed; returns each HEAD."""
+        heads = {}
+        for name, path in self._trees().items():
+            if nested := _nested_repositories(path):
+                raise WorktreeError(
+                    f"{name}: an agent left a git repository inside the tree "
+                    f"({', '.join(nested)}); it cannot be checkpointed - the next fresh "
+                    f"attempt removes it"
+                )
+            # new files, minus what running the tests leaves behind; then every change to
+            # a tracked file, wherever it is (a repository may vendor node_modules)
+            generated = [f":(glob){g}" for g in self.generated]
+            warned = set()
+            for pattern in (g for g in self.generated if g not in GENERATED):
+                # an org pattern broader than meant deletes the agent's work: say so loudly
+                for rel in _new_files(path, f":(glob){pattern}") - warned:
+                    warned.add(rel)
+                    _LOG.warning(
+                        "checkpoint of %s left out and deleted %s (org checkpoint_exclude %s)",
+                        name,
+                        rel,
+                        pattern,
+                    )
+            for rel in sorted(_new_files(path, *generated) - warned):
+                _LOG.info("checkpoint of %s left out %s (generated)", name, rel)
+            excluded = (f":(exclude,glob){g}" for g in self.generated)
+            _git(path, "add", "-A", "--", ".", *excluded)
+            _git(path, "add", "-u")
+            if _git(path, "diff", "--cached", "--name-only"):
+                _git(path, *self._commit_config(path), "commit", "-q", "--no-verify", "-m", message)
+            # and the caches left out go, so the tree is clean again: removing the run's
+            # trees at closure refuses any uncommitted change (review F2); ignored files stay
+            _git(path, "clean", "-q", "-fd", "--", *generated)
+            heads[name] = _git(path, "rev-parse", "HEAD")
+        self._keep_base(None)  # the next step starts from this checkpoint
+        return heads
+
+    def changed(self) -> list[Path]:
+        """Every path a step changed since its base (`begin`; the trees' HEAD when none is
+        kept), in every component: tracked files changed, added or deleted - staged, not
+        staged or committed by the agent itself (review F1) - and untracked files git
+        does not ignore: what this step would add to the run branch (M2-60: the post-step
+        protected-path check of an agent CLI's writes)."""
+        kept = self._kept_base()
+        found: dict[Path, None] = {}
+        for name, path in self._trees().items():
+            base = kept.get(name, "HEAD")
+            tracked = _git(path, "diff", "--name-only", "--no-renames", "-z", base, "--")
+            untracked = _git(path, "ls-files", "-z", "--others", "--exclude-standard")
+            for name in f"{tracked}\0{untracked}".split("\0"):
+                if name:
+                    found[path / name] = None
+        return list(found)
+
+    def rollback(self, to: Mapping[str, str]) -> None:
+        """Put each named component back at `to[component]`, a commit of the run's own
+        branch; uncommitted work is discarded."""
+        trees = self._trees()
+        for name, commit in to.items():
+            if name not in trees:
+                raise WorktreeError(f"rollback names {name!r}, which has no tree in this run")
+            path = trees[name]
+            if _git(path, "merge-base", commit, "HEAD", check=False) != commit:
+                raise WorktreeError(f"{commit} is not part of this run's branch in {name}")
+        for name, commit in to.items():
+            _git(trees[name], "reset", "-q", "--hard", commit)
+            _git(trees[name], "clean", "-q", "-ffd")
+        self._keep_base(None)  # the next step starts from where the trees were put
+
+    def diff(self, base: Mapping[str, str], head: Mapping[str, str]) -> str:
+        """The change from `base` to `head` in every component, as a plain unified diff
+        with `a/` and `b/` prefixes whatever the repository's diff settings say (no
+        external diff, no textconv, no colour). Each component's file names are its own
+        (`diff --git a/x b/x`)."""
+        parts = []
+        for name, path in self._trees().items():
+            start, end = base.get(name), head.get(name)
+            if start and end and start != end:
+                parts.append(_git(path, *_PLAIN_DIFF, start, end))
+        return "\n".join(part for part in parts if part)
+
+    def _trees(self) -> dict[str, Path]:
+        return {
+            name: tree.path
+            for name, tree in self.worktrees.trees().items()
+            if tree.mode == "worktree"
+        }
+
+    def _base_file(self) -> Path:
+        """Where the base of the step in progress is kept: the run folder, outside every
+        tree (an agent never writes it)."""
+        return state.runs_dir(self.target) / self.run_id / "step-base.json"
+
+    def _kept_base(self) -> dict[str, str]:
+        """The base of the step in progress, by component; {} when no step is in progress
+        (or the record cannot be read: then each tree's HEAD, as before)."""
+        try:
+            kept = json.loads(self._base_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(kept, dict):
+            return {}
+        return {k: v for k, v in kept.items() if isinstance(k, str) and isinstance(v, str)}
+
+    def _keep_base(self, heads: Mapping[str, str] | None) -> None:
+        where = self._base_file()
+        if heads is None:
+            where.unlink(missing_ok=True)
+            return
+        where.parent.mkdir(parents=True, exist_ok=True)
+        where.write_text(json.dumps(dict(heads)), encoding="utf-8")
+
+    def _commit_config(self, path: Path) -> list[str]:
+        """No hooks (an empty hooks folder), no signing, and an identity only when the
+        repository has none."""
+        hooks = state.runs_dir(self.target) / self.run_id / "no-hooks"
+        hooks.mkdir(parents=True, exist_ok=True)
+        config = ["-c", f"core.hooksPath={hooks.as_posix()}", "-c", "commit.gpgsign=false"]
+        if not _git(path, "config", "user.email", check=False):
+            config += ["-c", "user.name=agentic", "-c", "user.email=agentic@localhost"]
+        return config
+
+
+#: `git diff` as Zyroflo's budget reads it, whatever the repository configures or the
+#: agent's `.gitattributes` says (`--text`: a `-diff` or `binary` file still counts).
+_PLAIN_DIFF = (
+    "-c",
+    "diff.noprefix=false",
+    "-c",
+    "diff.mnemonicPrefix=false",
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--text",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+)
+
+
+def change_since_base(target: Path, run_id: str) -> list[tuple[str, Path, str]]:
+    """Each live tree's change so far: (component, tree, plain unified diff from the commit
+    the tree was made from to its HEAD) - what a reviewer of the run reads (M2-48)."""
+    found = []
+    for name, tree in sorted(RunWorktrees(target, run_id).trees().items()):
+        if tree.mode != "worktree" or not tree.base:
+            continue
+        found.append((name, tree.path, _git(tree.path, *_PLAIN_DIFF, tree.base, "HEAD")))
+    return found
+
+
+def _git(where: Path, *args: str, check: bool = True) -> str:
+    """A checkpoint git call: never runs an fsmonitor command the tree's or the
+    repository's config names (agent-reachable without a sandbox, review I5)."""
+    return worktree_git(where, "-c", "core.fsmonitor=false", *args, check=check)
+
+
+def _new_files(tree: Path, *pathspecs: str) -> set[str]:
+    """Untracked files in `tree` git does not ignore that match `pathspecs`."""
+    listing = _git(tree, "ls-files", "-z", "--others", "--exclude-standard", "--", *pathspecs)
+    return set(filter(None, listing.split("\0")))
+
+
+def _nested_repositories(tree: Path) -> list[str]:
+    """Untracked folders in `tree` that hold a git repository of their own."""
+    listing = _git(tree, "ls-files", "--others", "--exclude-standard", "--directory")
+    found = []
+    for entry in listing.splitlines():
+        folder = tree / entry.rstrip("/")
+        if entry.endswith("/") and folder.is_dir():
+            if (folder / ".git").exists() or any(folder.rglob(".git")):
+                found.append(entry.rstrip("/"))
+    return found
+
+
+def worktree_git(where: Path, *args: str, check: bool = True) -> str:
+    """One git call through Zyroflo's helper, its failure as a WorktreeError."""
+    try:
+        return zyroflo.git(where, *args, check=check)
+    except zyroflo.WorktreeError as error:
+        raise WorktreeError(str(error)) from error
+
+
+def _trees_root(target: Path, run_id: str) -> Path:
+    """The folder holding a run's trees (the same as `Guard.trees_root`)."""
+    try:
+        repo = policy.load(Path(target))
+    except policy.PolicyError as error:
+        raise WorktreeError(str(error)) from error
+    return Path(target) / repo["worktrees_root"] / run_id

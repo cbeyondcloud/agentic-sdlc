@@ -1,0 +1,24 @@
+# One team's narrowing of org policy (an example team: copy this file per team, and add
+# its lines to CODEOWNERS). A team can only narrow: fewer tiers, lower caps, more denies.
+allowed_tiers: [balanced, fast, local]
+monthly_budget_usd: 500
+
+# Lower caps per agent type (D35); a type left out keeps the org's caps.
+limits_max:
+  developer:
+    max: { budget_usd: 3, max_turns: 60, max_minutes: 45 }
+
+# Commands and paths this team's agents may never use, on top of the org's deny list.
+deny:
+  shell: ["terraform apply"]
+
+# Opt-in skill packs from the org catalog (spec §11.2), and agent-CLI plugins for steps
+# delegated to a backend that loads plugins - never the native loop (M2-47):
+skill_packs: []
+backend_plugins: []                     # e.g. [superpowers], once catalogued in skills/
+
+# Keep a version of an org agent or pipeline while the org rolls a new one out (see
+# policy/rollout.yaml); the version must be archived under agents|pipelines/versions/.
+# pins:
+#   agents: {developer: 1.2.0}
+#   pipelines: {feature-delivery: 1.4.0}

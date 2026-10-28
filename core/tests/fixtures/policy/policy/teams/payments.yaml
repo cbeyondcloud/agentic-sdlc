@@ -1,0 +1,8 @@
+# Team narrowing: can only tighten org policy, never loosen it.
+allowed_tiers: [balanced, fast]
+monthly_budget_usd: 2000
+limits_max:
+  developer:
+    max: { budget_usd: 3 }
+deny:
+  shell: [kubectl]

@@ -1,0 +1,31 @@
+id: rev-image-import
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the photo import tool."
+  diff: |
+    diff --git a/photos/importer.py b/photos/importer.py
+    --- a/photos/importer.py
+    +++ b/photos/importer.py
+    @@ -9,2 +9,7 @@ IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".heic"}
+     def find_images(paths: list[str]) -> list[str]:
+    -    return [p for p in paths if Path(p).suffix.lower() in IMAGE_TYPES]
+    +    found = []
+    +    for p in paths:
+    +        name = p.split("/")[-1]
+    +        if "." + name.rsplit(".", 1)[-1] in IMAGE_TYPES:
+    +            found.append(name)
+    +    return found
+expected:
+  seeded_defects:
+    - file: photos/importer.py
+      lines: [12, 12]
+      category: portability
+      note: "splitting on '/' keeps the whole Windows path 'C:\\Users\\a\\b.jpg' as the name, and the result loses the folder (two IMG_0001.jpg collide)"
+    - file: photos/importer.py
+      lines: [13, 13]
+      category: logic
+      note: "the extension test is case-sensitive: cameras write .JPG and .PNG, which are now skipped (the old code lower-cased the suffix)"
+tags: [python, windows]

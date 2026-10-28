@@ -1,0 +1,97 @@
+# The nightly code-intelligence index export (spec 10.3, D39).
+#
+# Added by `agentic init --repo` because org policy sets index_export_workflow: this
+# repository is too slow to index on every laptop, so CI builds the index once a night
+# and publishes a deterministic export OUTSIDE main. Developers import it, and every
+# agentic run starts from it and catches up with an incremental update:
+#
+#   * by default as the workflow artifact `agentic-index-export` (kept 7 days):
+#       gh run download -n agentic-index-export -D agentic-index-export
+#       agentic index import agentic-index-export
+#   * or, when the repository variable AGENTIC_INDEX_PUBLISH is `ref`, on the
+#     agentic-index branch (a commit a night holding only the shards that changed,
+#     restarted as one commit after 30 nights; any other history there is refused):
+#       git fetch origin agentic-index:refs/remotes/origin/agentic-index
+#       agentic index import --ref origin/agentic-index
+#
+# NEVER MAIN. No step commits. Only `agentic index publish` pushes - to agentic-index
+# alone; it refuses main, master, the default branch and the checked-out branch - and
+# only from publish-ref, the one job given contents: write. Run the workflow by hand
+# with dry_run to build and check the export and publish nothing (the artifact of a dry
+# run is named agentic-index-export-dry-run, which developers never import).
+#
+# TOKENS. The job uses only this workflow's own GITHUB_TOKEN, which GitHub issues per
+# run and revokes when the job ends:
+#   * export: contents: read; the checkout does not keep the token, and uploading an
+#     artifact needs no further permission;
+#   * publish-ref (opt-in): contents: write, used only to push agentic-index. Keep main
+#     protected (branch protection, or a ruleset the token cannot bypass); a ruleset can
+#     also restrict agentic-index to GitHub Actions.
+# It needs NO agentic service-account token: agentic service accounts hold only
+# run.trigger, and this job starts no run and calls no control plane.
+#
+# PINNED. An import refuses an export made with another code-review-graph or schema
+# version: install the org's pinned agentic below, the version developers have.
+#
+# GitHub disables scheduled workflows after 60 days without repository activity; the
+# Actions tab shows the last run.
+name: agentic-index-export
+
+on:
+  schedule:
+    # 02:17 UTC: not on the hour, the busiest minute for GitHub's scheduler
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and check the export; publish nothing
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agentic-index-export
+  cancel-in-progress: false
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      # EDIT: install from your internal package index, at the org's pinned version
+      - run: uv tool install agentic-cli --with "agentic-core[codeintel]"
+      - name: Build the index once and export it
+        run: agentic index export --out "$RUNNER_TEMP/agentic-index-export"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.dry_run && 'agentic-index-export-dry-run' || 'agentic-index-export' }}
+          path: ${{ runner.temp }}/agentic-index-export
+          retention-days: ${{ inputs.dry_run && 1 || 7 }}
+          if-no-files-found: error
+
+  publish-ref:
+    needs: export
+    if: ${{ vars.AGENTIC_INDEX_PUBLISH == 'ref' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.dry_run && 'agentic-index-export-dry-run' || 'agentic-index-export' }}
+          path: ${{ runner.temp }}/agentic-index-export
+      - uses: astral-sh/setup-uv@v6
+      # EDIT: install from your internal package index, at the org's pinned version
+      - run: uv tool install agentic-cli
+      - name: Publish on agentic-index, never main
+        env:
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: agentic index publish "$RUNNER_TEMP/agentic-index-export" --ref agentic-index ${DRY_RUN:+--dry-run}

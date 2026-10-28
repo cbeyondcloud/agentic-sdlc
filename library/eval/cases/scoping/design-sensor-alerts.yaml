@@ -1,0 +1,33 @@
+id: design-sensor-alerts
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the temperature alerts described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Cold rooms alert when too warm for a set time; silent sensors alert too."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Rooms alert after a sustained breach."
+          acceptance_criteria:
+            - "WHEN readings stay above the room threshold for the configured duration THE system SHALL raise one alert."
+            - "WHEN readings return below the threshold THE system SHALL close the alert."
+        - id: REQ-2
+          statement: "Silent sensors are detected."
+          acceptance_criteria:
+            - "WHEN a sensor sends no reading for 5 minutes THE system SHALL raise a sensor-offline alert."
+      ---
+      # Requirements: temperature alerts
+expected:
+  key_points:
+    - "a per-room state machine (normal, breaching, alerting) evaluated per reading"
+    - "readings are processed in device time order with late readings tolerated"
+    - "offline detection runs on a timer, not on incoming readings"
+    - "escalation uses a scheduled job cancelled by acknowledgement"
+rubric: design
+tags: [iot, monitoring]

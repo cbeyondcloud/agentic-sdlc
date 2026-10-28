@@ -1,0 +1,17 @@
+# Licences (SPDX ids) an agent must not bring in as a new dependency. `scan: true` also
+# runs a licence scanner on new dependencies (it needs the scanner in the tool pins).
+blocked:
+  - AGPL-3.0-only
+  - AGPL-3.0-or-later
+  - GPL-2.0-only
+  - GPL-2.0-or-later
+  - GPL-3.0-only
+  - GPL-3.0-or-later
+  - SSPL-1.0
+  - BUSL-1.1
+scan: false
+
+# Licences a catalogued skill may carry (`internal`: written by the org itself). The
+# policy-repo gate (`agentic policy check`) admits skills under this list; a catalog may
+# only narrow it. Widen it here, in its own reviewed change, after a legal review.
+skills: [MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC, internal]

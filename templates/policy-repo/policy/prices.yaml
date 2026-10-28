@@ -1,0 +1,4 @@
+# Model prices for client-side cost ESTIMATES, in USD per million tokens, used only
+# where the gateway reports no cost. Name each model as tiers.yaml does:
+#   change-me/balanced-model: { input_per_mtok: 3, output_per_mtok: 15 }
+prices: {}

@@ -1,0 +1,20 @@
+id: dev-config-home
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    config_dir() assumes HOME, which is not set on most Windows machines, so the
+    CLI crashes there. Use APPDATA on Windows (falling back to USERPROFILE), keep the
+    XDG rule on Linux, and use ~/Library/Application Support on macOS. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-config-home
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_config.py::test_windows_uses_appdata_without_home"
+      - "tests/test_config.py::test_macos_uses_application_support"
+    pass_to_pass:
+      - "tests/test_config.py::test_linux_uses_xdg_or_home"
+  solution: solutions/dev-config-home
+tags: [python, windows, macos]

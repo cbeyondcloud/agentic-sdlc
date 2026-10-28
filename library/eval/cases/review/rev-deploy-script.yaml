@@ -1,0 +1,38 @@
+id: rev-deploy-script
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the release deploy script."
+  diff: |
+    diff --git a/scripts/deploy.sh b/scripts/deploy.sh
+    --- a/scripts/deploy.sh
+    +++ b/scripts/deploy.sh
+    @@ -1,7 +1,8 @@
+     #!/usr/bin/env bash
+    -set -euo pipefail
+    +set -u
+     RELEASE_DIR="/srv/app/releases/$1"
+    -mkdir -p "$RELEASE_DIR"
+    +mkdir -p $RELEASE_DIR
+     tar -xzf "$ARTIFACT" -C "$RELEASE_DIR"
+    -ln -sfn "$RELEASE_DIR" /srv/app/current
+    +ln -sfn $RELEASE_DIR /srv/app/current
+    +rm -rf "$OLD_RELEASE_DIR/"*
+     systemctl restart app
+expected:
+  seeded_defects:
+    - file: scripts/deploy.sh
+      lines: [7, 7]
+      category: data
+      note: "when OLD_RELEASE_DIR is empty this becomes rm -rf /*: never expand an unchecked variable into a recursive delete (use ${OLD_RELEASE_DIR:?})"
+    - file: scripts/deploy.sh
+      lines: [4, 6]
+      category: portability
+      note: "unquoted $RELEASE_DIR word-splits and globs: a release name with a space creates and links the wrong folders"
+    - file: scripts/deploy.sh
+      lines: [2, 2]
+      category: error-handling
+      note: "dropping -e and pipefail means a failed tar still relinks current and restarts the service on a broken release"
+tags: [bash, posix]

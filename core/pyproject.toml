@@ -1,0 +1,50 @@
+[project]
+name = "agentic-core"
+version = "0.1.0"
+description = "Core library: definitions, policy, engine, agents"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "cel-python==0.5.0",
+    "detect-secrets==1.5.0",
+    "filelock==4.2.1",  # CVE-2026-112907, -112913, -112940 fixed in 4.2.1 (root exclude-newer-package)
+    "httpx2>=2.13.1,<2.14",
+    "keyring==25.7.0",
+    "opentelemetry-api>=1.45,<2",
+    "pydantic>=2.9",
+    "pydantic-ai-slim[anthropic,openai]==2.54.0",
+    "regex==2026.9.29",
+    "ruamel-yaml>=0.18",
+    "truststore>=0.10,<0.11",
+]
+
+[project.optional-dependencies]
+# The claude-code backend (M1-29, spike S2). Optional: its use is under Anthropic's
+# Commercial Terms and the wheel bundles the (Anthropic-signed) Claude Code binary.
+claude-code = ["claude-agent-sdk==0.2.164"]
+# The codex backend (M2-40, spike S3): the per-step Codex config is TOML. Pure Python, MIT.
+# The Codex CLI itself is an external, pinned binary found on PATH (macOS, Linux, or Linux
+# inside WSL2 on Windows - never the npm win32 package, which bundles an unsigned rg.exe).
+codex = ["tomli-w==1.2.0"]
+# Code intelligence (M1-35, spike S5): the default symbol-level index. Pure Python, MIT.
+codeintel = ["code-review-graph==2.3.9"]
+# Skill admission checks (M1-39): the Agent Skills reference validator. Pure Python,
+# Apache-2.0 (deps click BSD-3-Clause, strictyaml MIT). Only admission needs it.
+skills = ["skills-ref==0.1.1"]
+# Telemetry (M1-43): the OpenTelemetry SDK, so spans are recorded and exported. Without it
+# the API alone (a core dependency) makes every span a no-op. Pure Python, Apache-2.0.
+telemetry = ["opentelemetry-sdk==1.45.1"]
+# Agent evaluation (M1-63, spike S10): pydantic-evals runs cases, repeats and evaluators
+# under our own blinding, judging and statistics (agentic.eval). Pure Python, MIT; the same
+# release as pydantic-ai, and its other dependencies are already locked.
+eval = ["pydantic-evals==2.54.0"]
+# The shared ACP backend (M2-57, spike S7): the Agent Client Protocol Python SDK drives
+# third-party agent CLIs (OpenCode first) over stdio. Pure Python, Apache-2.0 (LICENSE in
+# the wheel; the PyPI licence field is empty); its only dependency is pydantic.
+acp = ["agent-client-protocol==0.12.1"]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "agentic"

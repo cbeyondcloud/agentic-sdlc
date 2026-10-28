@@ -1,0 +1,19 @@
+id: dev-atomic-write
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    save_state() fails on Windows the second time it runs: os.rename refuses to
+    replace an existing file there. Make the save replace the file atomically on every
+    OS, and make sure the data is on disk before it is swapped in. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-atomic-write
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_state.py::test_second_save_replaces_the_file_on_windows"
+    pass_to_pass:
+      - "tests/test_state.py::test_first_save_writes_the_file"
+  solution: solutions/dev-atomic-write
+tags: [python, windows, file-locking]

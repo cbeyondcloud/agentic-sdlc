@@ -1,0 +1,28 @@
+id: rev-churn-query
+agent: code-review
+case_class: review
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change to the monthly churn query."
+  diff: |
+    diff --git a/analytics/churn.sql b/analytics/churn.sql
+    --- a/analytics/churn.sql
+    +++ b/analytics/churn.sql
+    @@ -1,3 +1,3 @@
+    -SELECT month, cancelled::numeric / active AS churn
+    +SELECT month, cancelled / active AS churn
+     FROM monthly_accounts
+    -WHERE account_id NOT IN (SELECT account_id FROM test_accounts WHERE account_id IS NOT NULL);
+    +WHERE account_id NOT IN (SELECT account_id FROM test_accounts);
+expected:
+  seeded_defects:
+    - file: analytics/churn.sql
+      lines: [1, 1]
+      category: logic
+      note: "integer division: churn is 0 for every month where cancelled < active"
+    - file: analytics/churn.sql
+      lines: [3, 3]
+      category: logic
+      note: "one NULL account_id in test_accounts makes NOT IN return no rows at all"
+tags: [sql, analytics]

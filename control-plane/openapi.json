@@ -1,0 +1,5153 @@
+{
+  "components": {
+    "schemas": {
+      "ActivePolicy": {
+        "description": "`GET /v1/policy/active`: the tenant's validated policy and where its bundle is.",
+        "properties": {
+          "activated_at": {
+            "format": "date-time",
+            "title": "Activated At",
+            "type": "string"
+          },
+          "branch": {
+            "title": "Branch",
+            "type": "string"
+          },
+          "bundle_path": {
+            "title": "Bundle Path",
+            "type": "string"
+          },
+          "commit_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit At"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          },
+          "tree_digest": {
+            "title": "Tree Digest",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "branch",
+          "digest",
+          "tree_digest",
+          "activated_at",
+          "bundle_path"
+        ],
+        "title": "ActivePolicy",
+        "type": "object"
+      },
+      "Assignment": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "invited": {
+            "default": false,
+            "title": "Invited",
+            "type": "boolean"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "org",
+              "team"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "scope"
+        ],
+        "title": "Assignment",
+        "type": "object"
+      },
+      "AssignmentRef": {
+        "description": "A role held at org scope, within one team, or - derived from CODEOWNERS, never\nassigned by hand - for one repo (`derived` is then true).",
+        "properties": {
+          "derived": {
+            "default": false,
+            "title": "Derived",
+            "type": "boolean"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "scope": {
+            "enum": [
+              "org",
+              "team",
+              "repo"
+            ],
+            "title": "Scope",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "required": [
+          "role",
+          "scope"
+        ],
+        "title": "AssignmentRef",
+        "type": "object"
+      },
+      "AssignmentRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/rbac/assignments`: give `email` (created in the caller's tenant if new)\n`role` at org scope, or within `team`.",
+        "properties": {
+          "email": {
+            "maxLength": 254,
+            "minLength": 3,
+            "title": "Email",
+            "type": "string"
+          },
+          "role": {
+            "pattern": "^[a-z][a-z0-9-]{1,62}$",
+            "title": "Role",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "required": [
+          "email",
+          "role"
+        ],
+        "title": "AssignmentRequest",
+        "type": "object"
+      },
+      "AuditEntry": {
+        "description": "One audit record exactly as hashed (spec §14.5).",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "actor_kind": {
+            "enum": [
+              "human",
+              "service",
+              "system"
+            ],
+            "title": "Actor Kind",
+            "type": "string"
+          },
+          "after": {
+            "title": "After"
+          },
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "before": {
+            "title": "Before"
+          },
+          "event": {
+            "title": "Event",
+            "type": "string"
+          },
+          "hash": {
+            "title": "Hash",
+            "type": "string"
+          },
+          "policy_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Version"
+          },
+          "prev": {
+            "title": "Prev",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          },
+          "tenant": {
+            "title": "Tenant",
+            "type": "string"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          }
+        },
+        "required": [
+          "seq",
+          "tenant",
+          "team",
+          "actor",
+          "actor_kind",
+          "event",
+          "target",
+          "reason",
+          "run_id",
+          "trace_id",
+          "policy_version",
+          "at",
+          "prev",
+          "hash"
+        ],
+        "title": "AuditEntry",
+        "type": "object"
+      },
+      "AuditVerification": {
+        "properties": {
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Problems",
+            "type": "array"
+          }
+        },
+        "required": [
+          "problems"
+        ],
+        "title": "AuditVerification",
+        "type": "object"
+      },
+      "ChainHead": {
+        "description": "The last event a chain holds: `seq` 0 and `hash` \"\" before the first.",
+        "properties": {
+          "hash": {
+            "default": "",
+            "title": "Hash",
+            "type": "string"
+          },
+          "seq": {
+            "default": 0,
+            "title": "Seq",
+            "type": "integer"
+          }
+        },
+        "title": "ChainHead",
+        "type": "object"
+      },
+      "CheckRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/rbac/check`: may the caller (or `user`, needing `rbac.assign`) do\n`permission` for the org, a team or a repo?",
+        "properties": {
+          "permission": {
+            "title": "Permission",
+            "type": "string"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "maxLength": 254,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User"
+          }
+        },
+        "required": [
+          "permission"
+        ],
+        "title": "CheckRequest",
+        "type": "object"
+      },
+      "CheckResult": {
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          }
+        },
+        "required": [
+          "allowed",
+          "reason"
+        ],
+        "title": "CheckResult",
+        "type": "object"
+      },
+      "EffectivePermissions": {
+        "description": "What the caller may do, as the server computed it: permissions granted at org scope,\nper team, and per repo (derived maintainerships), plus each known repo's team. For\ndisplay and CLI hints only; authoritative answers come from `POST /v1/rbac/check`.",
+        "properties": {
+          "org": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Org",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "repo_teams": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Repo Teams",
+            "type": "object"
+          },
+          "repos": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "title": "Repos",
+            "type": "object"
+          },
+          "teams": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array",
+              "uniqueItems": true
+            },
+            "title": "Teams",
+            "type": "object"
+          }
+        },
+        "title": "EffectivePermissions",
+        "type": "object"
+      },
+      "HandlesInfo": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "handles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Handles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "email",
+          "handles"
+        ],
+        "title": "HandlesInfo",
+        "type": "object"
+      },
+      "HandlesUpdate": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/users/{email}/handles`: the person's host-qualified handles (`rbac.assign`).",
+        "properties": {
+          "handles": {
+            "items": {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9.-]{0,252}:[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$",
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Handles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "handles"
+        ],
+        "title": "HandlesUpdate",
+        "type": "object"
+      },
+      "ImportRow": {
+        "description": "One CSV row's outcome: `add`, `unchanged` or `error` (with `error` saying why).\n`line` is the row's first line in the file (1 is the header).",
+        "properties": {
+          "action": {
+            "enum": [
+              "add",
+              "unchanged",
+              "error"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "email": {
+            "default": "",
+            "title": "Email",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "handle": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Handle"
+          },
+          "line": {
+            "title": "Line",
+            "type": "integer"
+          },
+          "role": {
+            "default": "",
+            "title": "Role",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "required": [
+          "line",
+          "action"
+        ],
+        "title": "ImportRow",
+        "type": "object"
+      },
+      "IngestRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/runs/{run_id}/events`: run ledger entries exactly as chained (Zyroflo's\nformat), in order; the server caps the count (`max_ingest_entries`).",
+        "properties": {
+          "entries": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "IngestRequest",
+        "type": "object"
+      },
+      "IngestResult": {
+        "description": "What an ingest stored: new entries, replayed ones (no-ops), and the head after.",
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "integer"
+          },
+          "duplicates": {
+            "title": "Duplicates",
+            "type": "integer"
+          },
+          "head": {
+            "$ref": "#/components/schemas/ChainHead"
+          }
+        },
+        "required": [
+          "accepted",
+          "duplicates",
+          "head"
+        ],
+        "title": "IngestResult",
+        "type": "object"
+      },
+      "InviteInfo": {
+        "description": "An invite without its token (only the invitee's mail carries the link).",
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mailed": {
+            "title": "Mailed",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "expires_at",
+          "mailed"
+        ],
+        "title": "InviteInfo",
+        "type": "object"
+      },
+      "InviteRedeem": {
+        "additionalProperties": false,
+        "description": "`POST /v1/invites/redeem`: the token from the invite link (its `#` fragment).",
+        "properties": {
+          "token": {
+            "maxLength": 200,
+            "minLength": 10,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
+        ],
+        "title": "InviteRedeem",
+        "type": "object"
+      },
+      "InviteRedeemed": {
+        "description": "What a redeemed invite gives, once: a control-plane token and, when the deployment\nissues them, a gateway proxy key.",
+        "properties": {
+          "control_plane_token": {
+            "title": "Control Plane Token",
+            "type": "string"
+          },
+          "control_plane_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Control Plane Url"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "gateway_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Key"
+          },
+          "gateway_key_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Key Id"
+          },
+          "gateway_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Url"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notice"
+          },
+          "tenant": {
+            "$ref": "#/components/schemas/TenantRef"
+          },
+          "token_expires_at": {
+            "format": "date-time",
+            "title": "Token Expires At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant",
+          "email",
+          "control_plane_token",
+          "token_expires_at"
+        ],
+        "title": "InviteRedeemed",
+        "type": "object"
+      },
+      "KillState": {
+        "description": "`GET /v1/killswitch/state`: the active switches that may apply to a run of the\ncaller's (the CLI decides per step), and how long the answer may be cached.",
+        "properties": {
+          "checked_at": {
+            "format": "date-time",
+            "title": "Checked At",
+            "type": "string"
+          },
+          "switches": {
+            "items": {
+              "$ref": "#/components/schemas/KillSwitchInfo"
+            },
+            "title": "Switches",
+            "type": "array"
+          },
+          "ttl_seconds": {
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "checked_at",
+          "ttl_seconds"
+        ],
+        "title": "KillState",
+        "type": "object"
+      },
+      "KillSwitchInfo": {
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "cleared_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cleared At"
+          },
+          "cleared_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cleared By"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "kill",
+              "pause"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope_kind": {
+            "enum": [
+              "tenant",
+              "team",
+              "user",
+              "repo",
+              "pipeline",
+              "agent",
+              "model",
+              "backend"
+            ],
+            "title": "Scope Kind",
+            "type": "string"
+          },
+          "scope_value": {
+            "title": "Scope Value",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "required": [
+          "id",
+          "scope_kind",
+          "scope_value",
+          "mode",
+          "reason",
+          "created_by",
+          "created_at",
+          "active"
+        ],
+        "title": "KillSwitchInfo",
+        "type": "object"
+      },
+      "KillSwitchRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/killswitch`: stop (`kill`) or hold (`pause`) the runs a scope names.\n`scope_kind` `tenant` is the spec's global switch (no `scope_value`); `team` limits a\nswitch of any kind to that team's runs (a team lead must give their own team).",
+        "properties": {
+          "mode": {
+            "default": "kill",
+            "enum": [
+              "kill",
+              "pause"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 500,
+            "minLength": 3,
+            "title": "Reason",
+            "type": "string"
+          },
+          "scope_kind": {
+            "enum": [
+              "tenant",
+              "team",
+              "user",
+              "repo",
+              "pipeline",
+              "agent",
+              "model",
+              "backend"
+            ],
+            "title": "Scope Kind",
+            "type": "string"
+          },
+          "scope_value": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Scope Value",
+            "type": "string"
+          },
+          "team": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team"
+          }
+        },
+        "required": [
+          "scope_kind",
+          "reason"
+        ],
+        "title": "KillSwitchRequest",
+        "type": "object"
+      },
+      "Me": {
+        "description": "`GET /v1/me`: who the token belongs to, in which tenant, and what they hold.",
+        "properties": {
+          "assignments": {
+            "items": {
+              "$ref": "#/components/schemas/AssignmentRef"
+            },
+            "title": "Assignments",
+            "type": "array"
+          },
+          "kind": {
+            "enum": [
+              "human",
+              "service"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/EffectivePermissions"
+          },
+          "tenant": {
+            "$ref": "#/components/schemas/TenantRef"
+          },
+          "token_expires_at": {
+            "format": "date-time",
+            "title": "Token Expires At",
+            "type": "string"
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserRef"
+          }
+        },
+        "required": [
+          "user",
+          "kind",
+          "tenant",
+          "token_expires_at"
+        ],
+        "title": "Me",
+        "type": "object"
+      },
+      "NotificationInfo": {
+        "description": "A queued, sent or failed mail (never its body).",
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "next_attempt_at": {
+            "format": "date-time",
+            "title": "Next Attempt At",
+            "type": "string"
+          },
+          "recipient": {
+            "title": "Recipient",
+            "type": "string"
+          },
+          "sent_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent At"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "sent",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "subject": {
+            "title": "Subject",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "recipient",
+          "subject",
+          "status",
+          "attempts",
+          "next_attempt_at",
+          "created_at"
+        ],
+        "title": "NotificationInfo",
+        "type": "object"
+      },
+      "OffboardRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/users/{email}/offboard`: why (recorded in the audit chain).",
+        "properties": {
+          "reason": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "OffboardRequest",
+        "type": "object"
+      },
+      "OffboardResult": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "invites_revoked": {
+            "title": "Invites Revoked",
+            "type": "integer"
+          },
+          "kill_switch": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kill Switch"
+          },
+          "proxy_keys_pending": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Proxy Keys Pending",
+            "type": "array"
+          },
+          "proxy_keys_revoked": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Proxy Keys Revoked",
+            "type": "array"
+          },
+          "tokens_revoked": {
+            "title": "Tokens Revoked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "email",
+          "tokens_revoked",
+          "invites_revoked",
+          "proxy_keys_revoked",
+          "proxy_keys_pending"
+        ],
+        "title": "OffboardResult",
+        "type": "object"
+      },
+      "OrgCheck": {
+        "description": "One org check: `check` is rbac, killswitch, policy, pipeline, versions, concurrency\nor budget.",
+        "properties": {
+          "check": {
+            "title": "Check",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "value": {
+            "title": "Value"
+          }
+        },
+        "required": [
+          "check",
+          "passed",
+          "detail"
+        ],
+        "title": "OrgCheck",
+        "type": "object"
+      },
+      "PersonalFile": {
+        "description": "The newest backed-up copy of one personal skill file or note (M2-20). A removed file\nis `deleted`; a held-back one (`held`: the publish scan found a secret or personal\ndata) has no content. Only its owner ever reads this.",
+        "properties": {
+          "at": {
+            "title": "At",
+            "type": "string"
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content"
+          },
+          "deleted": {
+            "default": false,
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "device": {
+            "title": "Device",
+            "type": "string"
+          },
+          "held": {
+            "default": false,
+            "title": "Held",
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "skill",
+              "memory"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "seq": {
+            "title": "Seq",
+            "type": "integer"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "path",
+          "sha256",
+          "device",
+          "seq",
+          "at"
+        ],
+        "title": "PersonalFile",
+        "type": "object"
+      },
+      "PersonalIngestRequest": {
+        "additionalProperties": false,
+        "description": "A batch of one device's chained personal-backup events (M2-20).",
+        "properties": {
+          "entries": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "title": "PersonalIngestRequest",
+        "type": "object"
+      },
+      "PolicySource": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/tenant/policy-source`: where the tenant's policy repo lives. A URL with\ncredentials is refused (git credentials are mounted per tenant, ND-15).",
+        "properties": {
+          "branch": {
+            "default": "main",
+            "title": "Branch",
+            "type": "string"
+          },
+          "repo": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Repo",
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo"
+        ],
+        "title": "PolicySource",
+        "type": "object"
+      },
+      "PolicySourceChanged": {
+        "description": "The tenant after a policy-source change, and the sync it triggered.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "policy_branch": {
+            "title": "Policy Branch",
+            "type": "string"
+          },
+          "policy_repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Repo"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "sync": {
+            "$ref": "#/components/schemas/SyncOutcome"
+          },
+          "webhook_configured": {
+            "default": false,
+            "title": "Webhook Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "policy_branch",
+          "sync"
+        ],
+        "title": "PolicySourceChanged",
+        "type": "object"
+      },
+      "PolicyVersionInfo": {
+        "properties": {
+          "active": {
+            "default": false,
+            "title": "Active",
+            "type": "boolean"
+          },
+          "branch": {
+            "title": "Branch",
+            "type": "string"
+          },
+          "digest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Digest"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "accepted",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "version",
+          "branch",
+          "status",
+          "received_at"
+        ],
+        "title": "PolicyVersionInfo",
+        "type": "object"
+      },
+      "Problem": {
+        "description": "An RFC 9457 problem document. `code` is a stable machine name\n(`auth.invalid_token`, ...); `hint` is a next step the CLI prints as is. A problem never\nechoes a submitted secret and never names another tenant.",
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "head": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChainHead"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint"
+          },
+          "problems": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problems"
+          },
+          "status": {
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "type": {
+            "default": "about:blank",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "status",
+          "detail",
+          "code"
+        ],
+        "title": "Problem",
+        "type": "object"
+      },
+      "ProxyKeyIssued": {
+        "description": "A new gateway proxy key, in this response only.",
+        "properties": {
+          "gateway_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Url"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "key_id": {
+            "title": "Key Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "key_id"
+        ],
+        "title": "ProxyKeyIssued",
+        "type": "object"
+      },
+      "ProxyKeysRevoked": {
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "pending": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Pending",
+            "type": "array"
+          },
+          "revoked": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Revoked",
+            "type": "array"
+          }
+        },
+        "required": [
+          "email",
+          "revoked",
+          "pending"
+        ],
+        "title": "ProxyKeysRevoked",
+        "type": "object"
+      },
+      "Readiness": {
+        "properties": {
+          "db_enforced": {
+            "title": "Db Enforced",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "db_enforced"
+        ],
+        "title": "Readiness",
+        "type": "object"
+      },
+      "RepoInfo": {
+        "description": "A registered repo and the maintainers its CODEOWNERS names (ND-6).",
+        "properties": {
+          "codeowners_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Codeowners Path"
+          },
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit"
+          },
+          "maintainers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Maintainers",
+            "type": "array"
+          },
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed At"
+          },
+          "remote": {
+            "title": "Remote",
+            "type": "string"
+          },
+          "repo_key": {
+            "title": "Repo Key",
+            "type": "string"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          },
+          "unresolved": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unresolved",
+            "type": "array"
+          }
+        },
+        "required": [
+          "repo_key",
+          "remote",
+          "team"
+        ],
+        "title": "RepoInfo",
+        "type": "object"
+      },
+      "RepoMaintainers": {
+        "properties": {
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Commit"
+          },
+          "unresolved": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unresolved",
+            "type": "array"
+          },
+          "users": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Users",
+            "type": "array"
+          }
+        },
+        "required": [
+          "users"
+        ],
+        "title": "RepoMaintainers",
+        "type": "object"
+      },
+      "RepoRegistration": {
+        "additionalProperties": false,
+        "description": "`POST /v1/repos`: register a repo for a team (`agent.edit.repo` in that team).",
+        "properties": {
+          "remote": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Remote",
+            "type": "string"
+          },
+          "team": {
+            "pattern": "^[a-z][a-z0-9-]{0,62}$",
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "remote",
+          "team"
+        ],
+        "title": "RepoRegistration",
+        "type": "object"
+      },
+      "RoleImportRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/rbac/import`: role assignments as CSV text (`email,role,team,handle`).\nA dry run (the default) only reports what applying would do.",
+        "properties": {
+          "csv": {
+            "maxLength": 2000000,
+            "title": "Csv",
+            "type": "string"
+          },
+          "dry_run": {
+            "default": true,
+            "title": "Dry Run",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "csv"
+        ],
+        "title": "RoleImportRequest",
+        "type": "object"
+      },
+      "RoleImportResult": {
+        "properties": {
+          "added": {
+            "title": "Added",
+            "type": "integer"
+          },
+          "applied": {
+            "title": "Applied",
+            "type": "boolean"
+          },
+          "errors": {
+            "title": "Errors",
+            "type": "integer"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ImportRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "applied",
+          "added",
+          "unchanged",
+          "errors",
+          "rows"
+        ],
+        "title": "RoleImportResult",
+        "type": "object"
+      },
+      "RoleInfo": {
+        "properties": {
+          "builtin": {
+            "title": "Builtin",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          },
+          "team_assignable": {
+            "title": "Team Assignable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "permissions",
+          "builtin",
+          "team_assignable"
+        ],
+        "title": "RoleInfo",
+        "type": "object"
+      },
+      "RoleUpdate": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/rbac/roles/{name}`: create or replace a role's permissions.",
+        "properties": {
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Permissions",
+            "type": "array"
+          },
+          "team_assignable": {
+            "default": false,
+            "title": "Team Assignable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "permissions"
+        ],
+        "title": "RoleUpdate",
+        "type": "object"
+      },
+      "RoutingApplyInfo": {
+        "description": "One routing apply (M2-09): which gateway (TokenLean) routing version applied which\npolicy version, or why it did not.",
+        "properties": {
+          "applied_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied At"
+          },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "gateway_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gateway Version"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "next_attempt_at": {
+            "format": "date-time",
+            "title": "Next Attempt At",
+            "type": "string"
+          },
+          "plan_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Sha256"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "previous_gateway_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Gateway Version"
+          },
+          "problems": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "requested_by": {
+            "title": "Requested By",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "applied",
+              "invalid",
+              "failed",
+              "superseded",
+              "skipped"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "warnings": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "policy_version",
+          "status",
+          "attempts",
+          "requested_by",
+          "created_at",
+          "next_attempt_at"
+        ],
+        "title": "RoutingApplyInfo",
+        "type": "object"
+      },
+      "RunPreflight": {
+        "description": "The org checks' report. `registered`: every check passed and the run holds a slot.\n`team_budget_remaining_usd` is None while the gateway does not measure it - never 0.",
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/OrgCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "min_cli_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Cli Version"
+          },
+          "registered": {
+            "title": "Registered",
+            "type": "boolean"
+          },
+          "team_budget_remaining_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Budget Remaining Usd"
+          }
+        },
+        "required": [
+          "registered",
+          "checks"
+        ],
+        "title": "RunPreflight",
+        "type": "object"
+      },
+      "RunRegistration": {
+        "additionalProperties": false,
+        "description": "`POST /v1/runs`: the org checks before a run starts (spec §8.2), and the run's\nconcurrency slot when they pass. `pipeline_file` is the pipeline's path in the policy\nrepo (None for a repo-layer pipeline) and `pipeline_sha256` the hash of its bytes (D33);\n`agents` (name@version), `models` and `backends` are what the run's steps resolved to.\n`overlay_file` and `overlay_sha256` are the team's overlay applied to the pipeline, by\nits policy repo path and the hash of its bytes (M2-23; None: no overlay), and\n`pipeline_version` the version of the pipeline the team gets (M2-15).\n`dry_run` runs every check and registers nothing.",
+        "properties": {
+          "agents": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Agents",
+            "type": "array"
+          },
+          "backends": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 50,
+            "title": "Backends",
+            "type": "array"
+          },
+          "budget_usd": {
+            "anyOf": [
+              {
+                "pattern": "^\\d{1,9}(\\.\\d{1,6})?$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Budget Usd"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "models": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 200,
+            "title": "Models",
+            "type": "array"
+          },
+          "overlay_file": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overlay File"
+          },
+          "overlay_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overlay Sha256"
+          },
+          "pipeline": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Pipeline",
+            "type": "string"
+          },
+          "pipeline_file": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline File"
+          },
+          "pipeline_sha256": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Sha256"
+          },
+          "pipeline_version": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pipeline Version"
+          },
+          "policy_version": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "maxLength": 300,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "run_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Run Id",
+            "type": "string"
+          },
+          "team": {
+            "pattern": "^[a-z][a-z0-9-]{0,62}$",
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "team",
+          "pipeline",
+          "policy_version"
+        ],
+        "title": "RunRegistration",
+        "type": "object"
+      },
+      "RunSummary": {
+        "description": "`GET /v1/runs/{run_id}`: a run as the control plane holds it (ND-11: PR links point\nhere until a web UI exists).",
+        "properties": {
+          "head": {
+            "$ref": "#/components/schemas/ChainHead"
+          },
+          "last_event_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Event At"
+          },
+          "opened_at": {
+            "format": "date-time",
+            "title": "Opened At",
+            "type": "string"
+          },
+          "policy_known": {
+            "title": "Policy Known",
+            "type": "boolean"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "started_by": {
+            "title": "Started By",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "team",
+          "started_by",
+          "policy_version",
+          "policy_known",
+          "status",
+          "head",
+          "opened_at"
+        ],
+        "title": "RunSummary",
+        "type": "object"
+      },
+      "ServiceAccountInfo": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "team",
+          "status",
+          "created_at"
+        ],
+        "title": "ServiceAccountInfo",
+        "type": "object"
+      },
+      "ServiceAccountIssued": {
+        "description": "The one response that carries the service account's token.",
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "token_id": {
+            "format": "uuid",
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "team",
+          "token",
+          "token_id",
+          "expires_at"
+        ],
+        "title": "ServiceAccountIssued",
+        "type": "object"
+      },
+      "ServiceAccountRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/service-accounts`: a team-scoped account that may only trigger runs. Its\ntoken expires after `days` (required, at most 365: owner decision 75).",
+        "properties": {
+          "days": {
+            "maximum": 365.0,
+            "minimum": 1.0,
+            "title": "Days",
+            "type": "integer"
+          },
+          "name": {
+            "pattern": "^[a-z][a-z0-9-]{1,40}$",
+            "title": "Name",
+            "type": "string"
+          },
+          "team": {
+            "pattern": "^[a-z][a-z0-9-]{0,62}$",
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "team",
+          "days"
+        ],
+        "title": "ServiceAccountRequest",
+        "type": "object"
+      },
+      "SyncOutcome": {
+        "description": "What one policy sync did. `failed`: the repo could not be fetched (`problems` says\nwhy, credentials scrubbed).",
+        "properties": {
+          "kind": {
+            "enum": [
+              "unchanged",
+              "activated",
+              "rejected",
+              "busy",
+              "unconfigured",
+              "failed"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Problems",
+            "type": "array"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "SyncOutcome",
+        "type": "object"
+      },
+      "TenantInfo": {
+        "description": "`GET /v1/tenant`: the caller's tenant (credentials never shown).",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "policy_branch": {
+            "title": "Policy Branch",
+            "type": "string"
+          },
+          "policy_repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Repo"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "webhook_configured": {
+            "default": false,
+            "title": "Webhook Configured",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "slug",
+          "name",
+          "policy_branch"
+        ],
+        "title": "TenantInfo",
+        "type": "object"
+      },
+      "TenantRef": {
+        "description": "The caller's tenant, as the server derived it from the token.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "name"
+        ],
+        "title": "TenantRef",
+        "type": "object"
+      },
+      "TokenInfo": {
+        "description": "A token without its value.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "current": {
+            "default": false,
+            "title": "Current",
+            "type": "boolean"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "created_at",
+          "expires_at"
+        ],
+        "title": "TokenInfo",
+        "type": "object"
+      },
+      "TokenIssued": {
+        "description": "The one response that carries a token value; it is never shown again.",
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "token",
+          "expires_at"
+        ],
+        "title": "TokenIssued",
+        "type": "object"
+      },
+      "TokenRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/tokens`: a new token for the caller (rotation). `days` defaults to the\nlongest lifetime the caller's kind allows (90 for people, 365 for service accounts).",
+        "properties": {
+          "days": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Days"
+          },
+          "name": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "revoke_current": {
+            "default": false,
+            "title": "Revoke Current",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "TokenRequest",
+        "type": "object"
+      },
+      "UserRef": {
+        "properties": {
+          "display_name": {
+            "default": "",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "email"
+        ],
+        "title": "UserRef",
+        "type": "object"
+      },
+      "WebhookIssued": {
+        "description": "The webhook path, carrying the new hook token: shown once, never again.",
+        "properties": {
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "title": "WebhookIssued",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "description": "A control-plane token (`acp_...`) from `agentic login --for control-plane`",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "agentic control plane",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/healthz": {
+      "get": {
+        "description": "Liveness: the process answers. Never touches the database.",
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Healthz Healthz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Healthz",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/readyz": {
+      "get": {
+        "description": "Readiness: the database answers, is migrated to this release and enforces tenant\nisolation and insert-only evidence (fail closed unless relaxed for development).",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "summary": "Readyz",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/v1/audit": {
+      "get": {
+        "description": "Records after `after_seq`, oldest first. With `team`, only that team's records.",
+        "operationId": "list_audit_v1_audit_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after_seq",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After Seq",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 63,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AuditEntry"
+                  },
+                  "title": "Response List Audit V1 Audit Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Audit",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/v1/audit/export": {
+      "get": {
+        "description": "The records whose time is in [`from`, `to`) with the chain proof an auditor verifies\nwithout this database (`agentic.auditproof`). `from`/`to` are ISO dates (a `to` date\nincludes that day) or date-times with a zone. With `team`, other teams' records in the\nrange are link rows only. The export itself is audited (`audit.exported`).",
+        "operationId": "export_audit_v1_audit_export_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "default": "jsonl",
+              "enum": [
+                "jsonl",
+                "csv"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 40,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 40,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-ndjson": {},
+              "text/csv; charset=utf-8": {}
+            },
+            "description": "The export: JSONL (header, entries and links, proof) or CSV, streamed"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Export Audit",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/v1/audit/verify": {
+      "get": {
+        "description": "Recompute every hash and link of the tenant's chain; [] means intact.",
+        "operationId": "verify_audit_v1_audit_verify_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditVerification"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Verify Audit",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
+    "/v1/invites/redeem": {
+      "post": {
+        "description": "Use an invite once: a control-plane token for the invite's tenant and, when this\ndeployment issues them, a gateway key bound to the tenant, the person and their team.\nBoth are in this response only.",
+        "operationId": "redeem_v1_invites_redeem_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteRedeem"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteRedeemed"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "summary": "Redeem",
+        "tags": [
+          "provisioning"
+        ]
+      }
+    },
+    "/v1/killswitch": {
+      "get": {
+        "description": "The switches the caller may clear: every switch for `killswitch.global`, else the\nones limited to a team where the caller holds `killswitch.team`.",
+        "operationId": "list_switches_v1_killswitch_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "include_cleared",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Cleared",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/KillSwitchInfo"
+                  },
+                  "title": "Response List Switches V1 Killswitch Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Switches",
+        "tags": [
+          "killswitch"
+        ]
+      },
+      "post": {
+        "description": "Stop (`kill`) or hold (`pause`) the runs the scope names, from their next check.",
+        "operationId": "set_switch_v1_killswitch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KillSwitchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillSwitchInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Switch",
+        "tags": [
+          "killswitch"
+        ]
+      }
+    },
+    "/v1/killswitch/state": {
+      "get": {
+        "description": "The active switches that may apply to a run of the caller's with this team, repo and\npipeline: agent, model and backend switches are always included (the CLI decides per\nstep). Any authenticated user of the tenant may ask; user switches are the caller's.\n\n`team`, `repo` and `pipeline` are what the client says (DF-518): they only narrow what\nthe caller is shown, so a client that omits its team is not shown team-qualified\nswitches. Stopping such a client's model calls anyway is the gateway deny rule's job\n(spec §8.6 defence in depth, M2-30).\n\nConditional GET (DF-506): the answer carries an `ETag` over the tenant, the caller, the\nquery and the switches and TTL (never `checked_at`); a poll sending it back in\n`If-None-Match` while nothing changed gets 304 with no body.",
+        "operationId": "kill_state_v1_killswitch_state_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          },
+          {
+            "in": "query",
+            "name": "repo",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 300,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Repo"
+            }
+          },
+          {
+            "in": "query",
+            "name": "pipeline",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Pipeline"
+            }
+          },
+          {
+            "in": "header",
+            "name": "if-none-match",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-None-Match"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillState"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "304": {
+            "description": "Not modified since the `ETag` sent"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Kill State",
+        "tags": [
+          "killswitch"
+        ]
+      }
+    },
+    "/v1/killswitch/{id}": {
+      "delete": {
+        "description": "Clear a switch: held runs continue on `agentic resume`, killed runs stay killed.",
+        "operationId": "clear_switch_v1_killswitch__id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "reason",
+            "required": false,
+            "schema": {
+              "default": "cleared",
+              "maxLength": 500,
+              "minLength": 1,
+              "title": "Reason",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KillSwitchInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Clear Switch",
+        "tags": [
+          "killswitch"
+        ]
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "description": "Who the token belongs to, in which tenant, and the roles they hold.",
+        "operationId": "me_v1_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/notifications": {
+      "get": {
+        "description": "The newest mails first (org `audit.read.org`).",
+        "operationId": "list_notifications_v1_notifications_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "pending",
+                    "sent",
+                    "failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/NotificationInfo"
+                  },
+                  "title": "Response List Notifications V1 Notifications Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Notifications",
+        "tags": [
+          "notifications"
+        ]
+      }
+    },
+    "/v1/personal/devices/{device}/events": {
+      "post": {
+        "description": "Append a batch of one device's chained backup events: verified, stored all or\nnothing; replayed entries are no-ops (`duplicates`).",
+        "operationId": "ingest_v1_personal_devices__device__events_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device",
+            "required": true,
+            "schema": {
+              "title": "Device",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PersonalIngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ingest",
+        "tags": [
+          "personal"
+        ]
+      }
+    },
+    "/v1/personal/files": {
+      "get": {
+        "description": "The caller's newest backed-up copy of each personal file (for `agentic skills\nrestore`), a page at a time in path order: at most `limit` paths after `after`; a page\nshorter than `limit` is the last (review F4).",
+        "operationId": "files_v1_personal_files_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 1024,
+              "title": "After",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PersonalFile"
+                  },
+                  "title": "Response Files V1 Personal Files Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Files",
+        "tags": [
+          "personal"
+        ]
+      }
+    },
+    "/v1/policy/active": {
+      "get": {
+        "description": "The tenant's active policy version and where to download its bundle.",
+        "operationId": "get_active_v1_policy_active_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivePolicy"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Active",
+        "tags": [
+          "policy"
+        ]
+      }
+    },
+    "/v1/policy/sync": {
+      "post": {
+        "description": "Sync the tenant's policy now (org `policy.edit.org`); 202 when a sync is running.",
+        "operationId": "manual_sync_v1_policy_sync_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncOutcome"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncOutcome"
+                }
+              }
+            },
+            "description": "Accepted"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Manual Sync",
+        "tags": [
+          "policy"
+        ]
+      }
+    },
+    "/v1/policy/versions": {
+      "get": {
+        "description": "The tenant's policy versions, newest first, accepted and rejected.",
+        "operationId": "list_versions_v1_policy_versions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PolicyVersionInfo"
+                  },
+                  "title": "Response List Versions V1 Policy Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Versions",
+        "tags": [
+          "policy"
+        ]
+      }
+    },
+    "/v1/policy/versions/{version}/bundle": {
+      "get": {
+        "description": "An accepted version's bundle (`git archive`, gzipped); `ETag` is its digest.",
+        "operationId": "get_bundle_v1_policy_versions__version__bundle_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/gzip": {}
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Bundle",
+        "tags": [
+          "policy"
+        ]
+      }
+    },
+    "/v1/policy/webhook/{hook_token}": {
+      "post": {
+        "description": "A push to the tenant's policy repo: sync that tenant after answering (R15).",
+        "operationId": "webhook_v1_policy_webhook__hook_token__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "hook_token",
+            "required": true,
+            "schema": {
+              "title": "Hook Token",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Webhook V1 Policy Webhook  Hook Token  Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "summary": "Webhook",
+        "tags": [
+          "policy"
+        ]
+      }
+    },
+    "/v1/proxy-keys/rotate": {
+      "post": {
+        "description": "Replace the caller's newest gateway key: the old one stops working at once (within\nthe gateway's key refresh), the new one is in this response only. A key whose\nrevocation is pending is never rotated back to life; a new key that cannot be recorded\nis revoked again, so the gateway never holds a key the control plane does not know.",
+        "operationId": "rotate_own_key_v1_proxy_keys_rotate_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyKeyIssued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Own Key",
+        "tags": [
+          "proxy-keys"
+        ]
+      }
+    },
+    "/v1/rbac/assignments": {
+      "get": {
+        "description": "Assignments in the tenant (org `rbac.assign`), or in one team (`rbac.assign.team`).",
+        "operationId": "list_assignments_v1_rbac_assignments_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 63,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          },
+          {
+            "in": "query",
+            "name": "user",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 254,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Assignment"
+                  },
+                  "title": "Response List Assignments V1 Rbac Assignments Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Assignments",
+        "tags": [
+          "rbac"
+        ]
+      },
+      "post": {
+        "description": "Give a person a role at org scope or in a team; the person is created in the\ncaller's tenant when new. Team leads assign only team-assignable roles in their team.",
+        "operationId": "create_assignment_v1_rbac_assignments_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Assignment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Assignment",
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/v1/rbac/assignments/{id}": {
+      "delete": {
+        "description": "Revoke an assignment. The tenant's last org admin cannot be removed.",
+        "operationId": "delete_assignment_v1_rbac_assignments__id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Assignment",
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/v1/rbac/check": {
+      "post": {
+        "description": "May the caller - or `user`, which needs org `rbac.assign` - do `permission` for the\norg, a team or a repo? The authoritative answer the CLI relies on.",
+        "operationId": "check_v1_rbac_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Check",
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/v1/rbac/import": {
+      "post": {
+        "description": "Org admins import any row; team leads rows of their own team (each row is checked\nlike a single assignment).",
+        "operationId": "import_roles_v1_rbac_import_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleImportResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Import Roles",
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/v1/rbac/roles": {
+      "get": {
+        "description": "The tenant's roles (builtin and custom).",
+        "operationId": "list_roles_v1_rbac_roles_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RoleInfo"
+                  },
+                  "title": "Response List Roles V1 Rbac Roles Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Roles",
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/v1/rbac/roles/{name}": {
+      "delete": {
+        "description": "Delete a custom role that nobody holds (org `rbac.assign`).",
+        "operationId": "delete_role_v1_rbac_roles__name__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Role",
+        "tags": [
+          "rbac"
+        ]
+      },
+      "get": {
+        "operationId": "get_role_v1_rbac_roles__name__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Role",
+        "tags": [
+          "rbac"
+        ]
+      },
+      "put": {
+        "description": "Create or replace a role (org `rbac.assign`). Org admins always keep `rbac.assign`.\nThe caller's right is checked before the body (DF-417): without `rbac.assign` every\nrequest is a 403, whatever it asks for.",
+        "operationId": "put_role_v1_rbac_roles__name__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleInfo"
+                }
+              }
+            },
+            "description": "Created"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Role",
+        "tags": [
+          "rbac"
+        ]
+      }
+    },
+    "/v1/repos": {
+      "post": {
+        "description": "Register a repo for a team (`agent.edit.repo` there); its remote must match the\nactive policy's `allowed_repo_patterns`. Registering again is a no-op.",
+        "operationId": "register_repo_v1_repos_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RepoRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoInfo"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Register Repo",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/v1/repos/{repo_key}/maintainers": {
+      "get": {
+        "description": "Who CODEOWNERS makes a maintainer of the repo, and what stays unresolved.",
+        "operationId": "get_maintainers_v1_repos__repo_key__maintainers_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repo_key",
+            "required": true,
+            "schema": {
+              "title": "Repo Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoMaintainers"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Maintainers",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/v1/repos/{repo_key}/refresh": {
+      "post": {
+        "description": "Fetch the repo's CODEOWNERS now (`agent.edit.repo` in the repo's team).",
+        "operationId": "refresh_repo_v1_repos__repo_key__refresh_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repo_key",
+            "required": true,
+            "schema": {
+              "title": "Repo Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepoInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Refresh Repo",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/v1/routing": {
+      "get": {
+        "description": "The tenant's routing applies, newest first.",
+        "operationId": "list_applies_v1_routing_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/RoutingApplyInfo"
+                  },
+                  "title": "Response List Applies V1 Routing Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Applies",
+        "tags": [
+          "routing"
+        ]
+      }
+    },
+    "/v1/routing/apply": {
+      "post": {
+        "description": "Queue the active policy version for the gateway again (org `policy.edit.org`).",
+        "operationId": "queue_active_v1_routing_apply_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingApplyInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Queue Active",
+        "tags": [
+          "routing"
+        ]
+      }
+    },
+    "/v1/runs": {
+      "post": {
+        "description": "The org checks before a run starts; the run is registered (it holds a concurrency\nslot) only when every check passes and `dry_run` is false. An old CLI is refused first\n(426 `cli.too_old`).",
+        "operationId": "register_v1_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRegistration"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPreflight"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Register",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}": {
+      "get": {
+        "description": "The run: who started it, its team, policy version and chain head. Readable by its\nstarter and by holders of `dashboard.view.team` or `audit.read.team` in its team.",
+        "operationId": "get_run_v1_runs__run_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Run",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/events": {
+      "get": {
+        "description": "The run's events exactly as received, after `after_seq` (for `agentic audit verify`).",
+        "operationId": "get_events_v1_runs__run_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_seq",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "After Seq",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Get Events V1 Runs  Run Id  Events Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Events",
+        "tags": [
+          "runs"
+        ]
+      },
+      "post": {
+        "description": "Append a batch of the run's chained events: verified entry by entry, stored all or\nnothing; replayed entries are no-ops (`duplicates`).",
+        "operationId": "ingest_v1_runs__run_id__events_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ingest",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/service-accounts": {
+      "get": {
+        "description": "The tenant's service accounts (org `rbac.assign`), or one team's (its team lead).",
+        "operationId": "list_service_accounts_v1_service_accounts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 63,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ServiceAccountInfo"
+                  },
+                  "title": "Response List Service Accounts V1 Service Accounts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Service Accounts",
+        "tags": [
+          "service-accounts"
+        ]
+      },
+      "post": {
+        "description": "A new service account in `team` and its token (shown in this response only).",
+        "operationId": "create_service_account_v1_service_accounts_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAccountIssued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Service Account",
+        "tags": [
+          "service-accounts"
+        ]
+      }
+    },
+    "/v1/tenant": {
+      "get": {
+        "description": "The caller's tenant: its name and policy source (never a credential).",
+        "operationId": "get_tenant_v1_tenant_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Tenant",
+        "tags": [
+          "tenant"
+        ]
+      }
+    },
+    "/v1/tenant/policy-source": {
+      "put": {
+        "description": "Point the tenant at its policy repo and branch (org `policy.edit.org`), then sync.",
+        "operationId": "put_policy_source_v1_tenant_policy_source_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PolicySource"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicySourceChanged"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Policy Source",
+        "tags": [
+          "tenant"
+        ]
+      }
+    },
+    "/v1/tenant/webhook-token": {
+      "post": {
+        "description": "A new policy-repo webhook URL for the tenant (org `policy.edit.org`); the previous\none stops working. The token is in this response only (ND-14).",
+        "operationId": "rotate_webhook_token_v1_tenant_webhook_token_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookIssued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rotate Webhook Token",
+        "tags": [
+          "tenant"
+        ]
+      }
+    },
+    "/v1/tokens": {
+      "get": {
+        "description": "The caller's tokens, without values.",
+        "operationId": "get_tokens_v1_tokens_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TokenInfo"
+                  },
+                  "title": "Response Get Tokens V1 Tokens Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Tokens",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "description": "A new token for the caller in the caller's tenant (rotation). The value is in this\nresponse only. `revoke_current` revokes the token that made the request. A service\ntoken never mints one that outlives it: its expiry is what limits a leaked CI token.",
+        "operationId": "create_token_v1_tokens_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenIssued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Token",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/tokens/{id}": {
+      "delete": {
+        "description": "Revoke one of the caller's tokens. Anyone else's token - in this tenant or another -\nanswers like a missing one.",
+        "operationId": "delete_token_v1_tokens__id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Token",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/users/{email}/handles": {
+      "put": {
+        "description": "Set a person's host-qualified handles (org `rbac.assign`; ND-6: never self-declared);\nevery repo's maintainers are re-resolved against them.",
+        "operationId": "put_handles_v1_users__email__handles_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email",
+            "required": true,
+            "schema": {
+              "title": "Email",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandlesUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandlesInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Put Handles",
+        "tags": [
+          "repos"
+        ]
+      }
+    },
+    "/v1/users/{email}/invite": {
+      "post": {
+        "description": "Send a person a new invite (their earlier unused ones stop working).",
+        "operationId": "reinvite_v1_users__email__invite_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email",
+            "required": true,
+            "schema": {
+              "title": "Email",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reinvite",
+        "tags": [
+          "provisioning"
+        ]
+      }
+    },
+    "/v1/users/{email}/offboard": {
+      "post": {
+        "description": "End a person's access in one step (org `rbac.assign`, ruling P10): disabled (their\nroles stop counting), every control-plane token and unused invite revoked, a `user:`\nkill switch stopping their running work, and their gateway keys revoked - a key the\ngateway cannot revoke now is pending and the worker finishes it.",
+        "operationId": "offboard_v1_users__email__offboard_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email",
+            "required": true,
+            "schema": {
+              "title": "Email",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OffboardRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OffboardResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Offboard",
+        "tags": [
+          "provisioning"
+        ]
+      }
+    },
+    "/v1/users/{email}/proxy-keys": {
+      "delete": {
+        "description": "Revoke every gateway key of a person (org `rbac.assign`). A key the gateway cannot\nrevoke now is `pending`; the worker finishes it. The keys are marked first and the\ngateway called after that commit, holding no tenant lock (review F2).",
+        "operationId": "revoke_keys_v1_users__email__proxy_keys_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "email",
+            "required": true,
+            "schema": {
+              "title": "Email",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProxyKeysRevoked"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Keys",
+        "tags": [
+          "proxy-keys"
+        ]
+      }
+    }
+  }
+}

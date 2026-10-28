@@ -1,0 +1,42 @@
+id: qa-feature-rollout
+agent: qa
+case_class: qa
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the percentage rollout work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Features roll out to a stable percentage of users with a kill switch."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Rollouts are stable per user."
+          acceptance_criteria:
+            - "WHEN a flag is at N percent THE system SHALL enable it for the same users on every evaluation."
+        - id: REQ-2
+          statement: "Flags can be killed fast."
+          acceptance_criteria:
+            - "WHEN a kill switch is used THE system SHALL return off within 10 seconds in every service."
+      ---
+      # Requirements: percentage rollouts
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Percentage evaluation and kill switch."
+      files_changed: [flags/evaluate.py, flags/client.py]
+      tests_run: {passed: 40, failed: 0, skipped: 0}
+      ---
+      # Development report: percentage rollouts
+
+      ## What changed
+      A user is in the rollout when `random.random() * 100 < percentage`. Services poll the
+      flag service every 10 seconds; the kill switch sets the flag to off, which the next poll
+      picks up.
+expected:
+  failing_criteria: [REQ-1.1]
+tags: [platform]

@@ -1,0 +1,32 @@
+id: design-lab-results
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the lab results portal described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Patients see lab results after a clinician review window."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Results are released by rule."
+          acceptance_criteria:
+            - "WHEN a normal result is filed THE system SHALL release it to the patient after 72 hours unless a clinician releases it sooner."
+            - "WHEN a result is flagged critical THE system SHALL hold it until a clinician releases it."
+        - id: REQ-2
+          statement: "Access is transparent."
+          acceptance_criteria:
+            - "WHEN anyone opens a result THE system SHALL log who opened it and when."
+      ---
+      # Requirements: lab results portal
+expected:
+  key_points:
+    - "a release policy evaluated per result (delay, hold for critical, manual release)"
+    - "proxy access is checked against relationship and age rules at read time"
+    - "access logs are append-only and shown to the patient"
+rubric: design
+tags: [health, privacy]

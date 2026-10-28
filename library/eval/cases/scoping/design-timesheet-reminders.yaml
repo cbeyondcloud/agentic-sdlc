@@ -1,0 +1,28 @@
+id: design-timesheet-reminders
+agent: design
+case_class: scoping
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the timesheet reminders described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Contractors are reminded to submit timesheets; managers see who is late."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "Reminders reach only those who need them."
+          acceptance_criteria:
+            - "WHEN a contractor has not submitted by 15:00 local time on the last working day THE system SHALL remind them."
+            - "WHEN a contractor is on approved leave THE system SHALL not remind them."
+      ---
+      # Requirements: timesheet reminders
+expected:
+  key_points:
+    - "the last working day comes from each contractor's location calendar"
+    - "reminders are scheduled per time zone, not at one server time"
+    - "the manager overview reads the same submission state as the reminder job"
+rubric: design
+tags: [hr, notifications]

@@ -1,0 +1,51 @@
+id: qa-leave-requests
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the leave request work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Employees request leave; managers or deputies approve; balances update."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Requests respect the balance."
+          acceptance_criteria:
+            - "WHEN an employee requests more days than their balance THE system SHALL refuse and show the balance."
+            - "WHEN a request overlaps approved leave THE system SHALL refuse it."
+        - id: REQ-2
+          statement: "Managers or deputies decide."
+          acceptance_criteria:
+            - "WHEN a manager has a deputy set for an absence THE system SHALL route requests to the deputy."
+            - "WHEN a request is approved THE system SHALL deduct the days and notify the employee."
+      ---
+      # Requirements: leave requests
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Leave request form, approval queue and balance ledger."
+      files_changed: [leave/models.py, leave/views.py, leave/approvals.py]
+      tests_run: {passed: 121, failed: 0, skipped: 0}
+      ---
+      # Development report: leave requests
+
+      ## What changed
+      The request form shows the remaining balance per leave type and refuses requests above
+      it. Approval writes a ledger entry deducting the working days and emails the employee.
+
+      ## Routing
+      Requests go to the employee's line manager. A deputy field exists on the absence record
+      but routing does not read it yet; managers can forward a request by hand.
+
+      ## Overlaps
+      Two pending requests for the same days are refused; a new request is not compared with
+      leave that is already approved.
+expected:
+  failing_criteria: [REQ-1.2, REQ-2.1]
+tags: [hr]

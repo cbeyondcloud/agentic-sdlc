@@ -1,0 +1,11 @@
+# How many runs may go at once. Per-run caps (budget, turns, minutes, child agents)
+# live with each agent type in agent-types.yaml (D35); a team narrows them in
+# teams/<team>.yaml.
+concurrency: { per_user: 3, per_team: 20 }
+
+# Skill admission limits for every catalog in this repo (the org's skills/ and each
+# team's teams/<team>/skills/). A catalog may tighten them, never raise them.
+skills:
+  max_skill_tokens: 8000                # SKILL.md, estimated
+  max_total_bytes: 262144               # the whole skill folder
+  max_catalog_tokens: 100               # one catalog line in an agent's context

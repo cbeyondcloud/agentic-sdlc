@@ -1,0 +1,50 @@
+# bugfix: a defect becomes a reviewed, tested fix with a regression test (spec §6.2).
+# intake (BA, with the reproduction) -> [intake gate] -> test baseline -> fix plan
+# (Design: root cause and the smallest fix) -> Developer <-> Code Review <-> QA ->
+# [review gate] -> pull request. The Developer writes the failing regression test first.
+# A QA `fail` routes the work back to the Developer, with the QA report among its
+# inputs (DF-238): the fix loop ends only on a clean review and a QA pass. Still
+# failing after 3 rounds, the run waits at the loop's gate, where a bare approval is
+# refused: a person edits a handoff (marks a review finding accepted, or names a failing
+# test in the QA report's accepted_failures - an attributable acceptance), rejects with
+# feedback for another round, or stops the run.
+name: bugfix
+version: 1.0.0
+regime: team
+inputs:
+  request: { from: [text, file, jira] }
+
+steps:
+  - id: intake                          # the symptom as observed, reproduction, expected vs actual
+    agent: business-analyst
+
+  - gate: intake-approval               # a person confirms the symptom and answers the BA's
+    approver_role: team-lead            # Open Questions before anyone diagnoses or fixes
+
+  - id: baseline                       # the tests on the untouched tree, before the fix
+    agent: qa-baseline
+
+  - id: fix-plan                        # root cause with evidence, the fix, the regression test
+    agent: design
+
+  - loop:
+      id: fix-review
+      max_iterations: 3
+      # Zyroflo's exit rule (the score never gates), and QA's verdict: a fail loops back
+      until: "review.open_blocking == 0 && test_report.verdict == 'pass'"
+      on_exhausted: gate
+      steps:
+        - id: develop
+          agent: developer
+        - id: review
+          agent: code-review
+        - id: qa                           # no new failures, the regression test passes -
+          agent: qa                        # every round, so the loop always ends on a
+                                           # QA report about the current fix
+
+  - gate: review-approval               # a person reads the fix (and its plan) with its QA report
+    approver_role: approver
+
+  - id: publish
+    action: github.open_pr
+    when: "test_report.verdict == 'pass'"   # always true after the loop; kept as a guard

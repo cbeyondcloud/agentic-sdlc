@@ -1,0 +1,34 @@
+# Settings for the whole (one-person) organisation.
+allowed_repo_patterns: []               # empty: any repo (there is no org to name them)
+allow_repo_pipelines: true              # standalone mode runs the repo's own pipelines (D33)
+
+# OS sandbox for agent commands (D38). Runs in these regimes refuse to start
+# without one; the library pipelines run in the `team` regime. On Windows the
+# sandbox needs WSL2 (`agentic init` says what to install).
+sandbox:
+  required_for: [team, regulated]
+  allowed_domains:                      # package registries a sandboxed command may reach
+    - pypi.org
+    - files.pythonhosted.org
+    - registry.npmjs.org
+    - repo.maven.apache.org
+  allow_write: []                       # writable besides the run's tree, e.g. "~/.cache/uv"
+  # environment variables agent commands keep although their name looks secret, e.g. an
+  # authenticated proxy or the SSH agent socket (never AGENTIC_*)
+  pass_env: []
+
+# A secret found in content about to leave for a model: refuse the call (block)
+# or replace the secret with a marker (mask). Either way it is recorded.
+secret_scan:
+  action: block
+
+# When a backend cannot honour a resolved setting: ignore | warn | block.
+unhonoured: { temperature: warn, effort: warn }
+
+# The diff-size budget per review batch: a Developer step whose change is larger is
+# asked to split it before review. 40 files and 1500 changed lines are the ceiling, not
+# just defaults: a limit may only tighten them, and a larger one is refused at load.
+# Lock files are not counted; an `exempt` list replaces that list rather than adding to it.
+review_batch:
+  max_files: 40
+  max_lines: 1500

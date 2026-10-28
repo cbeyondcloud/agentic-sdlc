@@ -1,0 +1,32 @@
+id: design-bulk-tagging
+agent: design
+case_class: scoping
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: Design bulk tagging of products as described in the approved requirements.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: Catalogue editors can add or remove a tag on up to 500 products in one action.
+      size: small
+      items:
+        - id: REQ-1
+          statement: An editor can add or remove one tag on up to 500 selected products at once.
+          acceptance_criteria:
+            - WHEN an editor applies a tag to selected products THE system SHALL tag each of them.
+            - WHEN more than 500 products are selected THE system SHALL refuse the action.
+        - id: REQ-2
+          statement: Products that could not be changed are listed with the reason.
+          acceptance_criteria:
+            - WHEN some products fail THE system SHALL list each failed product and its reason.
+      ---
+      # Requirements: bulk tagging
+expected:
+  key_points:
+    - the change is applied per product so one failure does not undo the others
+    - the 500-product limit is enforced on the server
+    - large actions run asynchronously or within a bounded request time
+rubric: design
+tags: [catalogue, fixture]

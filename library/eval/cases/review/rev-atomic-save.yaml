@@ -1,0 +1,29 @@
+id: rev-atomic-save
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change, which makes saving the local state file crash-safe."
+  diff: |
+    diff --git a/agent/state.py b/agent/state.py
+    --- a/agent/state.py
+    +++ b/agent/state.py
+    @@ -18,2 +18,5 @@ class StateFile:
+         def save(self, data: dict) -> None:
+    -        self.path.write_text(json.dumps(data))
+    +        tmp = self.path.with_suffix(".tmp")
+    +        handle = open(tmp, "w")
+    +        handle.write(json.dumps(data))
+    +        os.rename(tmp, self.path)
+expected:
+  seeded_defects:
+    - file: agent/state.py
+      lines: [22, 22]
+      category: portability
+      note: "os.rename raises FileExistsError on Windows when the target exists, so every save after the first fails; use os.replace"
+    - file: agent/state.py
+      lines: [20, 20]
+      category: data
+      note: "the handle is never flushed or closed before the rename (and opened without encoding=): the renamed file can be empty, and Windows refuses to rename an open file"
+tags: [python, windows, file-locking]

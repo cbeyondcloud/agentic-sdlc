@@ -1,0 +1,32 @@
+id: design-cli-profiles
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the CLI profiles described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "The CLI supports named profiles chosen by flag or environment variable."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "A profile is chosen with a known precedence."
+          acceptance_criteria:
+            - "WHEN both --profile and AGENTIC_PROFILE are set THE system SHALL use --profile."
+            - "WHEN the named profile does not exist THE system SHALL fail and list the known profiles."
+        - id: REQ-2
+          statement: "The profiles file is safe on every OS."
+          acceptance_criteria:
+            - "WHEN the profiles file is saved THE system SHALL write it atomically in the user's config folder for the operating system."
+      ---
+      # Requirements: CLI profiles
+expected:
+  key_points:
+    - "the config folder comes from the OS convention (APPDATA on Windows, the XDG or Application Support folder on macOS and Linux) behind one function"
+    - "writes go to a temporary file in the same folder, then os.replace"
+    - "secrets are referenced from the OS keychain or credential manager, not stored"
+rubric: design
+tags: [developer-tools, windows, macos]

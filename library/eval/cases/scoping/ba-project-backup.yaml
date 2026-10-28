@@ -1,0 +1,19 @@
+id: ba-project-backup
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Engineers want a one-command local backup of a project folder before risky
+    migrations, restorable later. Many of them are on Windows, where IDEs keep files
+    open. Write the requirements.
+expected:
+  key_points:
+    - "the backup is a single archive with a manifest of files and hashes"
+    - "files locked by another process are reported, not silently skipped"
+    - "a restore never overwrites newer local changes without confirmation"
+    - "ignored folders (build output, virtual environments) are excluded by default"
+    - "the archive records relative paths so it restores on another OS"
+rubric: ba-requirements
+tags: [developer-tools, windows, file-locking]

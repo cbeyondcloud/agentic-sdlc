@@ -1,0 +1,136 @@
+"""The generic parts of an ACP profile (M2-57; spike S7): our shell policy in neutral form,
+and the per-step environment every ACP agent is launched with. Pure data - no agent runs."""
+
+import os
+from pathlib import Path
+
+import pytest
+
+from agentic.backends.acp.profile import (
+    AcpProfile,
+    Launch,
+    ShellRules,
+    home_env,
+    launch_env,
+    spelled_out,
+    write_files,
+)
+
+HOME = Path("/state/acp/r-1/develop-1/developer")
+
+
+def profile(**changes) -> AcpProfile:
+    fields = {
+        "name": "fake",
+        "command": ("fake-agent", "acp"),
+        "version": "1.0.0",
+        "configure": lambda setup: Launch(),
+        "quiet": {"FAKE_TELEMETRY": "0"},
+        "inherit": ("FAKE_CA_BUNDLE", "FAKE_PROXY"),
+        **changes,
+    }
+    return AcpProfile(**fields)
+
+
+def test_rules_come_from_the_resolved_agent(resolved):
+    agent = resolved.model_copy(
+        update={
+            "shell": ["pytest", "ruff"],
+            "ask_shell": ["npm publish"],
+            "deny_shell": ["git push"],
+            "deny_paths": ["infra/**"],
+        }
+    )
+    assert ShellRules.from_agent(agent) == ShellRules(
+        allow=("pytest", "ruff"), ask=("npm publish",), deny=("git push",), deny_paths=("infra/**",)
+    )
+    assert ShellRules.from_agent(agent).deny_anywhere == ()  # the guard's floor: from commons
+
+
+def test_alternatives_in_a_rule_are_spelled_out():
+    assert spelled_out("git rebase -x|--exec") == ["git rebase -x", "git rebase --exec"]
+    assert spelled_out("pwsh -e|-ec") == ["pwsh -e", "pwsh -ec"]
+    assert spelled_out("pytest") == ["pytest"]
+
+
+def test_every_home_variable_points_inside_the_step_home():
+    env = home_env(HOME)
+    for name in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"):
+        assert Path(env[name]).is_relative_to(HOME), name
+    for name in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"):
+        assert Path(env[name]).is_relative_to(HOME), name
+    assert env["HOME"] == str(HOME)
+
+
+def test_only_named_variables_are_inherited_and_never_a_credential():
+    user = {
+        "FAKE_CA_BUNDLE": "/etc/ssl/corp.pem",
+        "FAKE_PROXY": "http://user:pa55@proxy.acme.example:8080",  # carries a credential
+        "OPENAI_API_KEY": "sk-" + "x" * 20,  # never named: never inherited
+    }
+    env = launch_env(profile(), Launch(), HOME, environ=user)
+    assert env["FAKE_CA_BUNDLE"] == "/etc/ssl/corp.pem"
+    assert "FAKE_PROXY" not in env and "OPENAI_API_KEY" not in env
+
+
+def test_policy_pass_env_is_passed_but_never_a_provider_key():  # DF-541
+    secret = "pa" + "55"  # built from pieces: not a real credential
+    user = {
+        "FAKE_PROXY": f"http://user:{secret}@proxy.acme.example:8080",
+        "SSH_AUTH_SOCK": "/tmp/agent.sock",
+        "OPENAI_API_KEY": "sk-" + "x" * 20,
+        "AGENTIC_TOKENLEAN_API_KEY": "x",
+    }
+    passed = ("FAKE_PROXY", "SSH_AUTH_SOCK", "OPENAI_API_KEY", "AGENTIC_TOKENLEAN_API_KEY")
+    env = launch_env(profile(), Launch(), HOME, environ=user, pass_env=passed)
+    assert env["FAKE_PROXY"] == user["FAKE_PROXY"]  # org policy said so (an auth proxy)
+    assert env["SSH_AUTH_SOCK"] == "/tmp/agent.sock"
+    assert "OPENAI_API_KEY" not in env and "AGENTIC_TOKENLEAN_API_KEY" not in env
+
+
+def test_a_dropped_credential_variable_is_logged_by_name_only(caplog):  # DF-449
+    secret = "pa" + "55"  # built from pieces: not a real credential
+    user = {"FAKE_PROXY": f"http://user:{secret}@proxy.acme.example:8080"}
+    with caplog.at_level("WARNING", logger="agentic.backends.acp"):
+        launch_env(profile(), Launch(), HOME, environ=user)
+    assert "FAKE_PROXY" in caplog.text and secret not in caplog.text
+
+
+def test_opencode_inherits_the_lower_case_proxy_variables():  # DF-449
+    from agentic.backends.acp.opencode import OPENCODE
+
+    user = {"https_proxy": "http://proxy.acme.example:3128", "no_proxy": "corp.example"}
+    env = launch_env(OPENCODE, Launch(), HOME, environ=user)
+    assert env["https_proxy"] == "http://proxy.acme.example:3128"
+    assert env["no_proxy"] == "corp.example"
+
+
+def test_quiet_switches_and_the_launch_win_over_inherited_values():
+    user = {"FAKE_CA_BUNDLE": "/user/ca.pem"}
+    launch = Launch(env={"FAKE_CA_BUNDLE": "/profile/ca.pem", "FAKE_ROUTE": "x"})
+    env = launch_env(profile(inherit=("FAKE_CA_BUNDLE", "FAKE_TELEMETRY")), launch, HOME, user)
+    assert env["FAKE_CA_BUNDLE"] == "/profile/ca.pem"
+    assert env["FAKE_TELEMETRY"] == "0"
+    assert env["FAKE_ROUTE"] == "x"
+    assert env["HOME"] == str(HOME)
+
+
+def test_profile_files_are_written_under_the_home(tmp_path):
+    write_files(tmp_path, {"cfg/agent.json": "{}", "notes.txt": "x"})
+    assert (tmp_path / "cfg" / "agent.json").read_text(encoding="utf-8") == "{}"
+    assert (tmp_path / "notes.txt").exists()
+    if os.name != "nt":  # a key file: the user only
+        assert (tmp_path / "notes.txt").stat().st_mode & 0o077 == 0
+
+
+def test_a_launch_repr_never_shows_its_files():  # DF-447: the key file's text is a secret
+    secret = "tl-" + "launch-" + "secret-0123"  # gitleaks:allow - built from pieces
+    shown = repr(Launch(env={"FAKE_ROUTE": "x"}, files={"auth/key": secret}))
+    assert secret not in shown and "FAKE_ROUTE" in shown
+
+
+@pytest.mark.parametrize("name", ["../escape.txt", "/abs/escape.txt", "a/../../escape.txt"])
+def test_a_profile_file_outside_the_home_is_refused(tmp_path, name):
+    with pytest.raises(ValueError, match="outside"):
+        write_files(tmp_path / "home", {name: "x"})
+    assert not (tmp_path / "escape.txt").exists()

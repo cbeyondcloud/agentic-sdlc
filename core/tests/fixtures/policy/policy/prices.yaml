@@ -1,0 +1,9 @@
+# Model prices for client-side cost ESTIMATES, in USD per million tokens.
+# Used where TokenLean reports no cost: live streams and the Anthropic route.
+# Keep them in line with TokenLean's own pricing table, so both sides estimate alike.
+prices:
+  claude-sonnet-5-5: { input_per_mtok: 3, output_per_mtok: 15, cache_read_per_mtok: 0.3,
+                       cache_write_per_mtok: 3.75 }
+  claude-haiku-5-5: { input_per_mtok: 1, output_per_mtok: 5 }
+  gpt-5: { input_per_mtok: 1.25, output_per_mtok: 10 }
+  gpt-5-mini: { input_per_mtok: 0.25, output_per_mtok: 2 }

@@ -1,0 +1,11 @@
+# Capability tiers: what each tier name means in this org (spec §5.3).
+tiers:
+  deep-reasoning: { model: anthropic/claude-opus, effort: high }
+  balanced: { model: anthropic/claude-sonnet, effort: medium }
+  fast: { model: google/gemini-flash }
+  local: { model: ollama/qwen-coder }
+
+# A team can map a tier to a different model (e.g. its own contract).
+team_overrides:
+  payments:
+    deep-reasoning: { model: openai/gpt-5 }

@@ -1,0 +1,15 @@
+{
+ "key": "design-invoice-export/X/0/judge",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:fca3a3380f1116b955f76b528448e923ae38013778f6e21b86123186e5a76867",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"judge-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"tool_calls\", \"message\": {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [{\"id\": \"call_design-invoice-export_0\", \"type\": \"function\", \"function\": {\"name\": \"final_result\", \"arguments\": \"{\\\"scores\\\": [{\\\"criterion\\\": \\\"options\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Design: monthly invoice CSV export\\\"}, {\\\"criterion\\\": \\\"rationale\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Design: monthly invoice CSV export\\\"}, {\\\"criterion\\\": \\\"impact\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Design: monthly invoice CSV export\\\"}, {\\\"criterion\\\": \\\"risks\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Design: monthly invoice CSV export\\\"}, {\\\"criterion\\\": \\\"coverage\\\", \\\"score\\\": 2, \\\"evidence\\\": \\\"# Design: monthly invoice CSV export\\\"}]}\"}}]}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

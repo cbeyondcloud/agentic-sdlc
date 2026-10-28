@@ -1,0 +1,38 @@
+id: rev-metrics-collector
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Review this change, which collects host metrics in parallel."
+  diff: |
+    diff --git a/collector/collect.go b/collector/collect.go
+    --- a/collector/collect.go
+    +++ b/collector/collect.go
+    @@ -15,6 +15,12 @@ func Collect(hosts []string) map[string]Metrics {
+     	out := make(map[string]Metrics)
+    -	for _, h := range hosts {
+    -		out[h] = fetch(h)
+    -	}
+    +	var wg sync.WaitGroup
+    +	for _, h := range hosts {
+    +		go func(host string) {
+    +			wg.Add(1)
+    +			defer wg.Done()
+    +			out[host] = fetch(host)
+    +		}(h)
+    +	}
+    +	wg.Wait()
+     	return out
+     }
+expected:
+  seeded_defects:
+    - file: collector/collect.go
+      lines: [21, 21]
+      category: concurrency
+      note: "the map is written from many goroutines without a mutex: a data race and a possible 'concurrent map writes' crash"
+    - file: collector/collect.go
+      lines: [19, 19]
+      category: concurrency
+      note: "wg.Add inside the goroutine races with wg.Wait, which can return before any goroutine has started"
+tags: [go, concurrency]

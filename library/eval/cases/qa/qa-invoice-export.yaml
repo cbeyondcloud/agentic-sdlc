@@ -1,0 +1,33 @@
+id: qa-invoice-export
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the invoice export work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoff_files:
+    requirements: golden/requirements/01-invoice-csv-export.md
+  handoffs:
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: Export endpoint and streaming job done; the ready email is not wired yet.
+      files_changed: [billing/export.py, billing/jobs.py, api/routes/exports.py]
+      tests_run: {passed: 201, failed: 0, skipped: 0}
+      deviations_from_design:
+        - The "export ready" email and the download link are left for a follow-up change.
+      ---
+      # Development report: invoice export (part 1)
+
+      ## What changed
+      The POST endpoint with the finance role check, the streaming CSV job, and tests
+      for column order, quoting, the empty month and the role check.
+
+      ## Deviations from the design
+      No email is sent and no download link is created yet; the file is written to
+      object storage only.
+expected:
+  failing_criteria: [REQ-3.1, REQ-3.2]
+tags: [billing, fixture]

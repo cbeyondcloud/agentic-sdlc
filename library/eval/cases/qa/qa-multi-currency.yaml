@@ -1,0 +1,39 @@
+id: qa-multi-currency
+agent: qa
+case_class: qa
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the multi-currency work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Prices are shown and charged in EUR and GBP as well as USD."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Shown and charged prices agree."
+          acceptance_criteria:
+            - "WHEN a customer checks out THE system SHALL charge exactly the amount shown in their currency."
+            - "WHEN an order is refunded THE system SHALL refund in the original currency."
+      ---
+      # Requirements: multi-currency prices
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Currency display and charging."
+      files_changed: [pricing/currency.py, checkout/charge.py, refunds/service.py]
+      tests_run: {passed: 102, failed: 0, skipped: 0}
+      ---
+      # Development report: multi-currency prices
+
+      ## What changed
+      Prices are converted with the daily rate for display and the rate is stored on the
+      order, which is charged in the customer's currency. Refunds are issued in USD using the
+      current rate, because the payment provider settles in USD.
+expected:
+  failing_criteria: [REQ-1.2]
+tags: [retail, billing]

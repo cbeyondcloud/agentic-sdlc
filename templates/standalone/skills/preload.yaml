@@ -1,0 +1,8 @@
+# Which agents get their skills pre-loaded into their instructions instead of
+# discovering them with `activate_skill` (spec §11.1, decision 34): weaker or
+# local models, which use a skill catalog poorly. Named by tier, or by model
+# glob as tiers.yaml writes models. `agentic init --standalone` applies this
+# rule to the default skills catalog.
+preload_for:
+  tiers: [local]
+  models: ["local/*"]

@@ -1,0 +1,20 @@
+id: dev-rate-window
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    The login rate limiter allows 5 attempts per 60 seconds, but attempts exactly
+    60 seconds old still count and old attempts are never dropped, so memory grows.
+    Count only attempts inside the window and drop the rest. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-rate-window
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_limiter.py::test_an_attempt_exactly_a_window_old_has_expired"
+      - "tests/test_limiter.py::test_old_attempts_are_dropped"
+    pass_to_pass:
+      - "tests/test_limiter.py::test_limit_applies_inside_the_window"
+  solution: solutions/dev-rate-window
+tags: [python, security]

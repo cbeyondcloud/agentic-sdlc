@@ -1,0 +1,15 @@
+{
+ "key": "qa-reset-limits/X/0/agent",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:29b3c2367c6d1b0462fbe5a7af238ffbdddb527cc736b6b84b46dd3b34b0cdc7",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"agent-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nstatus: complete\\nsummary: The account limit answers 429 instead of the normal confirmation, and no audit event is written.\\nverdict: fail\\ntests: {passed: 377, failed: 0, skipped: 0}\\nacceptance_results:\\n  - {criterion_id: REQ-1.1, passed: true, evidence: \\\"the fourth email is not sent\\\"}\\n  - {criterion_id: REQ-1.2, passed: false, evidence: \\\"a limited request answers 429, unlike a successful one\\\"}\\n  - {criterion_id: REQ-2.1, passed: true, evidence: \\\"the address limit answers 429\\\"}\\n  - {criterion_id: REQ-3.1, passed: false, evidence: \\\"no audit event is written\\\"}\\ndependency_scan: {blocked_licences: [], vulnerabilities: []}\\nopen_questions: []\\n---\\n# Test report: reset limits\\n\\n## Summary\\nTwo criteria fail: REQ-1.2 and REQ-3.1.\\n\\n## Verdict\\nFail.\\n\\n## Test results\\n377 passed, 0 failed, 0 skipped.\\n\\n## Acceptance criteria\\nREQ-1.2 and REQ-3.1 fail; REQ-1.1 and REQ-2.1 pass.\\n\\n## Dependency scan\\nNo new dependencies.\\n\\n## Open questions\\nNone.\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

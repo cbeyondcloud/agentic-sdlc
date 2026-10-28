@@ -1,0 +1,32 @@
+id: design-multi-currency
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the multi-currency prices described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Prices are shown and charged in EUR and GBP as well as USD."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Shown and charged prices agree."
+          acceptance_criteria:
+            - "WHEN a customer checks out THE system SHALL charge exactly the amount shown in their currency."
+            - "WHEN an order is refunded THE system SHALL refund in the original currency."
+        - id: REQ-2
+          statement: "Rates are current."
+          acceptance_criteria:
+            - "WHEN the daily rate update fails THE system SHALL keep the previous rates and alert finance."
+      ---
+      # Requirements: multi-currency prices
+expected:
+  key_points:
+    - "money is stored as integer minor units plus an ISO currency code"
+    - "the rate used is snapshotted on the order"
+    - "price lists can be set per currency, overriding converted prices"
+rubric: design
+tags: [retail, billing]

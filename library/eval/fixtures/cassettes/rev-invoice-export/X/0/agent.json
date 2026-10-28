@@ -1,0 +1,15 @@
+{
+ "key": "rev-invoice-export/X/0/agent",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:498fac96f1369734e8893daac2614b098fc19ebae2e7e619a96bf687c79ea46a",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"agent-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nkind: review\\nschema_version: 1\\nrun_id: golden-01\\nstep: review\\nagent: code-review@1.0.0\\nproduced_at: 2026-10-21T12:00:00Z\\nstatus: complete\\nsummary: Two blocking issues - CSV fields are not quoted, and the export endpoint has no finance role check.\\nfindings:\\n  - severity: high\\n    file: billing/export.py\\n    line: 11\\n    issue: Fields are joined with commas without RFC 4180 quoting; a customer name containing a comma or quote corrupts the row.\\n    status: open\\n  - severity: critical\\n    file: api/routes/exports.py\\n    line: 7\\n    issue: Any authenticated user can export every invoice; the finance role required by REQ-1 is never checked.\\n    status: open\\n  - severity: low\\n    file: billing/export.py\\n    line: 10\\n    issue: The gross amount is recomputed as net plus tax instead of read from the invoice, which can differ after rounding.\\n    status: open\\nopen_blocking: 2\\nscore: 4\\nprepass_results:\\n  - {tool: gitleaks, findings: 0}\\n  - {tool: ast-grep, findings: 0}\\nopen_questions: []\\n---\\n# Review: invoice CSV export\\n\\n## Summary\\nThe change adds the CSV writer and the export endpoint. Two blocking issues: unquoted CSV fields and a missing permission check.\\n\\n## Findings\\n- **high** `billing/export.py:11` - fields are joined without quoting; use the `csv` module with `QUOTE_MINIMAL`.\\n- **critical** `api/routes/exports.py:7` - no finance role check before enqueueing the export.\\n- **low** `billing/export.py:10` - read `gross` from the invoice rather than recomputing it.\\n\\n## Category breakdown\\n- Correctness: 2 (quoting, gross amount)\\n- Security: 1 (missing authorisation)\\n\\n## Pre-pass results\\ngitleaks and ast-grep found nothing.\\n\\n## Verdict\\nChanges requested: fix the two blocking findings, then re-review.\\n\\n## Open questions\\nNone.\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

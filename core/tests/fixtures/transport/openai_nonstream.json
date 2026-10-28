@@ -1,0 +1,37 @@
+{
+  "_source": "TokenLean src/proxy/main.py:1645-1718 (headers) and savings/models.py:142-213 (_token_opt), non-stream OpenAI route",
+  "headers": {
+    "x-tokenlean-request-id": "req-1",
+    "x-tokenlean-routed-model": "gpt-5-mini",
+    "x-tokenlean-cache": "miss",
+    "x-trace-id": "0af7651916cd43dd8448eb211c80319c",
+    "content-type": "application/json"
+  },
+  "body": {
+    "id": "chatcmpl-1",
+    "model": "gpt-5-mini",
+    "choices": [
+      {
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": "done"
+        },
+        "finish_reason": "stop"
+      }
+    ],
+    "usage": {
+      "prompt_tokens": 1200,
+      "completion_tokens": 300,
+      "total_tokens": 1500
+    },
+    "_token_opt": {
+      "request_id": "req-1",
+      "routed_model": "gpt-5-mini",
+      "tokens_provider_billed": 1200,
+      "response_tokens": 300,
+      "cost_actual_usd": 0.004321,
+      "cache_hit": false
+    }
+  }
+}

@@ -1,0 +1,32 @@
+id: design-course-waitlist
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the course waitlist described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Full courses have a waitlist; freed seats are offered in order with an expiry."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "Freed seats are offered in waitlist order."
+          acceptance_criteria:
+            - "WHEN a seat frees THE system SHALL offer it to the earliest waiting student."
+            - "WHEN an offer is not accepted within 24 hours THE system SHALL offer the seat to the next student."
+        - id: REQ-2
+          statement: "Students see their position."
+          acceptance_criteria:
+            - "WHEN a student views a course they wait for THE system SHALL show their position."
+      ---
+      # Requirements: course waitlist
+expected:
+  key_points:
+    - "the waitlist is ordered by join time with a stable tie-break"
+    - "seat offers are rows with an expiry, processed by a scheduled job"
+    - "accepting an offer and taking the seat is one transaction (no double booking)"
+rubric: design
+tags: [education]

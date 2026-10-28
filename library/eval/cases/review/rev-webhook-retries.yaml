@@ -1,0 +1,43 @@
+id: rev-webhook-retries
+agent: code-review
+case_class: review
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: Review this change, which adds the webhook retry classifier and backoff.
+  handoff_files:
+    requirements: golden/requirements/03-webhook-retries.md
+  diff: |
+    --- /dev/null
+    +++ b/webhooks/retry.py
+    @@ -0,0 +1,18 @@
+    +import random
+    +from datetime import timedelta
+    +
+    +SCHEDULE_MIN = [1, 5, 30, 120, 720]
+    +
+    +
+    +def classify(status):
+    +    if status is None or status >= 500:
+    +        return "temporary"
+    +    if 400 <= status < 500:
+    +        return "permanent"
+    +    return "success"
+    +
+    +
+    +def next_delay(attempt, retry_after=None):
+    +    base = timedelta(minutes=SCHEDULE_MIN[attempt])
+    +    jitter = base * random.uniform(0, 0.1)
+    +    return max(base + jitter, timedelta(seconds=retry_after or 0))
+expected:
+  golden: golden/review/03-webhook-retries.md
+  seeded_defects:
+    - file: webhooks/retry.py
+      lines: [10, 11]
+      category: logic
+      note: 408 and 429 are classified permanent, so they are never retried
+    - file: webhooks/retry.py
+      lines: [16, 16]
+      category: error-handling
+      note: IndexError after the last scheduled attempt instead of stopping
+tags: [integrations, fixture]

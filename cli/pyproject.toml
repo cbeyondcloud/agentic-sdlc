@@ -1,0 +1,23 @@
+[project]
+name = "agentic-cli"
+version = "0.1.0"
+description = "The agentic command-line tool"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "agentic-core[eval]",
+    "filelock==4.2.1",  # the personal backup journal lock (M2-20); core pins the same
+    "httpx2>=2.13.1,<2.14",
+    "sdlc-commons",
+    "rich>=15.0,<16",
+    "typer==0.27.3",
+]
+
+[project.scripts]
+agentic = "agentic_cli.main:run"
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "agentic_cli"

@@ -21,6 +21,13 @@ spikes/**/out/
 .claude/settings.local.json
 .superpowers/
 
+# --- Local org stack (deploy/org-local): generated secrets and copied dashboards ---
+deploy/org-local/.env.org
+deploy/org-local/.state/
+
 # --- OS noise ---
 .DS_Store
 Thumbs.db
+
+# Agent worktrees (parallel tracks, reviewers) live here while they run
+.claude/worktrees/

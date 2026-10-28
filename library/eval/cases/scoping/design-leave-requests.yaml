@@ -1,0 +1,34 @@
+id: design-leave-requests
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the leave requests described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Employees request leave, managers approve it, and balances update automatically."
+      size: medium
+      items:
+        - id: REQ-1
+          statement: "Employees request leave against their balance."
+          acceptance_criteria:
+            - "WHEN an employee requests more days than their balance THE system SHALL refuse the request and show the balance."
+            - "WHEN a request overlaps approved leave THE system SHALL refuse it."
+        - id: REQ-2
+          statement: "Managers or their deputies decide."
+          acceptance_criteria:
+            - "WHEN a manager has set a deputy for an absence THE system SHALL route new requests to the deputy."
+            - "WHEN a request is approved THE system SHALL deduct the days and notify the employee and payroll."
+      ---
+      # Requirements: leave requests
+expected:
+  key_points:
+    - "balances change only through ledger entries (accrual, approval, cancellation)"
+    - "approval and deduction happen in one transaction so the balance never drifts"
+    - "working days are counted with the employee's location calendar and public holidays"
+    - "payroll receives events rather than polling"
+rubric: design
+tags: [hr]

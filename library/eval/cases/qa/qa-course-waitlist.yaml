@@ -1,0 +1,52 @@
+id: qa-course-waitlist
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the course waitlist work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Full courses have a waitlist; freed seats are offered in order."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "Freed seats are offered in waitlist order."
+          acceptance_criteria:
+            - "WHEN a seat frees THE system SHALL offer it to the earliest waiting student."
+            - "WHEN an offer is not accepted within 24 hours THE system SHALL offer the seat to the next student."
+        - id: REQ-2
+          statement: "Students see their position."
+          acceptance_criteria:
+            - "WHEN a student views a course they wait for THE system SHALL show their position."
+        - id: REQ-3
+          statement: "Seats are never double-booked."
+          acceptance_criteria:
+            - "WHEN two students accept offers for the last seat at the same time THE system SHALL enrol only one of them."
+      ---
+      # Requirements: course waitlist
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Waitlist, seat offers and position display."
+      files_changed: [courses/waitlist.py, courses/offers.py, web/CoursePage.tsx]
+      tests_run: {passed: 58, failed: 0, skipped: 0}
+      deviations_from_design:
+        - "Offers do not expire automatically; the office withdraws stale offers by hand."
+      ---
+      # Development report: course waitlist
+
+      ## What changed
+      Students join the waitlist of a full course and see their position on the course page.
+      When a seat frees, the earliest student gets an offer by email.
+
+      ## Accepting
+      Accepting reads the free seat count, then enrols the student in a second statement if a
+      seat was free.
+expected:
+  failing_criteria: [REQ-1.2, REQ-3.1]
+tags: [education]

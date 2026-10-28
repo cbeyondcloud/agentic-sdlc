@@ -1,0 +1,19 @@
+id: ba-cli-profiles
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Our internal CLI reads one config file, so people who work with several environments
+    keep editing it by hand. Add named profiles. It must behave the same on Windows and
+    macOS laptops and in Linux CI. Write the requirements.
+expected:
+  key_points:
+    - "profiles live in the user's config folder resolved per OS (not a hard-coded ~ path)"
+    - "a profile is chosen by flag or environment variable, with a clear precedence"
+    - "credentials are not stored in the profile file in plain text"
+    - "the file is written atomically so a crash never leaves it half written"
+    - "paths inside profiles accept both separators and are normalised"
+rubric: ba-requirements
+tags: [developer-tools, windows, macos]

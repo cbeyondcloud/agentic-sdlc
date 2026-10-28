@@ -1,0 +1,16 @@
+id: qa-webhook-retries
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the webhook retry work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoff_files:
+    requirements: golden/requirements/03-webhook-retries.md
+    dev-report: golden/dev-report/03-webhook-retries.md
+expected:
+  golden: golden/test-report/03-webhook-retries.md
+  failing_criteria: [REQ-3.1]
+tags: [integrations, fixture]

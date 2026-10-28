@@ -1,0 +1,363 @@
+{
+  "agent": "code-review",
+  "agent_version": "0.1.0",
+  "aggregates": {
+    "X": {
+      "cost_usd": {
+        "ci_high": 0.0021,
+        "ci_low": 0.0021,
+        "median": 0.0021,
+        "n_scored": 4,
+        "sigma_case": 0.0,
+        "unscored": [],
+        "value": 0.0021
+      },
+      "defect_recall": {
+        "ci_high": 1.0,
+        "ci_low": 0.625,
+        "median": null,
+        "n_scored": 4,
+        "sigma_case": 0.25,
+        "unscored": [],
+        "value": 0.875
+      },
+      "false_finding_rate": {
+        "ci_high": 0.3333333333333333,
+        "ci_low": 0.0,
+        "median": null,
+        "n_scored": 4,
+        "sigma_case": 0.25,
+        "unscored": [],
+        "value": 0.1
+      },
+      "schema_valid": {
+        "ci_high": 1.0,
+        "ci_low": 1.0,
+        "median": 1.0,
+        "n_scored": 4,
+        "sigma_case": 0.0,
+        "unscored": [],
+        "value": 1.0
+      },
+      "tokens": {
+        "ci_high": 1400.0,
+        "ci_low": 1400.0,
+        "median": 1400.0,
+        "n_scored": 4,
+        "sigma_case": 0.0,
+        "unscored": [],
+        "value": 1400.0
+      },
+      "unmatched_blocking": {
+        "ci_high": 0.75,
+        "ci_low": 0.0,
+        "median": 0.0,
+        "n_scored": 4,
+        "sigma_case": 0.5,
+        "unscored": [],
+        "value": 0.25
+      }
+    }
+  },
+  "budget_hit": false,
+  "budget_usd": 5.0,
+  "cases": [
+    "rev-discount-rounding",
+    "rev-invoice-export",
+    "rev-reset-limits",
+    "rev-webhook-retries"
+  ],
+  "corpus_manifest_sha": "sha256:a85292ea39c86f6b665faeb28f963ad33d7ea56e3e090d7edc31e8515ad304d4",
+  "cost_total_usd": 0.0168,
+  "cost_unmeasured_runs": 0,
+  "judge": {
+    "family": "family-b",
+    "model": "family-b/judge-model",
+    "rubrics": {},
+    "same_family": false,
+    "tier": "eval-judge",
+    "warnings": []
+  },
+  "judge_cost_usd": 0.0126,
+  "k": 2,
+  "kind": "review",
+  "labels": {
+    "X": "code-review@0.1.0"
+  },
+  "leaks": [],
+  "mode": "replay",
+  "model_changed": false,
+  "model_ids": [
+    "agent-model"
+  ],
+  "problems": [],
+  "runs": [
+    {
+      "case_id": "rev-discount-rounding",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "defect_recall": 0.5,
+        "defects_caught": 1.0,
+        "defects_total": 2.0,
+        "false_finding_rate": 0.5,
+        "false_findings": 1.0,
+        "findings_total": 2.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0,
+        "unmatched_blocking": 1.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:7e0cab1955354a82051069821dae22b7568491511087b0313621f4590a58819b",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "rev-discount-rounding.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "rev-discount-rounding",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "defect_recall": 0.5,
+        "defects_caught": 1.0,
+        "defects_total": 2.0,
+        "false_finding_rate": 0.5,
+        "false_findings": 1.0,
+        "findings_total": 2.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0,
+        "unmatched_blocking": 1.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:90c41580f0232843ff2d66abca1b15f2becdca86deab1631632e94371a3b598e",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "rev-discount-rounding.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "rev-invoice-export",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "defect_recall": 1.0,
+        "defects_caught": 2.0,
+        "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 3.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0,
+        "unmatched_blocking": 0.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:a22aec79efe409468682b8323cdb1db3d0bc662a592c94290d2216ee59e037c4",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "rev-invoice-export.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "rev-invoice-export",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "defect_recall": 1.0,
+        "defects_caught": 2.0,
+        "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 3.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0,
+        "unmatched_blocking": 0.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:52bb464e854d4d0f0ef0ec39fe34c9ed9590df59bea21e863006ebe6d95e2ccd",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "rev-invoice-export.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "rev-reset-limits",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "defect_recall": 1.0,
+        "defects_caught": 2.0,
+        "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 3.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0,
+        "unmatched_blocking": 0.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:5ac1a676733d5bc53691832b7ccad20a196531d5e6e5d43e0a4e6c5c15a55cda",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "rev-reset-limits.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "rev-reset-limits",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "defect_recall": 1.0,
+        "defects_caught": 2.0,
+        "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 3.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0,
+        "unmatched_blocking": 0.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:571b1f3cdfe789190e976e8c04d39c0978924fec8afd3026d27d3245fd3c1f1e",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "rev-reset-limits.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "rev-webhook-retries",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "defect_recall": 1.0,
+        "defects_caught": 2.0,
+        "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 2.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0,
+        "unmatched_blocking": 0.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:7ef7e6f49d6f1cc388c0f54c350c409cb07b20c587638cb337ff0a14a759516e",
+      "repeat": 0,
+      "requests": 1,
+      "run_id": "rev-webhook-retries.X.0",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    },
+    {
+      "case_id": "rev-webhook-retries",
+      "cost_estimated": false,
+      "cost_usd": 0.0021,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0021,
+        "defect_recall": 1.0,
+        "defects_caught": 2.0,
+        "defects_total": 2.0,
+        "false_finding_rate": 0.0,
+        "false_findings": 0.0,
+        "findings_total": 2.0,
+        "schema_valid": 1.0,
+        "tokens": 1400.0,
+        "unmatched_blocking": 0.0
+      },
+      "model_ids": [
+        "agent-model"
+      ],
+      "output_sha": "sha256:ef3980796d506cb996ec3d4ecda8e50781e7d51689881346b2f248f5766e2d50",
+      "repeat": 1,
+      "requests": 1,
+      "run_id": "rev-webhook-retries.X.1",
+      "status": "completed",
+      "tokens_in": 1000,
+      "tokens_out": 400
+    }
+  ],
+  "schema_version": 1,
+  "seed": 0,
+  "split": "all",
+  "stale_cassettes": 0,
+  "tag": "fixture",
+  "unscored_runs": [],
+  "verbosity_r": {
+    "X": null
+  },
+  "verdict": "MEASURED",
+  "warnings": []
+}

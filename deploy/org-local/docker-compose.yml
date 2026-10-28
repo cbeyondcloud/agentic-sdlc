@@ -1,0 +1,129 @@
+# =============================================================================
+# Local org stack (M2-39): control plane + its Postgres + Grafana, next to the gateway's
+# LITE stack (TokenLean, started by its own deploy/lite/local scripts; ruling S1).
+# =============================================================================
+# Start it with up.sh / up.ps1: they start the LITE stack in mock mode (no provider key),
+# generate .env.org (git-ignored), copy the gateway's LITE dashboards into .state/ and run
+#   <engine> compose -p agentic-org -f docker-compose.yml --env-file .env.org up -d --build
+#
+#   cp-postgres    the control plane's database (first start: owner role, database,
+#                  postgres_fdw and the reader-role parameter grant; cp-postgres/init.sh)
+#   cp-init        one-shot: migrate, runtime role, tenant `local`, the gateway usage link
+#                  and the tenant's Grafana reader role (cp-init/init.sh)
+#   control-plane  `python -m agentic_cp serve` on ORG_CP_PORT
+#   grafana        the official image, unmodified (AGPL-3.0, ruling G1): we ship only
+#                  provisioning files and dashboard JSON
+#
+# cp-postgres and grafana also join the LITE stack's network (tokenlean-lite_default) to
+# reach its database as `postgres`. Published ports bind to ORG_BIND (127.0.0.1 unless
+# set). Images are exact releases pinned by digest, each at least two weeks old.
+# =============================================================================
+
+name: agentic-org
+
+services:
+  cp-postgres:
+    image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    environment:
+      POSTGRES_PASSWORD: ${CP_SUPERUSER_PASSWORD:?run up.sh or up.ps1, which generates .env.org}
+      CP_OWNER_PASSWORD: ${CP_OWNER_PASSWORD:?run up.sh or up.ps1}
+      CP_DATABASE: agentic
+    volumes:
+      - cpdata:/var/lib/postgresql/data
+      - ./cp-postgres/init.sh:/docker-entrypoint-initdb.d/10-agentic.sh:ro,z
+    networks: [default, gateway]
+    healthcheck:
+      # over TCP: the entrypoint's first-start server listens on the socket only
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d agentic"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  cp-init:
+    image: agentic-control-plane:local
+    build:
+      context: ../..
+      dockerfile: control-plane/Dockerfile
+    entrypoint: ["sh", "/cp-init/init.sh"]
+    environment:
+      AGENTIC_CP_DATABASE_URL: postgresql://cp_app:${CP_APP_PASSWORD:?run up.sh or up.ps1}@cp-postgres:5432/agentic
+      AGENTIC_CP_OWNER_DATABASE_URL: postgresql://cp_owner:${CP_OWNER_PASSWORD}@cp-postgres:5432/agentic
+      ORG_TENANT: ${ORG_TENANT:-local}
+      ORG_ADMIN_EMAIL: ${ORG_ADMIN_EMAIL:-admin@org.local}
+      GATEWAY_TENANT: ${GATEWAY_TENANT:?run up.sh or up.ps1}
+      GATEWAY_DB_HOST: postgres
+      GATEWAY_DB_NAME: tokenlean
+      GATEWAY_DB_USER: tokenlean
+      GATEWAY_DB_PASSWORD: ${GATEWAY_DB_PASSWORD:?run up.sh or up.ps1}
+      AGENTIC_DASH_READER: ${AGENTIC_DASH_READER:-grafana_local}
+      AGENTIC_DASH_READER_PASSWORD: ${AGENTIC_DASH_READER_PASSWORD:?run up.sh or up.ps1}
+    volumes:
+      - ./cp-init/init.sh:/cp-init/init.sh:ro,z
+    depends_on:
+      cp-postgres:
+        condition: service_healthy
+    restart: "no"
+
+  control-plane:
+    image: agentic-control-plane:local
+    pull_policy: never   # the image cp-init's build just made
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      AGENTIC_CP_DATABASE_URL: postgresql://cp_app:${CP_APP_PASSWORD}@cp-postgres:5432/agentic
+      AGENTIC_CP_PUBLIC_URL: http://127.0.0.1:${ORG_CP_PORT:-8280}
+    ports:
+      - "${ORG_BIND:-127.0.0.1}:${ORG_CP_PORT:-8280}:8080"
+    depends_on:
+      cp-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.2.3@sha256:b28bae15e219c998fb0e0424ed724930cc61b1f61fb404d47c862f9a23f9e572
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?run up.sh or up.ps1}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/agentic/org.json
+      # read by the provisioned datasources (grafana/provisioning/datasources)
+      AGENTIC_DASH_DB_HOST: cp-postgres:5432
+      AGENTIC_DASH_DB_NAME: agentic
+      AGENTIC_DASH_READER: ${AGENTIC_DASH_READER:-grafana_local}
+      AGENTIC_DASH_READER_PASSWORD: ${AGENTIC_DASH_READER_PASSWORD}
+      GATEWAY_DB_HOST: postgres:5432
+      GATEWAY_DB_NAME: tokenlean
+      GATEWAY_DB_USER: tokenlean
+      GATEWAY_DB_PASSWORD: ${GATEWAY_DB_PASSWORD}
+    volumes:
+      - grafanadata:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro,z
+      - ../../control-plane/src/agentic_cp/dashboards/grafana:/var/lib/grafana/dashboards/agentic:ro,z
+      - ./.state/gateway-dashboards:/var/lib/grafana/dashboards/gateway:ro,z
+    ports:
+      - "${ORG_BIND:-127.0.0.1}:${ORG_GRAFANA_PORT:-3300}:3000"
+    networks: [default, gateway]
+    depends_on:
+      cp-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 18
+    restart: unless-stopped
+
+networks:
+  default:
+  gateway:
+    external: true
+    name: tokenlean-lite_default
+
+volumes:
+  cpdata:
+  grafanadata:

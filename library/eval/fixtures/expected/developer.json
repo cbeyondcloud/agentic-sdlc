@@ -1,0 +1,188 @@
+{
+  "agent": "developer",
+  "agent_version": "0.1.0",
+  "aggregates": {
+    "X": {
+      "cost_usd": {
+        "ci_high": 0.0042,
+        "ci_low": 0.0042,
+        "median": 0.0042,
+        "n_scored": 2,
+        "sigma_case": 0.0,
+        "unscored": [],
+        "value": 0.0042
+      },
+      "schema_valid": {
+        "ci_high": 1.0,
+        "ci_low": 1.0,
+        "median": 1.0,
+        "n_scored": 2,
+        "sigma_case": 0.0,
+        "unscored": [],
+        "value": 1.0
+      },
+      "tests_pass": {
+        "ci_high": 1.0,
+        "ci_low": 1.0,
+        "median": 1.0,
+        "n_scored": 2,
+        "sigma_case": 0.0,
+        "unscored": [],
+        "value": 1.0
+      },
+      "tokens": {
+        "ci_high": 2800.0,
+        "ci_low": 2800.0,
+        "median": 2800.0,
+        "n_scored": 2,
+        "sigma_case": 0.0,
+        "unscored": [],
+        "value": 2800.0
+      }
+    }
+  },
+  "budget_hit": false,
+  "budget_usd": 5.0,
+  "cases": [
+    "dev-money-split",
+    "dev-slugify"
+  ],
+  "corpus_manifest_sha": "sha256:a85292ea39c86f6b665faeb28f963ad33d7ea56e3e090d7edc31e8515ad304d4",
+  "cost_total_usd": 0.0168,
+  "cost_unmeasured_runs": 0,
+  "judge": null,
+  "judge_cost_usd": null,
+  "k": 2,
+  "kind": "dev-report",
+  "labels": {
+    "X": "developer@0.1.0"
+  },
+  "leaks": [],
+  "mode": "replay",
+  "model_changed": false,
+  "model_ids": [
+    "agent-model"
+  ],
+  "problems": [],
+  "runs": [
+    {
+      "case_id": "dev-money-split",
+      "cost_estimated": false,
+      "cost_usd": 0.0042,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0042,
+        "schema_valid": 1.0,
+        "tests_pass": 1.0,
+        "tokens": 2800.0
+      },
+      "model_ids": [
+        "agent-model",
+        "agent-model"
+      ],
+      "output_sha": "sha256:190cb3479bc3153b179654ae7fe8ef98dbbdb651c433872705de067ca7d74b96",
+      "repeat": 0,
+      "requests": 2,
+      "run_id": "dev-money-split.X.0",
+      "status": "completed",
+      "tokens_in": 2000,
+      "tokens_out": 800
+    },
+    {
+      "case_id": "dev-money-split",
+      "cost_estimated": false,
+      "cost_usd": 0.0042,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0042,
+        "schema_valid": 1.0,
+        "tests_pass": 1.0,
+        "tokens": 2800.0
+      },
+      "model_ids": [
+        "agent-model",
+        "agent-model"
+      ],
+      "output_sha": "sha256:930de5085078924c5daed279517951c51b4daf283501bb8e88dc5a933313613e",
+      "repeat": 1,
+      "requests": 2,
+      "run_id": "dev-money-split.X.1",
+      "status": "completed",
+      "tokens_in": 2000,
+      "tokens_out": 800
+    },
+    {
+      "case_id": "dev-slugify",
+      "cost_estimated": false,
+      "cost_usd": 0.0042,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0042,
+        "schema_valid": 1.0,
+        "tests_pass": 1.0,
+        "tokens": 2800.0
+      },
+      "model_ids": [
+        "agent-model",
+        "agent-model"
+      ],
+      "output_sha": "sha256:38871c5b1ead69deb1c18ed2ad29b0a411c5de0f7242248fad46334848b87135",
+      "repeat": 0,
+      "requests": 2,
+      "run_id": "dev-slugify.X.0",
+      "status": "completed",
+      "tokens_in": 2000,
+      "tokens_out": 800
+    },
+    {
+      "case_id": "dev-slugify",
+      "cost_estimated": false,
+      "cost_usd": 0.0042,
+      "error": null,
+      "errors": [],
+      "evaluator_errors": [],
+      "judge": null,
+      "label": "X",
+      "metrics": {
+        "cost_usd": 0.0042,
+        "schema_valid": 1.0,
+        "tests_pass": 1.0,
+        "tokens": 2800.0
+      },
+      "model_ids": [
+        "agent-model",
+        "agent-model"
+      ],
+      "output_sha": "sha256:8707367390edbf15d073eaa52ece80d134a8debf5e62dd133d0a2f8eb4adf24d",
+      "repeat": 1,
+      "requests": 2,
+      "run_id": "dev-slugify.X.1",
+      "status": "completed",
+      "tokens_in": 2000,
+      "tokens_out": 800
+    }
+  ],
+  "schema_version": 1,
+  "seed": 0,
+  "split": "all",
+  "stale_cassettes": 0,
+  "tag": "fixture",
+  "unscored_runs": [],
+  "verbosity_r": {
+    "X": null
+  },
+  "verdict": "MEASURED",
+  "warnings": []
+}

@@ -1,0 +1,55 @@
+id: qa-hooks-installer
+agent: qa
+case_class: qa
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the git hooks installer work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "One git hooks installer for PowerShell, bash and zsh."
+      size: small
+      items:
+        - id: REQ-1
+          statement: "The installer works in every shell."
+          acceptance_criteria:
+            - "WHEN the installer runs from PowerShell, bash or zsh THE system SHALL install the same hooks."
+            - "WHEN a hook already exists THE system SHALL chain it rather than replace it."
+        - id: REQ-2
+          statement: "Hooks survive line-ending conversion."
+          acceptance_criteria:
+            - "WHEN a repository uses core.autocrlf=true THE system SHALL still run the hooks."
+        - id: REQ-3
+          statement: "Uninstall restores the previous state."
+          acceptance_criteria:
+            - "WHEN the hooks are uninstalled THE system SHALL restore the hooks that were there before."
+      ---
+      # Requirements: hooks installer
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "install-hooks.sh plus a PowerShell wrapper."
+      files_changed: [tools/install-hooks.sh, tools/install-hooks.ps1, hooks/pre-commit]
+      tests_run: {passed: 12, failed: 0, skipped: 0}
+      deviations_from_design:
+        - "The PowerShell wrapper calls install-hooks.sh through bash, so it needs Git for Windows' bash on PATH."
+      ---
+      # Development report: hooks installer
+
+      ## What changed
+      `install-hooks.sh` copies `hooks/pre-commit` into `.git/hooks/`, overwriting any
+      existing file of that name; the PowerShell wrapper runs the same script. `--uninstall`
+      deletes the installed hooks.
+
+      ## Line endings
+      No `.gitattributes` rule was added; the hook is stored as it was committed.
+
+      ## Tested
+      bash on macOS and Linux, and PowerShell 7 on Windows with Git for Windows installed.
+expected:
+  failing_criteria: [REQ-1.2, REQ-2.1, REQ-3.1]
+tags: [developer-tools, windows, shell]

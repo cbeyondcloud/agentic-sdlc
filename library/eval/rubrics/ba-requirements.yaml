@@ -1,0 +1,42 @@
+# Rubric for the Business Analyst's requirements handoff (spike S10: 5 criteria x 0-2 = 10).
+# Analytic, not holistic; seeded from Zyroflo's P1 scoping SOP and the review rubric's
+# "deterministic, don't feel a number" rule. Change any anchor => bump the version: the
+# judge must be re-calibrated (agentic eval calibrate) whenever the rubric hash changes.
+id: ba-requirements
+version: 1
+kind: requirements
+instructions: |
+  Grade a requirements handoff written from a short feature request. The reference (when
+  given) is a good answer, not the only good answer: credit equivalent content. The key
+  points are what any good answer must cover.
+criteria:
+  - id: problem
+    title: Problem, users and value
+    anchors:
+      0: No statement of who needs this or why; the document restates the request.
+      1: Names the users or the problem, but not both, or the value is vague.
+      2: States who needs it, the problem today and why it matters, in concrete terms.
+  - id: acceptance
+    title: Testable acceptance criteria
+    anchors:
+      0: No acceptance criteria, or criteria that cannot be tested.
+      1: Some criteria are testable (EARS or equivalent), others vague or missing for an item.
+      2: Every item has criteria in EARS form (WHEN ... THE system SHALL ...) that a test could check.
+  - id: scope
+    title: Scope and edge cases
+    anchors:
+      0: No edge cases and no boundaries of the work.
+      1: Mentions some edge cases or limits, but misses obvious ones (empty, large, permissions, failure).
+      2: Covers the empty, large, permission and failure cases that matter and says what is out of scope.
+  - id: coverage
+    title: Covers the key points
+    anchors:
+      0: Misses most key points.
+      1: Covers some key points, or covers them only implicitly.
+      2: Covers every key point explicitly.
+  - id: consistency
+    title: Consistency and assumptions
+    anchors:
+      0: Contradictions between the fields and the body, or invented facts presented as given.
+      1: Minor inconsistencies, or assumptions made silently.
+      2: Fields and body agree; every default chosen is listed as an assumption or open question.

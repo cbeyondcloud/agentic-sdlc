@@ -1,0 +1,19 @@
+id: ba-sensor-alerts
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Our cold-storage customers install temperature sensors that report every 30 seconds.
+    They want an alert when a room gets too warm, without being woken up by a door opened
+    for a minute. Write the requirements.
+expected:
+  key_points:
+    - "thresholds are set per room, with a minimum duration before alerting"
+    - "a brief spike (door opened) does not alert"
+    - "alerts escalate to a second contact if not acknowledged"
+    - "a sensor that stops reporting raises its own alert"
+    - "alerts and acknowledgements are logged for food-safety audits"
+rubric: ba-requirements
+tags: [iot, monitoring]

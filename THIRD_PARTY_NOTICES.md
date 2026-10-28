@@ -1,0 +1,74 @@
+# Third-party notices
+
+agentic-sdlc includes code adapted from the projects below, under their licences.
+
+## OpenHands software-agent-sdk — stuck-loop detection
+
+`core/src/agentic/agents/stuck.py` is a port of
+`openhands-sdk/openhands/sdk/conversation/stuck_detector.py` from
+https://github.com/OpenHands/software-agent-sdk at commit c8a65f0 (2026-08-04).
+The detection patterns and their default thresholds are OpenHands'; the event
+model is agentic-sdlc's own.
+
+```
+The MIT License (MIT)
+
+Copyright © 2025 OpenHands contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## github/spec-kit — requirements and design handoff templates
+
+`core/src/agentic/handoffs/templates/requirements.md` adapts the section
+structure of `templates/spec-template.md`, and `design.md` that of
+`templates/plan-template.md`, from https://github.com/github/spec-kit. The
+guidance text is agentic-sdlc's own.
+
+```
+MIT License
+
+Copyright GitHub, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## MADR (Markdown Architectural Decision Records) — design handoff template
+
+`core/src/agentic/handoffs/templates/design.md` follows the section structure
+of `template/adr-template.md` from https://github.com/adr/madr (Context and
+problem statement, Decision drivers, Considered options, Decision outcome,
+Confirmation). MADR is licensed `MIT OR CC0-1.0`; it is used here under
+CC0-1.0, with this attribution as a courtesy.

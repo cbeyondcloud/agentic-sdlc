@@ -1,0 +1,18 @@
+id: dev-human-size
+agent: developer
+case_class: dev_task
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    human_size() should use binary units (KiB, MiB) but switches unit at 1000, so
+    1023 bytes shows as '1.0 KiB'. Switch at 1024. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-human-size
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_sizes.py::test_unit_boundary_is_1024"
+    pass_to_pass:
+      - "tests/test_sizes.py::test_small_and_large"
+  solution: solutions/dev-human-size
+tags: [python, developer-tools]

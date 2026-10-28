@@ -1,0 +1,788 @@
+"""The org policy: what admins allow, held in the policy repo (spec §12).
+
+Agent and pipeline files only *request*; this model is the authority that the
+resolver (agentic.policy.resolve, M1-04) checks every request against.
+"""
+
+import re
+from datetime import date
+from decimal import Decimal
+from typing import Annotated, Literal, Self
+
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
+
+from agentic.definitions import ChildLimits, DenyRules, Limits
+from agentic.definitions.discovery import PolicyRules
+from agentic.definitions.versions import Deprecations, Pins, Rollout
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")  # typos in policy files are errors
+
+
+def _checkpoint_glob(pattern: str) -> str:
+    """One `checkpoint_exclude` entry (review F3): a git glob relative to the repository
+    that git accepts on every laptop and that leaves some new file to commit. A wrong one
+    would otherwise fail every step's checkpoint after its model spend, or delete the
+    agent's new files instead of committing them."""
+    segments = pattern.split("/")
+    if pattern != pattern.strip() or "\n" in pattern:
+        raise ValueError(f"{pattern!r}: no surrounding blanks or line breaks")
+    if pattern.startswith(("/", "!")) or ":" in pattern:
+        raise ValueError(f"{pattern!r}: a glob relative to the repository (no /, ! or :)")
+    if "\\" in pattern:
+        raise ValueError(f"{pattern!r}: separate folders with / (a \\ escapes in a git glob)")
+    if ".." in segments:
+        raise ValueError(f"{pattern!r}: no .. - a glob inside the repository")
+    if all(set(segment) <= set("*?") for segment in segments):
+        raise ValueError(
+            f"{pattern!r}: matches every new file - the agent's work would be deleted, not "
+            "committed; name the folders or files to leave out"
+        )
+    if pattern.count("[") != pattern.count("]"):
+        raise ValueError(f"{pattern!r}: an unclosed [ ]")
+    return pattern
+
+
+class ModelPrice(_Strict):
+    """What one model costs, in USD per million tokens - for client-side cost
+    ESTIMATES where TokenLean reports none (live streams, the Anthropic route).
+    Kept in line with TokenLean's own pricing table, so both sides estimate alike."""
+
+    input_per_mtok: Decimal = Field(ge=0, allow_inf_nan=False)
+    output_per_mtok: Decimal = Field(ge=0, allow_inf_nan=False)
+    cache_read_per_mtok: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+    cache_write_per_mtok: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+class TierSpec(_Strict):
+    """What one capability tier means: the real model plus default settings."""
+
+    model: str
+    # the levels an agent file may ask for: a typo is refused here, not at a model call
+    effort: Literal["low", "medium", "high"] | None = None
+    temperature: float | None = None
+    # The model's family for the eval judge rule (spike S10), when its id's prefix before
+    # '/' does not say it (a gateway alias, a team's own deployment).
+    family: str | None = None
+
+
+def gateway_model(model_id: str) -> str:
+    """The name the gateway knows a tier model by: the part after its route (`route/name`,
+    DF-394), or the whole id when it has none. The client sends this name and the control
+    plane's routing rules (M2-09) pin it, so the two never disagree."""
+    _, slash, name = model_id.partition("/")
+    return name if slash and name else model_id
+
+
+class ClassificationRule(_Strict):
+    """What a repo of this sensitivity class may use."""
+
+    allowed_tiers: list[str]
+    allowed_models: list[str] | None = None  # None = any model the tiers map to
+    allowed_backends: list[str]
+    trace_capture: bool = False  # may full prompts/responses be stored centrally?
+    # may a user's own skills and notes (~/.agentic/skills, ~/.agentic/memory) shape runs in
+    # a repo of this class? (M2-45, D30; an org turns them off for restricted repos)
+    personal_skills: bool = True
+    personal_memory: bool = True
+
+
+class CapLimits(_Strict):
+    """A complete per-run cap: every field is required, so nothing is unlimited by omission."""
+
+    budget_usd: float = Field(ge=0)
+    max_turns: int = Field(ge=0)
+    max_minutes: int = Field(ge=0)
+
+
+class CapChildLimits(_Strict):
+    """A complete cap on child agents (0 = this type may not spawn children)."""
+
+    max_total: int = Field(ge=0)
+    max_concurrent: int = Field(ge=0)
+    max_depth: int = Field(ge=0)
+    per_child: CapLimits
+
+
+class TypeCaps(_Strict):
+    max: CapLimits
+    children_max: CapChildLimits
+
+
+class AgentType(_Strict):
+    """The org-approved template for one kind of agent (D35).
+
+    Agents of this type inherit every setting they leave out, and anything they
+    set must stay within these ceilings. Caps here are the org maximum; a team
+    may lower them but never raise them.
+    """
+
+    description: str
+    tier: str  # default tier
+    backends: list[str] = Field(min_length=1)  # allowed; the first is the default
+    tools: list[str] = []  # allowed and default
+    shell: list[str] = []  # allowed command prefixes and default
+    skills: list[str] = []  # allowed and default
+    consumes: list[str] = []  # allowed handoff kinds and default
+    produces: str | None = None  # fixed handoff kind for this type
+    limits: TypeCaps
+
+
+class RoleLimits(_Strict):
+    """A team's narrowing of one agent type's caps. A field left out keeps the type cap."""
+
+    max: Limits = Limits()
+    children_max: ChildLimits | None = None
+
+
+def _exact(value: object) -> object:
+    """A YAML float as the decimal it was written as (12.1, not 12.0999...)."""
+    return str(value) if isinstance(value, float) else value
+
+
+#: A spend threshold in USD per hour: positive (0 would trip on any spend at all).
+SpendRate = Annotated[Decimal, Field(gt=0, allow_inf_nan=False)]
+#: An error-rate threshold: the share of finished steps that ended in error, in (0, 1].
+ErrorRate = Annotated[Decimal, Field(gt=0, le=1, allow_inf_nan=False)]
+
+
+class TeamAutoTrip(_Strict):
+    """A team's own auto-trip thresholds (`teams/<team>.yaml: auto_trip`): only tighter
+    than the org's (a lower value), or set where the org sets none."""
+
+    spend_usd_per_hour: SpendRate | None = None
+    error_rate: ErrorRate | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def exact_numbers(cls, data: object) -> object:
+        if isinstance(data, dict):
+            return {key: _exact(value) for key, value in data.items()}
+        return data
+
+
+class AutoTripPolicy(_Strict):
+    """Auto-trip (M2-11, `org.yaml: auto_trip`): the control plane pauses a team whose
+    measured spend rate or error rate passes a threshold. Unset thresholds are off; spend
+    with no reported cost is unmeasured and never trips.
+
+    Hysteresis: a tripped team is re-armed only once the rate is below `threshold x
+    reset_ratio`; with `auto_clear` the control plane also clears its own pause switch then,
+    but not before `hold_minutes` have passed. Without it a person clears the switch."""
+
+    spend_usd_per_hour: SpendRate | None = None
+    error_rate: ErrorRate | None = None
+    window_minutes: int = Field(default=60, ge=5, le=1440)
+    min_steps: int = Field(default=20, ge=1, le=100_000)
+    """Fewer finished steps than this in the window: the error rate is unmeasured."""
+    reset_ratio: Decimal = Field(default=Decimal("0.5"), gt=0, lt=1, allow_inf_nan=False)
+    hold_minutes: int = Field(default=30, ge=0, le=1440)
+    auto_clear: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def exact_numbers(cls, data: object) -> object:
+        if isinstance(data, dict):
+            return {key: _exact(value) for key, value in data.items()}
+        return data
+
+    def effective(self, team: TeamAutoTrip | None) -> tuple[Decimal | None, Decimal | None]:
+        """(spend, error rate) thresholds for a team: the team's where it sets one (it can
+        only be tighter), else the org's."""
+        if team is None:
+            return self.spend_usd_per_hour, self.error_rate
+        return (
+            team.spend_usd_per_hour
+            if team.spend_usd_per_hour is not None
+            else self.spend_usd_per_hour,
+            team.error_rate if team.error_rate is not None else self.error_rate,
+        )
+
+
+def _looser_auto_trip(team: str, own: TeamAutoTrip | None, org: AutoTripPolicy) -> list[str]:
+    """A team threshold above the org's would loosen org policy: each one named."""
+    problems = []
+    for name in ("spend_usd_per_hour", "error_rate"):
+        mine, theirs = getattr(own, name, None), getattr(org, name)
+        if mine is not None and theirs is not None and mine > theirs:
+            problems.append(
+                f"teams.{team}.auto_trip.{name} ({mine}) is looser than the org's ({theirs}): "
+                "a team may only tighten it"
+            )
+    return problems
+
+
+class TeamRateLimit(_Strict):
+    """A team's request limits at the gateway (M2-09): requests per minute and per hour for
+    the team's keys together. The control plane writes them into the gateway's routing
+    overlay; at least one is set, and 0 (refuse everything) is not a limit."""
+
+    requests_per_minute: int | None = Field(default=None, ge=1)
+    requests_per_hour: int | None = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def names_a_limit(self) -> Self:
+        if self.requests_per_minute is None and self.requests_per_hour is None:
+            raise ValueError("rate_limit needs requests_per_minute or requests_per_hour")
+        return self
+
+
+class TeamPolicy(_Strict):
+    """Team narrowing: may only tighten org policy (spec §12.2)."""
+
+    allowed_tiers: list[str] | None = None  # None = every tier the org allows
+    # a number (review F1): an infinite or NaN budget is no cap and no alert threshold
+    monthly_budget_usd: float | None = Field(default=None, allow_inf_nan=False)
+    rate_limit: TeamRateLimit | None = None  # M2-09: the gateway's per-team request limits
+    limits_max: dict[str, RoleLimits] = {}  # keyed by agent TYPE (D35)
+    deny: DenyRules = DenyRules()
+    skill_packs: list[str] = []  # opt-in skill packs from the org catalog (spec §11.2)
+    # agent-CLI plugins from the org catalog, for steps on a backend that loads plugins
+    # (never the native loop; M2-47, D28)
+    backend_plugins: list[str] = []
+    auto_trip: TeamAutoTrip | None = None  # M2-11: tighter thresholds only
+    # versions this team keeps whatever the rollout says (M2-15); each must exist in the
+    # policy repo and is still refused once deprecated past its date
+    pins: Pins = Pins()
+
+
+#: Read-denied in every sandbox, whatever policy adds: where credentials live (D38).
+DEFAULT_DENY_READ = (
+    "~/.ssh",
+    "~/.aws",
+    "~/.azure",
+    "~/.config/gcloud",
+    "~/.config/gh",
+    "~/.docker",
+    "~/.kube",
+    "~/.gnupg",
+    "~/.netrc",
+    "~/.git-credentials",
+    "~/.pypirc",
+    "~/.npmrc",
+    "~/.agentic",
+)
+_GLOB = set("*?[")
+#: An egress host: DNS labels (an optional leading `*.` wildcard label), or an IPv4
+#: address, with an optional port - what srt's allowedDomains matches on.
+_LABEL = r"(?!-)[a-z0-9-]{1,63}(?<!-)"
+_EGRESS_HOST = re.compile(rf"(?:\*\.)?{_LABEL}(?:\.{_LABEL})*(?::[0-9]{{1,5}})?")
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+#: The framework's own credentials (gateway key, tokens): never passed to agent commands.
+FRAMEWORK_ENV_PREFIX = "AGENTIC_"
+
+
+#: Second-level labels registrars sell names under in a country code (`*.co.uk`,
+#: `*.com.au`): a wildcard straight over one is as broad as `*.com`.
+_PUBLIC_SECOND_LEVEL = frozenset(
+    "ac co com edu gob gov govt ltd mil ne net nic or org plc sch".split()
+)
+
+
+def _port_ok(host: str) -> bool:
+    _, sep, port = host.rpartition(":")
+    return not sep or 0 < int(port) < 65536
+
+
+def _too_broad(host: str) -> bool:
+    """A wildcard over a top-level domain, a country's public second level or an address."""
+    if not host.startswith("*."):
+        return False
+    labels = host[2:].partition(":")[0].split(".")
+    if len(labels) < 2 or all(label.isdigit() for label in labels):
+        return True
+    return len(labels) == 2 and len(labels[1]) == 2 and labels[0] in _PUBLIC_SECOND_LEVEL
+
+
+def _unpadded(host: str) -> str:
+    """`host:08080` as srt matches it: `host:8080`."""
+    name, sep, port = host.rpartition(":")
+    return f"{name}:{int(port)}" if sep else host
+
+
+class SandboxPolicy(_Strict):
+    """How agent commands are sandboxed (D38, spike S6): `srt` on every OS."""
+
+    # regimes that refuse to run without a sandbox; the others run on guards, with a warning.
+    # Team runs too (owner decision, DF-72): guards cannot stop code an allowed program runs.
+    required_for: list[Literal["solo", "team", "regulated"]] = ["team", "regulated"]
+    # The hosts a sandboxed command may reach (M2-42): package registries, as host names
+    # (`pypi.org`, `*.npmjs.org`, `registry.internal:8443`); a whole agent process also
+    # reaches the TokenLean host (`agentic.sandbox.egress`). Nothing else gets out.
+    allowed_domains: list[str] = []
+    deny_read: list[str] = []  # added to DEFAULT_DENY_READ, never instead of it
+    allow_write: list[str] = []  # writable besides the run's tree, e.g. "~/.cache/uv"
+    # Environment variables agent commands keep although their name or value looks secret
+    # (DF-365): e.g. an authenticated HTTPS_PROXY, SSH_AUTH_SOCK. Never AGENTIC_*.
+    pass_env: list[str] = []
+    srt_version: str = "0.0.78"
+
+    @property
+    def effective_deny_read(self) -> list[str]:
+        return list(dict.fromkeys([*DEFAULT_DENY_READ, *self.deny_read]))
+
+    @model_validator(mode="after")
+    def egress_names_hosts(self) -> Self:
+        problems, hosts = [], []
+        for entry in self.allowed_domains:
+            host = str(entry).strip().lower()
+            if not _EGRESS_HOST.fullmatch(host) or not _port_ok(host):
+                problems.append(
+                    f"allowed_domains entry {entry!r} is not a host name (pypi.org, "
+                    "*.npmjs.org or registry.internal:8443; never a URL, a path or '*')"
+                )
+            elif _too_broad(host):
+                problems.append(
+                    f"allowed_domains entry {entry!r} is too broad: a wildcard must sit under "
+                    "a registered name (*.npmjs.org, *.example.co.uk), never straight over "
+                    "a top-level domain, a country's public second level or an address"
+                )
+            else:
+                host = _unpadded(host)
+            hosts.append(host)
+        bad_env = [name for name in self.pass_env if not _ENV_NAME.fullmatch(str(name))]
+        bad_env += [n for n in self.pass_env if str(n).upper().startswith(FRAMEWORK_ENV_PREFIX)]
+        if bad_env:
+            problems.append(
+                f"pass_env entries {bad_env} are not environment variable names an org may "
+                f"pass through (letters, digits, '_'; never {FRAMEWORK_ENV_PREFIX}*)"
+            )
+        if problems:
+            raise ValueError("; ".join(problems))
+        self.allowed_domains = list(dict.fromkeys(hosts))
+        return self
+
+    @model_validator(mode="after")
+    def writes_stay_narrow(self) -> Self:
+        problems = []
+        for entry in self.allow_write:
+            if entry.rstrip("/") in ("", "~"):
+                problems.append(f"allow_write entry {entry!r} may not open the root or home")
+            elif _GLOB & set(entry):
+                problems.append(f"allow_write entry {entry!r} may not be a glob")
+            elif any(_inside(entry, denied) for denied in self.effective_deny_read):
+                problems.append(f"allow_write entry {entry!r} may not open a read-denied path")
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self
+
+
+class EvalTarget(_Strict):
+    """One gate target (M1-64): a report metric's value (or median) at least or at most."""
+
+    metric: str
+    statistic: Literal["value", "median"] = "value"
+    at_least: float | None = None
+    at_most: float | None = None
+
+    @model_validator(mode="after")
+    def one_bound(self) -> Self:
+        if (self.at_least is None) == (self.at_most is None):
+            raise ValueError(f"target {self.metric!r}: give exactly one of at_least or at_most")
+        return self
+
+
+class EvalPolicy(_Strict):
+    """Agent evaluation defaults (M1-63, spike S10); an A/B plan may set its own."""
+
+    repeats: int = Field(default=3, ge=1)  # runs per case per variant
+    # A/B guard: median cost per run B/A may rise by at most this fraction
+    max_cost_increase: float = Field(default=0.25, ge=0)
+    # Spend cap per eval or A/B in USD; at the cap the run stops as INCOMPLETE
+    budget_usd: float = Field(default=100, gt=0)
+    budget_usd_by_agent: dict[str, float] = {}  # e.g. a costlier QA or Developer agent
+    # The quality gate's targets by agent ('*': every agent); an agent named here replaces
+    # its defaults (agentic.eval.gate.DEFAULT_TARGETS, the M1-64 initial targets)
+    targets: dict[str, list[EvalTarget]] = {}
+
+    def budget_for(self, agent: str) -> float:
+        return self.budget_usd_by_agent.get(agent, self.budget_usd)
+
+
+#: The guard's own review batch budget (Zyroflo's policy defaults, which core cannot
+#: import; a commons test keeps the two equal): an org's limits may only tighten it.
+REVIEW_BATCH_CEILING = {"max_files": 40, "max_lines": 1500}
+#: `min_cli_version` (M2-08): a strict subset of PEP 440 - release, then optional aN/bN/rcN,
+#: .postN and .devN - so the control plane never meets a value it cannot compare.
+MIN_VERSION_PATTERN = r"^[0-9]+(\.[0-9]+){0,3}((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$"
+
+
+class ReviewBatchPolicy(_Strict):
+    """The diff-size budget per review batch (M2-24, spec §6.1): one agent step's change
+    must fit in one readable review. A limit may only tighten the guard's own (Zyroflo's
+    40 files and 1500 changed lines) - a looser one is an error, since it would have no
+    effect; None keeps it. `exempt` lists the paths not counted (lock files nobody
+    reads); None keeps Zyroflo's list, and a repository's own policy may drop entries
+    from it, never add (DF-13)."""
+
+    max_files: int | None = Field(default=None, ge=1)
+    max_lines: int | None = Field(default=None, ge=1)
+    exempt: list[Annotated[str, StringConstraints(min_length=1)]] | None = None
+
+    @model_validator(mode="after")
+    def limits_only_tighten(self) -> Self:
+        for name, ceiling in REVIEW_BATCH_CEILING.items():
+            value = getattr(self, name)
+            if value is not None and value > ceiling:
+                raise ValueError(
+                    f"{name} may be at most {ceiling}: the guard's own budget is a ceiling "
+                    f"that org policy may only tighten, so {value} would have no effect"
+                )
+        return self
+
+
+class SecretScanPolicy(_Strict):
+    """What happens to a secret in content about to leave for a model (M1-41): the call
+    is refused (`block`) or the secret is replaced by a marker (`mask`), and either way
+    an audit event is recorded. The same rule applies to tool output (DF-23)."""
+
+    action: Literal["block", "mask"] = "block"
+    detectors: list[str] | None = None  # None = the scanner's default set
+    # values never treated as secrets (test fixtures, documented examples); each at
+    # least 8 characters. Vendors' documented example keys are always allowed.
+    allow_values: list[str] = []
+
+    @model_validator(mode="after")
+    def allowed_values_are_specific(self) -> Self:
+        from agentic.security.secret_scan import MIN_ALLOWED  # lazy: no import cycle
+
+        if any(len(value) < MIN_ALLOWED for value in self.allow_values):
+            raise ValueError(
+                f"allow_values must each be at least {MIN_ALLOWED} characters - a shorter "
+                "one would let real secrets through"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def detectors_are_known(self) -> Self:
+        if self.detectors is None:
+            return self
+        if not self.detectors:
+            raise ValueError("detectors may not be empty (that would switch the scan off)")
+        from agentic.security.secret_scan import known_detectors  # lazy: no import cycle
+
+        if unknown := sorted(set(self.detectors) - set(known_detectors())):
+            raise ValueError(f"unknown detectors {unknown}; known: {known_detectors()}")
+        return self
+
+
+class PublishScanPolicy(_Strict):
+    """What happens to a secret or personal data in a run event before it is published to
+    the control plane (M2-49). `mask`: it is replaced by an id-shaped marker before the
+    event is chained, so the published chain still verifies; an event already chained
+    cannot change, so a hit in one is refused at the sink and stays queued. `block`:
+    nothing with a hit is published - the run's events stay local from there on. Either
+    way an audit event names kinds and counts. Secrets use `secret_scan`'s detectors and
+    allowed values."""
+
+    action: Literal["block", "mask"] = "mask"
+    pii: list[str] | None = None  # None = every entity the detector knows
+    # Fields naming the people the audit trail is about (an approver's email): never masked.
+    identity_fields: list[str] = ["approver", "owner", "actor"]
+
+    @model_validator(mode="after")
+    def entities_are_known(self) -> Self:
+        if self.pii is None:
+            return self
+        if not self.pii:
+            raise ValueError("pii may not be empty (leave it out for the default entities)")
+        from agentic.security.pii import ENTITIES  # lazy: no import cycle
+
+        if unknown := sorted(set(self.pii) - set(ENTITIES)):
+            raise ValueError(f"unknown PII entities {unknown}; known: {list(ENTITIES)}")
+        return self
+
+
+class ReviewPrepassPolicy(_Strict):
+    """The deterministic review pre-pass (M2-48): before an agent of one of `agent_types`
+    reviews a change, the framework scans it (secrets, blocked licences, new ignore rules;
+    and gitleaks, ast-grep and osv-scanner when the org pins them) and puts the results in
+    the agent's instructions. osv-scanner runs offline - it downloads the vulnerability
+    databases and sends no dependency list - unless `online_vulnerability_lookup` is on,
+    which sends the change's dependency list to the OSV service."""
+
+    enabled: bool = True
+    agent_types: list[str] = ["code-review"]
+    online_vulnerability_lookup: bool = False
+
+
+def _inside(path: str, folder: str) -> bool:
+    path, folder = path.rstrip("/"), folder.rstrip("/")
+    return path == folder or path.startswith(folder + "/")
+
+
+#: `<os>-<arch>` keys of a tool's per-platform artefacts (Zyroflo's third_party platforms).
+PlatformKey = Literal[
+    "windows-x86_64", "linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-aarch64"
+]
+#: A tool name, version or binary: each becomes one folder or file name in the tool cache,
+#: so never '.', '..', a separator, a drive or anything else that could leave it.
+PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
+#: A tier or class name: each is sent as an `X-Agentic-*` header on every model call
+#: (`agentic.transport.identity`), so 1-256 printable ASCII with no blank at either end.
+HEADER_VALUE = re.compile(r"[\x21-\x7e](?:[\x20-\x7e]{0,254}[\x21-\x7e])?")
+
+
+def _plain_name_problem(where: str, value: str) -> str | None:
+    if PLAIN_NAME.fullmatch(value):
+        return None
+    return f"{where} {value!r} must be a plain name (letters, digits, '.', '_', '+', '-')"
+
+
+class ToolArtefact(_Strict):
+    """One downloadable file of a pinned tool, for one platform, on the org mirror."""
+
+    file: str  # relative to OrgPolicy.tool_mirror_url
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    # The org checked the publisher's code signature of these exact bytes. Required for a
+    # Windows artefact: an unsigned native binary is never installed on Windows.
+    signed: bool = False
+
+    @model_validator(mode="after")
+    def stays_under_the_mirror(self) -> Self:
+        parts = self.file.replace("\\", "/").split("/")
+        if ":" in self.file or self.file.startswith(("/", "\\")) or ".." in parts:
+            raise ValueError(
+                f"artefact file {self.file!r} must be a relative path under the tool mirror "
+                "(no scheme, no leading '/', no '..')"
+            )
+        return self
+
+
+class ToolPin(_Strict):
+    """A user-space tool `agentic init` fetches, pinned by version and sha256 (spec §24)."""
+
+    version: str
+    binary: str  # the base name; Windows adds .exe
+    # always: every developer init; licence_scan: only when the org scans licences;
+    # on_request: only with `agentic init --install-missing`, after asking.
+    when: Literal["always", "licence_scan", "on_request"] = "always"
+    assets: dict[PlatformKey, ToolArtefact] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def binary_is_a_base_name(self) -> Self:
+        if self.binary.lower().endswith(".exe") or "/" in self.binary or "\\" in self.binary:
+            raise ValueError(f"binary {self.binary!r} must be a base name (Windows adds .exe)")
+        problems = [
+            _plain_name_problem("version", self.version),
+            _plain_name_problem("binary", self.binary),
+        ]
+        if found := [problem for problem in problems if problem]:
+            raise ValueError("; ".join(found))
+        return self
+
+
+class SkillLimits(_Strict):
+    """Org-wide skill admission limits (`limits.yaml` `skills:`); None keeps the
+    framework's default for that limit."""
+
+    max_skill_tokens: int | None = Field(default=None, ge=1)  # SKILL.md, estimated
+    max_total_bytes: int | None = Field(default=None, ge=1)  # the whole skill folder
+    max_catalog_tokens: int | None = Field(default=None, ge=1)  # one catalog line
+
+    def given(self) -> dict[str, int]:
+        return {name: value for name, value in self.model_dump().items() if value is not None}
+
+
+class OrgPolicy(_Strict):
+    # --- models ---
+    tiers: dict[str, TierSpec]
+    team_overrides: dict[str, dict[str, TierSpec]] = {}  # team -> tier -> different model
+
+    # --- repo classes ---
+    classifications: dict[str, ClassificationRule]
+    default_classification: str
+
+    # --- tools and guardrails ---
+    tools_catalog: list[str] = []
+    forbidden_tools: list[str] = []
+    deny: DenyRules = DenyRules()  # org-wide; merged with team and agent denies (D31)
+
+    # --- agent types (D35): caps, ceilings and defaults per kind of agent ---
+    agent_types: dict[str, AgentType] = Field(min_length=1)
+    concurrency: dict[str, int] = {}
+
+    # --- licences and retention ---
+    blocked_licences: list[str] = []
+    licence_scan: bool = False
+    retention_days: dict[str, int] = {}  # placeholder until OR-01
+    # licences a catalogued skill may carry, and the admission size limits: what the
+    # policy-repo gate admits skills under; a catalog may only narrow them (DF-143, DF-367).
+    # None / unset: the framework's own list and limits
+    skill_licences: list[str] | None = None
+    skill_limits: SkillLimits = SkillLimits()
+
+    # --- teams ---
+    teams: dict[str, TeamPolicy] = {}
+
+    # --- org-wide settings ---
+    allowed_repo_patterns: list[str] = []  # empty = any repo (standalone use only)
+    tool_mirror_url: str | None = None
+    tool_pins: dict[str, ToolPin] = {}  # tools `init` fetches from the mirror (M1-51)
+    allow_repo_pipelines: bool = False  # D33: pipelines only from the policy repo
+    # M2-23 (spec §6.1): per pipeline, the steps, gates and loops no overlay may remove or
+    # weaken; preflight refuses a pipeline missing one, whatever the cause
+    required_steps: dict[str, list[str]] = {}
+    # DF-315/DF-317: untracked paths (git globs, relative to the tree) a step's checkpoint
+    # leaves out on top of the framework's list, e.g. "**/target/**"; it only ever adds
+    checkpoint_exclude: list[
+        Annotated[str, StringConstraints(min_length=1), AfterValidator(_checkpoint_glob)]
+    ] = []
+    # M2-15 (spec §12.5, rollout.yaml): new versions team by team, and deprecations
+    rollout: Rollout = Rollout()
+    deprecated: Deprecations = Deprecations()
+    # M2-08: older CLIs are refused runs with an upgrade message (the control plane's own
+    # floor applies too; the higher wins). Release, pre-release, post and dev parts only:
+    # every value this accepts is a PEP 440 version the control plane compares, so none is
+    # silently dropped (review F4)
+    min_cli_version: Annotated[str, StringConstraints(pattern=MIN_VERSION_PATTERN)] | None = None
+    # D39: `init --repo` adds the nightly index export workflow only when this is on
+    index_export_workflow: bool = False
+    sandbox: SandboxPolicy = SandboxPolicy()  # D38
+    secret_scan: SecretScanPolicy = SecretScanPolicy()  # M1-41
+    publish_scan: PublishScanPolicy = PublishScanPolicy()  # M2-49
+    review_prepass: ReviewPrepassPolicy = ReviewPrepassPolicy()  # M2-48
+    review_batch: ReviewBatchPolicy = ReviewBatchPolicy()  # M2-24
+    eval: EvalPolicy = EvalPolicy()  # M1-63
+    auto_trip: AutoTripPolicy = AutoTripPolicy()  # M2-11
+    # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
+    # (`secret_scan`: the backend calls the model itself, past the framework's scanner;
+    # `shell_default_deny`: its shell runs unlisted commands, and its prefix rules miss
+    # a command hidden behind a redirect - spike S3, decision 22)
+    unhonoured: dict[
+        Literal["temperature", "effort", "secret_scan", "shell_default_deny"],
+        Literal["ignore", "warn", "block"],
+    ] = {
+        "temperature": "warn",
+        "effort": "warn",
+        "secret_scan": "warn",
+        "shell_default_deny": "warn",
+    }
+
+    # --- model prices, for estimating costs TokenLean does not report ---
+    prices: dict[str, ModelPrice] = {}
+
+    # --- which policy this is (git commit or content hash), recorded on every run ---
+    version: str
+
+    def price_for(self, model: str) -> ModelPrice | None:
+        """The price of `model`: an exact name wins, otherwise the longest priced name
+        contained in it, case-insensitively (TokenLean's rule). Never a default."""
+        if model in self.prices:
+            return self.prices[model]
+        lowered = model.lower()
+        matches = [name for name in self.prices if name.lower() in lowered]
+        return self.prices[max(matches, key=len)] if matches else None
+
+    def rules(self, *, team: str | None, repo: str | None, today: date) -> PolicyRules:
+        """What discovery needs to give `team`, in the repository whose origin key is
+        `repo`, the versions and overlay it gets on `today` (M2-15, M2-23)."""
+        team_policy = self.teams.get(team) if team else None
+        return PolicyRules(
+            team=team,
+            repo=repo,
+            today=today,
+            rollout=self.rollout,
+            deprecated=self.deprecated,
+            pins=team_policy.pins if team_policy is not None else Pins(),
+            required_steps=self.required_steps,
+        )
+
+    @model_validator(mode="before")
+    @classmethod
+    def unhonoured_defaults(cls, data: object) -> object:
+        """A policy naming some settings keeps the defaults for the others."""
+        if isinstance(data, dict) and isinstance(data.get("unhonoured"), dict):
+            data = {
+                **data,
+                "unhonoured": {
+                    "temperature": "warn",
+                    "effort": "warn",
+                    "secret_scan": "warn",
+                    "shell_default_deny": "warn",
+                    **data["unhonoured"],
+                },
+            }
+        return data
+
+    @model_validator(mode="after")
+    def references_are_consistent(self) -> Self:
+        """Every tier, class and tool named anywhere must exist."""
+        problems: list[str] = []
+        if any(not name.strip() for name in self.prices):
+            problems.append(
+                "prices: a price needs a model name (an empty one would match every model)"
+            )
+        known_tiers = set(self.tiers)
+        for kind, header, names in (
+            ("tier", "X-Agentic-Tier", self.tiers),
+            ("classification", "X-Agentic-Classification", self.classifications),
+        ):
+            problems += [
+                f"{kind} name {name!r} is sent as the {header} header: it must be 1-256 "
+                "printable ASCII characters with no blank at either end"
+                for name in names
+                if not HEADER_VALUE.fullmatch(name)
+            ]
+
+        def check_tiers(where: str, names: list[str] | None) -> None:
+            for name in names or []:
+                if name not in known_tiers:
+                    problems.append(f"{where} names unknown tier '{name}'")
+
+        for team, overrides in self.team_overrides.items():
+            check_tiers(f"team_overrides.{team}", list(overrides))
+        for cls_name, rule in self.classifications.items():
+            check_tiers(f"classifications.{cls_name}", rule.allowed_tiers)
+        for team, team_policy in self.teams.items():
+            check_tiers(f"teams.{team}.allowed_tiers", team_policy.allowed_tiers)
+            for type_name in team_policy.limits_max:
+                if type_name not in self.agent_types:
+                    problems.append(
+                        f"teams.{team}.limits_max names unknown agent type '{type_name}'"
+                    )
+            problems += _looser_auto_trip(team, team_policy.auto_trip, self.auto_trip)
+        for team in self.team_overrides:
+            if team not in self.teams:
+                problems.append(f"team_overrides names unknown team '{team}'")
+        for kind, entries in (
+            ("agents", self.rollout.agents),
+            ("pipelines", self.rollout.pipelines),
+        ):
+            for name, entry in entries.items():
+                for team in entry.teams:
+                    if team not in self.teams:
+                        problems.append(f"rollout.{kind}.{name} names unknown team '{team}'")
+        for type_name, agent_type in self.agent_types.items():
+            check_tiers(f"agent_types.{type_name}", [agent_type.tier])
+            for tool in agent_type.tools:
+                if tool not in self.tools_catalog:
+                    problems.append(
+                        f"agent_types.{type_name} names tool '{tool}' not in the catalog"
+                    )
+
+        if self.default_classification not in self.classifications:
+            problems.append(
+                f"default_classification '{self.default_classification}' "
+                "is not one of the classifications"
+            )
+        for tool in self.forbidden_tools:
+            if tool not in self.tools_catalog:
+                problems.append(f"forbidden tool '{tool}' is not in the tool catalog")
+        if self.tool_pins and not self.tool_mirror_url:
+            problems.append("tool pins need tool_mirror_url (the org mirror they come from)")
+        for name in self.tool_pins:
+            if problem := _plain_name_problem("tool pin name", name):
+                problems.append(problem)
+
+        if problems:
+            raise ValueError("; ".join(problems))
+        return self

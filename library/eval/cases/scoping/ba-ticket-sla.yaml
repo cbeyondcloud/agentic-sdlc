@@ -1,0 +1,18 @@
+id: ba-ticket-sla
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Support promises a first response within 4 business hours for paid plans, but nobody
+    sees a breach until a customer complains. Write the requirements for SLA tracking.
+expected:
+  key_points:
+    - "SLA timers count business hours of the team's calendar, not wall-clock time"
+    - "the timer pauses while waiting for the customer"
+    - "agents see time remaining; leads are warned before a breach"
+    - "breaches are reported per team and plan"
+    - "SLA targets differ by plan and priority"
+rubric: ba-requirements
+tags: [support]

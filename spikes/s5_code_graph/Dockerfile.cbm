@@ -1,0 +1,8 @@
+# codebase-memory-mcp v0.11.0 (linux-amd64) in an isolated Linux container.
+# Build context: spikes/s5_code_graph/out/cbm/bin  (contains the verified release tarball)
+FROM python:3.12-slim
+COPY codebase-memory-mcp-linux-amd64.tar.gz /tmp/cbm.tar.gz
+RUN mkdir /opt/cbm && tar -xzf /tmp/cbm.tar.gz -C /opt/cbm && rm /tmp/cbm.tar.gz
+RUN mkdir -p /data /work && chmod 700 /data
+ENV PATH="/opt/cbm:${PATH}" HOME=/data
+WORKDIR /work

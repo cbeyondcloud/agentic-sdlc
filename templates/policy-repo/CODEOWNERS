@@ -1,0 +1,20 @@
+# Who approves changes to this policy repo (D30, D33). Turn on branch protection for the
+# default branch with "Require review from Code Owners", so these owners are required.
+# The last matching line wins. EDIT: replace the example handles with your org's teams.
+
+# Everything not named below - the org policy, agents, pipelines and skills catalog -
+# belongs to the org admins.
+*                                @your-org/agentic-org-admins
+/policy/                         @your-org/agentic-org-admins
+/agents/                         @your-org/agentic-org-admins
+/pipelines/                      @your-org/agentic-org-admins
+/skills/                         @your-org/agentic-org-admins
+/CODEOWNERS                      @your-org/agentic-org-admins
+/.github/                        @your-org/agentic-org-admins
+
+# One block per team: its layer (agents, pipelines with per-repo overlays, skills) is the
+# team leads'. Overlays (teams/<team>/pipelines/overlays/) can never remove an org-required
+# step or gate (policy/org.yaml, the admins'), so the leads own them alone. Its narrowing of org policy is the leads' or the org admins' (a team file
+# can only narrow; the loader refuses anything wider).
+/teams/payments/                 @your-org/payments-leads
+/policy/teams/payments.yaml      @your-org/payments-leads @your-org/agentic-org-admins

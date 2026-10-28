@@ -1,0 +1,33 @@
+# =============================================================================
+# CAPABILITY TIERS (org policy-repo template)
+# Agents ask for a tier by what it is good at, never for a vendor's model, so the
+# same agents run with any provider the org's gateway (TokenLean) serves (spec §5.3).
+# EDIT EVERY `model:` BELOW: replace each change-me name with a model the gateway
+# serves, written the way the gateway names it. `family:` groups models from one
+# maker, so the eval judge can be chosen from another family than the agents.
+# =============================================================================
+tiers:
+  deep-reasoning:                       # architecture and design: the strongest model
+    model: change-me/deep-reasoning-model
+    effort: high
+    family: change-me-family-a
+  balanced:                             # most work: requirements, coding, review, QA
+    model: change-me/balanced-model
+    effort: medium
+    family: change-me-family-a
+  fast:                                 # cheap, quick tasks
+    model: change-me/fast-model
+    effort: low
+    family: change-me-family-a
+  local:                                # a model on the org's own machines or network;
+    model: local/change-me              # the only tier a `restricted` repo may use
+    family: change-me-family-local
+  eval-judge:                           # scores agent output in evaluations (M1-63): from
+    model: change-me/judge-model        # ANOTHER family than the agents it judges
+    effort: medium
+    family: change-me-family-b
+
+# A team that must use different models for a tier (cost, data residency):
+# team_overrides:
+#   payments:
+#     balanced: { model: change-me/other-balanced-model, family: change-me-family-a }

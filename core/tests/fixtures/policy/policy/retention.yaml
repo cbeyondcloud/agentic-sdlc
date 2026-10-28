@@ -1,0 +1,2 @@
+# Placeholder until open requirement OR-01 defines the retention policy.
+days: { audit: 2555, traces: 30 }

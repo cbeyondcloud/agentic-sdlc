@@ -1,0 +1,15 @@
+{
+ "key": "rev-webhook-retries/X/1/agent",
+ "calls": [
+  {
+   "path": "/v1/chat/completions",
+   "request_sha": "sha256:1261a7abb33e1e8b227460db54aa61f3719f0b34e77973c0ba89452fc8f24af6",
+   "status": 200,
+   "content_type": "application/json",
+   "headers": {
+    "x-tokenlean-cost-usd": "0.0021"
+   },
+   "body": "{\"id\": \"chatcmpl-fixture\", \"object\": \"chat.completion\", \"created\": 1767225600, \"model\": \"agent-model\", \"choices\": [{\"index\": 0, \"finish_reason\": \"stop\", \"message\": {\"role\": \"assistant\", \"content\": \"---\\nkind: review\\nschema_version: 1\\nrun_id: golden-03\\nstep: review\\nagent: code-review@1.0.0\\nproduced_at: 2026-10-21T12:20:00Z\\nstatus: complete\\nsummary: The classifier treats 408 and 429 as permanent, and the backoff crashes after the last scheduled attempt.\\nfindings:\\n  - severity: high\\n    file: webhooks/retry.py\\n    line: 10\\n    issue: 408 and 429 fall into the 4xx branch and are classified permanent, so throttled or timed-out deliveries are never retried (REQ-1 says they are temporary).\\n    status: open\\n  - severity: high\\n    file: webhooks/retry.py\\n    line: 16\\n    issue: SCHEDULE_MIN[attempt] raises IndexError after the fifth retry instead of marking the delivery failed.\\n    status: open\\nopen_blocking: 2\\nscore: 5\\nprepass_results:\\n  - {tool: ast-grep, findings: 0}\\nopen_questions: []\\n---\\n# Review: webhook retry classifier\\n\\n## Summary\\nThe schedule and jitter are right; the classifier and the end of the schedule are not.\\n\\n## Findings\\n- **high** `webhooks/retry.py:10` - check 408 and 429 before the generic 4xx branch and return \\\"temporary\\\".\\n- **high** `webhooks/retry.py:16` - return None (no more attempts) when `attempt >= len(SCHEDULE_MIN)` and let the caller mark the delivery failed.\\n\\n## Category breakdown\\n- Logic: 1 (classification)\\n- Error handling: 1 (end of schedule)\\n\\n## Pre-pass results\\nast-grep found nothing.\\n\\n## Verdict\\nChanges requested.\\n\\n## Open questions\\nNone.\\n\"}}], \"usage\": {\"prompt_tokens\": 1000, \"completion_tokens\": 400, \"total_tokens\": 1400}}"
+  }
+ ]
+}

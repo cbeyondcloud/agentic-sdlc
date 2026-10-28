@@ -1,0 +1,32 @@
+id: design-account-deletion
+agent: design
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: "Design the account deletion described in the approved requirements."
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Users delete their account and personal data themselves, across all systems."
+      size: large
+      items:
+        - id: REQ-1
+          statement: "Deletion reaches every system."
+          acceptance_criteria:
+            - "WHEN the grace period ends THE system SHALL request deletion from every registered system and track each confirmation."
+            - "WHEN a system has not confirmed within 7 days THE system SHALL alert the privacy team."
+        - id: REQ-2
+          statement: "Legally required records are kept."
+          acceptance_criteria:
+            - "WHEN an account is deleted THE system SHALL keep invoices with the personal fields replaced by a pseudonymous id."
+      ---
+      # Requirements: account deletion
+expected:
+  key_points:
+    - "a deletion saga with one step per system and per-step confirmation"
+    - "systems register a deletion handler; new systems cannot ship without one"
+    - "a tombstone record keeps the request id and dates, no personal data"
+rubric: design
+tags: [privacy, compliance]

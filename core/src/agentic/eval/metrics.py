@@ -1,0 +1,375 @@
+"""Per-run metrics (M1-63, spike S10 judging table).
+
+Objective truth wherever it exists; a judge only where it does not:
+
+| Agent output    | Metric                                                     | Judge? |
+|-----------------|------------------------------------------------------------|--------|
+| every agent     | schema_valid (completed, parses as its kind), cost, tokens | no     |
+| review          | defect_recall: an open finding above `info` in the same    | no     |
+|                 | file, within +/-3 lines of a seeded range (category        |        |
+|                 | compared when given);                                       |        |
+|                 | unmatched_blocking: open blocking findings matching none   |        |
+|                 | false_finding_rate: unmatched findings judged not real,    | yes    |
+|                 | over all counted findings (`FindingJudge`)                 |        |
+| test-report     | qa_catch: seeded failing criteria the report shows failed; | no     |
+|                 | qa_false_alarm: passing criteria it shows failed           |        |
+| dev-report      | tests_pass: every fail-to-pass and pass-to-pass test passes | no     |
+| requirements,   | rubric: 0-10, `RubricJudge` on the scrubbed output         | yes    |
+| design          |                                                            |        |
+
+Degenerate output must not score (DF-258): marking every criterion failed catches every
+seeded one but shows a false-alarm rate of 1.0; a finding marked `info`, `resolved` or
+`accepted` claims no defect; the line tolerance never exceeds a quarter of the lines the
+diff shows for that file, so one finding cannot cover a whole short diff; and a path
+written with the diff's `a/` or `b/` prefix still matches.
+
+A metric that cannot be computed is left out of the run's metrics (unmeasurable),
+never set to 0: a run that failed for infrastructure reasons, a cost TokenLean did not
+report, tests the run did not execute. An answer the agent got wrong is different: an
+invalid document delivers nothing, so it scores 0 on its kind's metric as well as on
+schema validity (the agent's failure, not the harness's).
+
+An unmatched finding is not automatically false: real diffs carry real issues. The
+judge adjudicates unmatched findings (DF-244) and its rulings are written beside the
+report (judged/<run>.findings.json) so a person can sample them, as S10 asks.
+"""
+
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import PurePosixPath
+
+from pydantic_evals.evaluators import Evaluator, EvaluatorContext
+
+from agentic.eval.blind import Scrubber
+from agentic.eval.cases import EvalCase, SeededDefect
+from agentic.eval.judge import FindingJudge, RubricJudge, cap_for_judge
+from agentic.eval.records import RunRecord, RunRequest
+from agentic.eval.validate import criteria_ids, parse_hunks
+from agentic.handoffs import BLOCK_ON_DEFAULT, Handoff, HandoffError, parse_handoff
+from agentic.handoffs.finalise import FRAMEWORK_FIELDS
+from agentic.transport import LimitHit
+from agentic.yamlio import YamlFileError, dump_yaml, load_yaml, split_front_matter
+
+TOLERANCE = 3  # lines either side of a seeded range (S10)
+# The agent answered, or failed on its own (turns, time, stuck): scored. An error, a skip,
+# a pause or a budget stop is the harness's or a person's doing: unscored.
+SCORED_STATUSES = ("completed", "invalid", "stopped")
+
+
+def scored(record: RunRecord) -> bool:
+    """Did this run measure the agent (rather than fail for a harness reason)?"""
+    return record.status in SCORED_STATUSES and record.error is None
+
+
+@dataclass(frozen=True)
+class Matching:
+    caught: frozenset[int]  # indexes of seeded defects some finding matched
+    unmatched: tuple[int, ...]  # indexes of findings that matched no seeded defect
+
+
+def parse_document(output: str | None, kind: str) -> Handoff | None:
+    """The run's handoff, if it is a valid document of `kind`."""
+    if not output:
+        return None
+    try:
+        handoff = parse_handoff(output)
+    except (HandoffError, ValueError):
+        return None
+    return handoff if handoff.envelope.kind == kind else None
+
+
+def schema_valid(status: str, output: str | None, kind: str) -> bool:
+    return status == "completed" and parse_document(output, kind) is not None
+
+
+def file_tolerances(diff: str | None) -> dict[str, int]:
+    """Per file of a review diff, the line tolerance: TOLERANCE, but never more than a
+    quarter of the new-side lines the diff shows for that file. Empty without a diff."""
+    if not diff:
+        return {}
+    try:
+        spans = parse_hunks(diff)
+    except ValueError:
+        return {}
+    shown = {file: sum(last - first + 1 for first, last in s) for file, s in spans.items()}
+    return {file: min(TOLERANCE, lines // 4) for file, lines in shown.items()}
+
+
+def counts_for_recall(finding: object) -> bool:
+    """An open finding above `info` (status defaults to open, as in the review schema)."""
+    found = _as_dict(finding)
+    return found.get("status", "open") == "open" and found.get("severity") != "info"
+
+
+def match_findings(
+    findings: Sequence[object],
+    seeded: Sequence[SeededDefect],
+    *,
+    tolerance: int = TOLERANCE,
+    tolerances: Mapping[str, int] | None = None,
+) -> Matching:
+    """A maximum one-to-one matching (Kuhn's augmenting paths): a finding counts for at
+    most one seeded defect and a defect for at most one finding, and as many defects as
+    possible are matched - whatever order the agent listed its findings in. Candidates
+    are tried nearest first (inside the range is distance 0). `tolerances` narrows the
+    tolerance per file (`file_tolerances`)."""
+    candidates: list[list[int]] = []
+    for raw in findings:
+        found = _as_dict(raw)
+        file, line = found.get("file"), found.get("line")
+        near: list[tuple[int, int]] = []
+        if isinstance(file, str) and isinstance(line, int):
+            paths, category = _spellings(file), found.get("category")
+            for d_index, defect in enumerate(seeded):
+                path = _posix(defect.file)
+                if path not in paths:
+                    continue
+                if category and str(category).casefold() != defect.category.casefold():
+                    continue
+                start, end = defect.lines
+                distance = max(start - line, line - end, 0)
+                if distance <= (tolerances or {}).get(path, tolerance):
+                    near.append((distance, d_index))
+        candidates.append([d for _, d in sorted(near)])
+    owner: dict[int, int] = {}  # defect index -> finding index
+
+    def claim(finding: int, seen: set[int]) -> bool:
+        for defect in candidates[finding]:
+            if defect in seen:
+                continue
+            seen.add(defect)
+            if defect not in owner or claim(owner[defect], seen):
+                owner[defect] = finding
+                return True
+        return False
+
+    for index in range(len(candidates)):
+        claim(index, set())
+    matched = set(owner.values())
+    unmatched = tuple(i for i in range(len(candidates)) if i not in matched)
+    return Matching(frozenset(owner), unmatched)
+
+
+def defect_recall(
+    findings: Sequence[object],
+    seeded: Sequence[SeededDefect],
+    tolerances: Mapping[str, int] | None = None,
+) -> tuple[int, int]:
+    counted = [f for f in findings if counts_for_recall(f)]
+    return len(match_findings(counted, seeded, tolerances=tolerances).caught), len(seeded)
+
+
+def unmatched_blocking(
+    findings: Sequence[object],
+    seeded: Sequence[SeededDefect],
+    block_on: frozenset[str] = BLOCK_ON_DEFAULT,
+    tolerances: Mapping[str, int] | None = None,
+) -> int:
+    counted = [f for f in findings if counts_for_recall(f)]
+    matching = match_findings(counted, seeded, tolerances=tolerances)
+    return sum(_as_dict(counted[i]).get("severity") in block_on for i in matching.unmatched)
+
+
+def _failed(acceptance_results: Sequence[object]) -> set[str]:
+    return {
+        str(r.get("criterion_id"))
+        for r in map(_as_dict, acceptance_results)
+        if r.get("passed") is False
+    }
+
+
+def qa_catch(
+    acceptance_results: Sequence[object], failing_criteria: Sequence[str]
+) -> tuple[int, int]:
+    """(seeded failing criteria the report marks failed, seeded failing criteria)."""
+    failed = _failed(acceptance_results)
+    return sum(1 for c in failing_criteria if c in failed), len(failing_criteria)
+
+
+def qa_false_alarms(
+    acceptance_results: Sequence[object], passing_criteria: Iterable[str]
+) -> tuple[int, int]:
+    """(criteria the work meets that the report marks failed, criteria the work meets)."""
+    failed, passing = _failed(acceptance_results), set(passing_criteria)
+    return len(passing & failed), len(passing)
+
+
+def objective_metrics(case: EvalCase, record: RunRecord, kind: str) -> dict[str, float]:
+    """Every metric this run can support, by name; unmeasurable ones are absent."""
+    if not scored(record):
+        return {}
+    metrics: dict[str, float] = {}
+    document = parse_document(record.output, kind) if record.status == "completed" else None
+    metrics["schema_valid"] = 1.0 if document is not None else 0.0
+    data = document.data.model_dump() if document is not None else {}
+    expected = case.expected
+    if expected.seeded_defects:
+        findings = data.get("findings", [])
+        tolerances = file_tolerances(case.inputs.diff)
+        caught, total = defect_recall(findings, expected.seeded_defects, tolerances)
+        unmatched = unmatched_blocking(findings, expected.seeded_defects, tolerances=tolerances)
+        metrics |= {
+            "defects_caught": float(caught),
+            "defects_total": float(total),
+            "defect_recall": caught / total,
+            "unmatched_blocking": float(unmatched),
+        }
+    if expected.failing_criteria:
+        results = data.get("acceptance_results", [])
+        caught, total = qa_catch(results, expected.failing_criteria)
+        metrics |= {
+            "criteria_caught": float(caught),
+            "criteria_total": float(total),
+            "qa_catch": caught / total,
+        }
+        criteria = criteria_ids(case.inputs.handoffs.get("requirements"))
+        if criteria and (passing := criteria - set(expected.failing_criteria)):
+            alarms, meets = qa_false_alarms(results, passing)
+            metrics |= {
+                "criteria_false_alarms": float(alarms),
+                "criteria_passing": float(meets),
+                "qa_false_alarm": alarms / meets,
+            }
+    if expected.tests is not None and record.tests is not None:
+        wanted = [*expected.tests.fail_to_pass, *expected.tests.pass_to_pass]
+        metrics["tests_pass"] = float(all(record.tests.get(test) is True for test in wanted))
+    if record.cost_usd is not None:
+        metrics["cost_usd"] = record.cost_usd
+    if record.tokens_in is not None and record.tokens_out is not None:
+        metrics["tokens"] = float(record.tokens_in + record.tokens_out)
+    metrics["duration_s"] = record.duration_s
+    return metrics
+
+
+# ── pydantic-evals evaluators ─────────────────────────────────────────────────
+
+
+@dataclass
+class ObjectiveMetrics(Evaluator[RunRequest, RunRecord, None]):
+    def evaluate(self, ctx: EvaluatorContext[RunRequest, RunRecord, None]) -> dict[str, float]:
+        return objective_metrics(ctx.inputs.case, ctx.output, ctx.inputs.kind)
+
+
+@dataclass
+class RubricMetric(Evaluator[RunRequest, RunRecord, None]):
+    """The rubric score of a scoping case's output, judged blind. The judge's result is
+    attached to the record (per criterion, evidence) for the report and calibration.
+
+    `judge_for` gives the judge for one run (None: the case is not rubric-judged), so
+    each run's judge calls can be keyed to that run (its cassette, its cost)."""
+
+    judge_for: Callable[[RunRequest], RubricJudge | None] = lambda request: None
+    scrubber: Scrubber = field(default_factory=Scrubber)
+    reference: Callable[[EvalCase], str | None] = lambda case: None
+
+    async def evaluate(
+        self, ctx: EvaluatorContext[RunRequest, RunRecord, None]
+    ) -> dict[str, float]:
+        case, record = ctx.inputs.case, ctx.output
+        judge = self.judge_for(ctx.inputs) if case.rubric else None
+        if judge is None or not scored(record):
+            return {}
+        if parse_document(record.output, ctx.inputs.kind) is None or record.status != "completed":
+            return {"rubric": 0.0}  # an invalid document delivers nothing to grade
+        # what it sees: no envelope, no model names, at most JUDGE_CHAR_CAP characters
+        record.judged = cap_for_judge(self.scrubber.scrub(judge_view(record.output or "")))
+        record.judge_reference = self.reference(case)  # people calibrating see these too
+        record.judge_key_points = list(case.expected.key_points)
+        try:
+            result = await judge.score(
+                record.judged,
+                reference=record.judge_reference,
+                key_points=record.judge_key_points,
+            )
+        except LimitHit:  # the eval's cap, not the agent's doing: unscored, INCOMPLETE
+            record.judge_stopped = True
+            return {}
+        record.judge = result
+        return {} if result.total is None else {"rubric": result.total}
+
+
+@dataclass
+class FalseFindingMetric(Evaluator[RunRequest, RunRecord, None]):
+    """The false-finding rate of a review run (DF-244): open findings above `info` that
+    match no seeded defect AND that the judge rules not a real issue, over all such
+    findings. Unmatched findings go to the judge in one call; its verdicts are kept on
+    the record (and in the report folder) for a person to sample. Unmeasured when there
+    is no judge, the judge cannot decide, or its budget share is spent."""
+
+    judge_for: Callable[[RunRequest], FindingJudge | None] = lambda request: None
+    scrubber: Scrubber = field(default_factory=Scrubber)
+
+    async def evaluate(
+        self, ctx: EvaluatorContext[RunRequest, RunRecord, None]
+    ) -> dict[str, float]:
+        case, record = ctx.inputs.case, ctx.output
+        if not case.expected.seeded_defects or not scored(record):
+            return {}
+        judge = self.judge_for(ctx.inputs)
+        document = parse_document(record.output, ctx.inputs.kind)
+        if judge is None or document is None or record.status != "completed":
+            return {}
+        counted = [
+            f for f in document.data.model_dump().get("findings", []) if counts_for_recall(f)
+        ]
+        tolerances = file_tolerances(case.inputs.diff)
+        unmatched = [
+            counted[i]
+            for i in match_findings(
+                counted, case.expected.seeded_defects, tolerances=tolerances
+            ).unmatched
+        ]
+        verdicts: list = []
+        if unmatched:
+            shown = [
+                {**f, "issue": self.scrubber.scrub(str(f.get("issue", "")))} for f in unmatched
+            ]
+            try:
+                verdicts = await judge.adjudicate(case.inputs.diff or "", shown) or []
+            except LimitHit:
+                record.judge_stopped = True
+                return {}
+            if not verdicts:
+                return {}
+        record.adjudications = [
+            {"file": f.get("file"), "line": f.get("line"), "issue": f.get("issue")}
+            | {"real": v.real, "reason": v.reason}
+            for f, v in zip(unmatched, verdicts, strict=True)
+        ]
+        false = sum(not v.real for v in verdicts)
+        return {
+            "false_findings": float(false),
+            "findings_total": float(len(counted)),
+            **({"false_finding_rate": false / len(counted)} if counted else {}),
+        }
+
+
+def judge_view(document: str) -> str:
+    """The document without the framework's envelope (run id, agent@version, time): those
+    are not the agent's work, and an agent version is exactly what an A/B varies."""
+    try:
+        header, body = split_front_matter(document)
+        meta, _ = load_yaml(header)
+    except YamlFileError:
+        return document
+    if not isinstance(meta, dict):
+        return document
+    kept = {k: v for k, v in meta.items() if k not in FRAMEWORK_FIELDS}
+    return f"---\n{dump_yaml(kept)}---\n{body}"
+
+
+def _as_dict(item: object) -> dict:
+    if isinstance(item, Mapping):
+        return dict(item)
+    dump = getattr(item, "model_dump", None)
+    return dump() if callable(dump) else {}
+
+
+def _posix(path: str) -> str:
+    return PurePosixPath(path.replace("\\", "/")).as_posix().removeprefix("./")
+
+
+def _spellings(path: str) -> set[str]:
+    """A finding's path, and the same path without a diff's `a/` or `b/` prefix."""
+    posix = _posix(path)
+    return {posix, posix[2:]} if posix.startswith(("a/", "b/")) else {posix}

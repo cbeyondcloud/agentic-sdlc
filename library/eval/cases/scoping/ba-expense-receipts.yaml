@@ -1,0 +1,18 @@
+id: ba-expense-receipts
+agent: business-analyst
+case_class: scoping
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Employees photograph paper receipts and email them to finance, which keys in amounts.
+    Let employees attach receipts to expense claims in the app. Write the requirements.
+expected:
+  key_points:
+    - "receipts can be uploaded as photos or PDFs with a size limit"
+    - "each claim line needs a receipt above a policy amount"
+    - "amount, date and merchant can be suggested from the receipt but are confirmed by the employee"
+    - "receipts are kept for the legal retention period"
+    - "duplicate receipts across claims are detected"
+rubric: ba-requirements
+tags: [finance]

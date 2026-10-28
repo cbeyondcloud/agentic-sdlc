@@ -1,0 +1,19 @@
+id: dev-glob-separators
+agent: developer
+case_class: dev_task
+split: holdout
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    is_ignored() matches ignore patterns like 'build/**' against paths, but on
+    Windows the paths arrive with backslashes and never match. Normalise the separators;
+    patterns always use '/'. Make the failing tests pass without breaking the others.
+  workspace: workspaces/dev-glob-separators
+expected:
+  tests:
+    fail_to_pass:
+      - "tests/test_ignore.py::test_windows_paths_match"
+    pass_to_pass:
+      - "tests/test_ignore.py::test_posix_paths_match"
+  solution: solutions/dev-glob-separators
+tags: [python, windows, paths]

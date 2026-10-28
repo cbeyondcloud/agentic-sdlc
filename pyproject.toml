@@ -1,0 +1,246 @@
+# Root of the uv workspace. It is not a package itself; it ties the four
+# packages together so they share one lock file (uv.lock) and one virtualenv.
+[project]
+name = "agentic-sdlc-workspace"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+
+# The two-week release-age rule for EVERY locked package, transitive ones included
+# (DF-95): a just-published (possibly compromised) release cannot enter uv.lock. A
+# security fix that cannot wait goes in `exclude-newer-package = { name = "<date>" }`
+# with a comment naming the advisory.
+[tool.uv]
+exclude-newer = "14 days"
+# certifi 2026.10.19 (uploaded 2026-10-20) fixes PYSEC-2026-4320: the release before it is
+# vulnerable, so the fix may not wait two weeks. Drop this line once it is 14 days old.
+# virtualenv 21.14.7 (uploaded 2026-10-12; pre-commit's dependency) fixes CVE-2026-113725
+# in 21.14.5; the cutoff admits 21.14.7 and nothing newer. pip-audit fails without it.
+# Drop each entry once check.py warns that it is older than the window.
+# filelock 4.2.1 (uploaded 2026-10-17) fixes CVE-2026-112907, CVE-2026-112913 and
+# CVE-2026-112940 in 4.0.12; fastmcp/fastmcp-slim 3.4.10 (uploaded 2026-10-20; through
+# code-review-graph, an optional extra) fix GHSA-7xgj-8392-5q4r in 3.4.8. pip-audit fails
+# without them; each cutoff admits the fix and nothing newer.
+exclude-newer-package = { certifi = "2026-10-21T00:00:00Z", virtualenv = "2026-10-18T00:00:00Z", filelock = "2026-10-18T00:00:00Z", fastmcp = "2026-10-20T15:00:00Z", fastmcp-slim = "2026-10-20T15:00:00Z" }
+
+[tool.uv.workspace]
+members = ["core", "commons", "cli", "control-plane"]
+
+# Each member depends on the others by name; these lines tell uv to use the
+# local folders instead of looking them up on a package index.
+[tool.uv.sources]
+agentic-core = { workspace = true }
+sdlc-commons = { workspace = true }
+agentic-cli = { workspace = true }
+agentic-control-plane = { workspace = true }
+
+# Tools used only while developing (never shipped to users).
+[dependency-groups]
+dev = [
+    "agentic-core[acp,claude-code,codeintel,codex,eval,skills,telemetry]",
+    "sdlc-commons",
+    "agentic-cli",
+    "agentic-control-plane",
+    "pytest>=8.3",
+    "ruff>=0.7",
+    "pre-commit>=4.0",
+    "trustme>=1.2",
+    # the capture SMTP server of the control plane's mail tests (M2-07); Apache-2.0, pure
+    # Python, released 2024-05-18
+    "aiosmtpd==1.4.6",
+    "import-linter==2.15",
+    "pip-audit==2.10.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["core/tests", "commons/tests", "cli/tests", "control-plane/tests", "scripts/tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Documentation folders contain Markdown with code snippets; never lint them. The eval
+# corpus's workspaces and reference solutions are data - code with seeded bugs, hashed into
+# library/eval/manifest.json - so neither the linter nor the formatter may touch them.
+extend-exclude = [
+  "docs",
+  "reports",
+  "research_notes",
+  "spikes",
+  "library/eval/workspaces",
+  "library/eval/solutions",
+]
+force-exclude = true  # honour the excludes when pre-commit passes file names
+
+[tool.ruff.lint]
+# E/F: pyflakes + pycodestyle errors, I: import order, B: common bugs, UP: modern syntax
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+# Our own packages: imports of these are grouped last, separate from third-party libraries.
+known-first-party = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+
+# Architecture rules (P0-03), checked by `lint-imports` in scripts/check.py. The "only in X"
+# rules restrict where the direct import sits (allow_indirect_imports): calling X is the point.
+[tool.importlinter]
+root_packages = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Core stays standalone: it never imports commons, the CLI, the control plane or Zyroflo"
+type = "forbidden"
+source_modules = ["agentic"]
+forbidden_modules = ["sdlc_commons", "agentic_cli", "agentic_cp", "tools"]
+
+[[tool.importlinter.contracts]]
+name = "Zyroflo (sdlc-harness) is used only through sdlc_commons (D34)"
+type = "forbidden"
+source_modules = ["agentic", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["tools"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Provider SDKs only in agentic.transport (provider-agnostic core, D2)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["openai", "anthropic"]
+allow_indirect_imports = true
+ignore_imports = ["agentic.transport.** -> openai", "agentic.transport.** -> anthropic"]
+
+[[tool.importlinter.contracts]]
+name = "The Claude Agent SDK only in the claude-code backend (optional extra)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["claude_agent_sdk"]
+allow_indirect_imports = true
+ignore_imports = ["agentic.backends.claude_code -> claude_agent_sdk"]
+
+[[tool.importlinter.contracts]]
+name = "tomli-w only in the codex backend (optional extra)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["tomli_w"]
+allow_indirect_imports = true
+ignore_imports = ["agentic.backends.codex -> tomli_w"]
+
+[[tool.importlinter.contracts]]
+name = "The ACP SDK only in the ACP backend runner (optional extra)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["acp"]
+allow_indirect_imports = true
+ignore_imports = ["agentic.backends.acp.runner -> acp"]
+
+[[tool.importlinter.contracts]]
+name = "code-review-graph only in its query and import subprocesses (optional extra)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["code_review_graph"]
+allow_indirect_imports = true
+ignore_imports = [
+    "agentic.codeintel._crg_query -> code_review_graph",
+    "agentic.codeintel._crg_import -> code_review_graph",
+]
+
+[[tool.importlinter.contracts]]
+name = "Commons never imports the CLI or the control plane"
+type = "forbidden"
+source_modules = ["sdlc_commons"]
+forbidden_modules = ["agentic_cli", "agentic_cp"]
+
+[[tool.importlinter.contracts]]
+name = "skills-ref only in skill admission (optional extra)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["skills_ref"]
+allow_indirect_imports = true
+ignore_imports = ["agentic.skills.admission -> skills_ref"]
+
+[[tool.importlinter.contracts]]
+name = "pydantic-evals only in the eval harness (optional extra)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli", "agentic_cp"]
+forbidden_modules = ["pydantic_evals"]
+allow_indirect_imports = true
+ignore_imports = ["agentic.eval.** -> pydantic_evals"]
+
+[[tool.importlinter.contracts]]
+name = "Hosting adapters only through the CLI's host registry (M1-58: providers behind one protocol)"
+type = "forbidden"
+source_modules = [
+    "agentic.agents",
+    "agentic.engine",
+    "agentic.definitions",
+    "agentic.policy",
+    "agentic.telemetry",
+    "sdlc_commons",
+    "agentic_cli",
+    "agentic_cp",
+]
+forbidden_modules = ["agentic.hosting.github"]
+allow_indirect_imports = true
+ignore_imports = ["agentic_cli.hosting -> agentic.hosting.github"]
+
+[[tool.importlinter.contracts]]
+name = "The Jira adapter only through the CLI's Jira module (M2-50: trackers behind the CLI)"
+type = "forbidden"
+source_modules = [
+    "agentic.agents",
+    "agentic.backends",
+    "agentic.engine",
+    "agentic.definitions",
+    "agentic.policy",
+    "agentic.telemetry",
+    "sdlc_commons",
+    "agentic_cli",
+    "agentic_cp",
+]
+forbidden_modules = ["agentic.integrations.jira"]
+allow_indirect_imports = true
+ignore_imports = ["agentic_cli.jira -> agentic.integrations.jira"]
+
+[[tool.importlinter.contracts]]
+name = "The CLI never imports the control plane (SP15: the wire contract is agentic.orgapi)"
+type = "forbidden"
+source_modules = ["agentic_cli"]
+forbidden_modules = ["agentic_cp"]
+
+[[tool.importlinter.contracts]]
+name = "Server libraries only in the control plane (SP15: they never reach developer laptops)"
+type = "forbidden"
+source_modules = ["agentic", "sdlc_commons", "agentic_cli"]
+forbidden_modules = [
+    "fastapi",
+    "starlette",
+    "uvicorn",
+    "sqlalchemy",
+    "alembic",
+    "asyncpg",
+    "casbin",
+    "codeowners",
+    "prometheus_client",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "prometheus_client only in agentic_cp.metrics (M2-12)"
+type = "forbidden"
+source_modules = ["agentic_cp"]
+forbidden_modules = ["prometheus_client"]
+allow_indirect_imports = true
+ignore_imports = ["agentic_cp.metrics -> prometheus_client"]
+
+[[tool.importlinter.contracts]]
+name = "casbin only behind authorize (SP15 DR-1: agentic_cp.rbac.authz is its one importer)"
+type = "forbidden"
+source_modules = ["agentic_cp"]
+forbidden_modules = ["casbin"]
+allow_indirect_imports = true
+ignore_imports = ["agentic_cp.rbac.authz -> casbin"]
+
+[[tool.importlinter.contracts]]
+name = "codeowners only in agentic_cp.rbac.codeowners (SP15 Task 8)"
+type = "forbidden"
+source_modules = ["agentic_cp"]
+forbidden_modules = ["codeowners"]
+allow_indirect_imports = true
+ignore_imports = ["agentic_cp.rbac.codeowners -> codeowners"]

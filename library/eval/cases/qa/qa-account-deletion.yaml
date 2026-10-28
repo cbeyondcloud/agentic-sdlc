@@ -1,0 +1,43 @@
+id: qa-account-deletion
+agent: qa
+case_class: qa
+split: dev
+source: {repo: synthetic, synthetic: true, licence: CC0-1.0}
+inputs:
+  prompt: |
+    Check the account deletion work against its acceptance criteria. Criterion ids are the
+    requirement id and the criterion's position, e.g. REQ-1.2.
+  handoffs:
+    requirements: |
+      ---
+      kind: requirements
+      summary: "Users delete their account and personal data across all systems."
+      size: large
+      items:
+        - id: REQ-1
+          statement: "Deletion reaches every system."
+          acceptance_criteria:
+            - "WHEN the grace period ends THE system SHALL request deletion from every registered system."
+            - "WHEN a system has not confirmed within 7 days THE system SHALL alert the privacy team."
+        - id: REQ-2
+          statement: "Legally required records are kept."
+          acceptance_criteria:
+            - "WHEN an account is deleted THE system SHALL keep invoices with the personal fields replaced by a pseudonymous id."
+      ---
+      # Requirements: account deletion
+    dev-report: |
+      ---
+      kind: dev-report
+      summary: "Deletion saga across registered systems."
+      files_changed: [privacy/deletion.py, privacy/handlers/]
+      tests_run: {passed: 77, failed: 0, skipped: 0}
+      ---
+      # Development report: account deletion
+
+      ## What changed
+      After the 30-day grace period the saga calls each registered system's deletion handler
+      and records its confirmation. Invoices are deleted with the account, since the profile
+      they point to no longer exists. Unconfirmed steps are retried daily.
+expected:
+  failing_criteria: [REQ-1.2, REQ-2.1]
+tags: [privacy, compliance]
