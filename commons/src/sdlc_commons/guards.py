@@ -1,7 +1,7 @@
 """Guard adapter over Zyroflo's walls (M1-08; D31 deny lists; D34: reuse, never rewrite).
 
 May an agent run this command, write these paths, hand over this diff, push
-there? Zyroflo's guard functions (`tools.sdlc.policy`) judge Zyroflo's walls;
+there? Zyroflo's guard functions (`zyroflo.sdlc.policy`) judge Zyroflo's walls;
 this module adds the framework's rules on top:
 
   * command - Zyroflo's destructive defaults (`destructive`), plus the agent's
@@ -41,8 +41,8 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.sdlc import policy
-from tools.sdlc.guard import scrub
+from zyroflo.sdlc import policy
+from zyroflo.sdlc.guard import scrub
 
 from sdlc_commons.worktrees import RunWorktrees, WorktreeError
 

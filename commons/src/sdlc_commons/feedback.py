@@ -1,7 +1,7 @@
 """The run's feedback journal (M3-11) over Zyroflo's `feedback.jsonl` (D34: reuse, never rewrite).
 
 Zyroflo keeps a run's corrections in `feedback.jsonl` beside its approval ledger
-(`tools.sdlc.feedback`): an append that never shares a line with a torn or unterminated
+(`zyroflo.sdlc.feedback`): an append that never shares a line with a torn or unterminated
 last line, a reader that marks a damaged line instead of dropping it, and de-duplication
 by each row's `id`. The framework writes its learning-loop records into that same file,
 through those same calls. What this adapter adds:
@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from filelock import FileLock
-from tools.sdlc import feedback
+from zyroflo.sdlc import feedback
 
 from sdlc_commons.ledger import entry_hash, run_id_refusal
 

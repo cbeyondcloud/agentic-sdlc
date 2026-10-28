@@ -1,6 +1,6 @@
 """Publishing a run (M1-58): push its branch, open its pull request, watch its CI.
 
-Zyroflo's release flow (`tools.sdlc.release`, P8), followed step by step:
+Zyroflo's release flow (`zyroflo.sdlc.release`, P8), followed step by step:
 
   1. **through the wall** - each of the run's trees is pushed only when Zyroflo's push
      wall (`Guard.push`: the approved remote, the run's own `sdlc/<run>` branch) allows

@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tools.sdlc import feedback as zyroflo_feedback
+from zyroflo.sdlc import feedback as zyroflo_feedback
 
 from sdlc_commons.feedback import FeedbackJournal
 from sdlc_commons.ledger import entry_hash

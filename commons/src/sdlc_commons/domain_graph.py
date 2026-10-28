@@ -1,11 +1,11 @@
-"""Domain-graph access over Zyroflo's `tools.graph` (M2-28; D34: reuse, never rewrite).
+"""Domain-graph access over Zyroflo's `zyroflo.graph` (M2-28; D34: reuse, never rewrite).
 
 Zyroflo's domain graph covers the service level across repositories: services,
 endpoints, HTTP calls, Kafka topics, tables and migrations, compose/Helm deploys,
 config keys and tests, each edge citing the file and line it was read from. This
 module puts it behind the framework's names, unchanged:
 
-  * build_graph()  - `tools.graph.build.build`: an estate's workspace file -> a graph
+  * build_graph()  - `zyroflo.graph.build.build`: an estate's workspace file -> a graph
                      folder (`graph.jsonl`, `build_report.json`, ...);
   * DomainGraph    - one built graph, read through Zyroflo's `GraphService` (the MCP
                      server's tools as methods, reloaded whenever the graph on disk
@@ -39,12 +39,12 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-import tools.graph
-from tools.graph import build as zyroflo_build
-from tools.graph import mcp_server as zyroflo_mcp
-from tools.graph.core.store.load import load_into
-from tools.graph.impact import GraphError, impact_diff, known_components, parse_diff
-from tools.graph.rules import RulesError, discover_rules
+import zyroflo.graph
+from zyroflo.graph import build as zyroflo_build
+from zyroflo.graph import mcp_server as zyroflo_mcp
+from zyroflo.graph.core.store.load import load_into
+from zyroflo.graph.impact import GraphError, impact_diff, known_components, parse_diff
+from zyroflo.graph.rules import RulesError, discover_rules
 
 #: The tools Zyroflo's MCP server serves.
 MCP_TOOLS: tuple[str, ...] = tuple(zyroflo_mcp.TOOL_NAMES)
@@ -106,7 +106,7 @@ def zyroflo_checkout() -> Path | None:
 
 def fixture_estate(name: str) -> Path:
     """One of the fixture estates Zyroflo ships with answer keys (`orderflow`, `pantry`)."""
-    folder = Path(tools.graph.__file__).parent / "tests" / "fixtures" / name
+    folder = Path(zyroflo.graph.__file__).parent / "tests" / "fixtures" / name
     if not (folder / "workspace.toml").is_file():
         raise DomainGraphError(f"Zyroflo ships no fixture estate called {name!r}")
     return folder
