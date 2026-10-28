@@ -71,6 +71,8 @@ class FakeControlPlane:
     service_accounts: list[dict] = field(default_factory=list)
     audit: list[dict] = field(default_factory=list)  # the tenant's audit chain (M2-26)
     export_cut: bool = False  # the export stream stops before its proof line (M2-13)
+    corrections: list[dict] = field(default_factory=list)  # attribution corrections (M3-12)
+    proposals: list[dict] = field(default_factory=list)  # GET /v1/learning/proposals (M3-13)
 
     def add_audit(self, count: int, *, team_of=lambda seq: "payments") -> list[dict]:
         """`count` chained audit records appended to the tenant's chain."""
@@ -474,6 +476,17 @@ class FakeControlPlane:
             limit = int(request.url.params.get("limit", "50"))
             ordered = sorted(self.personal_files(), key=lambda item: item["path"])
             return httpx2.Response(200, json=[f for f in ordered if f["path"] > after][:limit])
+        if path.startswith("/v1/runs/") and path.endswith("/feedback"):  # M3-11
+            run_id = path.split("/")[3]
+            if run_id not in self.events:  # the run's own events come first
+                return _problem(404, "not_found", "no such run")
+            return self._ingest(f"feedback:{run_id}", json.loads(request.content)["entries"])
+        if path.startswith("/v1/learning/feedback/") and path.endswith("/attribution"):
+            body = json.loads(request.content)
+            self.corrections.append({"id": path.split("/")[4], **body})
+            return httpx2.Response(200, json=self._feedback_info(path.split("/")[4], body))
+        if path == "/v1/learning/proposals":
+            return httpx2.Response(200, json=self.proposals)
         if path.startswith("/v1/runs/") and path.endswith("/events"):
             if self.max_body is not None and len(request.content) > self.max_body:
                 return _problem(413, "too_large", f"the body is over {self.max_body} bytes")
@@ -593,6 +606,21 @@ class FakeControlPlane:
                     "at": entry["at"],
                 }
         return [item for item in newest.values() if "kind" in item]
+
+    def _feedback_info(self, feedback_id: str, body: dict) -> dict:
+        learners = [{"agent": agent, "confidence": 1.0} for agent in body["agents"]]
+        return {
+            "id": feedback_id,
+            "run_id": "r",
+            "team": "payments",
+            "signal": "gate-rejection",
+            "actor": self.email,
+            "given_at": datetime.now(UTC).isoformat(),
+            "source": "gate:x",
+            "attribution": {"learners": learners, "method": "human", "reason": body["reason"]},
+            "author": self.email,
+            "corrected_by": self.email,
+        }
 
     def _ingest(self, run_id: str, entries: list[dict]) -> httpx2.Response:
         if self.refuse_ingest is not None:

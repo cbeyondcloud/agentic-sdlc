@@ -366,6 +366,45 @@ def test_a_failed_publish_step_keeps_what_to_do_in_its_reason(workspace, github,
     assert "no token for github.example.test" in reason and "do this" in reason
 
 
+def test_pr_checks_logs_records_the_failed_jobs_logs(workspace, github, cli):
+    """DF-290: with --logs a red verdict carries each failed check's log (the end of it),
+    in ci.json for a later route back; the download link gets no token; a failed check the
+    host keeps no log for says so instead of showing something that is not its log."""
+    _, run_id = ship(cli)
+    actions = {"app": {"slug": "github-actions"}, "html_url": ""}
+    github.check_runs = [
+        [
+            {"id": 41, "name": "unit", "status": "completed", "conclusion": "failure", **actions},
+            {"id": 42, "name": "lint", "status": "completed", "conclusion": "success", **actions},
+            {"id": 9, "name": "sonar", "status": "completed", "conclusion": "failure"},
+        ]
+    ]
+    github.job_logs = {"41": "collecting\nFAILED tests/test_csv.py::test_export\n"}
+    result = cli("--json", "pr", "checks", run_id, "--logs")
+    assert result.code == ExitCode.ERROR, result.err
+    logs = {row["name"]: row for row in result.json()["logs"]}
+    assert set(logs) == {"unit", "sonar"}  # failed checks only
+    assert logs["unit"]["log"].endswith("FAILED tests/test_csv.py::test_export\n")
+    assert logs["sonar"]["log"] is None and "no log" in logs["sonar"]["note"]
+    recorded = json.loads((run_folder(workspace, run_id) / "ci.json").read_text("utf-8"))
+    assert recorded["logs"] == result.json()["logs"]
+    blob = [r for r in github.requests if r["path"].startswith("/_blob/")]
+    assert len(blob) == 1 and blob[0]["auth"] == ""
+    human = cli("pr", "checks", run_id, "--logs")
+    assert "FAILED tests/test_csv.py::test_export" in human.out
+    assert "sonar: no log" in human.out
+
+
+def test_pr_checks_without_logs_reads_no_log(workspace, github, cli):
+    _, run_id = ship(cli)
+    failed = {"id": 41, "name": "unit", "status": "completed", "conclusion": "failure"}
+    github.check_runs = [[{**failed, "app": {"slug": "github-actions"}, "html_url": ""}]]
+    github.job_logs = {"41": "boom\n"}
+    shown = cli("--json", "pr", "checks", run_id).json()
+    assert "logs" not in shown
+    assert not [r for r in github.requests if "/actions/jobs/" in r["path"]]
+
+
 def test_pr_checks_before_any_pull_request_says_what_to_do(workspace, github, cli):
     paused = cli("--json", "run", "deliver", "--input", "request=x")
     run_id = paused.json()["run_id"]

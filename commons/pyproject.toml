@@ -6,6 +6,7 @@ license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "sdlc-harness==0.1.0",
+    "filelock==4.2.1",  # the feedback journal lock (M3-11); core and cli pin the same
 ]
 
 [build-system]

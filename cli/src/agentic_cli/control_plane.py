@@ -37,6 +37,7 @@ from agentic.orgapi import (
     Assignment,
     AuditEntry,
     CheckResult,
+    FeedbackInfo,
     IngestResult,
     InviteInfo,
     InviteRedeemed,
@@ -46,6 +47,7 @@ from agentic.orgapi import (
     NotificationInfo,
     OffboardResult,
     PersonalFile,
+    ProposalInfo,
     ProxyKeyIssued,
     ProxyKeysRevoked,
     RepoInfo,
@@ -365,6 +367,39 @@ class ControlPlaneClient:
             raise
         return IngestResult.model_validate(found)
 
+    def ingest_feedback(self, run_id: str, entries: Sequence[Mapping[str, object]]) -> IngestResult:
+        """Send a batch of the run's chained feedback-journal entries (M3-11), refused
+        exactly as a run's batch is (`ChainRejected` on a gap, a fork or a broken chain)."""
+        try:
+            found = self._json("POST", f"/runs/{run_id}/feedback", {"entries": list(entries)})
+        except ControlPlaneRefused as error:
+            if error.code_name.startswith("ingest.") and error.code_name != "ingest.too_large":
+                raise ChainRejected(
+                    str(error), code_name=error.code_name, problems=error.problems, head=error.head
+                ) from None
+            raise
+        return IngestResult.model_validate(found)
+
+    def feedback_records(
+        self, *, team: str | None = None, run_id: str | None = None
+    ) -> list[FeedbackInfo]:
+        """The feedback records the caller may read (its own, and its teams' with
+        `dashboard.view.team`)."""
+        params = {k: v for k, v in (("team", team), ("run_id", run_id)) if v}
+        found = self._json("GET", "/learning/feedback", params=params)
+        return [FeedbackInfo.model_validate(item) for item in found]
+
+    def correct_attribution(self, feedback_id: str, agents: list[str], reason: str) -> FeedbackInfo:
+        """A person's correction of which agents learn from a record (audited)."""
+        path = f"/learning/feedback/{quote(feedback_id, safe='')}/attribution"
+        body = {"agents": list(agents), "reason": reason}
+        return FeedbackInfo.model_validate(self._json("PUT", path, body))
+
+    def proposals(self, *, team: str | None = None) -> list[ProposalInfo]:
+        params = {"team": team} if team else None
+        found = self._json("GET", "/learning/proposals", params=params)
+        return [ProposalInfo.model_validate(item) for item in found]
+
     def personal_files(self) -> list[PersonalFile]:
         """The caller's newest backed-up copy of each personal skill file and note, read a
         page at a time (a page shorter than asked for is the last)."""
@@ -645,6 +680,18 @@ class PersonalSink(ControlPlaneSink):
 
     def _ingest(self, run_id: str, chunk: Sequence[Mapping[str, object]]) -> None:
         self.client.ingest_personal(run_id, chunk)
+
+
+class FeedbackSink(ControlPlaneSink):
+    """The sink for a run's feedback journal (M3-11): the same batching, 413 halving,
+    catch-up (R21), publish scan and refusals as the run sink, sent to
+    `POST /v1/runs/{run}/feedback`. A run whose events the control plane does not hold yet
+    is refused (404): the journal stays queued and goes with the next delivery."""
+
+    name = "control-plane-feedback"
+
+    def _ingest(self, run_id: str, chunk: Sequence[Mapping[str, object]]) -> None:
+        self.client.ingest_feedback(run_id, chunk)
 
 
 # ── which client, from where ────────────────────────────────────────────────

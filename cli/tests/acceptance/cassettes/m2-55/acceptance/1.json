@@ -36,7 +36,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:645c94566065518f4682e972f578e23be3e5900e2a85e81f1c1d062a82280ed9",
+   "request_sha": "sha256:47676fd30b7cd1ca0da9b38d097018a3a48ed2d93f07e6bb46c8eae7c990ea3d",
    "status": 200,
    "content_type": "application/json",
    "headers": {
