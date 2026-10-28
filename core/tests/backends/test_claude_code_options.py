@@ -181,3 +181,46 @@ def test_internal_overrides_of_a_parent_session_are_blanked(coder):
     environ = {"_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL": "1", "_claude_other": "x"}
     env = options(coder, environ=environ)["env"]
     assert env["_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"] == env["_claude_other"] == ""
+
+
+def test_claude_code_internal_switches_never_pass(coder):
+    # A parent Claude Code session sets this; inherited, it sent calls to the vendor's API.
+    environ = {"_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL": "1"}
+    passing = ClaudeCodeSettings(
+        gateway_url="https://tokenlean.acme.internal",
+        api_key="tl-key",
+        config_root=Path("/state"),
+        pass_env=("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",),
+    )
+    env = options(coder, settings=passing, environ=environ)["env"]
+    assert env["_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"] == ""
+
+
+def test_a_parent_claude_code_session_is_not_inherited(coder):
+    environ = {
+        "CLAUDE_CODE_SESSION_ID": "s-1",
+        "CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/session.sock",
+        "CLAUDE_CODE_GIT_BASH_PATH": "C:/Git/bin/bash.exe",
+    }
+    env = options(coder, environ=environ)["env"]
+    assert env["CLAUDE_CODE_SESSION_ID"] == env["CLAUDE_CODE_MESSAGING_SOCKET"] == ""
+    assert "CLAUDE_CODE_GIT_BASH_PATH" not in env  # Windows needs it to find bash
+    passing = ClaudeCodeSettings(
+        gateway_url="https://tokenlean.acme.internal",
+        api_key="tl-key",
+        config_root=Path("/state"),
+        pass_env=("CLAUDE_CODE_SESSION_ID",),
+    )
+    assert "CLAUDE_CODE_SESSION_ID" not in options(coder, settings=passing, environ=environ)["env"]
+
+
+def test_variables_the_sdk_manages_are_left_to_it(coder):
+    # The SDK sets CLAUDE_CODE_ENTRYPOINT=sdk-py under our env, drops CLAUDECODE, and
+    # defaults CLAUDE_CODE_SDK_READS_SESSION_STATE only when it is absent (review I1).
+    environ = {
+        "CLAUDE_CODE_ENTRYPOINT": "claude-vscode",
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_SDK_READS_SESSION_STATE": "1",
+    }
+    env = options(coder, environ=environ)["env"]
+    assert not set(environ) & set(env)

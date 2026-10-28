@@ -26,9 +26,7 @@ PROVIDER_PREFIXES = (
     "OPENAI_",
     "GEMINI_",
     "CLAUDE_CODE_USE_",
-    # internal overrides a parent agent session exports (one treats any base URL as the
-    # vendor's own, so the CLI reaches past TokenLean to the vendor's API)
-    "_CLAUDE_",
+    "_CLAUDE_",  # internal switches: one sends model calls to the vendor's own API
 )
 PROVIDER_NAMES = frozenset({"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS"})
 
