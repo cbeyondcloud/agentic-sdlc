@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from release_support import REPO, git
+from release_support import REPO, git, leaked, plant
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agentic_release import build  # noqa: E402
@@ -124,3 +124,26 @@ def test_git_is_given_no_prompt(monkeypatch, upstream, tmp_path: Path):
         url_map={FAKE_URL: str(repo)},
     )
     assert seen and set(seen) == {"0"}
+
+
+def test_the_build_backend_never_sees_release_secrets(monkeypatch, upstream, tmp_path: Path):
+    """`uv build` runs the dependency's own build backend and build requirements: no index,
+    signing or git credential, and no path to a checkout, may reach it."""
+    plant(monkeypatch)
+    seen = []
+    real = subprocess.run
+
+    def spy(cmd, **kwargs):
+        if cmd[0] == "uv":
+            seen.append(leaked(kwargs.get("env")))
+        return real(cmd, **kwargs)
+
+    monkeypatch.setattr(build.subprocess, "run", spy)
+    repo, pinned = upstream
+    build.build_git_sources(
+        lock(tmp_path, pinned),
+        tmp_path / "out",
+        tmp_path / "work",
+        url_map={FAKE_URL: str(repo)},
+    )
+    assert seen and all(not names for names in seen), seen

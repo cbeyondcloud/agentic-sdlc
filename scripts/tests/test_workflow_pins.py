@@ -2,7 +2,10 @@
 org did not review. Covers the workflows the framework ships to org repos, the release
 template (M3-21), and this repo's own (unused: CI here is local, scripts/check.py)."""
 
+import os
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -64,9 +67,62 @@ def steps(workflow: dict):
 
 def test_release_runs_the_local_release_script(release: dict):
     runs = "\n".join(step.get("run", "") for step in steps(release))
-    assert "uv run python scripts/release.py release" in runs
+    assert 'uv run python scripts/release.py "${args[@]}"' in runs
+    assert "args=(release " in runs
     assert "--tag" in runs  # the tag must be the version
     assert "uv sync --locked" in runs
+
+
+def _bash() -> str | None:
+    """A real bash: on Windows Git Bash (next to git, or the default install), never
+    System32's WSL launcher or the WindowsApps alias."""
+    if sys.platform != "win32":
+        return shutil.which("bash")
+    git = shutil.which("git")
+    candidates = [Path(git).parent.parent / "bin" / "bash.exe"] if git else []
+    candidates.append(Path(r"C:\Program Files\Git\bin\bash.exe"))
+    return next((str(path) for path in candidates if path.is_file()), None)
+
+
+@pytest.mark.parametrize(
+    ("publish", "tag", "expected"),
+    [
+        ("1", "v1.2.3", ["--tag", "v1.2.3"]),  # a tag push publishes
+        ("1", "", []),  # by hand, with publish on
+        ("", "", ["--no-publish"]),  # by hand, with publish off
+    ],
+)
+def test_release_step_runs_a_command_release_py_accepts(
+    release: dict, tmp_path: Path, publish: str, tag: str, expected: list[str]
+):
+    """Run the release step's script as Actions does (bash -eo pipefail), with `uv`
+    replaced by a stand-in that prints its arguments, and parse them as release.py would."""
+    bash = _bash()
+    if bash is None:
+        pytest.skip("no bash on this machine")
+    from release import _parser
+
+    step = next(s for s in steps(release) if "scripts/release.py" in s.get("run", ""))
+    script = tmp_path / "step.sh"
+    stand_in = "uv() { printf '%s\\n' \"$@\"; }\n"
+    script.write_text(stand_in + step["run"], encoding="utf-8", newline="\n")
+    env = dict(os.environ, PUBLISH=publish, TAG=tag, RUNNER_TEMP=tmp_path.as_posix())
+    done = subprocess.run(
+        [bash, "--noprofile", "--norc", "-eo", "pipefail", script.name],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert done.returncode == 0, done.stderr
+    argv = done.stdout.splitlines()
+    assert argv[:3] == ["run", "python", "scripts/release.py"]
+    args = _parser().parse_args(argv[3:])
+    assert args.command == "release"
+    assert args.no_publish is (publish == "")
+    assert args.tag == (tag or None)
+    assert [a for a in argv if a in ("--tag", "--no-publish") or a == tag != ""] == expected
 
 
 def test_release_reads_only_and_keeps_no_checkout_token(release: dict):

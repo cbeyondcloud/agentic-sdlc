@@ -20,6 +20,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from agentic_release.envs import scrubbed_env
+
 #: The template's placeholder model names (cli standalone.PLACEHOLDER).
 PLACEHOLDER = "change-me"
 CONFIG = "version: 1\nclassification: internal\npipelines: [feature-delivery]\n"
@@ -51,33 +53,35 @@ def _bin(venv: Path, name: str) -> Path:
 def clean_env(home: Path) -> dict[str, str]:
     """This process's environment without any agentic or uv project setting, with
     AGENTIC_HOME at `home`."""
-    dropped = ("AGENTIC_", "UV_PROJECT", "VIRTUAL_ENV", "PYTHONPATH", "UV_PUBLISH")
-    env = {k: v for k, v in os.environ.items() if not k.upper().startswith(dropped)}
+    dropped = ("AGENTIC_", "UV_PROJECT")
+    env = {k: v for k, v in scrubbed_env().items() if not k.upper().startswith(dropped)}
     env["AGENTIC_HOME"] = str(home)
     env["AGENTIC_TOKENLEAN_API_KEY"] = SMOKE_KEY
     return env
 
 
 def check_version(agentic: Path, version: str) -> None:
-    done = _run([str(agentic), "--version"])
+    # no PYTHONPATH or VIRTUAL_ENV from the release shell: the wheel runs, not a checkout
+    done = _run([str(agentic), "--version"], env=scrubbed_env())
     shown = done.stdout.strip()
     if done.returncode != 0 or shown != f"agentic {version}":
         raise SmokeError(f"`agentic --version` printed {shown!r}, expected 'agentic {version}'")
 
 
 def install(index_url: str, version: str, venv: Path, deps_from_lock: Path | None) -> Path:
-    """A new venv with agentic-cli==version from the index; returns the agentic command."""
-    _checked(["uv", "venv", str(venv), "--python", sys.executable, "-q"], "uv venv")
+    """A new venv with agentic-cli==version from the index; returns the agentic command.
+    No release secret reaches uv: an install may build an sdist-only dependency."""
+    env = scrubbed_env()
+    _checked(["uv", "venv", str(venv), "--python", sys.executable, "-q"], "uv venv", env=env)
     if deps_from_lock is not None:
-        env = dict(os.environ, UV_PROJECT_ENVIRONMENT=str(venv))
-        env.pop("VIRTUAL_ENV", None)
+        env = scrubbed_env(UV_PROJECT_ENVIRONMENT=str(venv))
         sync = ["uv", "sync", "--frozen", "--offline", "--no-dev", "--package", "agentic-cli"]
         _checked([*sync, "--no-install-workspace", "-q"], "uv sync", cwd=deps_from_lock, env=env)
     # --no-config: no project's or user's uv settings (such as this repo's exclude-newer
     # window, which a just-published release is inside of) change what gets installed
     pip = ["uv", "pip", "install", "--no-config", "--python", str(_bin(venv, "python"))]
     pip += ["--no-cache", "--index-url", index_url, f"agentic-cli=={version}", "-q"]
-    _checked(pip, "uv pip install", cwd=venv.parent)
+    _checked(pip, "uv pip install", cwd=venv.parent, env=scrubbed_env())
     return _bin(venv, "agentic")
 
 

@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from release_support import IDENTITY, allowed, git, make_release_repo, new_key
+from release_support import IDENTITY, allowed, git, leaked, make_release_repo, new_key, plant
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
@@ -72,7 +72,9 @@ def test_version_check_set_and_auto_bump(repo: Path, capsys):
     assert release.main(args) == 0
     major, minor, _ = (int(n) for n in read_version(repo).split("."))
     assert capsys.readouterr().out.strip() == f"{major}.{minor}.0"
-    assert release.main(["--repo", str(repo), "version", "--check"]) == 0
+    # --no-lock left uv.lock at the old version: the check refuses until `uv lock` runs
+    assert release.main(["--repo", str(repo), "version", "--check"]) == 1
+    assert "uv.lock: agentic-core" in capsys.readouterr().err
     git(repo, "checkout", "-q", "--", ".")
 
 
@@ -87,3 +89,28 @@ def test_publish_needs_a_url(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.delenv("AGENTIC_RELEASE_INDEX_URL", raising=False)
     assert release.main(["publish", "--dir", str(tmp_path)]) == 1
     assert "AGENTIC_RELEASE_INDEX_URL" in capsys.readouterr().err
+
+
+def test_version_set_locks_without_release_secrets(tmp_path: Path, monkeypatch, capsys):
+    """`uv lock` builds a git-sourced dependency to read its metadata (its backend is
+    not our code): no credential and no checkout path may reach it."""
+    import shutil
+    import subprocess
+
+    from agentic_release.version import MEMBERS, bump
+
+    shutil.copy2(SCRIPTS.parent / "pyproject.toml", tmp_path / "pyproject.toml")
+    for member in MEMBERS:
+        (tmp_path / member).mkdir()
+        shutil.copy2(SCRIPTS.parent / member / "pyproject.toml", tmp_path / member)
+    plant(monkeypatch)
+    seen = []
+
+    def fake(cmd, **kwargs):
+        seen.append((cmd, leaked(kwargs.get("env"))))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(release.subprocess, "run", fake)
+    new = bump(read_version(tmp_path), "patch")
+    assert release.main(["--repo", str(tmp_path), "version", "--set", new]) == 0
+    assert seen == [(["uv", "lock"], set())]

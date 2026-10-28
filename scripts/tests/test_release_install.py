@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from local_index import LocalIndex
-from release_support import IDENTITY, allowed, make_release_repo, new_key
+from release_support import IDENTITY, allowed, leaked, make_release_repo, new_key, plant
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agentic_release import build, publish, signing, smoke  # noqa: E402
@@ -60,3 +60,24 @@ def test_smoke_refuses_a_version_mismatch(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(smoke, "_run", fake)
     with pytest.raises(smoke.SmokeError, match="9.9.9"):
         smoke.check_version(tmp_path / "agentic", "1.0.0")
+
+
+def test_smoke_install_never_hands_on_release_secrets(tmp_path: Path, monkeypatch):
+    """`uv pip install` may build an sdist-only dependency (its backend is index code), and
+    the installed CLI must run as installed: no credential and no checkout path reach
+    either."""
+    import subprocess
+
+    plant(monkeypatch)
+    seen = {}
+
+    def fake(cmd, **kwargs):
+        seen[" ".join(str(part) for part in cmd[:3])] = leaked(kwargs.get("env"))
+        return subprocess.CompletedProcess(cmd, 0, "agentic 1.0.0\n", "")
+
+    monkeypatch.setattr(smoke, "_run", fake)
+    index_url = "https://idx.example.invalid/simple/"
+    agentic = smoke.install(index_url, "1.0.0", tmp_path / "v", tmp_path)
+    smoke.check_version(agentic, "1.0.0")
+    assert len(seen) == 4, seen  # uv venv, uv sync, uv pip install, agentic --version
+    assert {cmd: names for cmd, names in seen.items() if names} == {}

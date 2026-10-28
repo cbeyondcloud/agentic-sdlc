@@ -19,6 +19,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from agentic_release.envs import scrubbed_env
 from agentic_release.version import MEMBERS, check_versions
 
 #: The repo files every wheel carries as its licence files.
@@ -111,7 +112,7 @@ def build_packages(repo: Path, out: Path, *, allow_dirty: bool = False) -> list[
         )
     if out.exists() and any(out.iterdir()):
         raise BuildError(f"{out} is not empty: give an empty or new folder")
-    env = dict(os.environ, SOURCE_DATE_EPOCH=str(commit_epoch(repo)))
+    env = scrubbed_env(SOURCE_DATE_EPOCH=str(commit_epoch(repo)))
     with tempfile.TemporaryDirectory(prefix="agentic-release-") as scratch:
         built = Path(scratch) / "dist"
         for member in MEMBERS:
@@ -171,7 +172,8 @@ def build_git_sources(
                 f"says {source.version}: run `uv lock` and commit it"
             )
         target = workdir / f"{source.name}-dist"
-        _uv_build(checkout, target, dict(os.environ))
+        # the dependency's own build backend runs here: no release secret reaches it
+        _uv_build(checkout, target, scrubbed_env())
         out.mkdir(parents=True, exist_ok=True)
         for path in sorted(target.iterdir()):
             shutil.copyfile(path, out / path.name)
@@ -189,7 +191,8 @@ def _run_git(args: list[str], cwd: Path, env: dict[str, str], what: str) -> None
 
 
 def _uv_build(source: Path, out: Path, env: dict[str, str]) -> None:
-    """`uv build` of one staged project: the sdist, then the wheel built from it."""
+    """`uv build` of one staged project: the sdist, then the wheel built from it. `env`
+    comes from `scrubbed_env`: the build backend is index code."""
     cmd = ["uv", "build", str(source), "--out-dir", str(out), "--no-create-gitignore", "-q"]
     done = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8")
     if done.returncode != 0:

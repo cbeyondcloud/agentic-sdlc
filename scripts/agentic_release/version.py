@@ -4,7 +4,8 @@ The root `pyproject.toml` `[project].version` is the source. `uv_build` reads on
 versions, so `set_version` writes the new version into every member and moves every
 internal pin with it, and `check_versions` (run before each build) fails on any drift:
 
-* each member's `version` equals the source;
+* each member's `version` equals the source, and so does each workspace package's
+  version in `uv.lock` (the SBOM is exported from the lock);
 * each internal requirement (`agentic-core`, `sdlc-commons`, ...) is pinned `==<source>`,
   so a published CLI can never resolve another release's core from the index;
 * each git-sourced requirement (Zyroflo's `sdlc-harness`) is pinned exactly, and to the
@@ -74,6 +75,15 @@ def check_versions(root: Path) -> list[str]:
     except VersionError as error:
         problems.append(f"pyproject.toml: {error}")
     locked = _locked_versions(root)
+    # the SBOM is exported from uv.lock as it stands: a lock still at the last release
+    # would sign an SBOM that names it
+    workspace = [root / "pyproject.toml", *(root / m / "pyproject.toml" for m in MEMBERS)]
+    for path in workspace if locked else []:
+        name = str(_project(path)["project"]["name"])
+        if name in locked and locked[name] != current:
+            problems.append(
+                f"uv.lock: {name} {locked[name]} (the release is {current}): run uv lock"
+            )
     for member in MEMBERS:
         rel = f"{member}/pyproject.toml"
         data = _project(root / member / "pyproject.toml")

@@ -33,6 +33,7 @@ from pathlib import Path
 
 from agentic_release import build, changelog, publish, sbom, signing, smoke
 from agentic_release import version as versions
+from agentic_release.envs import scrubbed_env
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ENV = {
@@ -82,7 +83,10 @@ def cmd_version(args: argparse.Namespace, repo: Path) -> None:
     if new:
         versions.set_version(repo, new)
         if not args.no_lock:
-            done = subprocess.run(["uv", "lock"], cwd=repo, capture_output=True, text=True)
+            # uv lock builds a git-sourced dependency to read it: its backend gets no secret
+            done = subprocess.run(
+                ["uv", "lock"], cwd=repo, env=scrubbed_env(), capture_output=True, text=True
+            )
             if done.returncode != 0:
                 raise ReleaseError(f"uv lock failed: {done.stderr.strip()}")
     print(versions.read_version(repo))

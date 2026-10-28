@@ -77,6 +77,32 @@ def allowed(public: str, identity: str = IDENTITY, options: str = "") -> str:
     return f"# release signers\n{identity} {options + ' ' if options else ''}{public} ci\n"
 
 
+#: Settings a release shell holds that no build backend, installer or installed CLI may
+#: see: index, signing and git credentials, and paths that would load a checkout.
+PLANTED = (
+    "UV_PUBLISH_PASSWORD",
+    "UV_PUBLISH_TOKEN",
+    "AGENTIC_RELEASE_SIGNING_KEY",
+    "AGENTIC_RELEASE_SIGNING_KEY_PASSWORD",
+    "GIT_TOKEN",
+    "GH_TOKEN",
+    "PYTHONPATH",
+    "VIRTUAL_ENV",
+)
+
+
+def plant(monkeypatch) -> None:
+    """Set every PLANTED variable, as a release shell or CI step would."""
+    for name in PLANTED:
+        monkeypatch.setenv(name, "planted-by-the-test")
+
+
+def leaked(env: dict[str, str] | None) -> set[str]:
+    """The PLANTED variables a subprocess was given (None means all of os.environ)."""
+    assert env is not None, "the subprocess inherits the whole environment"
+    return {name.upper() for name in env} & set(PLANTED)
+
+
 def _copy(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     if source.is_dir():

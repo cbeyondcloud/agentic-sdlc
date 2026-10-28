@@ -8,7 +8,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from release_support import git, make_release_repo
+from release_support import git, leaked, make_release_repo, plant
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agentic_release import build  # noqa: E402
@@ -121,3 +121,22 @@ def test_version_drift_refused(repo: Path, tmp_path: Path):
             build.build_packages(repo, tmp_path / "refused")
     finally:
         git(repo, "revert", "--no-edit", "HEAD")
+
+
+def test_uv_build_never_sees_release_secrets(repo: Path, tmp_path: Path, monkeypatch):
+    """The build backend and its build requirements are code from the index: no index,
+    signing or git credential, and no path to a checkout, may reach them."""
+    plant(monkeypatch)
+    seen = []
+    real = build.subprocess.run
+
+    def spy(cmd, **kwargs):
+        if cmd[0] != "uv":
+            return real(cmd, **kwargs)
+        seen.append(leaked(kwargs.get("env")))
+        Path(cmd[cmd.index("--out-dir") + 1]).mkdir(parents=True, exist_ok=True)
+        return build.subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(build.subprocess, "run", spy)
+    build.build_packages(repo, tmp_path / "out")
+    assert len(seen) == 4 and all(not names for names in seen), seen

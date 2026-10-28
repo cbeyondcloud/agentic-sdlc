@@ -54,6 +54,20 @@ def test_check_reports_every_drift(workspace: Path):
     assert "commons/pyproject.toml: sdlc-harness" in problems
 
 
+def test_check_reports_a_lock_left_at_the_old_version(workspace: Path):
+    """The SBOM is exported from uv.lock (--frozen): a bump without `uv lock` would sign an
+    SBOM naming the previous release, so the check refuses it."""
+    shutil.copy2(REPO / "uv.lock", workspace / "uv.lock")
+    current = v.read_version(workspace)
+    assert v.check_versions(workspace) == []
+    new = v.bump(current, "minor")
+    v.set_version(workspace, new)
+    problems = v.check_versions(workspace)
+    assert f"uv.lock: agentic-core {current} (the release is {new}): run uv lock" in problems
+    # the four members and the workspace root
+    assert len([p for p in problems if p.startswith("uv.lock: ")]) == len(v.MEMBERS) + 1
+
+
 def test_set_moves_every_version_and_pin(workspace: Path):
     changed = v.set_version(workspace, "0.2.0")
     assert len(changed) == 5
