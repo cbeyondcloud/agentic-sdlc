@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from tools.sdlc import events
+from zyroflo.sdlc import events
 
 from sdlc_commons import ledger as ledger_module
 from sdlc_commons.ledger import AgentIdentity, LedgerError, RunIdentity, RunLedger

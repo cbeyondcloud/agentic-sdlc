@@ -353,7 +353,7 @@ def test_a_push_anywhere_else_is_refused(guard, remote, branch):
 
 
 def test_building_a_guard_does_not_change_zyroflo_defaults(repo: Path):
-    from tools.sdlc import policy
+    from zyroflo.sdlc import policy
 
     before = list(policy.DEFAULTS["deny_commands"]), list(policy.DEFAULTS["protected_paths"])
     Guard(repo, RUN, deny_shell=("curl",), deny_paths=("x/**",)).command("ls")

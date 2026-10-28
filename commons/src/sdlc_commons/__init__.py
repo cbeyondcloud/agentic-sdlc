@@ -5,7 +5,7 @@ Importing this package points Zyroflo at the framework's run-folder root
 adapter - and every Zyroflo command this process starts - uses the same runs.
 """
 
-from tools.sdlc import state as _zyroflo_state
+from zyroflo.sdlc import state as _zyroflo_state
 
 from sdlc_commons.lifecycle import RUNS_ROOT
 

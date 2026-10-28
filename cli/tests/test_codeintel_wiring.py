@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from cli_helpers import skip_unless_graph_required
 
 from agentic.codeintel import Candidates, CodeIntelError, Combined
 from agentic_cli import codeintel
@@ -20,7 +21,7 @@ def estate(tmp_path_factory) -> Path:
     """Zyroflo's pantry estate with its domain graph built into the estate's
     `.agentic/local/graph` (the default folder): the repo is the whole estate."""
     if not domain_graph.installer_available():
-        pytest.skip("no Zyroflo installer to build the graph with (Zyroflo PR Z7)")
+        skip_unless_graph_required("no Zyroflo installer to build the graph with (Zyroflo PR Z7)")
     root = tmp_path_factory.mktemp("cli-estate") / "pantry"
     shutil.copytree(domain_graph.fixture_estate("pantry"), root)
     domain_graph.build_graph(root / "workspace.toml", root / ".agentic" / "local" / "graph")
@@ -198,3 +199,11 @@ def test_a_commons_error_becomes_a_codeintel_error():
         intel.tests_for("m.py")
     with pytest.raises(CodeIntelError, match="no graph"):
         intel.overview()
+
+
+def test_missing_installer_fails_where_ci_requires_the_graph():
+    """As commons/tests/graph_ci.py: under scripts/check.py the estate tests run (DF-463)."""
+    with pytest.raises(pytest.fail.Exception, match="no installer"):
+        skip_unless_graph_required("no installer", environ={"AGENTIC_REQUIRE_ZYROFLO_GRAPH": "1"})
+    with pytest.raises(pytest.skip.Exception, match="no installer"):
+        skip_unless_graph_required("no installer", environ={})
