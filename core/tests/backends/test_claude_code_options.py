@@ -172,3 +172,36 @@ def test_provider_switches_and_credentials_are_blanked(coder):  # review I1
     assert env["ANTHROPIC_AUTH_TOKEN"] == env["GITHUB_TOKEN"] == ""
     assert "PATH" not in env and "CLAUDE_CODE_GIT_BASH_PATH" not in env  # kept as the user has them
     assert env["ANTHROPIC_API_KEY"] == "tl-key"  # ours, never blanked
+
+
+def test_claude_code_internal_switches_never_pass(coder):
+    # A parent Claude Code session sets this; inherited, it sent calls to the vendor's API.
+    environ = {"_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL": "1"}
+    passing = ClaudeCodeSettings(
+        gateway_url="https://tokenlean.acme.internal",
+        api_key="tl-key",
+        config_root=Path("/state"),
+        pass_env=("_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",),
+    )
+    env = options(coder, settings=passing, environ=environ)["env"]
+    assert env["_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"] == ""
+
+
+def test_a_parent_claude_code_session_is_not_inherited(coder):
+    environ = {
+        "CLAUDECODE": "1",
+        "CLAUDE_CODE_SESSION_ID": "s-1",
+        "CLAUDE_CODE_MESSAGING_SOCKET": "/tmp/session.sock",
+        "CLAUDE_CODE_GIT_BASH_PATH": "C:/Git/bin/bash.exe",
+    }
+    env = options(coder, environ=environ)["env"]
+    assert env["CLAUDECODE"] == env["CLAUDE_CODE_SESSION_ID"] == ""
+    assert env["CLAUDE_CODE_MESSAGING_SOCKET"] == ""
+    assert "CLAUDE_CODE_GIT_BASH_PATH" not in env  # Windows needs it to find bash
+    passing = ClaudeCodeSettings(
+        gateway_url="https://tokenlean.acme.internal",
+        api_key="tl-key",
+        config_root=Path("/state"),
+        pass_env=("CLAUDE_CODE_SESSION_ID",),
+    )
+    assert "CLAUDE_CODE_SESSION_ID" not in options(coder, settings=passing, environ=environ)["env"]

@@ -26,6 +26,7 @@ PROVIDER_PREFIXES = (
     "OPENAI_",
     "GEMINI_",
     "CLAUDE_CODE_USE_",
+    "_CLAUDE_",  # internal switches: one sends model calls to the vendor's own API
 )
 PROVIDER_NAMES = frozenset({"CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS"})
 
