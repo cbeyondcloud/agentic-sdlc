@@ -47,7 +47,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:daac67961a4fe6a5a3993a4ac8c0da3e287938a6b6c8e210f2d4e55194e94354",
+   "request_sha": "sha256:e4476d6bee5fdb35b13612d535462c0a01e66d0cff7a96765bb96306a5bf29e0",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -58,7 +58,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:bec08c46a7c8dd252c42716a42d8c3ccda280e5e8b4c0a099e24cf8ab0763739",
+   "request_sha": "sha256:7dabf2ae06e9343801596f7e30b7c5dbb8e54ae9832d0b3210fd828060d4e8c4",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -69,7 +69,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:b9decfe5d0549a471e6bf7d4e693ec247189e9c9de6706879f5a728a242af8f5",
+   "request_sha": "sha256:0c809169ad44f4761849579384a8f3ac001ba1c5ef5d2d716c868c0e9fb782ce",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -80,7 +80,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:e22b0aa8a7da4c081eef4d489db7b65e088bf153a145a3104c987194034e4d89",
+   "request_sha": "sha256:423931c5d492362a1a3323a1ce51ae8b0f794b41f80f4c1f772f215fdc834eb6",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -91,7 +91,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:2bac33f81e18e05409fde1d305a1d360d9f6542061c5fca699b15e0ceabb7ea5",
+   "request_sha": "sha256:ab31dac2e738928b683851954727ab132e484f6084be35446ad5bc7d1cc14a77",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -102,7 +102,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:69b81e25ecbd2ce379d9c9f8a04662f0f26939654ab9f5b327d4274e7fd8444c",
+   "request_sha": "sha256:0de170d41c1f56fca981d346a34b756f5035c77c01154dc44cf0a14d41c73158",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -113,7 +113,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:5cf06bc7b26c3dcf1c1cafed1816aaec41a521024baa031039fe64ec6b171bf8",
+   "request_sha": "sha256:376c0e1e120379fa55abf8705126063a103cf63181cb72d3044e2f0d38206c1b",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -124,7 +124,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:b28d82f3619b926a84304ad8d4c91f56267fda7bea3f677a248b47537c3a1433",
+   "request_sha": "sha256:6fb1a76816740b21600c0499bf3e466c608c89427b28ff34561934dab26bdc19",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -135,7 +135,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:d53ea8769de77165fac256bdc2b93e530e13907aff790f3f71c4110e0473810d",
+   "request_sha": "sha256:7239be8776c558d96d8d3b0d7939bc4733480c930c98c12a31ef54a95b4358de",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -146,7 +146,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:5f9dff3555051dd5b57501ba9e167e25c9e81e680345d4cf0d5bca94117ea500",
+   "request_sha": "sha256:f1e8c471bea6b48cb90cde2fa1aafb66be5cc1f89b331f3d66d670e299a9a8b1",
    "status": 200,
    "content_type": "application/json",
    "headers": {
