@@ -352,6 +352,30 @@ def test_a_paused_run_on_the_current_policy_continues(
     assert [r["agent"] for r in gateway.requests] == ["ba", "architect"]
 
 
+def test_a_git_policy_org_refuses_a_resume_once_its_policy_moved_on(
+    gateway, cli, workspace, tmp_path, monkeypatch
+):
+    """DF-697: a git-policy org (no control plane) refreshes its policy cache every 24 h;
+    a run paused before the refresh does not carry on under the new tiers with the old
+    version on its record."""
+    _org_config(tmp_path, url=None)
+    git(workspace, "remote", "add", "origin", "https://github.com/acme/app.git")
+    cache = tmp_path / "home" / "policy" / "acme"
+    shutil.copytree(workspace.parent / "org-policy", cache / "repo")
+    stamp = {"source": "https://github.com/acme/policy.git", "version": "unused"}
+    (cache / "fetched.json").write_text(json.dumps(stamp), encoding="utf-8")
+    monkeypatch.delenv("AGENTIC_POLICY_REPO")
+    started = start(cli)
+    assert started.code == ExitCode.PAUSED, started.err
+    run_id, before = started.json()["run_id"], started.json()["policy_version"]
+    changed = sorted((cache / "repo" / "policy").glob("*.yaml"))[0]
+    changed.write_text(changed.read_text(encoding="utf-8") + "# refreshed\n", "utf-8")
+    refused = cli("approve", run_id)
+    assert refused.code == ExitCode.REFUSED, refused.err
+    assert before in refused.err and f"agentic stop {run_id}" in refused.err
+    assert [r["agent"] for r in gateway.requests] == ["ba"]
+
+
 def test_signed_out_resume_stays_held_unconfirmed(org, gateway, cli, monkeypatch):
     """DF-518 (Review Focus 4): signed out of a configured control plane the switch state
     can never be confirmed (`Unconfirmable`), so a held run stays held - never continues -
