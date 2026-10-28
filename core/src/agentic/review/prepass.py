@@ -1,7 +1,7 @@
 """The deterministic review pre-pass: what machines find in a change before an agent reviews
 it (M2-48, spec §15).
 
-Results are documents in Zyroflo's pre-pass shape (`tools.review.prepass`): `tools[]` - one
+Results are documents in Zyroflo's pre-pass shape (`zyroflo.review.prepass`): `tools[]` - one
 row per check with `status`, `detail` and `findings` - and `sources[]` of rdjson-style
 diagnostics. The external scanners (gitleaks, ast-grep, osv-scanner) run in commons
 (`sdlc_commons.review_prepass`), through Zyroflo; the checks here are pure Python, so they

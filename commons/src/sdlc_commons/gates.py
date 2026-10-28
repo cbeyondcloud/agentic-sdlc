@@ -16,7 +16,7 @@ Zyroflo is used unchanged; only this package imports it.
 
 from typing import Literal
 
-from tools.sdlc import approve, policy
+from zyroflo.sdlc import approve, policy
 
 from sdlc_commons.ledger import LedgerError, RunLedger
 

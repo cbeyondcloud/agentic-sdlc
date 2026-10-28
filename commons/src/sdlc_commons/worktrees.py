@@ -1,7 +1,7 @@
 """Worktree adapter over Zyroflo's run trees (M1-09; D34: reuse, never rewrite).
 
 A run never works in the developer's checkout: it gets its own branch and
-linked git worktree per component (`tools.sdlc.worktree`). Zyroflo does the
+linked git worktree per component (`zyroflo.sdlc.worktree`). Zyroflo does the
 work and keeps the guarantees; this module gives the framework a small,
 typed surface over it:
 
@@ -28,8 +28,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.sdlc import policy, state
-from tools.sdlc import worktree as zyroflo
+from zyroflo.sdlc import policy, state
+from zyroflo.sdlc import worktree as zyroflo
 
 from sdlc_commons.ledger import run_id_refusal
 

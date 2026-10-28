@@ -1,4 +1,4 @@
-"""Review pre-pass scanners over Zyroflo's `tools.review` (M2-48; D34: reuse, never rewrite).
+"""Review pre-pass scanners over Zyroflo's `zyroflo.review` (M2-48; D34: reuse, never rewrite).
 
 Zyroflo's `prepass.prepass` runs gitleaks (the secret gate, matched text redacted) and
 ast-grep (its rule set plus the repository's `.agentic/review-rules/`) over a change's
@@ -106,7 +106,7 @@ def _zyroflo(locate: Locate, *, offline: bool) -> Iterator[tuple[object, object]
     """Zyroflo's prepass and sca modules, with our binaries, trusted scanner configuration
     and (offline) osv-scanner flags for the length of the block; all are put back whatever
     happens."""
-    from tools.review import prepass, sca
+    from zyroflo.review import prepass, sca
 
     with _SHIM, tempfile.TemporaryDirectory(prefix="agentic-scanner-config-") as folder:
         gitleaks_config = Path(folder) / "gitleaks.toml"

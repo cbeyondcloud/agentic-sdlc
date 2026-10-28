@@ -1,6 +1,6 @@
 """Run-ledger adapter over Zyroflo's hash-chained ledger (D34: reuse, never rewrite).
 
-Every ledger operation is a call into Zyroflo (`tools.sdlc.events`, `.approve`,
+Every ledger operation is a call into Zyroflo (`zyroflo.sdlc.events`, `.approve`,
 `.state`): the event format, the hash chain and tamper detection are Zyroflo's.
 This module only adds what the framework needs around it:
 
@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tools.sdlc import approve, events, state
+from zyroflo.sdlc import approve, events, state
 
 #: Our namespace in Zyroflo's `ext` block.
 NAMESPACE = "agentic"

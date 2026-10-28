@@ -1,6 +1,6 @@
 """Runner evidence tiers over Zyroflo's provider smoke (M2-41; D34: reuse, never rewrite).
 
-Zyroflo's `RUNNER_CONTRACT.md` and `tools.provider_smoke` record, with every conformance
+Zyroflo's `RUNNER_CONTRACT.md` and `zyroflo.provider_smoke` record, with every conformance
 verdict, what kind of runner produced it - because a green from a fixed command sequence
 and a green from a live agent are different claims:
 
@@ -16,7 +16,7 @@ complete (owner decision 73). The tier vocabulary and its order are Zyroflo's; t
 module only puts them behind the framework's names.
 """
 
-from tools import provider_smoke
+from zyroflo import provider_smoke
 
 #: Zyroflo's runner tiers, weakest first.
 RUNNER_TIERS: tuple[str, ...] = tuple(provider_smoke.RUNNER_TIERS)

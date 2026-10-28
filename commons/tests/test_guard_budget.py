@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from test_guards import RUN, make_repo, walls
-from tools.sdlc import policy as zyroflo
+from zyroflo.sdlc import policy as zyroflo
 
 from sdlc_commons.guards import Guard, GuardError
 

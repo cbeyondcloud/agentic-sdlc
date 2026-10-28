@@ -196,7 +196,7 @@ def test_this_machine_has_a_known_platform():
 
 
 def test_the_platform_keys_are_zyroflo_s():
-    from tools import third_party
+    from zyroflo import third_party
 
     assert PLATFORMS == tuple(third_party.PLATFORMS)
 
