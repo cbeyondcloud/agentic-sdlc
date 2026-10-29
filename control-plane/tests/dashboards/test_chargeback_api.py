@@ -110,6 +110,29 @@ async def test_every_export_is_audited(cost_api):
     assert last.after["month"] == OCT and last.after["format"] == "csv"
 
 
+async def test_a_slow_report_stops_with_a_clear_problem(cost_api, monkeypatch):
+    """Review F1: the report's queries stop after `report_timeout_seconds` with 503
+    `cost.report_timeout`, so a slow gateway read never holds a shared connection for long.
+    Nothing was exported, so nothing is audited."""
+    from agentic_cp.cost import api as cost_routes
+
+    async def slow(conn, month, team):
+        await conn.execute(text("select pg_sleep(5)"))
+        raise AssertionError("the statement timeout did not stop the query")
+
+    monkeypatch.setattr(cost_routes, "read_chargeback", slow)
+    api = cost_api.with_settings(report_timeout_seconds=1)
+    async with tenant_tx(api.db.owner, api.a.id) as conn:
+        before = len(await read_records(conn))
+    reply = await api.get(f"/v1/cost/chargeback?month={OCT}", api.a.admin_token)
+    assert reply.status_code == 503, reply.text
+    problem = reply.json()
+    assert problem["code"] == "cost.report_timeout"
+    assert "1 s" in problem["detail"] and problem["hint"]
+    async with tenant_tx(api.db.owner, api.a.id) as conn:
+        assert len(await read_records(conn)) == before
+
+
 @pytest.mark.parametrize(
     "query", ["month=2026-13", "month=oct", "format=xml", "team=Not%20A%20Team"]
 )

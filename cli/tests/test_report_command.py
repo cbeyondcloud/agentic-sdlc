@@ -9,6 +9,7 @@ import io
 import json
 from decimal import Decimal
 
+import httpx2
 import pytest
 from cp_fakes import CP_URL, TOKEN, FakeControlPlane
 
@@ -80,6 +81,28 @@ def test_chargeback_writes_the_csv_and_reports_totals(plane, capsys, tmp_path):
     [sent] = [r for r in plane.requests if r.url.path == "/v1/cost/chargeback"]
     assert dict(sent.url.params) == {"month": "2026-09"}
     assert not list(tmp_path.glob("*.part"))
+
+
+def test_chargeback_waits_as_long_as_an_export(plane, capsys):
+    """Review F1: the report reads the gateway's whole month, so it gets the export wait."""
+    code, data = run(capsys, "chargeback", "--month", "2026-09")
+    assert code == ExitCode.OK, data
+    [sent] = [r for r in plane.requests if r.url.path == "/v1/cost/chargeback"]
+    assert sent.extensions["timeout"]["read"] == control_plane.EXPORT_TIMEOUT.read
+
+
+def test_a_slow_control_plane_is_not_reported_as_unreachable(plane, capsys, monkeypatch):
+    """Review F1: a read timeout means the control plane is busy, not that the network or
+    VPN is down."""
+
+    def slow(request):
+        raise httpx2.ReadTimeout("timed out")
+
+    monkeypatch.setattr(control_plane, "make_transport", lambda: httpx2.MockTransport(slow))
+    code = main(["report", "chargeback", "--month", "2026-09"])
+    err = capsys.readouterr().err
+    assert code == ExitCode.ERROR
+    assert "did not answer within" in err and "VPN" not in err, err
 
 
 def test_one_team_to_a_named_file(plane, capsys, tmp_path):

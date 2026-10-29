@@ -139,7 +139,9 @@ export is audited (`cost.chargeback_exported`). The numbers come from `dash_char
 the view the Executive ROI dashboard reads, so the file and the dashboard agree. A
 registered run's cost belongs to its team and to the month it opened; a call that cannot
 be attributed to a run belongs to its own month and authenticated team. Empty cells are
-unmeasured, never 0.
+unmeasured, never 0. The report reads the gateway's usage through the shared connection
+pool, so its queries stop after `AGENTIC_CP_REPORT_TIMEOUT_SECONDS` (30) with a 503
+`cost.report_timeout`; the CLI waits up to 120 s.
 
 ### Gateway routing (M2-09)
 
