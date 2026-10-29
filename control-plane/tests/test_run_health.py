@@ -77,6 +77,12 @@ class Run:
         ledger_module._IDENTITIES.pop(self.run_id, None)
 
 
+@pytest.fixture(autouse=True)
+def fresh_identities(monkeypatch):
+    """Run identities are process-wide: another module's `r-1` must not leak in."""
+    monkeypatch.setattr(ledger_module, "_IDENTITIES", {})
+
+
 @pytest.fixture
 def made_runs():
     made = []
