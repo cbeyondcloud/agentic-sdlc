@@ -1,0 +1,11 @@
+<!doctype html>
+<html><body style="font-family: sans-serif; line-height: 1.4">
+<p>Run <b>$run_id</b> in team $team ($tenant_name) has sent no heartbeat for $minutes
+minutes, so the control plane marked it <b>stale</b> and released its concurrency slot.</p>
+<p>If its computer slept or lost the network, nothing is lost: the run is marked running
+again when its CLI is back.</p>
+<p>If the run's process stopped (closed terminal, crash, reboot), continue it or end it
+from the repository it ran in:</p>
+<pre style="background: #f4f4f4; padding: 8px">agentic resume $run_id
+agentic stop $run_id --reason "..."</pre>
+</body></html>

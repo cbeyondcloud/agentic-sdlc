@@ -221,6 +221,26 @@ def _looser_auto_trip(team: str, own: TeamAutoTrip | None, org: AutoTripPolicy) 
     return problems
 
 
+class RunHealthPolicy(_Strict):
+    """Run health (M3-07, `org.yaml: run_health`): a CLI driving a run sends a heartbeat
+    every `heartbeat_seconds`; the control plane marks an open run that sent neither a
+    heartbeat nor an event for `stale_minutes` stale, which frees its concurrency slot. A
+    run waiting for a person or a pause switch is never stale. The window spans at least
+    three beats, so one lost beat never makes a zombie."""
+
+    heartbeat_seconds: int = Field(default=60, ge=15, le=600)
+    stale_minutes: int = Field(default=30, ge=5, le=1440)
+
+    @model_validator(mode="after")
+    def three_beats(self) -> "RunHealthPolicy":
+        if self.stale_minutes * 60 < 3 * self.heartbeat_seconds:
+            raise ValueError(
+                f"stale_minutes ({self.stale_minutes}) must span at least three beats of "
+                f"heartbeat_seconds ({self.heartbeat_seconds})"
+            )
+        return self
+
+
 class TeamLearning(_Strict):
     """A team's learning-loop thresholds (M3-13): it may only tighten the org's - more
     similar corrections before a proposal, a shorter window."""
@@ -726,6 +746,7 @@ class OrgPolicy(_Strict):
     eval: EvalPolicy = EvalPolicy()  # M1-63
     auto_trip: AutoTripPolicy = AutoTripPolicy()  # M2-11
     learning: LearningPolicy = LearningPolicy()  # M3-13
+    run_health: RunHealthPolicy = RunHealthPolicy()  # M3-07
     # what to do when a backend cannot honour a resolved setting (M1-27, spec §9.1)
     # (`secret_scan`: the backend calls the model itself, past the framework's scanner;
     # `shell_default_deny`: its shell runs unlisted commands, and its prefix rules miss

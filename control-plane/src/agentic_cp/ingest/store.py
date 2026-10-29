@@ -27,6 +27,7 @@ from agentic_cp.alerts.gates import gate_waiting
 from agentic_cp.audit import AuditEvent, append
 from agentic_cp.auth.tokens import TokenContext
 from agentic_cp.errors import ApiProblem
+from agentic_cp.ingest.health import waits
 from agentic_cp.rbac.authz import EnforcerCache, Team, require
 from agentic_cp.tables import policy_versions, run_events, runs
 from agentic_cp.tenancy.context import require_tenant_id
@@ -243,8 +244,10 @@ async def ingest_batch(
     if added:
         values["spent_usd"] = spent_before + added
     closing = [entry for entry in rest if entry["event"] == "run_closed"]
-    if closing:
+    if closing:  # a stale run too: a run that died is closed by `agentic stop` (M3-07)
         values["status"] = str(closing[-1].get("status") or "closed")[:32]
+    if waits(rest):  # never cleared here: a late batch must not make it look dead (M3-07)
+        values["waiting"] = True
     if new_run:
         values["policy_known"] = await _policy_known(conn, row.policy_version)
     elif not row.policy_known:  # accepted since the run opened (DF-488): no longer flagged

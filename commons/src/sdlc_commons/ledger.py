@@ -32,15 +32,13 @@ from zyroflo.sdlc import approve, events, state
 NAMESPACE = "agentic"
 _SLUG = r"[a-z][a-z0-9-]{0,63}"
 _AGENT = _SLUG + r"@[0-9A-Za-z][0-9A-Za-z.+-]{0,31}"
+_POLICY_VERSION = r"git:[0-9a-f]{40}(?:[0-9a-f]{24})?|sha256:[0-9a-f]{64}"
 #: The ids the framework adds to events. Every field has its own pattern, so only
 #: an id of that shape can be recorded - never a note, a prompt or an email.
 FIELDS = {
     "team": {"type": "string", "pattern": _SLUG},
     # a git commit (SHA-1, or SHA-256's 64 hex: DF-307) or a content hash
-    "policy_version": {
-        "type": "string",
-        "pattern": r"git:[0-9a-f]{40}(?:[0-9a-f]{24})?|sha256:[0-9a-f]{64}",
-    },
+    "policy_version": {"type": "string", "pattern": _POLICY_VERSION},
     "agent": {"type": "string", "pattern": _AGENT},
     "parent": {"type": "string", "pattern": _AGENT},
     "tier": {"type": "string", "pattern": _SLUG},
@@ -48,6 +46,11 @@ FIELDS = {
     # the role a gate waits for (`gate_waiting`), so the org's control plane can mail its
     # holders (review F5); Zyroflo's own gate_waiting fields are gate and hard only
     "approver_role": {"type": "string", "pattern": _SLUG},
+    # a standalone or --policy run resumed after its owner edited the policy: the first
+    # event after the resume names the version in force before and after (DF-697, owner
+    # decision 105); `policy_version` stays the version the run started on
+    "policy_from": {"type": "string", "pattern": _POLICY_VERSION},
+    "policy_to": {"type": "string", "pattern": _POLICY_VERSION},
 }
 
 

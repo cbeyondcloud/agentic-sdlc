@@ -73,6 +73,8 @@ class FakeControlPlane:
     export_cut: bool = False  # the export stream stops before its proof line (M2-13)
     corrections: list[dict] = field(default_factory=list)  # attribution corrections (M3-12)
     proposals: list[dict] = field(default_factory=list)  # GET /v1/learning/proposals (M3-13)
+    heartbeats: list[dict] = field(default_factory=list)  # run id + body of each beat (M3-07)
+    refuse_heartbeats: bool = False  # answer every beat 503
 
     def add_audit(self, count: int, *, team_of=lambda seq: "payments") -> list[dict]:
         """`count` chained audit records appended to the tenant's chain."""
@@ -487,6 +489,11 @@ class FakeControlPlane:
             return httpx2.Response(200, json=self._feedback_info(path.split("/")[4], body))
         if path == "/v1/learning/proposals":
             return httpx2.Response(200, json=self.proposals)
+        if path.startswith("/v1/runs/") and path.endswith("/heartbeat"):  # M3-07
+            self.heartbeats.append({"run_id": path.split("/")[3], **json.loads(request.content)})
+            if self.refuse_heartbeats:
+                return _problem(503, "unavailable", "the control plane is overloaded")
+            return httpx2.Response(200, json={"status": "open", "counted": True, "revived": False})
         if path.startswith("/v1/runs/") and path.endswith("/events"):
             if self.max_body is not None and len(request.content) > self.max_body:
                 return _problem(413, "too_large", f"the body is over {self.max_body} bytes")

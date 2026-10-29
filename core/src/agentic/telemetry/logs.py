@@ -181,6 +181,13 @@ class LogTail:
         self.floor = LEVELS[min_level.lower()] if min_level else 0
         self._offsets: dict[Path, int] = {}
         self._lines: dict[Path, int] = {}
+        self._held: dict[Path, int] = {}
+
+    @property
+    def held(self) -> int:
+        """Bytes of unfinished last lines the latest poll held back (DF-282): a step still
+        writing, or the best evidence of where a dead process stopped."""
+        return sum(self._held.values())
 
     def poll(self, final: bool = False) -> list[dict]:
         """The new records. `final` also takes a last line with no newline (a writer
@@ -209,6 +216,7 @@ class LogTail:
             return []  # removed or unreadable for now: the next poll tries again
         end = len(data) if final else data.rfind(b"\n") + 1
         self._offsets[path] = offset + end
+        self._held[path] = len(data) - end
         records = []
         for raw in data[:end].splitlines():
             self._lines[path] = number = self._lines.get(path, 0) + 1

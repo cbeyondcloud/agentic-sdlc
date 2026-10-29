@@ -27,6 +27,7 @@ from agentic.killswitch import HOLD_PAUSE, UNCONFIRMED_PAUSE
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.logsetup import console_logging
+from agentic_cli.output import Output
 from agentic_cli.runtime import tracing_wanted
 from sdlc_commons.ledger import LedgerError
 
@@ -71,6 +72,19 @@ def drive(
             return asyncio.run(call())
     except CliError as error:  # an engine refusal can quote a provider's text
         raise CliError(redact(str(error)), error.code, hint=error.hint) from error
+
+
+def show_policy_change(out: Output, run_id: str, moved: tuple[str, str] | None) -> None:
+    """A paused standalone or `--policy` run continuing on its owner's edited policy
+    (`Runtime.check_same_policy`, DF-697): say so before it runs."""
+    if moved is None:
+        return
+    old, new = moved
+    out.notice(
+        {"policy": {"run_id": run_id, "from": old, "to": new}},
+        f"run {run_id} continues on policy {new} (it ran on {old} until now); "
+        "its ledger records the change",
+    )
 
 
 def exit_code_for(state: RunState) -> ExitCode:

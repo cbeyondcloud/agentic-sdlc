@@ -164,9 +164,20 @@ class RunStore:
         if not path.is_file():
             raise RunStateError(f"no run {run_id}: {path} not found")
         try:
-            return RunState.model_validate_json(path.read_bytes().decode("utf-8"))
+            return RunState.model_validate_json(_read(path).decode("utf-8"))
         except (OSError, UnicodeDecodeError, ValidationError) as error:
             raise RunStateError(f"{path}: cannot be read ({error})") from error
+
+
+def _read(path: Path) -> bytes:
+    """`run.json`'s bytes, retried briefly while a writer swaps it: Windows refuses the
+    open for a moment, or the name is briefly absent (DF-280)."""
+    for _ in range(_REPLACE_TRIES - 1):
+        try:
+            return path.read_bytes()
+        except (PermissionError, FileNotFoundError):
+            time.sleep(_REPLACE_WAIT_S)
+    return path.read_bytes()  # the last try: its error is the caller's
 
 
 def _replace(source: Path, target: Path) -> None:
