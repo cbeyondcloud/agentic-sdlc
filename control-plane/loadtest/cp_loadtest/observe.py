@@ -102,7 +102,9 @@ class DbSampler:
                count(*) filter (where state like 'idle in transaction%') as idle_in_tx,
                count(*) filter (where wait_event_type = 'Lock') as lock_waits,
                (select xact_commit from pg_stat_database where datname = current_database())
-                   as commits
+                   as commits,
+               (select sessions from pg_stat_database where datname = current_database())
+                   as sessions
         from pg_stat_activity
         where datname = current_database() and backend_type = 'client backend'
     """
@@ -178,6 +180,7 @@ class DbSampler:
             out["commits_per_s"] = round(
                 (last["commits"] - first["commits"]) / (last["t"] - first["t"]), 1
             )
+        out["sessions_opened"] = last["sessions"] - first["sessions"]  # new logins, all roles
         out["samples"] = len(self.samples)
         return out
 
