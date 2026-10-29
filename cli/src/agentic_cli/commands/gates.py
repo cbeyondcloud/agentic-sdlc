@@ -30,7 +30,7 @@ from agentic.engine.gates import Approve, Decision, Edit, Reject
 from agentic.engine.state import RunState, RunStateError
 from agentic.yamlio import YamlFileError, split_front_matter
 from agentic_cli.commands.runs import _all_runs, _load, sinks_reported
-from agentic_cli.driving import drive, exit_code_for, show_state, summary
+from agentic_cli.driving import drive, exit_code_for, show_policy_change, show_state, summary
 from agentic_cli.editor import edit_file
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
@@ -54,7 +54,7 @@ def register(app: typer.Typer) -> None:
         notes: Annotated[str, typer.Option(help="Recorded with the approval.")] = "",
     ) -> None:
         """Approve the handoffs the gate pins, as they are; the run continues."""
-        rt, state = _waiting(run_id)
+        rt, state = _waiting(ctx.obj, run_id)
         _decide(ctx.obj, rt, state, Approve(gate or state.pending.id, rt.user, notes))
 
     @app.command("reject")
@@ -67,7 +67,7 @@ def register(app: typer.Typer) -> None:
         """Send the work back to the gate's step, with your feedback."""
         if not feedback.strip():
             raise CliError("--feedback must say what to change", ExitCode.USAGE)
-        rt, state = _waiting(run_id)
+        rt, state = _waiting(ctx.obj, run_id)
         _decide(ctx.obj, rt, state, Reject(gate or state.pending.id, rt.user, feedback))
 
     @app.command("edit")
@@ -87,7 +87,7 @@ def register(app: typer.Typer) -> None:
         continued by the next `agentic edit` (DF-220). It is keyed by the pinned file's
         digest, so a draft of an older version is never offered."""
         out: Output = ctx.obj
-        rt, state = _waiting(run_id)
+        rt, state = _waiting(ctx.obj, run_id)
         pinned = sorted(state.pending.artefacts)
         if file is None and len(pinned) != 1:
             raise CliError(
@@ -195,7 +195,7 @@ def register(app: typer.Typer) -> None:
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
-def _waiting(run_id: str) -> tuple[Runtime, RunState]:
+def _waiting(out: Output, run_id: str) -> tuple[Runtime, RunState]:
     rt = Runtime(Workspace.load())
     state = _load(rt, run_id)
     if state.pending is None or state.pending.kind != "gate":
@@ -204,7 +204,8 @@ def _waiting(run_id: str) -> tuple[Runtime, RunState]:
             ExitCode.REFUSED,
             hint=f"agentic status {run_id}",
         )
-    rt.check_same_policy(state)  # before an editor opens: the edit could not be used
+    moved = rt.check_same_policy(state)  # before an editor opens: an edit could not be used
+    show_policy_change(out, run_id, moved)
     return rt, state
 
 
@@ -219,7 +220,7 @@ def _decide(
     if signed_in is not None:  # org mode: the person is the one the control plane knows
         decision = replace(decision, approver=signed_in)
     engine = rt.engine(regime=state.regime)
-    with sinks_reported(out, rt):
+    with sinks_reported(out, rt), rt.heartbeat(state.run_id) as beats:
         result = drive(
             rt.redact(gateway or rt.gateway()),
             rt.store.path(state.run_id).parent,
@@ -230,6 +231,7 @@ def _decide(
                 self_approval=self_approval_refusal,
             ),
         )
+        beats.ended(result.status)
     redact = rt.redact()
     out.result(summary(result, redact), show_state(result, redact))
     raise typer.Exit(exit_code_for(result))

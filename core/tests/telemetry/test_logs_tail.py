@@ -116,3 +116,15 @@ def test_redact_record_never_returns_raw_text_when_the_redactor_fails():
 
     clean = redact_record(record("s", 1, f"key {SECRET}"), broken)
     assert SECRET not in json.dumps(clean)
+
+
+def test_held_counts_the_bytes_of_unfinished_last_lines(tmp_path: Path):
+    """DF-282: what a non-final poll held back, so `agentic logs` can say it is there."""
+    tail = LogTail(tmp_path)
+    assert tail.held == 0
+    append(tmp_path, "a-1", record("a", 1, "whole"), raw=b'{"at": "2026')
+    append(tmp_path, "b-1", raw=b'{"at"')
+    assert messages(tail.poll()) == ["whole"]
+    assert tail.held == 17
+    tail.poll(final=True)
+    assert tail.held == 0

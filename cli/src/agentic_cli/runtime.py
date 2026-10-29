@@ -64,6 +64,7 @@ from agentic_cli.codeintel import codeintel_for as codeintel_factory
 from agentic_cli.codeintel import codeintel_settings, codeintel_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.heartbeat import Heartbeat
 from agentic_cli.learning import FeedbackCapture
 from agentic_cli.skill_activity import SkillActivity, StampingRecorder
 from agentic_cli.standalone import PLACEHOLDER
@@ -71,7 +72,7 @@ from agentic_cli.step_extras import StepExtras
 from agentic_cli.wiring import StepWiring, production_scanner
 from agentic_cli.workspace import RUNS, Workspace
 from sdlc_commons.gates import ZyrofloGates, regime_block_on
-from sdlc_commons.ledger import RunIdentity, RunLedger
+from sdlc_commons.ledger import LedgerError, RunIdentity, RunLedger
 from sdlc_commons.redaction import redactor
 
 #: Seconds a command waits, after the engine stops, for run events still being delivered to
@@ -176,6 +177,7 @@ class Runtime:
         self._restored: list[str] = []  # skills the last sync restored (a local edit)
         self._recorders: dict[str, ForwardingRecorder] = {}
         self._stamped: dict[str, StampingRecorder] = {}
+        self._next_ids: dict[str, dict[str, str]] = {}  # run -> ids for its next event
         # skill and memory activations, stamped on each step_finished in the ledger (M2-45)
         self.activity = SkillActivity()
         self._personal: PersonalContext | None = None
@@ -276,7 +278,27 @@ class Runtime:
                 self.recorder(run_id), self.sinks(), background=True, screen=screen
             )
             self._stamped[run_id] = StampingRecorder(self._recorders[run_id], self.activity)
+            if ids := self._next_ids.pop(run_id, None):  # a policy change on resume (DF-697)
+                self._stamped[run_id].stamp_next(ids)
         return self._stamped[run_id]
+
+    def heartbeat(self, run_id: str) -> Heartbeat:
+        """The run's heartbeat around one engine call (M3-07): into the run folder always,
+        and to the control plane in org mode with one and the user signed in, on a client of
+        its own (the sink's client belongs to the delivery thread). Not signed in, only the
+        folder beats: `sinks()` already says why runs are not reported."""
+        poster = None
+        if self.ws.settings.get("org"):
+            try:
+                poster = control_plane.client_for(self.ws.env, self.ws.settings, self.ws.home)
+            except control_plane.ControlPlaneError:
+                poster = None
+        return Heartbeat(
+            self.store.path(run_id).parent,
+            run_id,
+            interval_s=self.ws.policy().run_health.heartbeat_seconds,
+            poster=poster,
+        )
 
     def close_sinks(self, timeout: float = SINK_GRACE_S) -> dict[str, int]:
         """Wait (bounded) for the runs' pending deliveries; returns run -> events still
@@ -630,25 +652,56 @@ class Runtime:
             return StandaloneAuthorizer(), None
         return OrgAuthorizer(me, self.ws.team), me.user.email
 
-    def check_same_policy(self, state: RunState) -> None:
+    def check_same_policy(self, state: RunState) -> tuple[str, str] | None:
         """Before a paused run continues (resume, a gate decision): a run keeps the policy it
         started on, so its record names the policy every step used (spec §1.3, §12.1). With
         the control plane's policy, any `agentic run` in this home follows the tenant's active
         version (M2-53), so a run paused on an older one is refused here (exit 2) rather than
         carried on under the new tiers and tools with the old version on its record (review
         F3). A git-policy org's cache moves on with its 24 h refresh, so it is refused the
-        same way (DF-697). A standalone or `--policy` repo is the person's own and is not
-        checked here. `agentic stop` still ends it."""
+        same way (DF-697). `agentic stop` still ends it.
+
+        A standalone or `--policy` repo is the person's own: a run paused on one version and
+        resumed after its owner edited the policy continues (owner decision 105), and its
+        ledger says so - the next event the run records carries the version in force before
+        (`policy_from`: the last change its ledger recorded, else the version it started
+        on) and the new one (`policy_to`), and `run.policy_changed` is in the audit log.
+        Returns that (before, after) pair for the command to show, or None."""
         current = self.ws.policy().version
-        if state.policy_version == current or not self.ws.org_policy_cache():
-            return
-        raise CliError(
-            f"run {state.run_id} started on org policy {state.policy_version}, and the org "
-            f"policy is now {current}: a run continues only on the policy it started on",
-            ExitCode.REFUSED,
-            hint=f"agentic stop {state.run_id} --reason 'org policy changed', then start it "
-            f"again: agentic run {state.pipeline}",
-        )
+        if self.ws.org_policy_cache():
+            if state.policy_version == current:
+                return None
+            raise CliError(
+                f"run {state.run_id} started on org policy {state.policy_version}, and the org "
+                f"policy is now {current}: a run continues only on the policy it started on",
+                ExitCode.REFUSED,
+                hint=f"agentic stop {state.run_id} --reason 'org policy changed', then start it "
+                f"again: agentic run {state.pipeline}",
+            )
+        before = self._policy_in_force(state)
+        if before == current:
+            return None
+        ids = {"policy_from": before, "policy_to": current}
+        if state.run_id in self._stamped:
+            self._stamped[state.run_id].stamp_next(ids)
+        else:  # stamped once `forwarding` builds the run's recorder
+            self._next_ids[state.run_id] = ids
+        step = state.pending.step if state.pending is not None else None
+        log_record("run.policy_changed", {"run": state.run_id, "step": step, **ids})
+        return before, current
+
+    def _policy_in_force(self, state: RunState) -> str:
+        """The policy version a paused standalone run last ran under: the last change its
+        ledger recorded, else the version it started on."""
+        try:
+            entries = RunLedger(self.ws.repo, state.run_id).events()
+        except LedgerError:  # the resume itself reports a broken ledger
+            return state.policy_version
+        found = state.policy_version
+        for entry in entries:
+            block = (entry.get("ext") or {}).get("agentic") or {}
+            found = block.get("policy_to") or found
+        return found
 
     def killswitch(self) -> KillSwitch:
         """The engine's kill-switch port (M2-19): the control plane's switches in org mode
