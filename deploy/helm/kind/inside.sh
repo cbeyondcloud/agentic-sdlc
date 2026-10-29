@@ -10,7 +10,10 @@
 set -eu
 
 : "${KIND_CLUSTER:?}" "${CP_IMAGE:?}"
-NODE_IMAGE=kindest/node:v1.36.4@sha256:099e049362a1526b2db71494e1947aae99bd16290d7c895f2b7ea312e3cbfaed
+# Kubernetes 1.34: the newest node image of kind 0.33.0 that still runs on cgroup v1 hosts
+# (Docker Desktop on WSL2 kernels 5.15; kubelet 1.35+ refuses cgroup v1). KIND_NODE_IMAGE
+# overrides it on cgroup v2 hosts.
+NODE_IMAGE=${KIND_NODE_IMAGE:-kindest/node:v1.34.11@sha256:44e222ee2132dab25ff87301682f89eb82c7880ea3a1bf543bfe9708fd08d67d}
 NS=agentic
 
 say() { echo "kind-smoke: $*"; }

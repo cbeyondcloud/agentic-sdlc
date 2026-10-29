@@ -25,8 +25,13 @@ name="$KIND_CLUSTER-tools-$$"
 # MSYS_NO_PATHCONV: Git Bash on Windows must not rewrite the socket path
 MSYS_NO_PATHCONV=1 "$ENGINE" create --name "$name" \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -e KIND_CLUSTER -e CP_IMAGE -e KEEP "$tools" sh /w/kind/inside.sh >/dev/null
-trap '"$ENGINE" rm -f "$name" >/dev/null 2>&1 || true' EXIT
+  -e KIND_CLUSTER -e CP_IMAGE -e KEEP -e KIND_NODE_IMAGE "$tools" sh /w/kind/inside.sh >/dev/null
+cleanup() {
+  "$ENGINE" rm -f "$name" >/dev/null 2>&1 || true
+  # an interrupted run leaves the cluster's node behind
+  if [ "$KEEP" != 1 ]; then "$ENGINE" rm -f "$KIND_CLUSTER-control-plane" >/dev/null 2>&1 || true; fi
+}
+trap cleanup EXIT
 "$ENGINE" cp "$ROOT/deploy/helm/." "$name:/w/"
 "$ENGINE" cp "$ROOT/deploy/org-local/cp-postgres/init.sh" "$name:/w/kind/pg-init.sh"
 "$ENGINE" start -a "$name"

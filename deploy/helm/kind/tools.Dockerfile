@@ -15,12 +15,12 @@ RUN set -e; arch="$(uname -m)"; \
     curl -sSfL -o /usr/local/bin/kind \
       "https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}/kind-linux-${a}"; \
     echo "$sum  /usr/local/bin/kind" | sha256sum -c -; chmod 0755 /usr/local/bin/kind
-# kubectl v1.36.4, the version of the kind node image below
-ARG KUBECTL_VERSION=1.36.4
+# kubectl v1.34.11, the version of the kind node image in inside.sh
+ARG KUBECTL_VERSION=1.34.11
 RUN set -e; arch="$(uname -m)"; \
     case "$arch" in \
-      x86_64) a=amd64; sum=8b8f088da2dab964f853b38464033b1be15ede2839eca751482357c45abdd05a ;; \
-      aarch64) a=arm64; sum=0ecf44450ee6063bf19dd166a103ee6df4a9034455c2abce626e6eea657d73fb ;; \
+      x86_64) a=amd64; sum=8efbb9435132a190920eb65a47a8c1ecf755ad85ab57a600c9bedbab460bb7a8 ;; \
+      aarch64) a=arm64; sum=5b045a4712674c88a56fd98eef4285689738b7fbe8735e1b9ee3509521af5cb4 ;; \
       *) echo "no pinned kubectl for $arch" >&2; exit 1 ;; \
     esac; \
     curl -sSfL -o /usr/local/bin/kubectl \
