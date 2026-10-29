@@ -1,5 +1,6 @@
-"""The seven Grafana dashboards (M2-38): rendered from `dashboards.catalog`, committed as
-JSON, reading only the `dash_*` views, with no vendor names in titles."""
+"""The Grafana dashboards (M2-38; M3-01 executive ROI): rendered from
+`dashboards.catalog`, committed as JSON, reading only the `dash_*` views, with no vendor
+names in titles."""
 
 import json
 import re
@@ -40,12 +41,13 @@ EXPECTED = {
     "agentic-limits-safety",
     "agentic-audit-explorer",
     "agentic-adoption",
+    "agentic-executive-roi",
 }
 
 
-def test_seven_dashboards_with_unique_uids():
+def test_eight_dashboards_with_unique_uids():
     assert {d.uid for d in DASHBOARDS} == EXPECTED
-    assert len({d.title for d in DASHBOARDS}) == 7
+    assert len({d.title for d in DASHBOARDS}) == 8
     for dashboard in DASHBOARDS:
         panels = render(dashboard)["panels"]
         assert panels, dashboard.uid

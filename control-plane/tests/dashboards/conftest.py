@@ -180,6 +180,19 @@ async def readers(linked_db, pg_server):
 
 
 @pytest.fixture
+async def roi_reader(roi_db, pg_server):
+    """Tenant a's dashboard reader on the executive cost seed, connected as Grafana is."""
+    db, seeded = roi_db
+    made = Readers(db, pg_server)
+    try:
+        role, password = made.name("roi"), secrets.token_hex(12)
+        await made.bind(seeded.a, role, password)
+        yield await made.connect(role, password)
+    finally:
+        await made.close()
+
+
+@pytest.fixture
 async def bound(readers):
     """Readers bound to a and b, connected."""
     db, seeded, made = readers

@@ -75,7 +75,14 @@ DEV, DESIGN, REVIEW = "developer@1.2.0", "design@1.0.0", "code-review@1.0.0"
 CALLS: tuple[Call, ...] = (
     Call(GW_A, "0.040000", "payments", tags("a-r1", "design", DESIGN, "payments", pipeline="fd")),
     Call(GW_A, "0.060000", "payments", tags("a-r1", "design", DESIGN, "payments", repo="app")),
-    Call(GW_A, "0.150000", "payments", tags("a-r1", "develop", DEV, "payments")),
+    Call(
+        GW_A,
+        "0.150000",
+        "payments",
+        tags("a-r1", "develop", DEV, "payments"),
+        cache_read_tokens=600,  # M3-01: the cached-token share
+        cache_write_tokens=100,
+    ),
     Call(GW_A, "0.200000", "payments", tags("a-r1", "develop", DEV, "payments")),
     # the caller asserts team "search"; the authenticated team is payments (ST-1 wins)
     Call(GW_A, "0.160000", "payments", tags("a-r1", "develop", DEV, "search")),

@@ -1,9 +1,9 @@
 # Local org stack (M2-39)
 
 The framework's org mode on one machine: the control plane, its Postgres and Grafana with
-the seven framework dashboards, next to the gateway's (TokenLean) LITE stack in mock mode,
-so nothing calls a model provider and nothing is spent. Windows, macOS and Linux; Docker or
-Podman.
+the eight framework dashboards (Executive ROI among them, M3-01), next to the gateway's
+(TokenLean) LITE stack in mock mode, so nothing calls a model provider and nothing is
+spent. Windows, macOS and Linux; Docker or Podman.
 
 | Service | What | Address |
 |---|---|---|

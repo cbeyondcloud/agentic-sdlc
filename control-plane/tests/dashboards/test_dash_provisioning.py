@@ -116,6 +116,9 @@ async def test_every_panel_query_returns_rows(reader_a):
     for dashboard in DASHBOARDS:
         values: dict[str, list[str]] = {}
         for variable in dashboard.variables:
+            if variable.kind == "textbox":  # opened with its default
+                values[variable.name] = [variable.default]
+                continue
             options = await _options(reader_a, variable.sql, window)
             assert options, (dashboard.uid, variable.name)
             if variable.multi:  # opened with "All": every option

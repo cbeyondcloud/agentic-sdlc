@@ -1,7 +1,8 @@
 # Dashboard providers for the local org stack (M2-38). Grafana reads JSON files only; no
 # Grafana code is shipped or changed (ruling G1: the official image runs unmodified).
 #
-#   agentic  the seven framework dashboards, generated from agentic_cp.dashboards.catalog
+#   agentic  the eight framework dashboards (Executive ROI among them, M3-01), generated
+#            from agentic_cp.dashboards.catalog
 #            (control-plane/src/agentic_cp/dashboards/grafana, mounted read-only)
 #   gateway  the gateway's LITE dashboard set (spec 25), mounted read-only from TOKENLEAN_DIR
 apiVersion: 1
