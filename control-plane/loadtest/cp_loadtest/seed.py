@@ -119,10 +119,11 @@ async def seed(
     users: int,
     workdir: Path,
     clock: Callable[[], datetime],
+    prefix: str = "lt",
 ) -> Population:
-    """`tenants` tenants (`lt-01`, ...) of `teams` teams each (`team-01`, ...), with `users`
-    people spread evenly over every team of every tenant, each holding `developer` in their
-    team and a 30-day token. `settings` must allow local policy repos."""
+    """`tenants` tenants (`<prefix>-01`, ...) of `teams` teams each (`team-01`, ...), with
+    `users` people spread evenly over every team of every tenant, each holding `developer`
+    in their team and a 30-day token. `settings` must allow local policy repos."""
     names = team_names(teams)
     per_team = max(1, -(-users // (tenants * teams)))
     repo = make_policy_repo(workdir / "policy", names, per_team)
@@ -132,7 +133,7 @@ async def seed(
     transport = httpx2.ASGITransport(app=app)
     async with httpx2.AsyncClient(transport=transport, base_url="http://seed.local") as http:
         for t in range(1, tenants + 1):
-            slug = f"lt-{t:02d}"
+            slug = f"{prefix}-{t:02d}"
             made = await bootstrap_tenant(
                 owner_engine,
                 settings,

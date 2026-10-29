@@ -238,7 +238,8 @@ class Driver:
         try:
             if count == 0:
                 await wire.me()
-                await wire.bundle(await wire.active_policy())
+                bundle = await wire.bundle(await wire.active_policy())
+                recorder.count("bundle_bytes", len(bundle))
             else:
                 await wire.active_policy()
             preflight = await wire.register(registration(self.population, user, run_id))
