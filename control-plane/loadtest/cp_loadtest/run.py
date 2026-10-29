@@ -54,6 +54,7 @@ async def measure(
             await asyncio.gather(scraping, return_exceptions=True)
         await asyncio.sleep(2 * watcher.interval_s)  # the watcher's last reads
         await watcher.read_once()
+        top = await database.top_statements()
     finally:
         elapsed = time.monotonic() - started
         sampler.stop()
@@ -64,7 +65,7 @@ async def measure(
             await client.aclose()
     summary = recorder.summary()
     summary["targets"] = targets.verdicts(summary)
-    summary["database"] = database.summary()
+    summary["database"] = database.summary() | {"top_statements": top}
     summary["containers"] = sampler.summary()
     summary["driver_loop_lag"] = loop_lag.summary()
     summary["metrics_scrape"] = scrape

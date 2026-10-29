@@ -38,6 +38,8 @@ services:
       - work_mem=8MB
       - -c
       - maintenance_work_mem=256MB
+      - -c
+      - shared_preload_libraries=pg_stat_statements  # the run reports the costliest queries
     environment:
       POSTGRES_PASSWORD: ${LT_SUPERUSER_PASSWORD:?run loadtest.py up}
       CP_OWNER_PASSWORD: ${LT_OWNER_PASSWORD:?run loadtest.py up}

@@ -61,10 +61,13 @@ class HeadWatcher:
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
+        """Stop reading, after one last read of what is still expected."""
         if self._task is not None:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
         if self._conn is not None:
+            if self._expected:
+                await self.read_once()
             await self._conn.close()
 
     async def _loop(self) -> None:
@@ -104,14 +107,45 @@ class DbSampler:
         where datname = current_database() and backend_type = 'client backend'
     """
 
+    TOP = """
+        select calls, round(total_exec_time)::bigint as total_ms,
+               round(mean_exec_time::numeric, 2)::float as mean_ms, rows,
+               left(regexp_replace(query, '\\s+', ' ', 'g'), 200) as query
+        from pg_stat_statements
+        where dbid = (select oid from pg_database where datname = current_database())
+        order by total_exec_time desc
+        limit $1
+    """
+
     def __init__(self, admin_dsn: str, *, interval_s: float = 5.0) -> None:
         self._dsn = _dsn(admin_dsn)
         self.interval_s = interval_s
         self.samples: list[dict] = []
+        self.statements = False  # pg_stat_statements is preloaded (the stack's Postgres)
         self._task: asyncio.Task | None = None
 
     async def start(self) -> None:
+        conn = await asyncpg.connect(self._dsn)
+        try:
+            preloaded = await conn.fetchval("select current_setting('shared_preload_libraries')")
+            if "pg_stat_statements" in (preloaded or ""):
+                await conn.execute("create extension if not exists pg_stat_statements")
+                await conn.execute("select pg_stat_statements_reset()")
+                self.statements = True
+        finally:
+            await conn.close()
         self._task = asyncio.create_task(self._loop())
+
+    async def top_statements(self, limit: int = 15) -> list[dict]:
+        """The statements that took the most database time since `start` ([] without the
+        extension)."""
+        if not self.statements:
+            return []
+        conn = await asyncpg.connect(self._dsn)
+        try:
+            return [dict(row) for row in await conn.fetch(self.TOP, limit)]
+        finally:
+            await conn.close()
 
     async def stop(self) -> None:
         if self._task is not None:
