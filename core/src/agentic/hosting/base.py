@@ -86,6 +86,27 @@ class CheckRun:
     log_ref: str = ""  # the host's handle for the check's log; empty when it keeps none
 
 
+@dataclass(frozen=True)
+class BranchProtection:
+    """What a host enforces on a branch before a change lands (D33: the policy repo's
+    default branch must require review by code owners). `classic_readable` is False when
+    the token could not read the host's branch protection itself (some hosts need admin
+    rights for it): an unprotected answer is then a "cannot tell", not a "no"."""
+
+    protected: bool  # a pull request (or any rule) is required
+    code_owner_reviews: bool  # a code owner must approve
+    required_approvals: int
+    source: str  # "classic" (branch protection), "rulesets" or "none"
+    classic_readable: bool = True
+
+
+@runtime_checkable
+class ProtectionHost(Protocol):
+    """Reading a branch's protection (M3-09: `agentic doctor` checks the policy repo)."""
+
+    def branch_protection(self, repo: RepoRef, branch: str) -> BranchProtection: ...
+
+
 class HostingProvider(Protocol):
     kind: str  # what the host registry calls this adapter
 

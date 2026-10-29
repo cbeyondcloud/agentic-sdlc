@@ -38,6 +38,13 @@ sandbox:
   # environment variables agent commands keep although their name looks secret, e.g. an
   # authenticated proxy or the SSH agent socket (never AGENTIC_*)
   pass_env: []
+  # What one agent command may use (M3-10). Enforced on Linux and macOS; on native Windows
+  # best effort (no file-size limit). Leave a limit out for none. EDIT to fit your builds.
+  limits:
+    cpu_seconds: 3600                   # CPU time per process
+    memory_mb: 8192                     # resident memory of the whole command
+    max_file_mb: 4096                   # the largest file a command may write
+    processes: 512                      # processes a command may run at once
 
 # A secret found in content about to leave for a model: refuse the call (block) or
 # replace the secret with a marker (mask). Either way it is recorded.

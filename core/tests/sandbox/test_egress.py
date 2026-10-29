@@ -171,7 +171,7 @@ def test_pass_through_names_match_case_blind_on_windows_only():
 def test_the_sandboxes_hand_the_names_through(tmp_path, monkeypatch):
     seen = {}
 
-    async def fake_run(command, cwd, timeout_s, env=None):
+    async def fake_run(command, cwd, timeout_s, env=None, **limits):  # limits: M3-10
         seen["env"] = env
         return None
 

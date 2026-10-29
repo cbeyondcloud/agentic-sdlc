@@ -30,6 +30,7 @@ from urllib.parse import quote
 import httpx2
 
 from agentic.hosting.base import (
+    BranchProtection,
     CheckRun,
     HostingError,
     ListingIncomplete,
@@ -348,6 +349,59 @@ class GitHubHost:
             payload["commit_id"] = commit
         self._json("POST", path, json=payload)
 
+    # ── branch protection (M3-09, D33) ───────────────────────────────────────
+
+    def branch_protection(self, repo: RepoRef, branch: str) -> BranchProtection:
+        """What GitHub enforces on `branch`: classic branch protection (readable with
+        admin rights only) and the rulesets that apply to it (readable with read access).
+        A 403 on both is raised: nothing can be told."""
+        base = self._repo_path(repo)
+        name = quote(branch, safe="")
+        classic: dict | None = None
+        classic_readable = True
+        try:
+            data = self._json("GET", f"{base}/branches/{name}/protection")
+            classic = data if isinstance(data, dict) else {}
+        except HostingApiError as error:
+            if error.status == 403 or (
+                error.status == 404 and "branch not protected" not in str(error).lower()
+            ):
+                classic_readable = False  # no admin rights (GitHub answers 403 or 404)
+            elif error.status != 404:
+                raise
+        try:
+            rules = self._json("GET", f"{base}/rules/branches/{name}")
+        except HostingApiError as error:
+            if classic_readable or error.status not in (403, 404):
+                raise
+            raise HostingApiError(
+                self._scrub(
+                    f"neither the branch protection nor the rulesets of {repo.slug} "
+                    f"{branch} can be read with this token ({error})"
+                ),
+                403,
+            ) from None
+        reviews = [
+            rule.get("parameters") or {}
+            for rule in (rules if isinstance(rules, list) else [])
+            if isinstance(rule, dict) and rule.get("type") == "pull_request"
+        ]
+        owners = any(bool(p.get("require_code_owner_review")) for p in reviews)
+        approvals = max([_count(p.get("required_approving_review_count")) for p in reviews] or [0])
+        source = "rulesets" if reviews else "none"
+        if classic is not None:
+            pr = classic.get("required_pull_request_reviews") or {}
+            owners = owners or bool(pr.get("require_code_owner_reviews"))
+            approvals = max(approvals, _count(pr.get("required_approving_review_count")))
+            source = "classic"
+        return BranchProtection(
+            protected=classic is not None or bool(reviews),
+            code_owner_reviews=owners,
+            required_approvals=approvals,
+            source=source,
+            classic_readable=classic_readable,
+        )
+
     # ── what people said (FeedbackHost, M3-11) ───────────────────────────────
 
     def pull_request_reviews(self, repo: RepoRef, number: int) -> list[PullRequestReview]:
@@ -607,3 +661,7 @@ def _pull_request(data: Any) -> PullRequest:
         author=str((data.get("user") or {}).get("login") or ""),
         merged=bool(data.get("merged") or data.get("merged_at")),
     )
+
+
+def _count(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 0

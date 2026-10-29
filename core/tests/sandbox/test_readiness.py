@@ -220,3 +220,37 @@ def test_missing_srt_does_not_blame_user_namespaces():  # DF-71: the fix would m
     r = readiness(system="Linux", kernel_release="6.8", which=which, run=answers())
     assert "apparmor_restrict_unprivileged_userns" not in r.text()
     assert "install node and srt first" in r.text()
+
+
+def test_user_namespaces_named_first_when_tools_are_also_missing():  # DF-372 (a)
+    """ripgrep missing AND srt refused by the kernel: both fixes in one round, not two."""
+    which = lambda name: None if name == "rg" else present(name)  # noqa: E731
+    r = readiness(
+        system="Linux",
+        kernel_release="6.8",
+        which=which,
+        run=_smoke_says("bwrap: setting up uid map: Permission denied"),
+    )
+    fix = _smoke_fix(r)
+    assert "apparmor_restrict_unprivileged_userns" in fix
+    assert "missing tools" in fix
+
+
+def test_a_custom_wsl2_kernel_is_not_wsl1():  # DF-372 (b)
+    r = readiness(
+        system="Linux",
+        kernel_release="6.6.36.3-microsoft-custom",
+        which=present,
+        run=_smoke_says("srt: failed to start the sandbox"),
+    )
+    assert "WSL 1" not in _smoke_fix(r)
+
+
+def test_the_wsl1_kernel_shape_is_still_wsl1():  # DF-372 (b)
+    r = readiness(
+        system="Linux",
+        kernel_release="4.4.0-22621-Microsoft",
+        which=present,
+        run=_smoke_says("srt: failed to start the sandbox"),
+    )
+    assert "WSL 1" in _smoke_fix(r)

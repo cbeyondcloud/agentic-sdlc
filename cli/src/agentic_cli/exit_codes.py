@@ -19,8 +19,9 @@ EXIT_CODE_TABLE: tuple[tuple[ExitCode, str], ...] = (
     (
         ExitCode.ERROR,
         "An error; the message says what failed. Also: `init` finished but the machine is "
-        "not ready (the report names what to fix), and `pr checks` read CI and it is not "
-        "green; with --json, the result (ready, state) tells these from a failure.",
+        "not ready (the report names what to fix), `doctor` found a check that fails, and "
+        "`pr checks` read CI and it is not green; with --json, the result (ready, healthy, "
+        "state) tells these from a failure.",
     ),
     (ExitCode.REFUSED, "Refused by a safety or precondition check; nothing was changed."),
     (

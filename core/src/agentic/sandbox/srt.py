@@ -20,6 +20,8 @@ from collections.abc import Sequence
 from dataclasses import replace
 from pathlib import Path
 
+from agentic.policy.model import ResourceLimits
+from agentic.sandbox.limits import launcher
 from agentic.sandbox.process import ShellResult, run_process, safe_env
 from agentic.sandbox.rules import SandboxRules, srt_settings
 
@@ -39,12 +41,14 @@ class SrtSandbox:
         *,
         srt: Sequence[str] = ("srt",),
         pass_env: Sequence[str] = (),  # policy's `sandbox.pass_env` (DF-365)
+        limits: ResourceLimits | None = None,  # policy's `sandbox.limits` (M3-10)
     ) -> None:
         self.rules = rules
         self.settings = Path(settings_dir) / SETTINGS_FILE
         self.tmp = Path(settings_dir) / "tmp"
         self.srt = tuple(srt)
         self.pass_env = tuple(pass_env)
+        self.limits = limits or ResourceLimits()
         self._written = False
 
     def _write_settings(self) -> None:
@@ -80,5 +84,14 @@ class SrtSandbox:
         return [*self.srt, "--settings", str(self.settings), "--", "env", *names]
 
     async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
-        argv = [*self.command_prefix(), "bash", "-c", command]
-        return await run_process(argv, cwd, timeout_s, env=safe_env(pass_through=self.pass_env))
+        """The command under srt, behind the rlimit launcher inside the sandbox (srt's own
+        Node process is never limited), its tree watched for memory and processes."""
+        inner = launcher(self.limits, ["bash", "-c", command])
+        return await run_process(
+            [*self.command_prefix(), *inner],
+            cwd,
+            timeout_s,
+            env=safe_env(pass_through=self.pass_env),
+            limits=self.limits,
+            launch=False,
+        )

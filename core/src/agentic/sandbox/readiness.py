@@ -53,6 +53,9 @@ USERNS_FIX = (
     "sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0"
 )
 _USERNS_WORDS = re.compile(r"uid map|user namespace|userns|unprivileged", re.IGNORECASE)
+#: WSL 1 reports Windows' fixed kernel version, `4.4.0-<build>-Microsoft`; every WSL 2
+#: kernel (a custom one too, which may not say "WSL2") is a real Linux release (DF-372 b).
+_WSL1_KERNEL = re.compile(r"4\.4\.0-\d+-Microsoft")
 
 
 @dataclass(frozen=True)
@@ -127,7 +130,7 @@ def readiness(
         checks.append(_tool(which, "socat", "socat", "sudo apt install -y socat"))
     # what the smoke check's fix may name (DF-335): WSL 1 kernels carry no "WSL2" tag
     cause = "macos" if kind == "macos" else "tools" if not all(c.ok for c in checks[2:]) else ""
-    if not cause and kind == "wsl" and "wsl2" not in release.lower():
+    if not cause and kind == "wsl" and _WSL1_KERNEL.fullmatch(release.strip()):
         cause = "wsl1"
     checks.append(_smoke(which, run, ready=all(c.ok for c in checks[:2]), cause=cause))
     if kind == "wsl" and tree is not None:
@@ -228,6 +231,8 @@ def _smoke_fix(cause: str, output: str) -> str:
             "`python -m agentic.sandbox.probe` for a case-by-case report"
         )
     if cause == "tools":
+        if _USERNS_WORDS.search(output):  # both at once: one round of fixes (DF-372 a)
+            return f"{USERNS_FIX}; and install the missing tools listed above, then check again"
         return "install the missing tools listed above, then check again"
     if cause == "wsl1" and not _USERNS_WORDS.search(output):
         return (

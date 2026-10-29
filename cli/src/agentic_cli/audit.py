@@ -12,17 +12,28 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from agentic.auditproof import ChainChecker, ExportReport, Finding, verify_export
+from agentic.engine.state import RunStateError, RunStore
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from sdlc_commons.ledger import LedgerError, RunLedger, run_id_refusal, run_ids
+from sdlc_commons.lifecycle import RUNS_ROOT
 
 #: Records per page when pulling the control plane's chain (the server's maximum).
 PAGE = 1000
+#: A running run's half-written last line is read again after this long (DF-618): an
+#: append finishes in far less, so a line still torn then is the run being written.
+TORN_RETRY_S = 0.2
+ACTIVE_NOTE = (
+    "run is active: its last event is still being written; checked up to the last whole line"
+)
+_sleep = time.sleep  # replaced by the tests
 
 
 def _finding(file: str, finding: Finding) -> dict:
@@ -43,19 +54,25 @@ class RunReport:
     entries: int = 0
     findings: list[dict] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    active: bool = False  # running, its last line half written: checked to the last whole one
+    note: str = ""
 
     @property
     def intact(self) -> bool:
         return not self.findings and not self.problems
 
     def as_dict(self) -> dict:
-        return {
+        data = {
             "run_id": self.run_id,
             "intact": self.intact,
+            "active": self.active,
             "entries": self.entries,
             "findings": self.findings,
             "problems": self.problems,
         }
+        if self.note:
+            data["note"] = self.note
+        return data
 
 
 def _lines(path: Path) -> list[object]:
@@ -74,8 +91,60 @@ def _lines(path: Path) -> list[object]:
 
 
 def verify_run(repo: Path, run_id: str) -> RunReport:
-    report = RunReport(run_id)
+    """One run's chains. A running run whose ledger ends in a half-written line is read
+    again once; still torn, it is checked up to its last whole line and reported active,
+    never BROKEN (DF-618). A finished run's torn tail is a problem, as before."""
     ledger = RunLedger(repo, run_id)
+    if _running(repo, run_id) and _torn_tail(ledger):
+        _sleep(TORN_RETRY_S)
+        if _torn_tail(ledger):
+            return _verify_whole_lines(repo, run_id, ledger)
+    return _verify(ledger, RunReport(run_id))
+
+
+def _running(repo: Path, run_id: str) -> bool:
+    try:
+        return RunStore(Path(repo) / RUNS_ROOT).load(run_id).status == "running"
+    except RunStateError:
+        return False
+
+
+def _torn_tail(ledger: RunLedger) -> bool:
+    """Whether a chain file ends in a line that is not (yet) a whole record."""
+    for path in ledger.chain_files():
+        try:
+            data = path.read_bytes()
+        except OSError:
+            continue
+        if not data or data.endswith(b"\n"):
+            continue
+        try:
+            whole = isinstance(json.loads(data.rsplit(b"\n", 1)[-1]), dict)
+        except ValueError:
+            whole = False
+        if not whole:
+            return True
+    return False
+
+
+def _verify_whole_lines(repo: Path, run_id: str, ledger: RunLedger) -> RunReport:
+    """Verify a snapshot of the run's chains cut at their last newline (the run goes on
+    writing the live files meanwhile; they are never changed here)."""
+    with tempfile.TemporaryDirectory(prefix="agentic-verify-") as folder:
+        snapshot = Path(folder)
+        for path in ledger.chain_files():
+            if not path.is_file():
+                continue
+            data = path.read_bytes()
+            copy = snapshot / path.relative_to(repo)
+            copy.parent.mkdir(parents=True, exist_ok=True)
+            copy.write_bytes(data[: data.rfind(b"\n") + 1])
+        return _verify(
+            RunLedger(snapshot, run_id), RunReport(run_id, active=True, note=ACTIVE_NOTE)
+        )
+
+
+def _verify(ledger: RunLedger, report: RunReport) -> RunReport:
     try:
         report.problems = ledger.verify()
     except LedgerError as error:
