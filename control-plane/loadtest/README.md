@@ -54,7 +54,9 @@ uv run python control-plane/loadtest/loadtest.py down
   with `developer` in their team), drives the runs, prints the summary and writes it as JSON
   (`--out`, default `.state/last-run.json`). It exits 3 when a target is missed.
 - `down` removes the project's containers and its volume. The image stays; remove it with
-  `docker image rm agentic-control-plane:m3-load-test`.
+  `docker image rm agentic-control-plane:m3-load-test`. If compose fails, `down` exits
+  non-zero and keeps `.state/stack.json` (the volume still has those passwords); run it
+  again once the engine is back. It also works without the state file, to clear leftovers.
 
 **Against another deployment** (staging): set `LT_BASES` (the replicas' URLs, comma
 separated; plain http to 127.0.0.1 or https), `LT_OWNER_DSN` and `LT_APP_DSN` (the owner and

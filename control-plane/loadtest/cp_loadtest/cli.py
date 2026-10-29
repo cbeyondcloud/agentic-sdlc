@@ -74,7 +74,7 @@ def _status(args) -> int:
 
 
 def _down(args) -> int:
-    Stack.load().down()
+    Stack.load(for_down=True).down()
     print("removed the agentic-m3-load-test stack")
     return 0
 

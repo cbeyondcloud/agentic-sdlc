@@ -45,10 +45,15 @@ class Stack:
     secrets: dict[str, str]
 
     @classmethod
-    def load(cls, *, create: bool = False) -> Stack:
+    def load(cls, *, create: bool = False, for_down: bool = False) -> Stack:
+        """The stack's secrets from the state file. `for_down` works without one: `down`
+        only needs compose.yml's required values set, not the real passwords, so leftovers
+        of a lost state file can always be removed."""
         path = STATE / "stack.json"
         if path.exists():
             found = json.loads(path.read_text(encoding="utf-8"))
+        elif for_down:
+            found = {name: "unused-by-down" for name in SECRETS}
         elif create:
             found = {name: secrets.token_hex(16) for name in SECRETS}
             STATE.mkdir(parents=True, exist_ok=True)
@@ -79,7 +84,16 @@ class Stack:
         return bases
 
     def down(self) -> None:
-        self.compose("down", "-v", "--remove-orphans")
+        """Remove the containers and the volume, then the state file. If compose fails the
+        state file stays: the volume keeps the passwords it was created with, and a new `up`
+        with new ones could not log in."""
+        done = self.compose("down", "-v", "--remove-orphans")
+        if done.returncode != 0:
+            raise SystemExit(
+                f"compose down failed (exit {done.returncode}); the stack and its state file "
+                "are kept: check the container engine is running, then run `loadtest.py down` "
+                "again"
+            )
         (STATE / "stack.json").unlink(missing_ok=True)
 
     def _port(self, service: str, port: int, index: int = 1) -> int:
