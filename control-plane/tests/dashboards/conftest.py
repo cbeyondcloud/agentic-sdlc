@@ -125,6 +125,22 @@ async def roi_db(db, make_gateway):
     return db, Seeded(a=a, b=b, gateway_dsn=gateway.dsn)
 
 
+@pytest.fixture
+async def roi_queued_db(db, make_gateway):
+    """The executive cost seed plus `roi_seed.QUEUED`: a registered run with gateway calls
+    and no ingested event (review F2)."""
+    from roi_seed import CALLS as ROI_CALLS
+    from roi_seed import QUEUED_CALLS, seed_queued, seed_roi
+
+    a, b = await make_tenants(db.owner)
+    await seed_roi(db.owner, a, b)
+    await seed_queued(db.owner, a)
+    gateway = await make_gateway(calls=ROI_CALLS + QUEUED_CALLS)
+    async with db.owner.begin() as conn:
+        await link_usage(conn, db.schema, gateway.db)
+    return db, Seeded(a=a, b=b, gateway_dsn=gateway.dsn)
+
+
 def _clock():
     from dash_seed import NOW
 

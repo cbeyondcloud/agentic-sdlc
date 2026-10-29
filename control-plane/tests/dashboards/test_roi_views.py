@@ -8,6 +8,8 @@ from decimal import Decimal
 import pytest
 from roi_seed import (
     OCT,
+    QUEUED,
+    QUEUED_CALLS,
     RUNS_A,
     SEP,
     a_calls,
@@ -169,6 +171,36 @@ async def test_unmeasured_factors_are_null_not_zero(roi_db):
     ):
         assert cara[column] is None, column
     assert cara["data_quality_alert"] is False  # nothing measured, nothing to reconcile
+
+
+async def test_calls_without_events_leave_turns_unmeasured(roi_queued_db):
+    """Review F2: a registered run whose calls reached the gateway but none of whose events
+    reached the control plane has NULL step executions, never a measured 0."""
+    db, seeded = roi_queued_db
+    run = QUEUED.run_id
+    facts = await _rows(
+        db.owner,
+        seeded.a,
+        f"select executions, calls, cost_usd from dash_cost_facts where run_id = '{run}'",
+    )
+    assert facts == [
+        {"executions": None, "calls": len(QUEUED_CALLS), "cost_usd": cost(QUEUED_CALLS)}
+    ]
+    [dan] = await _rows(
+        db.owner,
+        seeded.a,
+        f"select * from dash_cost_drivers_user where user_email = '{QUEUED.owner}'",
+    )
+    assert dan["requests"] == len(QUEUED_CALLS)
+    assert dan["actual_usd"] == cost(QUEUED_CALLS)
+    for column in ("turns", "turns_per_session", "requests_per_turn", "product_usd"):
+        assert dan[column] is None, column
+    assert dan["data_quality_alert"] is True  # cost without turns cannot be reconciled
+    [october] = await _rows(
+        db.owner, seeded.a, f"select * from dash_cost_drivers where month = '{OCT}'"
+    )
+    assert october["turns"] == 5  # the queued run adds no turn
+    assert _close(october["product_usd"], october["actual_usd"]), october
 
 
 async def test_cached_share_is_null_without_cache_counts(roi_db):

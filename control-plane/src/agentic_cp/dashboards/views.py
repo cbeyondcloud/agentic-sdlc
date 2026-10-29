@@ -503,14 +503,14 @@ LEFT JOIN dash_step_agents sa ON sa.tenant_id = c.tenant_id AND sa.run_id = c.ru
 _SUMS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "tokens")
 
 #: One row per (registered run, step): step executions next to the step's calls. A run with
-#: neither keeps one row (step NULL; executions NULL when none of its events arrived).
+#: neither keeps one row (step NULL). Executions are NULL on every row of a run none of whose
+#: events arrived, even when its calls did (review F2): its turns are unmeasured, not 0.
 #: Unattributed calls follow as grouped rows with `attributed = false`.
 _COST_FACTS = f"""
 SELECT r.tenant_id, r.month, true AS attributed, CAST(NULL AS text) AS unattributed_reason,
   r.run_id, r.user_email, r.team, r.pipeline, x.step,
   COALESCE(x.agent, '{UNATTRIBUTED}') AS agent,
-  CASE WHEN x.run_id IS NOT NULL THEN COALESCE(x.executions, 0)
-    WHEN r.has_events THEN 0 END AS executions,
+  CASE WHEN r.has_events THEN COALESCE(x.executions, 0) END AS executions,
   COALESCE(x.calls, 0) AS calls,
   {", ".join(f"x.{name}" for name in _SUMS)}, x.cost_usd
 FROM dash_cost_runs r

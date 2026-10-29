@@ -137,6 +137,15 @@ CALLS: tuple[Call, ...] = (
 
 REGISTERED = {run.run_id: run for run in RUNS_A}
 
+#: Registered, and its calls reached the gateway, but none of its events reached the control
+#: plane yet (the offline queue has not drained): its turns are unmeasured (review F2). Only
+#: the `roi_queued_db` fixture seeds it, so the totals of the main seed stay as they are.
+QUEUED = Run("r6", "dan@a.test", "search", "bugfix", when(OCT, 22))
+QUEUED_CALLS: tuple[Call, ...] = (
+    _call("r6", "develop", DEV, "search", "0.500000", when(OCT, 22, 11), model=SMALL),
+    _call("r6", "develop", DEV, "search", "0.250000", when(OCT, 22, 12), model=SMALL),
+)
+
 
 def a_calls() -> list[Call]:
     return [call for call in CALLS if call.gateway == GW_A]
@@ -240,3 +249,8 @@ async def seed_roi(engine, a: UUID, b: UUID) -> None:
     """Runs, step and gate events of `RUNS_A` in a and `RUNS_B` in b."""
     await _seed_tenant(engine, a, RUNS_A)
     await _seed_tenant(engine, b, RUNS_B)
+
+
+async def seed_queued(engine, a: UUID) -> None:
+    """`QUEUED` in a: the run row only, no event."""
+    await _seed_tenant(engine, a, (QUEUED,))
