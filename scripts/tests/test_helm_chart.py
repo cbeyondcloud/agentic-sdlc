@@ -180,7 +180,7 @@ def test_the_restore_runbook_scales_only_the_release_and_brings_the_api_back():
     restore = (ROOT / "docs" / "runbooks" / "postgres-backup-restore.md").read_text(
         encoding="utf-8"
     )
-    assert "--all" not in restore
+    assert not re.search(r"--all\b", restore), "kubectl --all scales every Deployment"
     assert SCALE_DOWN in restore and SCALE_API_UP in restore
     # the kind smoke runs the same commands (sh: the namespace is "$NS")
     inside = (ROOT / "deploy" / "helm" / "kind" / "inside.sh").read_text(encoding="utf-8")
