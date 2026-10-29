@@ -21,6 +21,7 @@ from agentic_cp.audit.api import router as audit_router
 from agentic_cp.auth.api import router as auth_router
 from agentic_cp.auth.service_accounts import router as service_accounts_router
 from agentic_cp.body_limit import BodyLimit
+from agentic_cp.dashboards.link import linked_views
 from agentic_cp.db import current_revision, head_revision, make_engine
 from agentic_cp.db_roles import AUDIT, TENANCY, enforcement_status
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, install_problem_handlers, log
@@ -161,6 +162,9 @@ def create_app(
 class Readiness(BaseModel):
     status: str
     db_enforced: bool
+    #: the usage views read the gateway's tables (`db link-usage`, M2-37); false:
+    #: every cost dashboard shows no data (informational, never a refusal: DF-631)
+    gateway_linked: bool = False
 
 
 async def serve_preflight(settings: Settings, engine: AsyncEngine | None = None) -> str | None:
@@ -186,6 +190,7 @@ async def check_ready(engine: AsyncEngine, settings: Settings) -> Readiness:
         async with engine.connect() as conn:
             revision = await current_revision(conn)
             status = await enforcement_status(conn, schema=settings.db_schema)
+            linked = await linked_views(conn, settings.db_schema)
     except (OSError, SQLAlchemyError) as error:
         log.warning("readyz: database unavailable (%s)", type(error).__name__)
         raise ApiProblem(503, "db.unavailable", "the database is not reachable") from None
@@ -205,4 +210,8 @@ async def check_ready(engine: AsyncEngine, settings: Settings) -> Readiness:
             raise ApiProblem(
                 503, code, f"the database does not enforce {what}; the server log has details"
             )
-    return Readiness(status="ready", db_enforced=status.enforced)
+    return Readiness(
+        status="ready",
+        db_enforced=status.enforced,
+        gateway_linked="usage_source" in linked,
+    )

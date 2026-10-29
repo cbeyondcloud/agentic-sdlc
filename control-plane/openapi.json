@@ -1880,6 +1880,11 @@
             "title": "Db Enforced",
             "type": "boolean"
           },
+          "gateway_linked": {
+            "default": false,
+            "title": "Gateway Linked",
+            "type": "boolean"
+          },
           "status": {
             "title": "Status",
             "type": "string"

@@ -191,6 +191,7 @@ def _migrate(args: argparse.Namespace) -> int:
 
 async def _migrate_and_regrant(settings: Settings) -> str:
     from agentic_cp.app import utc_now
+    from agentic_cp.dashboards.link import relink_contracts
     from agentic_cp.db import make_owner_engine, migrate_async
     from agentic_cp.db_roles import enforcement_status, grant_runtime, runtime_role_exists
     from agentic_cp.rbac.defaults import seed_roles
@@ -205,6 +206,10 @@ async def _migrate_and_regrant(settings: Settings) -> str:
             if present:
                 await grant_runtime(conn, settings.runtime_role, None, settings.db_schema)
             known = await list_tenants(conn)
+            # a migration that recreated the views reset the gateway link (DF-631)
+            relinked = await relink_contracts(conn, settings.db_schema)
+        if relinked:
+            print(f"gateway link restored: {', '.join(relinked)}")
         for tenant in known:  # a release's new builtin roles reach every tenant
             async with tenant_tx(engine, tenant.id) as conn:
                 added = await seed_roles(conn, clock=utc_now)

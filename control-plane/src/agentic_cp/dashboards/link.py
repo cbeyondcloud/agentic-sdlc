@@ -28,7 +28,13 @@ from pydantic import SecretStr
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
-from agentic_cp.dashboards.views import CONTRACTS, LINK_SUFFIX, placeholder_sql, source_sql
+from agentic_cp.dashboards.views import (
+    CONTRACTS,
+    LINK_SUFFIX,
+    SourceColumn,
+    placeholder_sql,
+    source_sql,
+)
 
 log = logging.getLogger("agentic_cp.dashboards.link")
 
@@ -195,6 +201,27 @@ async def link_usage(conn: AsyncConnection, schema: str, gateway: GatewayDb) -> 
             f"the gateway database {gateway.dbname} on {gateway.host}:{gateway.port} could "
             f"not be read ({_masked(_first_line(error), gateway)})"
         ) from None
+    present = await _imported_columns(conn, link)
+    if "usage_events" not in present:
+        raise LinkError(f"the gateway database {gateway.dbname} has no {remote}.usage_events table")
+    linked = []
+    for name, (columns, table) in CONTRACTS.items():
+        if table not in present:
+            continue  # stays empty: this gateway does not keep that table
+        missing = _missing(columns, present[table])
+        if missing:
+            needs = sorted({c.requires for c in missing if c.requires})
+            raise LinkError(
+                f"the gateway's {table} lacks {', '.join(c.remote for c in missing)}"
+                + (f": the dashboards need the gateway's {' and '.join(needs)}" if needs else "")
+            )
+        await _point(conn, name, columns, link, table, present[table])
+        linked.append(name)
+    return LinkResult(linked=tuple(linked), server=link, link_schema=link)
+
+
+async def _imported_columns(conn: AsyncConnection, link: str) -> dict[str, set[str]]:
+    """The gateway tables imported into `link`, with their columns."""
     found = await conn.exec_driver_sql(
         "select table_name, column_name from information_schema.columns "
         f"where table_schema = '{link}'"
@@ -202,23 +229,63 @@ async def link_usage(conn: AsyncConnection, schema: str, gateway: GatewayDb) -> 
     present: dict[str, set[str]] = {}
     for table, column in found:
         present.setdefault(table, set()).add(column)
-    if "usage_events" not in present:
-        raise LinkError(f"the gateway database {gateway.dbname} has no {remote}.usage_events table")
-    linked = []
+    return present
+
+
+def _missing(columns: tuple[SourceColumn, ...], present: set[str]) -> list[SourceColumn]:
+    return [c for c in columns if not c.optional and c.remote not in present]
+
+
+async def _point(
+    conn: AsyncConnection,
+    name: str,
+    columns: tuple[SourceColumn, ...],
+    link: str,
+    table: str,
+    present: set[str],
+) -> None:
+    body = source_sql(columns, f"{link}.{table}", frozenset(present))
+    await _execute(conn, f"CREATE OR REPLACE VIEW {name} AS {body}")
+
+
+async def linked_views(conn: AsyncConnection, schema: str) -> frozenset[str]:
+    """The contract views that read the gateway link now (not their empty placeholder)."""
+    link = _ident(schema + LINK_SUFFIX)
+    rows = await conn.exec_driver_sql(
+        "select viewname from pg_views where schemaname = $1 and position($2 in definition) > 0",
+        (_ident(schema), f"{link}."),
+    )
+    return frozenset(name for (name,) in rows if name in CONTRACTS)
+
+
+async def relink_contracts(conn: AsyncConnection, schema: str) -> tuple[str, ...]:
+    """Point every contract view that reads its empty placeholder back at the gateway table
+    already imported into the link schema (DF-631): a migration that recreates the views
+    resets them, and `migrate` runs this after every upgrade. No password is needed: the
+    foreign server and its user mapping outlive the views. Returns the views re-pointed; a
+    table the link schema lacks, or that lost a required column, leaves its placeholder (a
+    warning in the log: run `db link-usage` again)."""
+    link = _ident(schema + LINK_SUFFIX)
+    present = await _imported_columns(conn, link)
+    if not present:
+        return ()
+    already = await linked_views(conn, schema)
+    relinked = []
     for name, (columns, table) in CONTRACTS.items():
-        if table not in present:
-            continue  # stays empty: this gateway does not keep that table
-        missing = [c for c in columns if not c.optional and c.remote not in present[table]]
+        if name in already or table not in present:
+            continue
+        missing = _missing(columns, present[table])
         if missing:
-            needs = sorted({c.requires for c in missing if c.requires})
-            raise LinkError(
-                f"the gateway's {table} lacks {', '.join(c.remote for c in missing)}"
-                + (f": the dashboards need the gateway's {' and '.join(needs)}" if needs else "")
+            log.warning(
+                "link: %s stays empty: the imported %s lacks %s (run `db link-usage` again)",
+                name,
+                table,
+                ", ".join(c.remote for c in missing),
             )
-        body = source_sql(columns, f"{link}.{table}", frozenset(present[table]))
-        await _execute(conn, f"CREATE OR REPLACE VIEW {name} AS {body}")
-        linked.append(name)
-    return LinkResult(linked=tuple(linked), server=link, link_schema=link)
+            continue
+        await _point(conn, name, columns, link, table, present[table])
+        relinked.append(name)
+    return tuple(relinked)
 
 
 async def audit_link(
