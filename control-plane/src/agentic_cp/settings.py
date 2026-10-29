@@ -123,6 +123,9 @@ class Settings(BaseModel):
     service_token_max_days: Annotated[int, Field(ge=1, le=365)] = 365
     enforcer_cache_tenants: Annotated[int, Field(ge=1)] = 256
     kill_ttl_seconds: Annotated[int, Field(ge=1, le=30)] = 10
+    kill_cache_seconds: Annotated[int, Field(ge=0, le=5)] = 2
+    """How long a process reuses a tenant's switches for kill-switch polls (0: never); its
+    own changes show at once, another replica's within this window (M3-22, DF-704)."""
     """The longest a CLI may cache the kill-switch state (`KillState.ttl_seconds`, ruling R1).
     The CLI caches for the smaller of this and its own 10 s, so a value above 10 never
     lengthens propagation; it can only shorten it (DF-707). The ceiling stays 30 (ruling R5)."""

@@ -60,7 +60,10 @@ limit at the ingress in front of the service is still recommended.
 Each process keeps `AGENTIC_CP_DB_POOL_SIZE` connections open (default 15) and may open
 `AGENTIC_CP_DB_MAX_OVERFLOW` more for a burst (default 0: an overflow connection is closed
 when it is returned, so a busy process would log in to Postgres again and again). Size
-Postgres' `max_connections` for replicas x (pool + overflow) plus the worker. The load test
+Postgres' `max_connections` for replicas x (pool + overflow) plus the worker. Kill-switch
+polls (every running CLI, every 10 s) reuse a tenant's switches for
+`AGENTIC_CP_KILL_CACHE_SECONDS` (default 2, `0` turns it off): a change made through one
+replica shows there at once and on the others within that window. The load test
 in `control-plane/loadtest/` (M3-22) measures a deployment; its report is
 `docs/load-test/M3-22-report.md`.
 

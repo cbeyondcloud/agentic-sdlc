@@ -4,7 +4,7 @@ other tenants out); every change is appended to the tenant's audit chain with it
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -59,6 +59,30 @@ async def rows(conn: AsyncConnection, *, include_cleared: bool = False) -> list:
 
 async def active_switches(conn: AsyncConnection) -> list[Switch]:
     return [as_switch(row) for row in await rows(conn)]
+
+
+class SwitchCache:
+    """Each tenant's active switches as this process last read them, for the kill-switch
+    poll only (M3-22, DF-704: two thirds of the load test's requests were polls, each a
+    transaction). An entry is used for `seconds` by the app's clock; this process's own
+    changes drop it at once. Registration and every write still read the table."""
+
+    def __init__(self, seconds: int) -> None:
+        self.window = timedelta(seconds=seconds)
+        self._entries: dict[UUID, tuple[datetime, list]] = {}
+
+    def get(self, tenant_id: UUID, now: datetime) -> list | None:
+        found = self._entries.get(tenant_id)
+        if found is None or not (found[0] <= now < found[0] + self.window):
+            return None
+        return found[1]
+
+    def put(self, tenant_id: UUID, found: list, now: datetime) -> None:
+        if self.window:
+            self._entries[tenant_id] = (now, found)
+
+    def forget(self, tenant_id: UUID) -> None:
+        self._entries.pop(tenant_id, None)
 
 
 def scope_of(row_or_values) -> dict:

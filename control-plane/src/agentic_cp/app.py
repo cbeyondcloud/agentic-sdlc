@@ -30,6 +30,7 @@ from agentic_cp.ingest.api import router as runs_router
 from agentic_cp.keys.api import router as keys_router
 from agentic_cp.keys.gateway import gateway_keys_for
 from agentic_cp.killswitch.api import router as killswitch_router
+from agentic_cp.killswitch.store import SwitchCache
 from agentic_cp.learning.api import router as learning_router
 from agentic_cp.logredact import install_log_redaction
 from agentic_cp.metrics import Metrics, MetricsMiddleware
@@ -97,6 +98,7 @@ def create_app(
     app.state.alert_sinks = default_sinks(alert_webhook)
     app.state.enforcers = EnforcerCache(settings.enforcer_cache_tenants)
     app.state.touched = RecentTouches()  # token last-use writes skipped within a minute
+    app.state.kill_cache = SwitchCache(settings.kill_cache_seconds)  # kill polls (DF-704)
     install_problem_handlers(app)
     install_log_redaction()  # the webhook token travels in the path (review F2)
     app.add_middleware(BodyLimit, max_bytes=settings.max_body_bytes)
