@@ -1,0 +1,47 @@
+{{- /* Database migrations before every install and upgrade (a Helm hook). The new pods
+start only after this Job succeeds; the old pods keep serving the migrated database
+(expand/contract migrations, DF-413). Only this Job gets the owner role's DSN. It runs as
+migrations.serviceAccountName ("default"): a pre-install hook runs before the chart's own
+service account exists. */ -}}
+{{- if .Values.migrations.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "agentic.fullname" . }}-migrate
+  labels:
+    {{- include "agentic.labels" (list . "migrate") | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migrations.activeDeadlineSeconds }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentic.labels" (list . "migrate") | nindent 8 }}
+    spec:
+      {{- include "agentic.podCommon" (list . .Values.migrations.serviceAccountName) | nindent 6 }}
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: {{ include "agentic.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["sh", "-c"]
+          {{- if .Values.migrations.grantRuntime }}
+          args: ["python -m agentic_cp migrate && python -m agentic_cp db grant-runtime"]
+          {{- else }}
+          args: ["python -m agentic_cp migrate"]
+          {{- end }}
+          env:
+            {{- include "agentic.env" (list . true) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.migrations.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            {{- include "agentic.volumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "agentic.volumes" . | nindent 8 }}
+{{- end }}

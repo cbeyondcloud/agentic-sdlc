@@ -1,0 +1,41 @@
+{{- /* Optional NetworkPolicy for the chart's pods. Ingress: only the API port, from
+networkPolicy.ingressFrom (default: the release namespace). Egress, when an allow-list is
+given: DNS plus that list (Postgres, TokenLean, git hosts, SMTP) - the network-level guard
+for tenant-set git URLs (DF-484). */ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "agentic.fullname" . }}-api
+  labels:
+    {{- include "agentic.labels" (list . "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agentic.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  policyTypes:
+    - Ingress
+    {{- if .Values.networkPolicy.egress }}
+    - Egress
+    {{- end }}
+  ingress:
+    - ports:
+        - port: http
+          protocol: TCP
+      from:
+        {{- if .Values.networkPolicy.ingressFrom }}
+        {{- toYaml .Values.networkPolicy.ingressFrom | nindent 8 }}
+        {{- else }}
+        - podSelector: {}
+        {{- end }}
+  {{- with .Values.networkPolicy.egress }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

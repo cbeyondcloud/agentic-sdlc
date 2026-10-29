@@ -1,0 +1,76 @@
+# Every optional part of the chart switched on (render tests, lint and schema validation
+# use it). Host names are examples; no value here is a secret.
+image:
+  repository: registry.example.org/agentic/agentic-control-plane
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+imagePullSecrets:
+  - name: registry-pull
+publicUrl: https://agentic.example.org
+minCliVersion: "0.1.0"
+smtp:
+  host: smtp.example.org
+  port: 587
+  security: starttls
+  username: agentic-mailer
+  from: agentic@example.org
+tokenlean:
+  url: https://tokenlean.example.org
+  adminUrl: https://tokenlean-admin.example.org
+config:
+  AGENTIC_CP_POLICY_POLL_SECONDS: "60"
+  AGENTIC_CP_RATE_LIMIT_PER_MINUTE: 1200
+gitConfigSecret: agentic-git-config
+api:
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/component: api
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: org-issuer
+  host: agentic.example.org
+  tlsSecretName: agentic-tls
+metrics:
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: prometheus
+  scrapeAnnotations: true
+networkPolicy:
+  enabled: true
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.20.0.0/16
+      ports:
+        - port: 5432
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 587
+          protocol: TCP
+grafana:
+  dashboards:
+    namespace: observability
+  datasource:
+    enabled: true
+    namespace: observability
+    host: agentic-postgres.example.org:5432
+    user: grafana_acme

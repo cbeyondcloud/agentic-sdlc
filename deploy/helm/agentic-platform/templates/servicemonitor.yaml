@@ -1,0 +1,25 @@
+{{- /* /metrics answers only with the metrics token (M2-12), read from the existing Secret. */ -}}
+{{- if .Values.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "agentic.fullname" . }}-api
+  labels:
+    {{- include "agentic.labels" (list . "api") | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "agentic.selector" (list . "api") | nindent 6 }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ include "agentic.secretName" . }}
+          key: {{ .Values.secrets.keys.metricsToken }}
+{{- end }}

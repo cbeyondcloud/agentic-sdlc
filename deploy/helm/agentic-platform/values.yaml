@@ -1,0 +1,217 @@
+# Values for the agentic-platform chart (M3-02). Every value is documented here; the
+# chart's README explains the prerequisites (a Postgres, the Secret, the image).
+#
+# No value in this file takes a secret. Secrets live in one Kubernetes Secret you create
+# (by hand, External Secrets or Sealed Secrets), named by secrets.existingSecret.
+
+# -- Override the chart name in object names.
+nameOverride: ""
+# -- Override the full object name prefix (default: <release>-agentic-platform, or the
+# release name when it already contains the chart name).
+fullnameOverride: ""
+
+image:
+  # -- The control-plane image, built from control-plane/Dockerfile and pushed to your
+  # registry (`docker build -f control-plane/Dockerfile .` from the repository root).
+  repository: agentic-control-plane
+  # -- The image tag; empty means the chart's appVersion (the release version).
+  tag: ""
+  # -- An image digest (sha256:...). When set it is used instead of the tag: preferred.
+  digest: ""
+  pullPolicy: IfNotPresent
+# -- Image pull secrets (names of existing docker-registry Secrets).
+imagePullSecrets: []
+
+secrets:
+  # -- The existing Secret holding the control plane's secrets (keys below). Required. The
+  # chart only references it: create it before installing (see the README).
+  existingSecret: agentic-platform
+  # -- Key names inside the existing Secret (the names, never the values).
+  keys:
+    # -- The runtime role's DSN (postgresql://...): API, worker and migration Job.
+    databaseUrl: database-url
+    # -- The owner role's DSN: the migration Job only, never the long-running pods.
+    ownerDatabaseUrl: owner-database-url
+    # -- Optional: the bearer token Prometheus scrapes /metrics with (16+ characters).
+    metricsToken: metrics-token
+    # -- Optional: the SMTP relay password.
+    smtpPassword: smtp-password
+    # -- Optional: TokenLean's admin API key (proxy keys, routing).
+    gatewayAdminKey: gateway-admin-key
+
+# -- Where people reach the control plane (invite links). Sets AGENTIC_CP_PUBLIC_URL.
+publicUrl: ""
+# -- The deployment's minimum CLI version (PEP 440). Raise it after a grace period
+# (docs/runbooks/upgrade.md). Sets AGENTIC_CP_MIN_CLI_VERSION.
+minCliVersion: ""
+
+smtp:
+  # -- The org's SMTP relay host; empty keeps mail queued (nothing is sent).
+  host: ""
+  port: 587
+  # -- starttls, tls or none (none only for a relay inside the cluster).
+  security: starttls
+  # -- The relay user name (not a secret; the password is secrets.keys.smtpPassword).
+  username: ""
+  # -- The deployment's sender address.
+  from: ""
+
+tokenlean:
+  # -- Install TokenLean's LITE sub-chart. Off by default (BYO TokenLean); the sub-chart
+  # is a placeholder until M3-04.
+  enabled: false
+  # -- The TokenLean URL developers' CLIs use (BYO). Sets AGENTIC_CP_GATEWAY_URL.
+  url: ""
+  # -- TokenLean's admin API (proxy keys, routing). Sets AGENTIC_CP_GATEWAY_ADMIN_URL.
+  adminUrl: ""
+
+# -- Other AGENTIC_CP_* settings by their variable name (see agentic_cp.settings), e.g.
+# AGENTIC_CP_POLICY_POLL_SECONDS: "60". Settings that hold a secret are refused here.
+config: {}
+
+# -- A Secret with one `<tenant-slug>.gitconfig` per tenant (credential helper for its
+# private policy and code repositories). Mounted read-only; sets AGENTIC_CP_GIT_CONFIG_DIR.
+gitConfigSecret: ""
+
+api:
+  # -- Replicas when autoscaling is off (two or more for availability).
+  replicas: 2
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  # -- Sizing starting point (master plan): 1 vCPU / 1 GB per replica.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # -- Spread replicas over nodes when the scheduler can.
+  topologySpreadConstraints: []
+
+worker:
+  # -- One worker leads (a Postgres advisory lock); the others wait as standbys.
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+migrations:
+  # -- Run `migrate` as a pre-install and pre-upgrade hook.
+  enabled: true
+  # -- Also create or re-align the runtime role (`db grant-runtime`). Turn off when the
+  # platform team manages that role itself.
+  grantRuntime: true
+  # -- The Job's service account. A pre-install hook runs before the chart's own service
+  # account exists, so it uses the namespace's "default" (no token is mounted).
+  serviceAccountName: default
+  backoffLimit: 2
+  activeDeadlineSeconds: 900
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # -- The host name (also the TLS certificate's name).
+  host: ""
+  # -- The TLS Secret (for example made by cert-manager); empty: no TLS section.
+  tlsSecretName: ""
+
+serviceAccount:
+  # -- Create a service account for the pods (none of them calls the Kubernetes API).
+  create: true
+  name: ""
+  annotations: {}
+
+metrics:
+  serviceMonitor:
+    # -- A prometheus-operator ServiceMonitor scraping /metrics with the metrics token.
+    enabled: false
+    interval: 30s
+    labels: {}
+  # -- Add prometheus.io/* scrape annotations to the API pods (your scrape config must
+  # send the metrics token as a bearer token).
+  scrapeAnnotations: false
+
+networkPolicy:
+  # -- A NetworkPolicy for the chart's pods.
+  enabled: false
+  # -- Who may reach the API (NetworkPolicy `from` peers); empty: the release namespace.
+  ingressFrom: []
+  # -- Egress allow-list (NetworkPolicy `to` rules: Postgres, TokenLean, git hosts, SMTP).
+  # DNS is always allowed. Empty: egress is not restricted.
+  egress: []
+
+grafana:
+  dashboards:
+    # -- ConfigMaps with the framework's dashboards for Grafana's dashboard sidecar.
+    enabled: true
+    # -- The sidecar's label (the Grafana chart's sidecar.dashboards.label).
+    label: grafana_dashboard
+    labelValue: "1"
+    # -- The folder annotation (the Grafana chart's sidecar.dashboards.folderAnnotation).
+    folderAnnotation: grafana_folder
+    folder: Agentic
+    # -- Namespace of the ConfigMaps; empty: the release namespace.
+    namespace: ""
+  datasource:
+    # -- A ConfigMap with the dashboards' datasource (uid agentic-postgres) for Grafana's
+    # datasource sidecar. Grafana reads the reader's password from its own environment.
+    enabled: false
+    label: grafana_datasource
+    labelValue: "1"
+    namespace: ""
+    orgId: 1
+    # -- The Postgres host:port the reader logs in to.
+    host: ""
+    database: agentic
+    # -- The tenant's Grafana reader role (`python -m agentic_cp db dashboard-role`).
+    user: ""
+    # -- The variable in Grafana's environment holding the reader's password.
+    passwordEnv: AGENTIC_DASH_READER_PASSWORD
+    sslmode: require
+
+# -- Pod and container security settings shared by every pod (the image's user 10001).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+# -- Size limit of the writable /tmp (policy repository checkouts).
+tmpSizeLimit: 1Gi

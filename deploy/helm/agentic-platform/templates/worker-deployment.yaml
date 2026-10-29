@@ -1,0 +1,54 @@
+{{- /* The background worker: policy sync, CODEOWNERS refresh, auto-trip, zombie runs, mail
+and key revocations. One replica leads (a Postgres session advisory lock); the others wait
+and take over when it stops. */ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentic.fullname" . }}-worker
+  labels:
+    {{- include "agentic.labels" (list . "worker") | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.replicas }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "agentic.selector" (list . "worker") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentic.labels" (list . "worker") | nindent 8 }}
+      {{- with .Values.worker.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- include "agentic.podCommon" (list . "") | nindent 6 }}
+      # a stopping leader releases its lock when its connection closes
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: {{ include "agentic.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["worker"]
+          env:
+            {{- include "agentic.env" (list . false) | nindent 12 }}
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            {{- include "agentic.volumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "agentic.volumes" . | nindent 8 }}
+      {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worker.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

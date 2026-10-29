@@ -1,0 +1,27 @@
+# The framework's umbrella chart (M3-02): the control plane (API, worker, migration Job),
+# Grafana provisioning for a BYO Grafana, and TokenLean's LITE sub-chart (optional).
+# `version` is the release version as SemVer and `appVersion` the release version itself;
+# `uv run python scripts/release.py version set X` moves both (scripts/agentic_release).
+apiVersion: v2
+name: agentic-platform
+description: The agentic SDLC framework's org deployment - control plane, worker, migrations and dashboards
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+kubeVersion: ">=1.29.0-0"
+annotations:
+  artifacthub.io/license: MIT
+keywords:
+  - agentic
+  - sdlc
+  - control-plane
+sources:
+  - https://github.com/cbeyondcloud/agentic-sdlc
+dependencies:
+  # TokenLean LITE (track tokenlean-st8-cloud, TokenLean repo deploy/lite/cloud/helm). Until
+  # M3-04 wires the real chart this is a local placeholder that refuses to render; run
+  # TokenLean yourself and set tokenlean.url (BYO, the default).
+  - name: tokenlean-lite
+    version: "0.0.0-placeholder"
+    repository: file://charts/tokenlean-lite
+    condition: tokenlean.enabled

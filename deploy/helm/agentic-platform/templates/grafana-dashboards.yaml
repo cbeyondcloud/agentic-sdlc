@@ -1,0 +1,25 @@
+{{- /* One ConfigMap per framework dashboard for Grafana's dashboard sidecar (the label
+convention of the Grafana chart and kube-prometheus-stack). The folder is globbed, so a
+dashboard added to the catalog (`python -m agentic_cp dashboards --write` refreshes the
+chart's copy) is provisioned without a template change. */ -}}
+{{- if .Values.grafana.dashboards.enabled }}
+{{- $root := . }}
+{{- $d := .Values.grafana.dashboards }}
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+{{- $base := regexReplaceAll "[^a-z0-9-]" (base $path | trimSuffix ".json" | lower) "-" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-dashboard-%s" (include "agentic.fullname" $root) $base | trunc 63 | trimSuffix "-" }}
+  namespace: {{ default $root.Release.Namespace $d.namespace }}
+  labels:
+    {{- include "agentic.labels" (list $root "dashboards") | nindent 4 }}
+    {{ $d.label }}: {{ $d.labelValue | quote }}
+  annotations:
+    {{ $d.folderAnnotation }}: {{ $d.folder | quote }}
+data:
+  {{ base $path }}: |
+    {{- $root.Files.Get $path | nindent 4 }}
+{{- end }}
+{{- end }}
