@@ -10,7 +10,6 @@ exclude-newer-span = "P14D"
 certifi = "2026-10-21T00:00:00Z"
 fastmcp = "2026-10-20T15:00:00Z"
 filelock = "2026-10-18T00:00:00Z"
-authlib = "2026-10-14T15:00:00Z"
 virtualenv = "2026-10-18T00:00:00Z"
 fastmcp-slim = "2026-10-20T15:00:00Z"
 
