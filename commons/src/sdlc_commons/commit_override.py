@@ -350,6 +350,22 @@ class CommitOverride:
             log.write(json.dumps(row, sort_keys=True) + "\n")
 
 
+def without_push(target: Path) -> list[str]:
+    """The profile's in-place components that name no push command: a run on them cannot
+    be published (asked before a run spends anything). [] when the profile cannot be read -
+    the run itself then says why."""
+    try:
+        components = policy.components(Path(target))
+    except (policy.PolicyError, ValueError, OSError):
+        return []
+    return [
+        str(c["name"])
+        for c in components
+        if (c.get("vcs") or {}).get("deny_raw_git")
+        and not str((c.get("vcs") or {}).get("push_command") or "").strip()
+    ]
+
+
 def _what(action: str) -> str:
     return {"commit": "commit message", "rollback": "commit to go back to"}.get(action, "value")
 

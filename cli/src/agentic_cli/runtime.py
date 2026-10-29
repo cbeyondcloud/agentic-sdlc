@@ -70,7 +70,7 @@ from agentic_cli.skill_activity import SkillActivity, StampingRecorder
 from agentic_cli.standalone import PLACEHOLDER
 from agentic_cli.step_extras import StepExtras
 from agentic_cli.wiring import StepWiring, production_scanner
-from agentic_cli.workspace import RUNS, Workspace
+from agentic_cli.workspace import RUNS, Workspace, rollback_commands
 from sdlc_commons.gates import ZyrofloGates, regime_block_on
 from sdlc_commons.ledger import LedgerError, RunIdentity, RunLedger
 from sdlc_commons.redaction import redactor
@@ -762,6 +762,9 @@ class Runtime:
             scanner=production_scanner(self.ws.policy()),  # tool output, as model calls
             batch=self.ws.policy().review_batch,
             checkpoint_exclude=tuple(self.ws.policy().checkpoint_exclude),
+            commit_override=self.ws.policy().commit_override,  # M2-61
+            deny_shell=tuple(self.ws.policy().deny.shell),
+            rollback_commands=rollback_commands(self.ws.config),
         )
 
     def _catalog_root(self) -> Path | None:
