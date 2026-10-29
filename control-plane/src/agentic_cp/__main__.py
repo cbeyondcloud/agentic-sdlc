@@ -15,6 +15,8 @@
     db dashboard-role --tenant S --role R [--password-env VAR]
                           bind one Grafana reader role to one tenant: the dash_* views,
                           that tenant's rows only
+    db verify-restore     check a restored database (owner role): migration revision, the
+                          runtime role's guarantees, every tenant's audit chain
     admin audit verify --tenant S
                           verify one tenant's audit chain
     admin tenant create --slug S --name N --admin-email E [--policy-repo URL]
@@ -267,6 +269,28 @@ def _grant_runtime(args: argparse.Namespace) -> int:
     asyncio.run(run())
     print(f"runtime role {settings.runtime_role} granted")
     return 0
+
+
+def _verify_restore(args: argparse.Namespace) -> int:
+    """Check a restored database (M3-02): this release's migration revision, the runtime
+    role's guarantees and every tenant's audit chain. Exit 1 when it is not usable."""
+    from agentic_cp.db import make_owner_engine
+    from agentic_cp.restore import verify_restored
+
+    settings = _settings()
+    _owner_dsn(settings)
+
+    async def run():
+        engine = make_owner_engine(settings)
+        try:
+            return await verify_restored(engine, settings.db_schema, settings.runtime_role)
+        finally:
+            await engine.dispose()
+
+    report = asyncio.run(run())
+    for line in report.lines():
+        print(line)
+    return 0 if report.ok else 1
 
 
 class CommandError(Exception):
@@ -720,6 +744,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     grant = db.add_parser("grant-runtime", help="create or re-align the runtime role")
     grant.set_defaults(run=_grant_runtime)
+    db.add_parser(
+        "verify-restore",
+        help="check a restored database: revision, guarantees, every audit chain",
+    ).set_defaults(run=_verify_restore)
     link = db.add_parser(
         "link-usage", help="read the gateway's usage through postgres_fdw (dashboards)"
     )
