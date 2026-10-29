@@ -326,3 +326,44 @@ async def test_audit_export_end_to_end(live, tmp_path):
         data.replace(b'"reason":"payments"', b'"reason":"paymentz"', 1)
     )
     assert subprocess.run(check, capture_output=True).returncode == 3
+
+
+async def test_chargeback_end_to_end(live, db, tmp_path):
+    """M3-01: `agentic report chargeback` writes the same bytes as the control plane's CSV
+    export of the same month; another tenant's team is never in it."""
+    from datetime import UTC, datetime
+
+    from agentic_cli.commands.report import write_csv
+    from agentic_cp.tables import runs
+    from agentic_cp.tenancy.context import tenant_tx
+
+    base, a, b = live
+    opened = datetime.now(UTC)
+    month = opened.strftime("%Y-%m")
+    for tenant, team in ((a, "payments"), (b, "b-only-team")):
+        async with tenant_tx(db.owner, tenant.id) as conn:
+            await conn.execute(
+                runs.insert().values(
+                    tenant_id=tenant.id,
+                    run_id=f"cost-{team}",
+                    team=team,
+                    started_by=tenant.admin_id,
+                    policy_version="git:" + "c" * 40,
+                    policy_known=True,
+                    opened_at=opened,
+                    pipeline="deliver",
+                )
+            )
+    with ControlPlaneClient(base, a.admin_token) as client:
+        report = client.chargeback(month=month, team=None)
+    assert [row.team for row in report.rows] == ["payments"]
+    assert report.rows[0].runs == 1 and report.rows[0].cost_usd is None  # no gateway linked
+    write_csv(report, tmp_path / "cli.csv")
+    served = httpx2.get(
+        f"{base}{API_PREFIX}/cost/chargeback",
+        params={"month": month, "format": "csv"},
+        headers={"Authorization": f"Bearer {a.admin_token}"},
+        trust_env=False,
+    )
+    assert served.status_code == 200, served.text
+    assert (tmp_path / "cli.csv").read_bytes() == served.content

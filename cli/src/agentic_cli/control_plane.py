@@ -60,6 +60,7 @@ from agentic.orgapi import (
     ServiceAccountInfo,
     ServiceAccountIssued,
 )
+from agentic.orgapi.cost import Chargeback
 from agentic.security.pii import PiiDetector
 from agentic.security.publish_scan import PublishBlocked, PublishGuard
 from agentic.security.secret_scan import SecretScanner
@@ -356,6 +357,12 @@ class ControlPlaneClient:
                 f"the audit export from {self._shown} broke off ({type(error).__name__})",
                 hint="run the export again",
             ) from None
+
+    def chargeback(self, *, month: str | None, team: str | None) -> Chargeback:
+        """The month's chargeback per team (M3-01): `dashboard.view.org`, or
+        `dashboard.view.team` for one team. No month: the previous calendar month."""
+        params = {k: v for k, v in (("month", month), ("team", team)) if v}
+        return Chargeback.model_validate(self._json("GET", "/cost/chargeback", params=params))
 
     def register_repo(self, remote: str, team: str) -> RepoInfo:
         return RepoInfo.model_validate(
