@@ -334,6 +334,8 @@ async def test_the_digest_mails_waiting_proposals_every_day(api, lead):
     from agentic_cp.policy_sync.worker import EXTRA_JOBS
 
     assert digest_job in EXTRA_JOBS
+    # the clock starts at the real time: begin at 08:00 UTC so "six hours later" is still today
+    api.clock.now = (api.clock.now + timedelta(days=1)).replace(hour=8, minute=0, second=0)
     a_id, _ = await person(api, "a1@a.example.test")
     b_id, _ = await person(api, "b1@a.example.test")
     await shared_proposal(api, [a_id, b_id])  # in the morning: a proposal, the day's mail
