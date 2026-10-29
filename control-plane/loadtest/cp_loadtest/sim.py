@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import asyncio
 import random
+import secrets
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import UUID
 
 import httpx2
 
@@ -66,12 +68,18 @@ class Sink:
     (R21); a failure waits a backoff (1 s doubling to 60 s) and tries again."""
 
     def __init__(
-        self, wire: Wire, run_id: str, recorder: Recorder, watcher: HeadWatcher | None
+        self,
+        wire: Wire,
+        run_id: str,
+        recorder: Recorder,
+        watcher: HeadWatcher | None,
+        tenant_id: UUID | None = None,
     ) -> None:
         self.wire = wire
         self.run_id = run_id
         self.recorder = recorder
         self.watcher = watcher
+        self.tenant_id = tenant_id  # with a watcher: the run's tenant
         self.entries: list[dict] = []
         self.produced_at: list[float] = []
         self.cursor = 0
@@ -82,7 +90,7 @@ class Sink:
         self.entries.append(entry)
         self.produced_at.append(at)
         if self.watcher is not None:
-            self.watcher.expect(self.run_id, entry["seq"], at)
+            self.watcher.expect(self.tenant_id, self.run_id, entry["seq"], at)
         self._wake.set()
 
     def start(self) -> None:
@@ -198,6 +206,10 @@ class Driver:
         self.template = template or load_template()
         self.started = 0
         self.end = 0.0
+        self.tag = secrets.token_hex(3)  # run ids never repeat across load tests
+
+    def run_id(self, slot: int, count: int, rng: random.Random) -> str:
+        return f"lt-{self.tag}-{slot:04d}-{count:03d}-{rng.getrandbits(16):04x}"
 
     async def run(self) -> None:
         options = self.options
@@ -234,7 +246,7 @@ class Driver:
     ) -> None:
         recorder, timing = self.recorder, self.options.timing
         wire = Wire(http, user.token, recorder)
-        run_id = f"lt-{slot:04d}-{count:03d}-{rng.getrandbits(32):08x}"
+        run_id = self.run_id(slot, count, rng)
         try:
             if count == 0:
                 await wire.me()
@@ -261,7 +273,8 @@ class Driver:
             team=user.team,
             policy_version=self.population.policy_version[user.tenant],
         )
-        sink = Sink(wire, run_id, recorder, self.watcher)
+        tenant_id = self.population.tenant_ids.get(user.tenant)
+        sink = Sink(wire, run_id, recorder, self.watcher, tenant_id)
         sink.start()
         process = _Process(wire, run_id, user, timing)
         process.start()

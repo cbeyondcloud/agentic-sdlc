@@ -14,7 +14,7 @@ from apiclient import FakeClock, settings_for
 from cp_loadtest.chain import RunChain
 from cp_loadtest.observe import HeadWatcher
 from cp_loadtest.profile import Timing, load_template
-from cp_loadtest.seed import registration, remove_tree, seed
+from cp_loadtest.seed import Population, registration, remove_tree, seed
 from cp_loadtest.sim import Driver, Options, Sink
 from cp_loadtest.stats import Recorder
 from cp_loadtest.wire import Wire, make_http
@@ -125,8 +125,9 @@ async def test_sink_catches_up_after_gap(db, workdir):
 
 
 async def test_head_watcher_marks_visibility(db, workdir):
-    population, app = await _seeded(db, workdir, users=1)
-    user = population.users[0]
+    population, app = await _seeded(db, workdir, tenants=2, users=2)
+    user, other = population.users
+    assert (user.tenant, other.tenant) == ("lt-01", "lt-02")
     recorder = Recorder()
     watcher = HeadWatcher(db.admin_dsn, recorder, interval_s=0.05)
     await watcher.start()
@@ -143,8 +144,11 @@ async def test_head_watcher_marks_visibility(db, workdir):
             )
             entries = [chain.next(_utc()) for _ in range(3)]
             produced = time.monotonic()
+            elsewhere = population.tenant_ids[other.tenant]
             for entry in entries:
-                watcher.expect(run_id, entry["seq"], produced)
+                watcher.expect(population.tenant_ids[user.tenant], run_id, entry["seq"], produced)
+                # the same run id in another tenant is another run: never made visible here
+                watcher.expect(elsewhere, run_id, entry["seq"], produced)
             await asyncio.sleep(0.2)
             assert recorder.visible_lag == []  # nothing is visible before it is sent
             await wire.ingest(run_id, entries)
@@ -155,7 +159,17 @@ async def test_head_watcher_marks_visibility(db, workdir):
     finally:
         await watcher.stop()
     assert len(recorder.visible_lag) == 3 and all(lag >= 0.2 for lag in recorder.visible_lag)
-    assert watcher.pending == 0
+    assert watcher.pending == 3  # the other tenant's never became visible
+
+
+def test_two_drivers_never_reuse_run_ids():
+    """Run ids name a run per tenant; two load tests on one database (same seed) must not
+    produce the same ids, or the head watcher could read an older run's head."""
+    population = Population([], {}, {}, "sha256:" + "0" * 64)
+    one = Driver(population, [], Options(runs=1, duration_s=1, ramp_s=0, timing=FAST), Recorder())
+    two = Driver(population, [], Options(runs=1, duration_s=1, ramp_s=0, timing=FAST), Recorder())
+    rng = random.Random(1)
+    assert one.run_id(0, 0, rng) != two.run_id(0, 0, random.Random(1))
 
 
 def _utc() -> datetime:

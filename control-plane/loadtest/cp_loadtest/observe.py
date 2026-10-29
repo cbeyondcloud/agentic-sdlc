@@ -20,6 +20,7 @@ import subprocess
 import threading
 import time
 from collections import defaultdict
+from uuid import UUID
 
 import asyncpg
 
@@ -41,10 +42,13 @@ class HeadWatcher:
         if not _SCHEMA.fullmatch(schema):
             raise ValueError(f"unsafe schema name {schema!r}")
         self._dsn = _dsn(admin_dsn)
-        self._query = f"select run_id, head_seq from {schema}.runs where run_id = any($1::text[])"
+        self._query = (
+            f"select tenant_id, run_id, head_seq from {schema}.runs "
+            "where run_id = any($1::text[]) and tenant_id = any($2::uuid[])"
+        )
         self.recorder = recorder
         self.interval_s = interval_s
-        self._expected: dict[str, list[tuple[int, float]]] = defaultdict(list)
+        self._expected: dict[tuple[UUID, str], list[tuple[int, float]]] = defaultdict(list)
         self._task: asyncio.Task | None = None
         self._conn: asyncpg.Connection | None = None
 
@@ -52,9 +56,10 @@ class HeadWatcher:
     def pending(self) -> int:
         return sum(len(items) for items in self._expected.values())
 
-    def expect(self, run_id: str, seq: int, produced: float) -> None:
-        """Event `seq` of `run_id` was produced at `produced` (time.monotonic)."""
-        self._expected[run_id].append((seq, produced))
+    def expect(self, tenant_id: UUID, run_id: str, seq: int, produced: float) -> None:
+        """Event `seq` of the tenant's run was produced at `produced` (time.monotonic). A run
+        id names a run per tenant, so both identify it."""
+        self._expected[(tenant_id, run_id)].append((seq, produced))
 
     async def start(self) -> None:
         self._conn = await asyncpg.connect(self._dsn)
@@ -77,10 +82,13 @@ class HeadWatcher:
             await asyncio.sleep(self.interval_s)
 
     async def read_once(self) -> None:
-        rows = await self._conn.fetch(self._query, list(self._expected))
+        keys = list(self._expected)
+        tenants = sorted({tenant for tenant, _ in keys}, key=str)
+        rows = await self._conn.fetch(self._query, [run for _, run in keys], tenants)
         seen = time.monotonic()
-        for run_id, head in rows:
-            items = self._expected.get(run_id)
+        for tenant_id, run_id, head in rows:
+            key = (tenant_id, run_id)
+            items = self._expected.get(key)
             if not items:
                 continue
             visible = [produced for seq, produced in items if seq <= head]
@@ -89,9 +97,9 @@ class HeadWatcher:
             self.recorder.count("events_visible", len(visible))
             left = [(seq, produced) for seq, produced in items if seq > head]
             if left:
-                self._expected[run_id] = left
+                self._expected[key] = left
             else:
-                del self._expected[run_id]
+                del self._expected[key]
 
 
 class DbSampler:
