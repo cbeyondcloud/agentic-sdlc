@@ -26,7 +26,6 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from agentic.eval.cases import EvalCase
-from agentic.learning.lessons import tokens
 
 if TYPE_CHECKING:
     from agentic.eval.runner import RunCase
@@ -75,12 +74,10 @@ def regression_case(
 
 
 def lesson_coverage(key_points: Sequence[str], output: str | None) -> float:
-    """The mean share of each key point's content words that `output` holds (0..1)."""
-    if not output or not key_points:
-        return 0.0
-    held = tokens(output)
-    shares = [len(tokens(kp) & held) / len(tokens(kp)) for kp in key_points if tokens(kp)]
-    return round(sum(shares) / len(shares), 4) if shares else 0.0
+    """`agentic.eval.lesson.lesson_coverage` (imported only with the eval extra)."""
+    from agentic.eval.lesson import lesson_coverage as coverage
+
+    return coverage(key_points, output)
 
 
 @dataclass(frozen=True)
@@ -100,16 +97,8 @@ class Measurement:
 
 async def measure(case: EvalCase, *, before: "RunCase", after: "RunCase", kind: str) -> Measurement:
     """Run `case` once without the change (`before`) and once with it (`after`)."""
-    from pydantic_evals.evaluators import Evaluator, EvaluatorContext
-
+    from agentic.eval.lesson import LessonCovered
     from agentic.eval.runner import run_eval
-
-    class LessonCovered(Evaluator):
-        def evaluate(self, ctx: EvaluatorContext) -> dict[str, float]:
-            record = ctx.output
-            done = record is not None and record.status == "completed"
-            output = record.output if done else None
-            return {"lesson_covered": lesson_coverage(ctx.inputs.case.expected.key_points, output)}
 
     found = await run_eval(
         [case],
