@@ -20,6 +20,7 @@ from agentic_cp.alerts.sinks import default_sinks
 from agentic_cp.audit.api import router as audit_router
 from agentic_cp.auth.api import router as auth_router
 from agentic_cp.auth.service_accounts import router as service_accounts_router
+from agentic_cp.auth.tokens import RecentTouches
 from agentic_cp.body_limit import BodyLimit
 from agentic_cp.db import current_revision, head_revision, make_engine
 from agentic_cp.db_roles import AUDIT, TENANCY, enforcement_status
@@ -95,6 +96,7 @@ def create_app(
     # where budget alerts go (M2-16): the mail outbox and the webhook seam
     app.state.alert_sinks = default_sinks(alert_webhook)
     app.state.enforcers = EnforcerCache(settings.enforcer_cache_tenants)
+    app.state.touched = RecentTouches()  # token last-use writes skipped within a minute
     install_problem_handlers(app)
     install_log_redaction()  # the webhook token travels in the path (review F2)
     app.add_middleware(BodyLimit, max_bytes=settings.max_body_bytes)

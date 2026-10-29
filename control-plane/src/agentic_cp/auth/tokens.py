@@ -170,6 +170,10 @@ async def list_tokens(conn: AsyncConnection, user_id: UUID) -> list:
     return list(found)
 
 
+#: A token's stored last use moves at most this often.
+TOUCH_EVERY = timedelta(minutes=1)
+
+
 async def touch_token(conn: AsyncConnection, token_id: UUID, *, now: datetime) -> None:
     """Record use, at most once a minute (a write per request would be wasteful)."""
     await conn.execute(
@@ -179,9 +183,28 @@ async def touch_token(conn: AsyncConnection, token_id: UUID, *, now: datetime) -
                 tokens.c.id == token_id,
                 or_(
                     tokens.c.last_used_at.is_(None),
-                    tokens.c.last_used_at < now - timedelta(minutes=1),
+                    tokens.c.last_used_at < now - TOUCH_EVERY,
                 ),
             )
         )
         .values(last_used_at=now)
     )
+
+
+class RecentTouches:
+    """The tokens this process recorded the use of within `TOUCH_EVERY`: their next request
+    needs no `touch_token` transaction, which would change nothing (M3-22: it was a third of
+    every request's database work). Bounded: when full it starts again empty."""
+
+    def __init__(self, max_tokens: int = 100_000) -> None:
+        self.max_tokens = max_tokens
+        self._at: dict[UUID, datetime] = {}
+
+    def due(self, token_id: UUID, now: datetime) -> bool:
+        last = self._at.get(token_id)
+        return last is None or not (last <= now < last + TOUCH_EVERY)
+
+    def done(self, token_id: UUID, now: datetime) -> None:
+        if len(self._at) >= self.max_tokens:
+            self._at.clear()
+        self._at[token_id] = now

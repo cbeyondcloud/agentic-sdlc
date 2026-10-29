@@ -81,8 +81,12 @@ async def current_token(
     if not decision.allowed:
         headers = {"Retry-After": str(decision.retry_after)} if decision.retry_after else None
         raise ApiProblem(429, "rate.limited", "too many requests; try again later", headers=headers)
-    async with tenant_tx(state.engine, ctx.tenant_id) as conn:
-        await touch_token(conn, ctx.token_id, now=now)
+    touched = getattr(state, "touched", None)
+    if touched is None or touched.due(ctx.token_id, now):
+        async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+            await touch_token(conn, ctx.token_id, now=now)
+        if touched is not None:
+            touched.done(ctx.token_id, now)
     return ctx
 
 
