@@ -9,7 +9,7 @@ from datetime import timedelta
 import pytest
 from apiclient import member
 from policy_repos import commit, make_policy_repo, url, write
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 
 from agentic.orgapi import CLI_VERSION_HEADER
 from agentic_cp.tables import policy_versions, runs
@@ -254,6 +254,24 @@ async def test_two_registrations_at_cap_minus_one_get_one_slot(api, version):
         _register(api, token, _body(version, "race-b")),
     )
     assert sorted(r["registered"] for r in results) == [False, True]
+
+
+async def test_only_taking_a_slot_waits_for_the_tenant_lock(api, version):
+    """M3-22: every check ran under the tenant's registration lock, so at 200 concurrent runs
+    registrations queued on it (620 ms each), held pool connections and starved every other
+    route. Now a dry run and a refused run never wait on it; only taking a slot does."""
+    token = api.a.admin_token
+    key = func.hashtextextended(f"agentic.runs.register:{api.a.id}", 0)
+    async with tenant_tx(api.db.owner, api.a.id) as holder:
+        await holder.execute(select(func.pg_advisory_xact_lock(key)))
+        dry = await asyncio.wait_for(_register(api, token, _body(version, dry_run=True)), 10)
+        assert dry["registered"] is False and all(c["passed"] for c in dry["checks"])
+        refused = _body(version, "run-x", policy_version="git:" + "0" * 40)
+        assert not (await asyncio.wait_for(_register(api, token, refused), 10))["registered"]
+        taking = asyncio.ensure_future(_register(api, token, _body(version, "run-2")))
+        await asyncio.sleep(1.0)
+        assert not taking.done()  # the slot decision still waits for the lock (R8)
+    assert (await asyncio.wait_for(taking, 10))["registered"]
 
 
 async def test_caps_of_two_tenants_are_counted_separately(api, version, tmp_path):
