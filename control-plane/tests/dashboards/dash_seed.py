@@ -54,6 +54,12 @@ class Call:
     output_tokens: int = 200
     status: int = 200
     request_id: str = field(default_factory=lambda: f"req-{uuid.uuid4().hex[:16]}")
+    #: M3-01: a fixed time (else `minutes_ago`), the model, and the cache counts (None: the
+    #: gateway did not record them)
+    when: datetime | None = None
+    model: str = "model-x"
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
 
 def tags(run: str, step: str, agent: str, team: str, **more: str) -> dict[str, str]:
@@ -349,18 +355,27 @@ async def fill_gateway(dsn: str, ddl=GATEWAY_DDL, calls=CALLS) -> None:
             await conn.execute(
                 "INSERT INTO usage_events (tenant_id, request_id, timestamp, model, provider,"
                 " team, tags, provider_prompt_tokens, response_tokens, cost_actual_usd,"
-                " status_code, total_duration_ms) VALUES ($1, $2, $3, 'model-x', 'provider-x',"
+                " status_code, total_duration_ms) VALUES ($1, $2, $3, $10, 'provider-x',"
                 " $4, $5::jsonb, $6, $7, $8::numeric, $9, 1500)",
                 call.gateway,
                 call.request_id,
-                at(call.minutes_ago),
+                call.when or at(call.minutes_ago),
                 call.team,
                 json.dumps(call.tags) if call.tags is not None else None,
                 call.input_tokens,
                 call.output_tokens,
                 call.cost,
                 call.status,
+                call.model,
             )
+            if call.cache_read_tokens is not None or call.cache_write_tokens is not None:
+                await conn.execute(
+                    "UPDATE usage_events SET cache_read_tokens = $2, cache_write_tokens = $3"
+                    " WHERE request_id = $1",
+                    call.request_id,
+                    call.cache_read_tokens,
+                    call.cache_write_tokens,
+                )
         audited = any("audit_events" in statement for statement in ddl)
         for n, (gateway, action) in enumerate(GATEWAY_AUDIT if audited else ()):
             await conn.execute(

@@ -111,6 +111,20 @@ async def linked_db(dash_db, make_gateway):
     return db, seeded, gateway
 
 
+@pytest.fixture
+async def roi_db(db, make_gateway):
+    """Tenants a and b with the executive cost seed (`roi_seed`) and its gateway linked."""
+    from roi_seed import CALLS as ROI_CALLS
+    from roi_seed import seed_roi
+
+    a, b = await make_tenants(db.owner)
+    await seed_roi(db.owner, a, b)
+    gateway = await make_gateway(calls=ROI_CALLS)
+    async with db.owner.begin() as conn:
+        await link_usage(conn, db.schema, gateway.db)
+    return db, Seeded(a=a, b=b, gateway_dsn=gateway.dsn)
+
+
 def _clock():
     from dash_seed import NOW
 

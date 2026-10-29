@@ -19,7 +19,16 @@ has the same one.
 reported cost. A call without a run tag is the `(unattributed)` line of each cost view
 (the label cannot be a run id, step, agent or team: none may hold parentheses). A step's
 agent is the one its ledger event records, else the agent tag of its first gateway call
-(`dash_step_runs.agent_source` says which)."""
+(`dash_step_runs.agent_source` says which).
+
+**Executive cost (M3-01).** `dash_cost_calls` gives every call one attribution: a call whose
+run tag names a registered run is `attributed` and belongs to that run's month (UTC month
+it opened), owner, team and pipeline; any other call is unattributed (`no run tag`, `run not
+registered`) and belongs to its own month and authenticated team. `dash_cost_facts` is the
+filterable layer (one row per run step), and `driver_sql` writes the six factors of the
+master plan's cost breakdown over any slice of it: each is a ratio of measured totals of the
+same slice, so their product is the slice's actual cost, which the drivers views show next
+to the unattributed cost with a data-quality alert above 0.5 %."""
 
 from __future__ import annotations
 
@@ -420,10 +429,194 @@ SELECT r.tenant_id, r.repo_key, r.team, r.created_at, r.registered_by
 FROM repos r JOIN dash_scope s ON s.tenant_id = r.tenant_id
 """
 
-#: Every dashboard view, in creation order (each reads only those before it). A Grafana
-#: reader may select exactly these; `test_every_dash_view_is_registered` keeps the list
-#: equal to the schema's `dash_*` views.
-DASH_VIEWS: tuple[str, ...] = (
+# ── executive cost (M3-01) ───────────────────────────────────────────────────
+
+
+def _month(expression: str) -> str:
+    """The UTC calendar month of a timestamptz, as `YYYY-MM`."""
+    return f"to_char({expression} AT TIME ZONE 'UTC', 'YYYY-MM')"
+
+
+#: Each registered run: its month, owner, team and pipeline (the one registered, else the
+#: pipeline tag of its first call), and whether any of its events reached the control plane
+#: (a run without one has unmeasured turns, not zero).
+_COST_RUNS = f"""
+SELECT r.tenant_id, r.run_id, {_month("r.opened_at")} AS month, r.opened_at,
+  COALESCE(p.email, CAST(r.started_by AS text)) AS user_email, r.team,
+  COALESCE(r.pipeline, t.pipeline, '{UNATTRIBUTED}') AS pipeline,
+  EXISTS (SELECT 1 FROM run_events e WHERE e.tenant_id = r.tenant_id AND e.run_id = r.run_id)
+    AS has_events
+FROM runs r
+JOIN dash_scope s ON s.tenant_id = r.tenant_id
+LEFT JOIN users p ON p.tenant_id = r.tenant_id AND p.id = r.started_by
+LEFT JOIN (
+  SELECT run_id, (array_agg(pipeline ORDER BY at, request_id))[1] AS pipeline
+  FROM dash_calls WHERE run_id IS NOT NULL AND pipeline IS NOT NULL GROUP BY run_id
+) t ON t.run_id = r.run_id
+"""
+
+#: Each step of a run, as the ledger saw it: how often it started (every loop iteration and
+#: retry) and its agent (the ledger's, else the agent tag of the step's first call).
+_COST_STEPS = f"""
+SELECT e.tenant_id, e.run_id, e.step,
+  COUNT(*) FILTER (WHERE e.event = 'step_started') AS executions,
+  COALESCE(MAX({_LEDGER_AGENT}), MAX(sa.agent)) AS agent
+FROM run_events e
+JOIN dash_scope s ON s.tenant_id = e.tenant_id
+LEFT JOIN dash_step_agents sa ON sa.tenant_id = e.tenant_id AND sa.run_id = e.run_id
+  AND sa.step = e.step
+WHERE e.event IN ('step_started', 'step_finished')
+GROUP BY e.tenant_id, e.run_id, e.step
+"""
+
+#: A call's tokens: the parts the gateway measured (a missing cache count is not 0, it is
+#: left out); NULL when it measured none.
+_PARTS = ("c.input_tokens", "c.output_tokens", "c.cache_read_tokens", "c.cache_write_tokens")
+_CALL_TOKENS = (
+    f"CASE WHEN num_nonnulls({', '.join(_PARTS)}) > 0 "
+    f"THEN {' + '.join(f'COALESCE({part}, 0)' for part in _PARTS)} END"
+)
+
+_COST_CALLS = f"""
+SELECT c.tenant_id, c.request_id, c.at,
+  COALESCE(r.month, {_month("c.at")}) AS month,
+  (r.run_id IS NOT NULL) AS attributed,
+  CASE WHEN c.run_id IS NULL THEN 'no run tag'
+    WHEN r.run_id IS NULL THEN 'run not registered' END AS unattributed_reason,
+  c.run_id, r.user_email,
+  COALESCE(r.team, c.team) AS team,
+  COALESCE(r.pipeline, c.pipeline, '{UNATTRIBUTED}') AS pipeline,
+  c.step_key AS step,
+  COALESCE(st.agent, sa.agent, '{UNATTRIBUTED}') AS agent,
+  COALESCE(c.routed_model, c.model, '{UNATTRIBUTED}') AS model,
+  c.input_tokens, c.output_tokens, c.cache_read_tokens, c.cache_write_tokens,
+  {_CALL_TOKENS} AS tokens,
+  c.cost_usd
+FROM dash_calls c
+LEFT JOIN dash_cost_runs r ON r.tenant_id = c.tenant_id AND r.run_id = c.run_id
+LEFT JOIN dash_cost_steps st ON st.tenant_id = c.tenant_id AND st.run_id = c.run_id
+  AND st.step = c.step_key
+LEFT JOIN dash_step_agents sa ON sa.tenant_id = c.tenant_id AND sa.run_id = c.run_id
+  AND sa.step = c.step_key
+"""
+
+_SUMS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "tokens")
+
+#: One row per (registered run, step): step executions next to the step's calls. A run with
+#: neither keeps one row (step NULL; executions NULL when none of its events arrived).
+#: Unattributed calls follow as grouped rows with `attributed = false`.
+_COST_FACTS = f"""
+SELECT r.tenant_id, r.month, true AS attributed, CAST(NULL AS text) AS unattributed_reason,
+  r.run_id, r.user_email, r.team, r.pipeline, x.step,
+  COALESCE(x.agent, '{UNATTRIBUTED}') AS agent,
+  CASE WHEN x.run_id IS NOT NULL THEN COALESCE(x.executions, 0)
+    WHEN r.has_events THEN 0 END AS executions,
+  COALESCE(x.calls, 0) AS calls,
+  {", ".join(f"x.{name}" for name in _SUMS)}, x.cost_usd
+FROM dash_cost_runs r
+LEFT JOIN (
+  SELECT COALESCE(st.tenant_id, ca.tenant_id) AS tenant_id,
+    COALESCE(st.run_id, ca.run_id) AS run_id,
+    COALESCE(st.step, ca.step) AS step,
+    COALESCE(st.agent, ca.agent) AS agent,
+    st.executions, ca.calls, {", ".join(f"ca.{name}" for name in _SUMS)}, ca.cost_usd
+  FROM dash_cost_steps st
+  FULL JOIN (
+    SELECT tenant_id, run_id, step, MAX(agent) AS agent, COUNT(*) AS calls,
+      {", ".join(f"SUM({name}) AS {name}" for name in _SUMS)}, SUM(cost_usd) AS cost_usd
+    FROM dash_cost_calls WHERE attributed GROUP BY tenant_id, run_id, step
+  ) ca ON ca.tenant_id = st.tenant_id AND ca.run_id = st.run_id AND ca.step = st.step
+) x ON x.tenant_id = r.tenant_id AND x.run_id = r.run_id
+UNION ALL
+SELECT tenant_id, month, false, unattributed_reason, run_id, NULL, team, pipeline, step,
+  agent, 0, COUNT(*), {", ".join(f"SUM({name})" for name in _SUMS)}, SUM(cost_usd)
+FROM dash_cost_calls WHERE NOT attributed
+GROUP BY tenant_id, month, unattributed_reason, run_id, team, pipeline, step, agent
+"""
+
+#: The six factors in product order: (column, label).
+FACTORS: tuple[tuple[str, str], ...] = (
+    ("users", "Users"),
+    ("sessions_per_user", "Sessions per user"),
+    ("turns_per_session", "Turns per session"),
+    ("requests_per_turn", "Requests per turn"),
+    ("tokens_per_request", "Tokens per request"),
+    ("cost_per_token", "Cost per token"),
+)
+#: Above this difference between the product of the factors and the actual cost, the
+#: drivers views raise `data_quality_alert` (master plan: 0.5 %).
+ALERT_PCT = "0.5"
+
+_FACTOR_SQL = {
+    "users": "t.users",
+    "sessions_per_user": "CAST(t.sessions AS numeric) / NULLIF(t.users, 0)",
+    "turns_per_session": "CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)",
+    "requests_per_turn": "CAST(t.requests AS numeric) / NULLIF(t.turns, 0)",
+    "tokens_per_request": "CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)",
+    "cost_per_token": "t.actual_usd / NULLIF(t.tokens, 0)",
+}
+_PRODUCT = " * ".join(f"({_FACTOR_SQL[name]})" for name, _ in FACTORS)
+_TOTAL = (
+    "CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL "
+    "ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END"
+)
+
+
+def driver_sql(where: str = "true", group: tuple[str, ...] = ()) -> str:
+    """The cost drivers of the `dash_cost_facts f` rows matching `where`, one row per `group`
+    (no group: exactly one row, even over no rows). Columns: the group, the measured totals
+    (users, sessions, turns, requests, tokens and their split), the six factors, the product
+    of the factors, the attributed actual cost, the unattributed cost, their total, the
+    difference in percent, `data_quality_alert` and `cached_share`."""
+    keys = "".join(f"f.{name} AS {name}, " for name in group)
+    outer = "".join(f"t.{name}, " for name in group)
+    grouping = f" GROUP BY {', '.join(f'f.{name}' for name in group)}" if group else ""
+    split = ", ".join(f"SUM(f.{name}) FILTER (WHERE f.attributed) AS {name}" for name in _SUMS)
+    inner = (
+        f"SELECT {keys}"
+        "COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, "
+        "COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, "
+        "SUM(f.executions) FILTER (WHERE f.attributed) AS turns, "
+        "SUM(f.calls) FILTER (WHERE f.attributed) AS requests, "
+        f"{split}, "
+        "SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, "
+        "SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, "
+        "SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, "
+        "SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens "
+        f"FROM dash_cost_facts f WHERE {where}{grouping}"
+    )
+    factors = ", ".join(f"{_FACTOR_SQL[name]} AS {name}" for name, _ in FACTORS)
+    return (
+        f"SELECT {outer}t.sessions, t.turns, t.requests, "
+        f"{', '.join(f't.{name}' for name in _SUMS)}, {factors}, "
+        f"{_PRODUCT} AS product_usd, t.actual_usd, t.unattributed_usd, "
+        f"t.unattributed_requests, {_TOTAL} AS total_usd, "
+        f"ROUND(100 * ABS({_PRODUCT} - ({_TOTAL})) / NULLIF({_TOTAL}, 0), 4) AS diff_pct, "
+        f"CASE WHEN ({_TOTAL}) IS NULL THEN false WHEN ({_PRODUCT}) IS NULL THEN true "
+        f"WHEN ({_TOTAL}) = 0 THEN ({_PRODUCT}) <> 0 "
+        f"ELSE 100 * ABS({_PRODUCT} - ({_TOTAL})) / ({_TOTAL}) > {ALERT_PCT} END "
+        "AS data_quality_alert, "
+        "ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share "
+        f"FROM ({inner}) t"
+    )
+
+
+_CHARGEBACK = f"""
+SELECT f.tenant_id, f.month, f.team,
+  COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users,
+  COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS runs,
+  SUM(f.executions) AS step_executions,
+  SUM(f.calls) AS calls,
+  {", ".join(f"SUM(f.{name}) AS {name}" for name in _SUMS)},
+  SUM(f.cost_usd) FILTER (WHERE f.attributed) AS attributed_usd,
+  SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd,
+  SUM(f.cost_usd) AS cost_usd
+FROM dash_cost_facts f
+GROUP BY f.tenant_id, f.month, f.team
+"""
+
+#: Every dashboard view of M2-37, in creation order (each reads only those before it).
+M2_37_VIEWS: tuple[str, ...] = (
     "dash_scope",
     "dash_calls",
     "dash_step_agents",
@@ -440,6 +633,23 @@ DASH_VIEWS: tuple[str, ...] = (
     "dash_audit",
     "dash_repos",
 )
+
+
+#: The executive cost views of M3-01 (migration `m3_01_roi`), in creation order.
+ROI_VIEWS: tuple[str, ...] = (
+    "dash_cost_runs",
+    "dash_cost_steps",
+    "dash_cost_calls",
+    "dash_cost_facts",
+    "dash_cost_drivers",
+    "dash_cost_drivers_team",
+    "dash_cost_drivers_user",
+    "dash_chargeback",
+)
+
+#: Every dashboard view, in creation order. A Grafana reader may select exactly these;
+#: `test_every_dash_view_is_registered` keeps the list equal to the schema's `dash_*` views.
+DASH_VIEWS: tuple[str, ...] = M2_37_VIEWS + ROI_VIEWS
 
 
 def _bodies(schema: str) -> dict[str, str]:
@@ -459,21 +669,33 @@ def _bodies(schema: str) -> dict[str, str]:
         "dash_gateway_safety": _GATEWAY_SAFETY,
         "dash_audit": _AUDIT,
         "dash_repos": _REPOS,
+        "dash_cost_runs": _COST_RUNS,
+        "dash_cost_steps": _COST_STEPS,
+        "dash_cost_calls": _COST_CALLS,
+        "dash_cost_facts": _COST_FACTS,
+        "dash_cost_drivers": driver_sql(group=("tenant_id", "month")),
+        "dash_cost_drivers_team": driver_sql(group=("tenant_id", "month", "team")),
+        "dash_cost_drivers_user": driver_sql("f.attributed", ("tenant_id", "month", "user_email")),
+        "dash_chargeback": _CHARGEBACK,
     }
 
 
-def view_statements(schema: str) -> list[str]:
-    """`CREATE VIEW` for the contracts (empty) and every dashboard view, in order. `schema`
-    must already be a checked identifier (`tenancy.rls.schema_of`)."""
-    statements = [
-        f"CREATE VIEW {name} AS {placeholder_sql(columns)}"
-        for name, (columns, _) in CONTRACTS.items()
-    ]
+def view_statements(schema: str, views: tuple[str, ...] = M2_37_VIEWS) -> list[str]:
+    """`CREATE VIEW` for `views`, in order; the M2-37 set also creates the contracts (empty)
+    first. `schema` must already be a checked identifier (`tenancy.rls.schema_of`)."""
+    statements = []
+    if views == M2_37_VIEWS:
+        statements += [
+            f"CREATE VIEW {name} AS {placeholder_sql(columns)}"
+            for name, (columns, _) in CONTRACTS.items()
+        ]
     bodies = _bodies(schema)
-    statements += [f"CREATE VIEW {name} AS {bodies[name].strip()}" for name in DASH_VIEWS]
+    statements += [f"CREATE VIEW {name} AS {bodies[name].strip()}" for name in views]
     return statements
 
 
-def drop_statements() -> list[str]:
-    """`DROP VIEW` for every view `view_statements` creates, dependents first."""
-    return [f"DROP VIEW IF EXISTS {name}" for name in (*reversed(DASH_VIEWS), *CONTRACT_VIEWS)]
+def drop_statements(views: tuple[str, ...] = M2_37_VIEWS) -> list[str]:
+    """`DROP VIEW` for every view `view_statements(schema, views)` creates, dependents
+    first."""
+    contracts = CONTRACT_VIEWS if views == M2_37_VIEWS else ()
+    return [f"DROP VIEW IF EXISTS {name}" for name in (*reversed(views), *contracts)]
