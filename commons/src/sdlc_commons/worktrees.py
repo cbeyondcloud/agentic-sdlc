@@ -73,6 +73,67 @@ class Tree:
     mode: str  # "worktree", or "in-place" for a component Zyroflo cannot give a tree
 
 
+#: Where a run keeps the commit-command override its first `prepare` accepted (M2-61): in the
+#: run folder, which agents never write, so later steps use these commands and no others.
+OVERRIDE_FILE = "vcs-override.json"
+
+
+@dataclass(frozen=True)
+class InPlace:
+    """An in-place component's commit-command override (M2-61), as accepted for one run:
+    argv templates with whole-word placeholders; `push` is () when none is configured."""
+
+    component: str
+    checkout: Path  # the component's own checkout: agents work here, commands run here
+    base: str  # the commit the run started from (Zyroflo's record)
+    commit: tuple[str, ...]
+    rollback: tuple[str, ...]
+    push: tuple[str, ...] = ()
+
+    def as_json(self) -> dict:
+        return {
+            "checkout": str(self.checkout),
+            "base": self.base,
+            "commit": list(self.commit),
+            "rollback": list(self.rollback),
+            "push": list(self.push),
+        }
+
+
+def kept_override(target: Path, run_id: str) -> dict[str, InPlace] | None:
+    """The override the run accepted, by component; None when it accepted none (or the
+    record cannot be read: then nothing in place is trusted)."""
+    try:
+        path = state.runs_dir(Path(target)) / run_id / OVERRIDE_FILE
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            name: InPlace(
+                component=name,
+                checkout=Path(row["checkout"]),
+                base=str(row["base"]),
+                commit=tuple(str(w) for w in row["commit"]),
+                rollback=tuple(str(w) for w in row["rollback"]),
+                push=tuple(str(w) for w in row.get("push", ())),
+            )
+            for name, row in data["components"].items()
+        }
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def keep_override(target: Path, run_id: str, accepted: Mapping[str, InPlace]) -> None:
+    path = state.runs_dir(Path(target)) / run_id / OVERRIDE_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {"components": {name: cmds.as_json() for name, cmds in accepted.items()}}
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+
+def override_homes(target: Path, run_id: str) -> list[Path]:
+    """The checkouts of the run's in-place components whose override it accepted: where its
+    agents may work besides its trees (`Guard`)."""
+    return [cmds.checkout for cmds in (kept_override(target, run_id) or {}).values()]
+
+
 class RunWorktrees:
     """The trees of one run."""
 

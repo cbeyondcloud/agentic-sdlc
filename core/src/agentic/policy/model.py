@@ -528,7 +528,7 @@ def _override_rule(rule: str) -> str:
         raise ValueError("an allow rule names at least the program; an empty one allows all")
     if any(c in rule for c in "\r\n") or "{" in rule or "}" in rule:
         raise ValueError(f"{rule!r}: one line of words, without {{placeholders}}")
-    return " ".join(rule.split())
+    return rule.strip()
 
 
 class CommitOverridePolicy(_Strict):
