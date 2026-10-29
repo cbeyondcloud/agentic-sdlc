@@ -40,6 +40,21 @@ git_hosts:
     credential: ghe_token                     # optional; default github_token
 ```
 
+### Cleaning up finished runs (`gc:`)
+
+`agentic gc` removes finished runs and their trees once they are older than a number of
+days. `agentic status` warns when this repository's local data passes a cap. Both
+defaults come from the org policy (`limits.yaml` `local:`), else 14 days and 20 GB. Your
+own setting wins over the org's:
+
+```yaml
+gc:
+  older_than_days: 30     # what `agentic gc` removes without --older-than
+  disk_cap_gb: 50         # when `agentic status` warns
+```
+
+See [CLI operations](runbooks/cli-operations.md) for what gc always keeps.
+
 ## Org settings: the policy repo's `policy/org.yaml`
 
 ### Keeping an environment variable in agent commands (`sandbox.pass_env`)
@@ -55,3 +70,15 @@ sandbox:
 
 Names are letters, digits and `_`. The framework's own `AGENTIC_*` variables are never
 passed, whatever the list says.
+
+### Resource limits for agent commands (`sandbox.limits`)
+
+What one agent shell command may use: CPU time per process, resident memory of the whole
+command, the largest file it may write, and the processes it may run at once. A limit
+left out is not applied. Enforced on Linux and macOS; on native Windows best effort, with
+no file-size limit (see [CLI operations](runbooks/cli-operations.md)).
+
+```yaml
+sandbox:
+  limits: { cpu_seconds: 3600, memory_mb: 8192, max_file_mb: 4096, processes: 512 }
+```

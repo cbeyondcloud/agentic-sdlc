@@ -81,6 +81,8 @@ def register(app: typer.Typer) -> None:
                 console.print("No runs in this repository.")
             for report in runs:
                 verdict = "intact" if report.intact else "BROKEN"
+                if report.active:  # DF-618: a running run's last line is still being written
+                    verdict += " (active: checked to its last whole event)"
                 console.print(f"run {report.run_id}: {verdict} ({report.entries} events)")
                 for f in report.findings:
                     console.print(f"  {_located(f)}", markup=False)

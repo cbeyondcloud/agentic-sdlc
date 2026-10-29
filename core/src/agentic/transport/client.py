@@ -28,6 +28,9 @@ import hashlib
 import re
 import secrets
 from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Literal
 
 import httpx2
@@ -134,6 +137,32 @@ def verify_gateway_key(
     """Ask the gateway whether it accepts `api_key` (`GET <base>/v1/models`, which needs a
     valid key and costs nothing): `rejected` on 401/403, `unknown` when the gateway cannot
     be reached or answers anything else (DF-182)."""
+    return probe_gateway(
+        base_url, api_key, network=network, transport=transport, timeout=timeout
+    ).verdict
+
+
+@dataclass(frozen=True)
+class GatewayProbe:
+    """What one `GET /v1/models` told about the gateway (M3-09 `agentic doctor`)."""
+
+    verdict: Literal["accepted", "rejected", "unknown"]
+    models: tuple[str, ...] | None  # the model names it serves; None when it did not list them
+    server_date: datetime | None  # its `Date` header: doctor's clock-skew check
+    detail: str  # what happened, never the key
+
+
+def probe_gateway(
+    base_url: str,
+    api_key: str,
+    *,
+    network: NetworkSettings | None = None,
+    transport: httpx2.BaseTransport | None = None,
+    timeout: float = 10.0,
+) -> GatewayProbe:
+    """`GET <base>/v1/models` with the key: whether the gateway is reachable and accepts
+    the key, which models it serves (an OpenAI-style `{"data": [{"id": ...}]}` list) and
+    the time it says it is. No model is called; nothing is spent."""
     options: dict = {"timeout": timeout, "follow_redirects": False}
     if transport is not None:
         options["transport"] = transport
@@ -146,11 +175,38 @@ def verify_gateway_key(
             response = client.get(
                 f"{base_url.rstrip('/')}/v1/models", headers={"Authorization": f"Bearer {api_key}"}
             )
-    except httpx2.HTTPError:
-        return "unknown"
-    if response.status_code in (401, 403):
-        return "rejected"
-    return "accepted" if response.is_success else "unknown"
+    except httpx2.HTTPError as error:
+        return GatewayProbe("unknown", None, None, f"cannot reach it ({type(error).__name__})")
+    except (httpx2.InvalidURL, ValueError):  # a typo in the configured URL: doctor reports it
+        return GatewayProbe("unknown", None, None, "gateway_url is not a valid URL")
+    date = _date(response.headers.get("Date"))
+    status = response.status_code
+    if status in (401, 403):
+        return GatewayProbe("rejected", None, date, f"HTTP {status}: the key was refused")
+    if not response.is_success:
+        return GatewayProbe("unknown", None, date, f"HTTP {status}")
+    return GatewayProbe("accepted", _model_ids(response), date, f"HTTP {status}")
+
+
+def _model_ids(response: httpx2.Response) -> tuple[str, ...] | None:
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    rows = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(rows, list):
+        return None
+    return tuple(str(row["id"]) for row in rows if isinstance(row, dict) and row.get("id"))
+
+
+def _date(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
 
 
 def make_client(

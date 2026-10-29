@@ -174,6 +174,15 @@ def test_provider_switches_and_credentials_are_blanked(coder):  # review I1
     assert env["ANTHROPIC_API_KEY"] == "tl-key"  # ours, never blanked
 
 
+def test_internal_overrides_of_a_parent_session_are_blanked(coder):
+    # A developer who runs agentic from inside a Claude Code session inherits its internal
+    # `_CLAUDE_*` overrides; one makes the binary treat TokenLean as first party and reach
+    # past it to the vendor's own API.
+    environ = {"_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL": "1", "_claude_other": "x"}
+    env = options(coder, environ=environ)["env"]
+    assert env["_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL"] == env["_claude_other"] == ""
+
+
 def test_claude_code_internal_switches_never_pass(coder):
     # A parent Claude Code session sets this; inherited, it sent calls to the vendor's API.
     environ = {"_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL": "1"}

@@ -159,6 +159,95 @@ def test_torn_tail_is_reported(home, repo, monkeypatch, capsys):
     assert any("torn" in problem for problem in report["problems"])
 
 
+def save_state(repo: Path, run_id: str, status: str) -> None:
+    """The run's run.json, as the engine writes it (only its status matters here)."""
+    from datetime import UTC, datetime
+
+    from agentic.engine.state import Cursor, RunState, RunStore
+
+    now = datetime.now(UTC)
+    state = RunState(
+        run_id=run_id,
+        pipeline="feature-delivery",
+        pipeline_version="1.0.0",
+        pipeline_digest="sha256:" + "0" * 64,
+        policy_version=POLICY,
+        catalog_digest="sha256:" + "1" * 64,
+        regime="solo",
+        starter="dev@example.invalid",
+        status=status,
+        cursor=Cursor(index=0),
+        started_at=now,
+        updated_at=now,
+    )
+    RunStore(repo / ".agentic" / "local" / "runs").save(state)
+
+
+def torn(repo: Path, run_id: str) -> None:
+    with events_file(repo, run_id).open("ab") as fh:
+        fh.write(b'{"seq": 5, "event": "step_')
+
+
+def test_active_run_with_a_half_written_event_is_not_broken(home, repo, monkeypatch, capsys):
+    """DF-618: a running run's ledger is being written; its last line may be caught half
+    written. It is retried once, then checked up to the last whole line and called active."""
+    make_run(repo, "r-1")
+    save_state(repo, "r-1", "running")
+    torn(repo, "r-1")
+    waits = []
+    monkeypatch.setattr(audit, "_sleep", waits.append)
+    monkeypatch.chdir(repo)
+
+    code, data = verify(capsys)
+
+    assert code == ExitCode.OK
+    report = data["runs"][0]
+    assert report["intact"] is True
+    assert report["active"] is True
+    assert report["entries"] == 4  # opened + 3 steps; the torn fifth is not counted
+    assert "still being written" in report["note"]
+    assert waits == [audit.TORN_RETRY_S]
+
+
+def test_active_run_tampering_is_still_located(home, repo, monkeypatch, capsys):
+    make_run(repo, "r-1")
+    save_state(repo, "r-1", "running")
+    path = events_file(repo, "r-1")
+    entries = lines_of(path)
+    entries[1]["attempt"] = 99
+    rewrite(path, entries)
+    torn(repo, "r-1")
+    monkeypatch.setattr(audit, "_sleep", lambda s: None)
+    monkeypatch.chdir(repo)
+
+    code, data = verify(capsys)
+
+    assert code == ExitCode.INVALID
+    assert data["runs"][0]["active"] is True
+    assert findings(data, "r-1") == [("events.jsonl", 2, 2, "content")]
+
+
+def test_finished_run_with_a_torn_tail_is_broken(home, repo, monkeypatch, capsys):
+    make_run(repo, "r-1")
+    save_state(repo, "r-1", "completed")
+    torn(repo, "r-1")
+    monkeypatch.setattr(audit, "_sleep", lambda s: None)
+    monkeypatch.chdir(repo)
+    code, data = verify(capsys)
+    assert code == ExitCode.INVALID
+    assert data["runs"][0]["active"] is False
+
+
+def test_active_human_output_says_so(home, repo, monkeypatch, capsys):
+    make_run(repo, "r-1")
+    save_state(repo, "r-1", "running")
+    torn(repo, "r-1")
+    monkeypatch.setattr(audit, "_sleep", lambda s: None)
+    monkeypatch.chdir(repo)
+    assert main(["audit", "verify"]) == ExitCode.OK
+    assert "intact (active" in capsys.readouterr().out
+
+
 def test_unknown_run_is_usage_error(home, repo, monkeypatch, capsys):
     make_run(repo, "r-1")
     monkeypatch.chdir(repo)

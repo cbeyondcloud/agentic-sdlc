@@ -18,6 +18,7 @@ from pathlib import Path
 from pydantic_ai import ApprovalRequired, RunContext, Tool
 
 from agentic.agents.tools.context import ShellResult, ToolContext, guarded, refused
+from agentic.policy.model import ResourceLimits
 from agentic.sandbox.process import MAX_OUTPUT, run_process, safe_env
 
 
@@ -27,11 +28,13 @@ class LocalProcessSandbox:
 
     isolated = False
 
-    def __init__(self, pass_env: Sequence[str] = ()) -> None:
+    def __init__(self, pass_env: Sequence[str] = (), limits: ResourceLimits | None = None) -> None:
         self.pass_env = tuple(pass_env)
+        self.limits = limits  # policy's `sandbox.limits` (M3-10)
 
     async def run(self, command: str, cwd: Path, timeout_s: float) -> ShellResult:
-        return await run_process(command, cwd, timeout_s, env=safe_env(pass_through=self.pass_env))
+        env = safe_env(pass_through=self.pass_env)
+        return await run_process(command, cwd, timeout_s, env=env, limits=self.limits)
 
 
 def shell_tools(ctx: ToolContext) -> list[Tool]:
@@ -46,6 +49,8 @@ def shell_tools(ctx: ToolContext) -> list[Tool]:
             raise ApprovalRequired(metadata={"ask_rules": asks})
         result = await ctx.sandbox.run(command, ctx.tree, ctx.shell_timeout_s)
         status = "timed out" if result.timed_out else f"exit {result.exit_code}"
+        if result.limited:  # M3-10: a resource limit of policy stopped it
+            status = f"stopped at the {result.limited} limit (org policy sandbox.limits)"
         return f"{status}\nstdout:\n{_cap(result.stdout)}\nstderr:\n{_cap(result.stderr)}"
 
     return [Tool(run_shell, takes_ctx=True)]

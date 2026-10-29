@@ -185,7 +185,9 @@ def test_withheld_names_are_reported_once_and_never_their_values(caplog):  # DF-
     assert len(records) == 1 and records[0].levelno == logging.WARNING
     text = records[0].getMessage()
     assert "HTTPS_PROXY" in text and "SSH_AUTH_SOCK" in text and "LANG" not in text
-    assert PASSWORD not in text and "proxy.corp" not in text
+    # the value's password and host never appear (the remedy names `sandbox.pass_env`)
+    assert f"me:{PASSWORD}word" not in text and f"{PASSWORD}word" not in text
+    assert "proxy.corp" not in text
     assert withheld_names(env) == ["HTTPS_PROXY", "SSH_AUTH_SOCK"]
 
 
@@ -194,3 +196,13 @@ def test_safe_env_runs_a_real_child():
         [sys.executable, "-c", "print('ok')"], env=safe_env(), capture_output=True, text=True
     )
     assert done.stdout.strip() == "ok"
+
+
+def test_the_withheld_warning_says_why_and_how_to_pass_one(caplog):  # DF-372 (c)
+    process._REPORTED.clear()
+    env = {"SSH_AUTH_SOCK": "/tmp/agent.sock"}
+    with caplog.at_level(logging.INFO, logger="agentic.sandbox"):
+        safe_env(env, windows=False)
+    text = next(r.getMessage() for r in caplog.records if r.name == "agentic.sandbox")
+    assert "on purpose" in text
+    assert "sandbox.pass_env" in text

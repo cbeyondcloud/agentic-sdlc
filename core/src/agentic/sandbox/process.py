@@ -19,7 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from agentic.backends.processes import KILL_WAIT_S, ProcessTree, spawn_group
-from agentic.policy.model import FRAMEWORK_ENV_PREFIX
+from agentic.policy.model import FRAMEWORK_ENV_PREFIX, ResourceLimits
+from agentic.sandbox.limits import POLL_S, Watchdog, job_limit, kernel_limit, launcher
 
 MAX_OUTPUT = 50_000
 # Environment variables a command never sees: API keys, tokens, passwords, agent sockets
@@ -51,10 +52,11 @@ _log = logging.getLogger("agentic.sandbox")
 
 @dataclass(frozen=True)
 class ShellResult:
-    exit_code: int | None  # None when the command was stopped (timed out)
+    exit_code: int | None  # None when the command was stopped (timed out, or at a limit)
     stdout: str
     stderr: str
     timed_out: bool
+    limited: str | None = None  # the resource limit that stopped it (M3-10), e.g. "memory (512 MB)"
 
 
 _REPORTED: set[str] = set()  # withheld names already logged by this process
@@ -90,7 +92,9 @@ def _report(names: list[str]) -> None:
     noticeable = any(name.upper() in _NOTICEABLE for name in new)
     _log.log(
         logging.WARNING if noticeable else logging.INFO,
-        "withheld from agent commands (a secret name or a credential in the value): %s",
+        "withheld from agent commands on purpose (a secret name or a credential in the "
+        "value): %s - if a tool needs one (an authenticated proxy, the SSH agent), ask your "
+        "org admin to list it in policy sandbox.pass_env; `agentic doctor` lists them",
         ", ".join(new),
     )
 
@@ -168,8 +172,17 @@ async def run_process(
     cwd: Path,
     timeout_s: float,
     env: Mapping[str, str] | None = None,
+    *,
+    limits: ResourceLimits | None = None,
+    launch: bool = True,
 ) -> ShellResult:
-    """Run `command` (a string through the shell, a sequence exec'd) in `cwd`."""
+    """Run `command` (a string through the shell, a sequence exec'd) in `cwd`.
+
+    `limits` (M3-10, `agentic.sandbox.limits`): on POSIX the command runs behind the
+    rlimit launcher (unless `launch` is False: a sandbox that put the launcher inside
+    itself) and a watchdog kills its tree past the memory or process limit; on Windows
+    its Job Object carries the limits. `ShellResult.limited` names the limit hit."""
+    limits = limits or ResourceLimits()
     common = {
         "cwd": cwd,
         "stdin": subprocess.DEVNULL,
@@ -178,27 +191,52 @@ async def run_process(
         "env": dict(env) if env is not None else safe_env(),
         **spawn_group(),
     }
-    if isinstance(command, str):
-        process = await asyncio.create_subprocess_shell(command, **common)
+    argv = command
+    if launch and os.name != "nt" and limits.given():
+        shell = ["/bin/sh", "-c", command] if isinstance(command, str) else list(command)
+        argv = launcher(limits, shell)
+    if isinstance(argv, str):
+        process = await asyncio.create_subprocess_shell(argv, **common)
     else:
-        process = await asyncio.create_subprocess_exec(*command, **common)
-    tree = ProcessTree().adopt(process)
+        process = await asyncio.create_subprocess_exec(*argv, **common)
+    tree = ProcessTree().adopt(process, limits=limits)
     out, err = _Capture(), _Capture()
     finished = asyncio.ensure_future(
         asyncio.gather(out.drain(process.stdout), err.drain(process.stderr), process.wait())
     )
+    dog = Watchdog(limits, process.pid, include_root=launch)  # srt itself is not the command
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_s
+    hit: str | None = None
     try:
-        done, _ = await asyncio.wait({finished}, timeout=timeout_s)
+        while True:
+            left = deadline - loop.time()
+            wait = min(POLL_S, left) if dog.active else left
+            done, _ = await asyncio.wait({finished}, timeout=max(wait, 0))
+            if done or left <= 0:
+                break
+            if dog.active and (hit := await asyncio.to_thread(dog.check)):
+                break
     except asyncio.CancelledError:  # the run was stopped: the command goes with it
         await _stop(tree, finished)
         raise
+    if hit is not None:
+        await _stop(tree, finished)
+        return ShellResult(None, out.text(), err.text(), timed_out=False, limited=hit)
     if not done:
         await _stop(tree, finished)
         return ShellResult(exit_code=None, stdout=out.text(), stderr=err.text(), timed_out=True)
+    hits = tree.limits_hit()  # Windows: what its job enforced (before the job is closed)
     if tree.settle():  # nothing left in the background: finished now, not at step end
         tree.close()
+    stderr = err.text()
+    code = process.returncode
     return ShellResult(
-        exit_code=process.returncode, stdout=out.text(), stderr=err.text(), timed_out=False
+        exit_code=code,
+        stdout=out.text(),
+        stderr=stderr,
+        timed_out=False,
+        limited=kernel_limit(limits, code, stderr) or job_limit(limits, code, hits),
     )
 
 

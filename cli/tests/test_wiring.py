@@ -183,6 +183,15 @@ def test_pass_env_reaches_both_sandboxes(repo, tmp_path, agent):  # DF-365
         assert w.tools_for(step(agent)).sandbox.pass_env == ("SSH_AUTH_SOCK",)
 
 
+def test_sandbox_limits_come_from_policy(repo, tmp_path, agent):  # M3-10
+    from agentic.policy.model import ResourceLimits
+
+    limits = {"cpu_seconds": 60, "memory_mb": 1024, "max_file_mb": 100, "processes": 64}
+    for decision in (SANDBOXED, UNSANDBOXED):
+        w = wiring(repo, tmp_path, decision, limits=limits)
+        assert w.tools_for(step(agent)).sandbox.limits == ResourceLimits(**limits)
+
+
 def test_an_agent_process_wrap_reaches_the_gateway_and_the_registries(repo, tmp_path, agent):
     w = wiring(repo, tmp_path, SANDBOXED, allowed_domains=["pypi.org"], allow_write=["~/.cache/uv"])
     w.gateway_url = "https://tokenlean.acme.example:8443"

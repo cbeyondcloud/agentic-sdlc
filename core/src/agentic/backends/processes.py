@@ -50,6 +50,14 @@ _SESSION = "import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])"
 _log = logging.getLogger("agentic.backends.processes")
 
 
+class Limits(Protocol):
+    """What a Job Object can limit (`agentic.policy.model.ResourceLimits`, M3-10)."""
+
+    cpu_seconds: int | None
+    memory_mb: int | None
+    processes: int | None
+
+
 class Started(Protocol):
     """A started child: `subprocess.Popen`, an `asyncio` or an `anyio` process."""
 
@@ -93,16 +101,23 @@ class ProcessTree:
         self._settled = False  # exited with nothing left: never signal its group again
         self._lock = threading.RLock()
 
-    def adopt(self, process: Started) -> "ProcessTree":
-        """Contain `process` (just started) and register it in the current scope."""
+    def adopt(self, process: Started, *, limits: "Limits | None" = None) -> "ProcessTree":
+        """Contain `process` (just started) and register it in the current scope. On
+        Windows `limits` (M3-10: CPU time, memory, processes) are set on its job."""
         with self._lock:
             self._process, self.pid = process, process.pid
             if os.name == "nt" and self._job is None and not self._exited():
-                self._job = _Job.containing(process.pid)
+                self._job = _Job.containing(process.pid, limits)
         scope = _SCOPE.get()
         if scope is not None:
             scope.add(self)
         return self
+
+    def limits_hit(self) -> frozenset[str]:
+        """Windows: the job limits (M3-10) the tree ran into - "cpu", "memory",
+        "processes"; empty elsewhere (the launcher and the watchdog tell there)."""
+        with self._lock:
+            return self._job.limits_hit() if self._job is not None else frozenset()
 
     @property
     def contained(self) -> bool:
@@ -409,8 +424,15 @@ def run_contained(
 
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000
+_JOB_OBJECT_LIMIT_JOB_TIME = 0x0004  # PerJobUserTimeLimit, in 100 ns units
+_JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x0008  # ActiveProcessLimit
+_JOB_OBJECT_LIMIT_JOB_MEMORY = 0x0200  # JobMemoryLimit, committed bytes of the whole job
 _PROCESS_TERMINATE = 0x0001
 _PROCESS_SET_QUOTA = 0x0100
+_JOB_OBJECT_ASSOCIATE_COMPLETION_PORT_INFORMATION = 7
+_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+#: The job's notifications that name a limit it enforced (JOB_OBJECT_MSG_*).
+_LIMIT_MESSAGES = {1: "cpu", 3: "processes", 10: "memory"}  # end of job time, active, memory
 
 
 class _IoCounters(ctypes.Structure):
@@ -449,6 +471,10 @@ class _ExtendedLimits(ctypes.Structure):
     ]
 
 
+class _CompletionPort(ctypes.Structure):
+    _fields_ = [("CompletionKey", ctypes.c_void_p), ("CompletionPort", ctypes.c_void_p)]
+
+
 _KERNEL32 = None
 
 
@@ -465,6 +491,17 @@ def _kernel32():
             "AssignProcessToJobObject": ([handle, handle], boolean),
             "TerminateJobObject": ([handle, ctypes.c_uint], boolean),
             "CloseHandle": ([handle], boolean),
+            "CreateIoCompletionPort": ([handle, handle, ctypes.c_size_t, dword], handle),
+            "GetQueuedCompletionStatus": (
+                [
+                    handle,
+                    ctypes.POINTER(dword),
+                    ctypes.POINTER(ctypes.c_size_t),
+                    ctypes.POINTER(ctypes.c_void_p),
+                    dword,
+                ],
+                boolean,
+            ),
         }
         for name, (argtypes, restype) in prototypes.items():
             function = getattr(k, name)
@@ -477,34 +514,58 @@ def _last_error() -> OSError:
     return ctypes.WinError(ctypes.get_last_error())
 
 
+def _job_limits(given: Limits | None) -> _ExtendedLimits:
+    """A job's limits: killed with its last handle, and the resource limits given."""
+    limits = _ExtendedLimits()
+    basic = limits.BasicLimitInformation
+    flags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if given is not None and given.cpu_seconds:
+        flags |= _JOB_OBJECT_LIMIT_JOB_TIME
+        basic.PerJobUserTimeLimit = given.cpu_seconds * 10_000_000
+    if given is not None and given.processes:
+        flags |= _JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+        basic.ActiveProcessLimit = given.processes
+    if given is not None and given.memory_mb:
+        flags |= _JOB_OBJECT_LIMIT_JOB_MEMORY
+        limits.JobMemoryLimit = given.memory_mb * 1024 * 1024
+    basic.LimitFlags = flags
+    return limits
+
+
 class _Job:
     """A Windows Job Object that kills its processes when its last handle closes. The
     handle is not inheritable, so only this process holds it."""
 
-    def __init__(self, handle: int) -> None:
+    def __init__(self, handle: int, port: int | None = None) -> None:
         self.handle: int | None = handle
+        self.port = port  # the job's notifications, when it has resource limits
+        self.hits: set[str] = set()
 
     @classmethod
-    def containing(cls, pid: int) -> "_Job | None":
+    def containing(cls, pid: int, given: Limits | None = None) -> "_Job | None":
         """A new job holding `pid`, or None (logged) when Windows refuses: the tree is
-        then killed by `taskkill /T` alone."""
+        then killed by `taskkill /T` alone. `given`: the job's resource limits (M3-10),
+        and then a completion port that hears which limit the job enforced."""
         k = _kernel32()
         job = k.CreateJobObjectW(None, None)
         if not job:
             _log.warning("no job object for pid %s: %s", pid, _last_error())
             return None
-        limits = _ExtendedLimits()
-        limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        process = None
+        limits = _job_limits(given)
+        process = port = None
         try:
             size = ctypes.sizeof(limits)
             info = _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION
             if not k.SetInformationJobObject(job, info, ctypes.byref(limits), size):
                 raise _last_error()
+            if limits.BasicLimitInformation.LimitFlags != _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE:
+                port = _notifications(job)
             process = k.OpenProcess(_PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, pid)
             if not process or not k.AssignProcessToJobObject(job, process):
                 raise _last_error()
         except OSError as error:
+            if port:
+                k.CloseHandle(port)
             k.CloseHandle(job)
             _log.warning(
                 "pid %s could not be put in a job object (%s): what it starts may outlive "
@@ -516,7 +577,27 @@ class _Job:
         finally:
             if process:
                 k.CloseHandle(process)
-        return cls(job)
+        return cls(job, port)
+
+    def limits_hit(self) -> frozenset[str]:
+        """The resource limits the job has enforced so far ("cpu", "memory", "processes"):
+        Windows posts each before it ends or refuses the process, so after the command
+        exits they are all queued."""
+        k = _kernel32()
+        while self.port is not None:
+            message, key = ctypes.c_uint32(), ctypes.c_size_t()
+            overlapped = ctypes.c_void_p()
+            if not k.GetQueuedCompletionStatus(
+                self.port,
+                ctypes.byref(message),
+                ctypes.byref(key),
+                ctypes.byref(overlapped),
+                0,
+            ):
+                break  # the queue is empty
+            if message.value in _LIMIT_MESSAGES:
+                self.hits.add(_LIMIT_MESSAGES[message.value])
+        return frozenset(self.hits)
 
     def terminate(self) -> None:
         if self.handle is not None:
@@ -526,3 +607,21 @@ class _Job:
         if self.handle is not None:
             _kernel32().CloseHandle(self.handle)  # KILL_ON_JOB_CLOSE: anything left dies
             self.handle = None
+        if self.port is not None:
+            _kernel32().CloseHandle(self.port)
+            self.port = None
+
+
+def _notifications(job: int) -> int:
+    """A completion port that receives `job`'s notifications (its limit messages)."""
+    k = _kernel32()
+    port = k.CreateIoCompletionPort(_INVALID_HANDLE_VALUE, None, 0, 1)
+    if not port:
+        raise _last_error()
+    link = _CompletionPort(None, port)
+    info = _JOB_OBJECT_ASSOCIATE_COMPLETION_PORT_INFORMATION
+    if not k.SetInformationJobObject(job, info, ctypes.byref(link), ctypes.sizeof(link)):
+        error = _last_error()
+        k.CloseHandle(port)
+        raise error
+    return port

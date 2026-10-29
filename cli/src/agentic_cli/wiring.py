@@ -122,17 +122,18 @@ class StepWiring:
         tree = self._home(step.run_id)
         guard = Guard.for_agent(self.target, step.run_id, step.agent)
         pass_env = tuple(self.policy.pass_env)
+        limits = self.policy.limits  # M3-10: what each agent command may use
         if not self.decision.use_srt:
             return ToolContext(
                 tree=tree,
                 guard=guard,
-                sandbox=LocalProcessSandbox(pass_env),
+                sandbox=LocalProcessSandbox(pass_env, limits=limits),
                 allow_unisolated=True,
                 secret_scanner=self.scanner,
             )
         rules = self._rules(guard, step.run_id, tree, egress_hosts(self.policy))
         settings = self.state_root / step.run_id / "sandbox" / step.agent.definition.name
-        sandbox = SrtSandbox(rules, settings, pass_env=pass_env)
+        sandbox = SrtSandbox(rules, settings, pass_env=pass_env, limits=limits)
         return ToolContext(tree=tree, guard=guard, sandbox=sandbox, secret_scanner=self.scanner)
 
     def process_wrap_for(
