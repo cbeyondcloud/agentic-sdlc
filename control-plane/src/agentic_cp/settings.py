@@ -98,6 +98,12 @@ class Settings(BaseModel):
     owner_database_url: SecretStr | None = None
     """The owner role's DSN, for `migrate`, `db grant-runtime` and `admin` commands only."""
     db_schema: Annotated[str, Field(pattern=SCHEMA_PATTERN)] = "agentic"
+    db_pool_size: Annotated[int, Field(ge=1, le=500)] = 15
+    """Database connections each process keeps open (M3-22: they stay open, so a busy
+    process does not log in to Postgres again and again)."""
+    db_max_overflow: Annotated[int, Field(ge=0, le=500)] = 0
+    """Extra connections a process may open beyond `db_pool_size`; each is closed again
+    when it is returned (a password exchange and a new backend every time)."""
     policy_poll_seconds: Annotated[int, Field(ge=10)] = 60
     policy_workdir: Path = Path(tempfile.gettempdir()) / "agentic-cp" / "policy"
     git_config_dir: Path | None = None

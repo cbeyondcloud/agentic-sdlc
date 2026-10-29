@@ -55,6 +55,15 @@ also accepts `file://` and paths, for development only (in a shared deployment a
 could read the server's disk). Request bodies over `AGENTIC_CP_MAX_BODY_BYTES` get 413; a
 limit at the ingress in front of the service is still recommended.
 
+### Database connections and sizing
+
+Each process keeps `AGENTIC_CP_DB_POOL_SIZE` connections open (default 15) and may open
+`AGENTIC_CP_DB_MAX_OVERFLOW` more for a burst (default 0: an overflow connection is closed
+when it is returned, so a busy process would log in to Postgres again and again). Size
+Postgres' `max_connections` for replicas x (pool + overflow) plus the worker. The load test
+in `control-plane/loadtest/` (M3-22) measures a deployment; its report is
+`docs/load-test/M3-22-report.md`.
+
 ### Rate limits
 
 Each process gives every token holder a bucket of `AGENTIC_CP_RATE_LIMIT_PER_MINUTE`
