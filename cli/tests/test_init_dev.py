@@ -332,6 +332,7 @@ def test_an_installed_tool_not_on_path_says_how_to_add_it(
 ):
     """Tools land in ~/.agentic/tools, which nothing puts on PATH yet (DF-191): the
     report says so, with the command for this machine's shell."""
+    monkeypatch.setenv("SHELL", "/bin/zsh")  # the person's login shell (DF-349)
     init(setup_repo, policy_repo, monkeypatch, "--install-missing", "--yes")
     helper = item(report_of(capsys), "tool: helper")
     folder = agentic_home() / "tools" / "helper" / "1.0.0" / LINUX
@@ -346,10 +347,49 @@ def test_the_path_fix_names_the_shell_of_each_os(tmp_path):
     from agentic_cli.dev_init import path_fix
 
     folder = tmp_path / "with space" / "bin"
-    windows = path_fix(folder, "Windows")
-    assert "PowerShell" in windows and f";{folder}'" in windows and "'User')" in windows
-    mac = path_fix(folder, "Darwin")
+    windows = path_fix(folder, "Windows", shell="")
+    assert "PowerShell" in windows and f"'{folder}'" in windows
+    mac = path_fix(folder, "Darwin", shell="/bin/zsh")
     assert "~/.zshrc" in mac and f'"{folder}' in mac
+
+
+@pytest.mark.parametrize(
+    ("system", "shell", "profile"),
+    [
+        ("Linux", "/bin/bash", "~/.bashrc"),
+        ("Linux", "/usr/bin/zsh", "~/.zshrc"),
+        ("Darwin", "/bin/zsh", "~/.zshrc"),
+        ("Darwin", "/bin/bash", "~/.bash_profile"),
+        ("Linux", "/bin/sh", "~/.profile"),
+        ("Linux", "", "~/.profile"),
+    ],
+)
+def test_the_path_fix_writes_the_profile_the_shell_reads(tmp_path, system, shell, profile):
+    """DF-349: a Linux bash user was told to edit ~/.zshrc, which bash never reads."""
+    from agentic_cli.dev_init import path_fix
+
+    fix = path_fix(tmp_path / "bin", system, shell=shell)
+    assert f">> {profile}" in fix
+    assert fix.count(">>") == 1
+
+
+def test_the_path_fix_for_fish_uses_fish_add_path(tmp_path):
+    from agentic_cli.dev_init import path_fix
+
+    assert "fish_add_path" in path_fix(tmp_path / "bin", "Linux", shell="/usr/bin/fish")
+
+
+def test_the_windows_path_fix_keeps_unexpanded_entries(tmp_path):
+    """DF-349: [Environment]::SetEnvironmentVariable rewrote the user PATH as REG_SZ with
+    every %VAR% expanded. The fix reads the raw value and writes it back as
+    REG_EXPAND_SZ, then lets running programs know the environment changed."""
+    from agentic_cli.dev_init import path_fix
+
+    fix = path_fix(tmp_path / "it's" / "bin", "Windows", shell="")
+    assert "DoNotExpandEnvironmentNames" in fix and "'ExpandString'" in fix
+    assert "SetEnvironmentVariable('Path'" not in fix
+    assert "it''s" in fix  # a quote in the folder is doubled inside the PowerShell string
+    assert "SetEnvironmentVariable('AGENTIC_PATH_REFRESH', $null, 'User')" in fix
 
 
 def test_an_index_that_cannot_be_built_is_reported(

@@ -11,6 +11,10 @@ is gone it says so too (a warning) and falls back to the framework's
 template (M1-62): `~/.agentic/policy/standalone/` when it exists - the person's own copy,
 never overwritten - else a fresh one assembled in a scratch folder
 (`agentic_cli.standalone`) that `LoadedPolicy.commit()` installs there after the guard.
+`init --standalone --refresh-template` (DF-273) asks for the replacement: the current
+template with the person's policy/ files carried over is assembled in a scratch folder,
+and after the guard `commit()` moves the old copy aside to
+`standalone.previous-<UTC time>` (kept, never deleted) and renames the new one in.
 
 Org mode: the user config (`~/.agentic/config.yaml`) names the org and its policy repo:
 
@@ -57,11 +61,19 @@ from agentic.orgapi import Me
 from agentic.policy import OrgPolicy, PolicyError, load_policy, tree_digest
 from agentic.policy.load import pipeline_digests
 from agentic.policy.portable import portable_path_problems
-from agentic_cli import control_plane
+from agentic_cli import __version__, control_plane
 from agentic_cli.config import local_policy_setting
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
-from agentic_cli.standalone import STANDALONE_DIR, assemble
+from agentic_cli.standalone import (
+    STANDALONE_DIR,
+    TEMPLATE,
+    Refresh,
+    assemble,
+    framework_root,
+    refresh,
+    template_news,
+)
 
 DEFAULT_CACHE_HOURS = 24
 _ORG = re.compile(r"[a-z][a-z0-9-]{0,63}")
@@ -69,6 +81,8 @@ _ORG = re.compile(r"[a-z][a-z0-9-]{0,63}")
 _RENAME_WAITS = (0.1, 0.2, 0.4, 0.8, 1.6)
 #: Swap leftovers older than this are an interrupted init's, never a running one's (DF-377).
 _LEFTOVER_SECONDS = 600
+#: At most this many paths of each kind in the refresh note (the rest are counted).
+_LISTED = 10
 CONTROL_PLANE_SOURCE = "control-plane"
 
 
@@ -84,6 +98,7 @@ class LoadedPolicy:
     _pending: Path | None = field(default=None, repr=False)  # a fresh clone not yet cached
     _cache: Path | None = field(default=None, repr=False)
     _install: Path | None = field(default=None, repr=False)  # standalone template target
+    _backup: Path | None = field(default=None, repr=False)  # where a refresh moves the old copy
     _hours: int = DEFAULT_CACHE_HOURS
     me: Me | None = None  # who the control plane says the user is (org mode with one)
     stamp: dict = field(default_factory=dict)  # extra fetched.json fields (control plane)
@@ -91,6 +106,13 @@ class LoadedPolicy:
     def commit(self) -> None:
         """Put a freshly fetched (org) or assembled (standalone template) policy repo in
         its place under `~/.agentic`; called only after the guard passed."""
+        if self._pending is not None and self._install is not None and self._backup is not None:
+            try:
+                _refresh_in_place(self._pending, self._install, self._backup)
+            finally:
+                self.discard()  # the scratch folder, in every case
+            self.root = self._install
+            return
         if self._pending is not None and self._install is not None:
             if self._install.exists():  # made meanwhile (another init): theirs is kept
                 self.discard()
@@ -141,22 +163,39 @@ def resolve_policy(
     config: dict[str, Any],
     recorded: Path | None = None,
     env: Mapping[str, str] | None = None,
+    refresh_template: bool = False,
 ) -> LoadedPolicy:
     """Load the policy for this init without writing anything (see `commit`).
     `recorded` is the policy repo an earlier standalone init recorded for this
-    repository (`workspace.recorded_root`), kept when no policy is given."""
+    repository (`workspace.recorded_root`), kept when no policy is given.
+    `refresh_template` stages the current template over the installed standalone copy
+    (DF-273); it is refused for any other policy."""
     if standalone:
         setting = local_policy_setting(config)
         path = policy_path or (Path(setting) if setting else None)
-        if path is None and recorded is not None and recorded != home / STANDALONE_DIR:
+        own = recorded is not None and recorded != home / STANDALONE_DIR
+        if refresh_template and (path is not None or own):
+            raise CliError(
+                "--refresh-template refreshes the framework's standalone template copy, and "
+                "this repository uses another policy",
+                ExitCode.USAGE,
+                hint="update that policy repo yourself, or drop --refresh-template",
+            )
+        if path is None and own:
             return _recorded_policy(recorded, home)
         if path is None:
-            return _standalone_template(home)
+            return _standalone_template(home, refresh=refresh_template)
         path = Path(path).expanduser().absolute()  # init.json records it for later commands
         root, folder = _layout(path)
         return LoadedPolicy(_load(folder), root, "standalone", str(path))
     if policy_path is not None:
         raise CliError("--policy is for --standalone", ExitCode.USAGE)
+    if refresh_template:
+        raise CliError(
+            "--refresh-template is for --standalone",
+            ExitCode.USAGE,
+            hint="an org's policy comes from its policy repo or control plane, refreshed by init",
+        )
     return _org_policy(home, config, os.environ if env is None else env)
 
 
@@ -178,12 +217,18 @@ def _recorded_policy(recorded: Path, home: Path) -> LoadedPolicy:
     return loaded
 
 
-def _standalone_template(home: Path) -> LoadedPolicy:
-    """The person's standalone policy repo, or the framework template ready to install."""
+def _standalone_template(home: Path, *, refresh: bool = False) -> LoadedPolicy:
+    """The person's standalone policy repo, or the framework template ready to install;
+    with `refresh`, the current template staged to replace their copy (DF-273)."""
     target = home / STANDALONE_DIR
+    if target.is_dir() and refresh:
+        return _staged_refresh(target)
     if target.is_dir():
         root, folder = _layout(target)
-        return LoadedPolicy(_load(folder), root, "standalone", str(target))
+        loaded = LoadedPolicy(_load(folder), root, "standalone", str(target))
+        if news := template_news(target):  # an upgraded CLI: say so, never replace (DF-273)
+            loaded.notes.append(news)
+        return loaded
     scratch = Path(tempfile.mkdtemp(prefix="agentic-standalone-"))
     try:
         built = assemble(scratch / "repo")
@@ -197,6 +242,58 @@ def _standalone_template(home: Path) -> LoadedPolicy:
         "edit it there (init never overwrites it)"
     )
     return loaded
+
+
+def _staged_refresh(target: Path) -> LoadedPolicy:
+    """The current template with the person's policy/ files, assembled in a scratch
+    folder for `commit` to swap in; or their copy as it is when it is already current."""
+    scratch = Path(tempfile.mkdtemp(prefix="agentic-standalone-"))
+    try:
+        built = scratch / "repo"
+        done = refresh(target, built)
+        if not done.template_changed and template_news(target) is None:
+            shutil.rmtree(scratch, ignore_errors=True)
+            root, folder = _layout(target)
+            loaded = LoadedPolicy(_load(folder), root, "standalone", str(target))
+            loaded.notes.append(
+                f"{target} already holds the template agentic {__version__} ships: "
+                "nothing to refresh"
+            )
+            return loaded
+        loaded = LoadedPolicy(_load(built / "policy"), built, "standalone", str(target))
+    except BaseException:
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    backup = target.with_name(f"{target.name}.previous-{stamp}")
+    count = 2
+    while backup.exists():
+        backup = target.with_name(f"{target.name}.previous-{stamp}-{count}")
+        count += 1
+    loaded._pending, loaded._install, loaded._backup = built, target, backup
+    loaded.notes.append(_refresh_note(done, target, backup))
+    return loaded
+
+
+def _refresh_note(done: Refresh, target: Path, backup: Path) -> str:
+    def listed(paths: tuple[str, ...]) -> str:
+        shown = ", ".join(paths[:_LISTED])
+        more = len(paths) - _LISTED
+        return f"{shown} and {more} more" if more > 0 else shown
+
+    parts = [f"refreshed {target} to the template agentic {__version__} ships"]
+    for label, paths in (("changed", done.changed), ("added", done.added)):
+        if paths:
+            parts.append(f"{label}: {listed(paths)}")
+    if done.removed:
+        parts.append(f"removed: {listed(done.removed)}")
+    if done.kept:
+        template = framework_root() / TEMPLATE / "policy"
+        parts.append(
+            f"kept your policy files: {listed(done.kept)} (the template's own are in {template})"
+        )
+    parts.append(f"your previous copy, with any edits outside policy/, is in {backup}")
+    return "; ".join(parts)
 
 
 def _layout(path: Path) -> tuple[Path, Path]:
@@ -525,6 +622,32 @@ def _install_atomically(source: Path, target: Path) -> bool:
             ) from error
         raise
     return True
+
+
+def _refresh_in_place(source: Path, target: Path, backup: Path) -> None:
+    """Swap the refreshed copy `source` in at `target` by renames only (DF-273): staged
+    beside `target` (same volume), the old copy renamed to `backup` and kept, the new one
+    renamed in. A failure part-way puts the old copy back."""
+    staged = target.with_name(f".{target.name}.tmp-{os.getpid()}")
+    if staged.exists():  # left by a killed init with this pid
+        shutil.rmtree(staged, onexc=_writable_and_retry)
+    try:
+        shutil.copytree(source, staged)
+        _replace_retrying(target, backup)
+        try:
+            _replace_retrying(staged, target)
+        except OSError:
+            if not target.exists():
+                os.replace(backup, target)
+            raise
+    except OSError as error:
+        shutil.rmtree(staged, ignore_errors=True)
+        raise CliError(
+            f"cannot refresh the standalone policy in {target}: {error}",
+            ExitCode.ERROR,
+            hint="your copy was not replaced; another program (often an antivirus scan) may "
+            "be holding its files - wait a moment, then run the command again",
+        ) from error
 
 
 def _swap_in(source: Path, target: Path) -> None:

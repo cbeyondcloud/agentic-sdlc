@@ -21,10 +21,20 @@ from contextlib import contextmanager
 
 import typer
 
+from agentic_cli import __version__
 from agentic_cli.commands import COMMANDS
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.output import Output, safe_streams
+
+
+def _show_version(ctx: typer.Context, value: bool) -> None:
+    """`agentic --version`: the same answer as `agentic version`, before any command."""
+    if not value:
+        return
+    out = ctx.obj if isinstance(ctx.obj, Output) else Output()
+    out.result({"version": __version__}, lambda c: c.print(f"agentic {__version__}"))
+    raise typer.Exit(ExitCode.OK)
 
 
 def build_app() -> typer.Typer:
@@ -42,6 +52,13 @@ def build_app() -> typer.Typer:
         ctx: typer.Context,
         json_mode: bool = typer.Option(False, "--json", help="Machine-readable JSON output."),
         no_color: bool = typer.Option(False, "--no-color", help="No colour in the output."),
+        _version: bool = typer.Option(
+            False,
+            "--version",
+            is_eager=True,
+            callback=_show_version,
+            help="Show the installed version and exit.",
+        ),
     ) -> None:
         ctx.obj = Output(json_mode=json_mode, color=not no_color)
 
@@ -66,7 +83,9 @@ def main(argv: Sequence[str] | None = None, app: typer.Typer | None = None) -> i
 def _run(command, args: list[str], out: Output) -> int:
     try:
         # Typer returns Click's exit code instead of raising for Ctrl-C (130)
-        returned = command.main(args=args, prog_name="agentic", standalone_mode=False)
+        # obj: eager options (--version) run before --json is parsed, so they get the
+        # Output made from the whole command line
+        returned = command.main(args=args, prog_name="agentic", standalone_mode=False, obj=out)
         return returned if isinstance(returned, int) else ExitCode.OK
     except CliError as error:
         out.error(error)

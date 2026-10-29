@@ -414,3 +414,21 @@ def test_auditproof_imports_only_the_standard_library():
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             imported.add(node.module.split(".")[0])
     assert imported <= set(sys.stdlib_module_names), imported - set(sys.stdlib_module_names)
+
+
+def test_auditproof_runs_on_the_system_python_of_older_machines():
+    """DF-612: an auditor's macOS (Command Line Tools) or Ubuntu 22.04 has Python 3.9 or
+    3.10: no 3.10+ syntax, and none of the 3.10/3.11 names that fail on import."""
+    source = Path(auditproof.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source, feature_version=(3, 9))  # raises on match, except*, ...
+    assert "from __future__ import annotations" in source  # `X | None` stays unevaluated
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "datetime":
+            assert "UTC" not in {alias.name for alias in node.names}  # 3.11+
+        if isinstance(node, ast.Call):
+            assert "strict" not in {kw.arg for kw in node.keywords}, ast.unparse(node)  # 3.10+
+            if isinstance(node.func, ast.Name) and node.func.id == "dataclass":
+                assert not {"slots", "kw_only"} & {kw.arg for kw in node.keywords}
+        if isinstance(node, ast.Attribute):
+            assert node.attr not in {"pairwise", "UTC"}, ast.unparse(node)
+    assert "3.9" in source.split('"""', 2)[1]  # the docstring says what it needs

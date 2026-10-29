@@ -2,12 +2,13 @@
 name = "agentic-cli"
 version = "0.1.0"
 description = "The agentic command-line tool"
+license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "agentic-core[eval]",
+    "agentic-core[eval]==0.1.0",
     "filelock==4.2.1",  # the personal backup journal lock (M2-20); core pins the same
     "httpx2>=2.13.1,<2.14",
-    "sdlc-commons",
+    "sdlc-commons==0.1.0",
     "rich>=15.0,<16",
     "typer==0.27.3",
 ]

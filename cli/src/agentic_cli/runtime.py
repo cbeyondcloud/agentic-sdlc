@@ -636,9 +636,11 @@ class Runtime:
         the control plane's policy, any `agentic run` in this home follows the tenant's active
         version (M2-53), so a run paused on an older one is refused here (exit 2) rather than
         carried on under the new tiers and tools with the old version on its record (review
-        F3). `agentic stop` still ends it."""
+        F3). A git-policy org's cache moves on with its 24 h refresh, so it is refused the
+        same way (DF-697). A standalone or `--policy` repo is the person's own and is not
+        checked here. `agentic stop` still ends it."""
         current = self.ws.policy().version
-        if state.policy_version == current or not self.ws.control_plane_policy():
+        if state.policy_version == current or not self.ws.org_policy_cache():
             return
         raise CliError(
             f"run {state.run_id} started on org policy {state.policy_version}, and the org "
