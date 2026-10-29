@@ -18,6 +18,11 @@ commit on the run branch (the step's reviewable diff), and a rejection rolls
 the tree back to the step's base. Checkpoint commits run OUTSIDE the sandbox
 on files an agent wrote, so they never run the repository's git hooks.
 
+A component Zyroflo makes in place (`vcs.deny_raw_git`) has no tree. A run of that one
+component works in its own checkout when its commit-command override is accepted (M2-61,
+`sdlc_commons.commit_override`): its checkpoints and rollbacks go through the component's
+own commands, and git only reads it.
+
 Components come from the repository's Zyroflo profile (`.sdlc/profile.yml`);
 a repository without one is a single component.
 """
@@ -27,6 +32,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from zyroflo.sdlc import policy, state
 from zyroflo.sdlc import worktree as zyroflo
@@ -98,6 +104,16 @@ class InPlace:
             "rollback": list(self.rollback),
             "push": list(self.push),
         }
+
+
+class Override(Protocol):
+    """The commit-command override (`sdlc_commons.commit_override.CommitOverride`)."""
+
+    def resolve(self, trees: Mapping[str, "Tree"]) -> dict[str, InPlace]: ...
+
+    def commit(self, cmds: InPlace, message: str) -> None: ...
+
+    def rollback(self, cmds: InPlace, commit: str) -> None: ...
 
 
 def kept_override(target: Path, run_id: str) -> dict[str, InPlace] | None:
@@ -212,21 +228,45 @@ def _live(record: dict) -> dict[str, Tree]:
 class StepCheckpoints:
     """Per-step checkpoints on one run's trees (all components at once)."""
 
-    def __init__(self, target: Path, run_id: str, *, exclude: Sequence[str] = ()) -> None:
+    def __init__(
+        self,
+        target: Path,
+        run_id: str,
+        *,
+        exclude: Sequence[str] = (),
+        override: "Override | None" = None,
+    ) -> None:
         self.worktrees = RunWorktrees(target, run_id)
         self.target, self.run_id = self.worktrees.target, run_id
         # the framework's exclusions plus the org's (`exclude`): only ever more
         self.generated = tuple(dict.fromkeys((*GENERATED, *exclude)))
+        # the commit-command override of in-place components (M2-61); None: none
+        self.override = override
 
     def prepare(self) -> Path:
         """Make the run's trees (harmless when they exist) and return where agents
-        work: a single component's own tree, or the folder holding every tree."""
+        work: a single component's own tree, or the folder holding every tree - or, for a
+        run of one in-place component whose commit-command override is accepted, that
+        component's own checkout (M2-61)."""
         trees = self.worktrees.create()
         if in_place := sorted(name for name, tree in trees.items() if tree.mode != "worktree"):
-            raise WorktreeError(
-                f"component(s) {', '.join(in_place)} cannot get a tree (vcs.deny_raw_git): code "
-                f"steps need one to be checkpointed and rolled back"
-            )
+            names = ", ".join(in_place)
+            if len(trees) > 1:
+                raise WorktreeError(
+                    f"component(s) {names} work in place (vcs.deny_raw_git) in a run of "
+                    f"{len(trees)} components: code steps on such a run need every component "
+                    f"to have a tree, or to be its run's only component"
+                )
+            if self.override is None:
+                raise WorktreeError(
+                    f"component(s) {names} cannot get a tree (vcs.deny_raw_git): code steps "
+                    f"need one to be checkpointed and rolled back, or the commit-command "
+                    f"override - set vcs.commit_command in .sdlc/profile.yml and "
+                    f"rollback_commands in .agentic/config.yaml, and allow both in org policy "
+                    f"(commit_override.allow)"
+                )
+            accepted = self.override.resolve(trees)
+            return next(iter(accepted.values())).checkout
         if len(trees) == 1:
             return next(iter(trees.values())).path
         return _trees_root(self.target, self.run_id)
@@ -245,6 +285,15 @@ class StepCheckpoints:
                 _git(path, "reset", "-q", "--hard", kept.get(name, "HEAD"))
                 _git(path, "clean", "-q", "-ffd")  # -ff: nested repositories too (review I4)
             heads[name] = _git(path, "rev-parse", "HEAD")
+        for name, cmds in self._in_place().items():
+            # in place, the rollback command discards; only when there is something to
+            # discard, so a clean start runs no command
+            head = _git(cmds.checkout, "rev-parse", "HEAD")
+            start = kept.get(name, head)
+            if fresh and (start != head or _git(cmds.checkout, "status", "--porcelain")):
+                self._overridden().rollback(cmds, start)
+                head = self._at(cmds, start)
+            heads[name] = head
         self._keep_base(heads if fresh or not kept else kept)
         return heads
 
@@ -283,6 +332,14 @@ class StepCheckpoints:
             # trees at closure refuses any uncommitted change (review F2); ignored files stay
             _git(path, "clean", "-q", "-fd", "--", *generated)
             heads[name] = _git(path, "rev-parse", "HEAD")
+        for name, cmds in self._in_place().items():
+            # in place, the component's own commit command commits; what it commits is its
+            # tool's business (the framework's exclusions are git pathspecs it cannot pass)
+            if _git(cmds.checkout, "status", "--porcelain"):
+                self._overridden().commit(cmds, message)
+                if _git(cmds.checkout, "status", "--porcelain"):
+                    _LOG.warning("the commit command of %s left uncommitted changes", name)
+            heads[name] = _git(cmds.checkout, "rev-parse", "HEAD")
         self._keep_base(None)  # the next step starts from this checkpoint
         return heads
 
@@ -294,7 +351,7 @@ class StepCheckpoints:
         protected-path check of an agent CLI's writes)."""
         kept = self._kept_base()
         found: dict[Path, None] = {}
-        for name, path in self._trees().items():
+        for name, path in self._readable().items():
             base = kept.get(name, "HEAD")
             tracked = _git(path, "diff", "--name-only", "--no-renames", "-z", base, "--")
             untracked = _git(path, "ls-files", "-z", "--others", "--exclude-standard")
@@ -306,14 +363,18 @@ class StepCheckpoints:
     def rollback(self, to: Mapping[str, str]) -> None:
         """Put each named component back at `to[component]`, a commit of the run's own
         branch; uncommitted work is discarded."""
-        trees = self._trees()
+        trees, in_place = self._trees(), self._in_place()
         for name, commit in to.items():
-            if name not in trees:
+            if name not in trees and name not in in_place:
                 raise WorktreeError(f"rollback names {name!r}, which has no tree in this run")
-            path = trees[name]
+            path = trees[name] if name in trees else in_place[name].checkout
             if _git(path, "merge-base", commit, "HEAD", check=False) != commit:
                 raise WorktreeError(f"{commit} is not part of this run's branch in {name}")
         for name, commit in to.items():
+            if name in in_place:  # its own rollback command, never a git write (M2-61)
+                self._overridden().rollback(in_place[name], commit)
+                self._at(in_place[name], commit)
+                continue
             _git(trees[name], "reset", "-q", "--hard", commit)
             _git(trees[name], "clean", "-q", "-ffd")
         self._keep_base(None)  # the next step starts from where the trees were put
@@ -324,7 +385,7 @@ class StepCheckpoints:
         external diff, no textconv, no colour). Each component's file names are its own
         (`diff --git a/x b/x`)."""
         parts = []
-        for name, path in self._trees().items():
+        for name, path in self._readable().items():
             start, end = base.get(name), head.get(name)
             if start and end and start != end:
                 parts.append(_git(path, *_PLAIN_DIFF, start, end))
@@ -336,6 +397,34 @@ class StepCheckpoints:
             for name, tree in self.worktrees.trees().items()
             if tree.mode == "worktree"
         }
+
+    def _in_place(self) -> dict[str, InPlace]:
+        """The run's in-place components whose override it accepted (M2-61)."""
+        live = {n for n, t in self.worktrees.trees().items() if t.mode != "worktree"}
+        kept = kept_override(self.target, self.run_id) or {}
+        return {name: cmds for name, cmds in kept.items() if name in live}
+
+    def _readable(self) -> dict[str, Path]:
+        """Where git may READ the run's work: its trees and its in-place checkouts (Zyroflo:
+        `deny_raw_git` forbids commit, push and worktree, not a read)."""
+        return {**self._trees(), **{n: c.checkout for n, c in self._in_place().items()}}
+
+    def _overridden(self) -> "Override":
+        if self.override is None:
+            raise WorktreeError(
+                "this run works in place and was given no commit-command override to use"
+            )
+        return self.override
+
+    def _at(self, cmds: InPlace, commit: str) -> str:
+        """The checkout's HEAD after a rollback command, which must have put it at `commit`."""
+        head = _git(cmds.checkout, "rev-parse", "HEAD")
+        if head != commit:
+            raise WorktreeError(
+                f"{cmds.component}: the rollback command left the checkout at {head}, not "
+                f"{commit} - check {cmds.checkout} by hand"
+            )
+        return head
 
     def _base_file(self) -> Path:
         """Where the base of the step in progress is kept: the run folder, outside every
