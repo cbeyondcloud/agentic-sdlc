@@ -13,6 +13,8 @@ from pathlib import Path
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from alembic.util import CommandError
+from sqlalchemy import func, select
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
@@ -77,6 +79,15 @@ def head_revision() -> str:
     return ScriptDirectory.from_config(_alembic_config()).get_current_head() or ""
 
 
+def revision_is_known(revision: str) -> bool:
+    """Whether `revision` is one of this release's migrations. A database at a revision
+    this release does not know was migrated by a newer release (DF-413)."""
+    try:
+        return ScriptDirectory.from_config(_alembic_config()).get_revision(revision) is not None
+    except CommandError:
+        return False
+
+
 async def current_revision(conn: AsyncConnection) -> str | None:
     """The database's migration revision, or None before the first migration."""
     found = await conn.exec_driver_sql("select to_regclass('alembic_version') is not null")
@@ -86,16 +97,29 @@ async def current_revision(conn: AsyncConnection) -> str | None:
 
 
 async def _run_alembic(owner_dsn: str, schema: str, action, revision: str) -> str | None:
+    """Run one alembic action while holding the schema's migration lock: a session advisory
+    lock, so two runs at once (several pods, a retried hook) take turns instead of failing
+    with 'relation already exists' (DF-413). The lock goes with its connection."""
     schema = _checked_schema(schema)
     engine = engine_for(owner_dsn, schema)
     try:
-        async with engine.begin() as conn:
-            await conn.exec_driver_sql(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-        async with engine.connect() as conn:
-            await conn.run_sync(lambda sync: action(_alembic_config(sync, schema), revision))
-            await conn.commit()
-        async with engine.connect() as conn:
-            return await current_revision(conn)
+        async with engine.connect() as lock:
+            key = func.hashtext(f"agentic_cp.migrate:{schema}")
+            await lock.execute(select(func.pg_advisory_lock(key)))
+            await lock.commit()
+            try:
+                async with engine.begin() as conn:
+                    await conn.exec_driver_sql(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+                async with engine.connect() as conn:
+                    await conn.run_sync(
+                        lambda sync: action(_alembic_config(sync, schema), revision)
+                    )
+                    await conn.commit()
+                async with engine.connect() as conn:
+                    return await current_revision(conn)
+            finally:
+                await lock.execute(select(func.pg_advisory_unlock(key)))
+                await lock.commit()
     finally:
         await engine.dispose()
 

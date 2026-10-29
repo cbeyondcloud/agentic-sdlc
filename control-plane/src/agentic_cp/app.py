@@ -21,7 +21,7 @@ from agentic_cp.audit.api import router as audit_router
 from agentic_cp.auth.api import router as auth_router
 from agentic_cp.auth.service_accounts import router as service_accounts_router
 from agentic_cp.body_limit import BodyLimit
-from agentic_cp.db import current_revision, head_revision, make_engine
+from agentic_cp.db import current_revision, head_revision, make_engine, revision_is_known
 from agentic_cp.db_roles import AUDIT, TENANCY, enforcement_status
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, install_problem_handlers, log
 from agentic_cp.gitops import GitRunner
@@ -189,7 +189,10 @@ async def check_ready(engine: AsyncEngine, settings: Settings) -> Readiness:
     except (OSError, SQLAlchemyError) as error:
         log.warning("readyz: database unavailable (%s)", type(error).__name__)
         raise ApiProblem(503, "db.unavailable", "the database is not reachable") from None
-    if revision != head_revision():
+    # A revision this release does not know is a newer release's: its migrations only add
+    # (expand/contract), so this release keeps serving during a rolling upgrade and after a
+    # rollback (DF-413). A known older revision still needs `migrate`.
+    if revision != head_revision() and (revision is None or revision_is_known(revision)):
         raise ApiProblem(
             503,
             "db.migrations_pending",
