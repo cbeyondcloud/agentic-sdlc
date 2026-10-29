@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Install the umbrella chart on a throw-away kind cluster and run its smoke (M3-02).
+#   deploy/helm/kind/smoke.sh            build the control-plane image, then the smoke
+#   SKIP_BUILD=1 CP_IMAGE=... smoke.sh   use an image already built on this machine
+#   KEEP=1 smoke.sh                      keep the cluster afterwards (kind delete cluster)
+# kind, kubectl and helm run in a pinned tool container (tools.Dockerfile) that drives this
+# machine's Docker through its socket: nothing native is installed. Docker only (kind's
+# Podman provider is experimental). Containers and the cluster carry KIND_CLUSTER's name.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../../.." && pwd)"
+ENGINE="${CONTAINER_ENGINE:-docker}"
+export KIND_CLUSTER="${KIND_CLUSTER:-agentic-kind-smoke}"
+export CP_IMAGE="${CP_IMAGE:-agentic-control-plane:kind-smoke}"
+export KEEP="${KEEP:-0}"
+
+if [ "${SKIP_BUILD:-0}" != 1 ]; then
+  "$ENGINE" build -f "$ROOT/control-plane/Dockerfile" -t "$CP_IMAGE" "$ROOT"
+fi
+tools="agentic-kind-tools:$(sha256sum "$HERE/tools.Dockerfile" | cut -c1-12)"
+"$ENGINE" build -q -t "$tools" -f "$HERE/tools.Dockerfile" "$HERE" >/dev/null
+
+name="$KIND_CLUSTER-tools-$$"
+# MSYS_NO_PATHCONV: Git Bash on Windows must not rewrite the socket path
+MSYS_NO_PATHCONV=1 "$ENGINE" create --name "$name" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e KIND_CLUSTER -e CP_IMAGE -e KEEP "$tools" sh /w/kind/inside.sh >/dev/null
+trap '"$ENGINE" rm -f "$name" >/dev/null 2>&1 || true' EXIT
+"$ENGINE" cp "$ROOT/deploy/helm/." "$name:/w/"
+"$ENGINE" cp "$ROOT/deploy/org-local/cp-postgres/init.sh" "$name:/w/kind/pg-init.sh"
+"$ENGINE" start -a "$name"

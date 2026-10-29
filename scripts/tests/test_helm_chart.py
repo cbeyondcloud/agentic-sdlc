@@ -164,6 +164,22 @@ def test_the_runbooks_exist_and_link_each_other():
     assert "(upgrade.md)" in (runbooks / "release.md").read_text(encoding="utf-8")
 
 
+def test_the_kind_smoke_is_pinned_and_runs_in_containers():
+    kind = ROOT / "deploy" / "helm" / "kind"
+    tools = (kind / "tools.Dockerfile").read_text(encoding="utf-8")
+    assert f"FROM {HELM_IMAGE}\n" in tools
+    assert tools.count("sha256sum -c -") == 2  # kind and kubectl
+    inside = (kind / "inside.sh").read_text(encoding="utf-8")
+    assert re.search(r"kindest/node:v[0-9.]+@sha256:[0-9a-f]{64}", inside)
+    assert "--from-literal" not in inside, "passwords go through files"
+    for name in ("smoke.sh", "smoke.ps1"):
+        text = (kind / name).read_text(encoding="utf-8")
+        assert "/var/run/docker.sock" in text and "inside.sh" in text, name
+    manifest = (kind / "postgres.yaml").read_text(encoding="utf-8")
+    images = re.findall(r"image: (\S+)", manifest)
+    assert images and all(DIGEST.match(image) for image in images)
+
+
 # ── default values ────────────────────────────────────────────────────────────
 
 
