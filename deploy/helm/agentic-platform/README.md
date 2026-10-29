@@ -122,6 +122,15 @@ reach an internal host outside the list (DF-484).
 The chart's `version` is the release version in SemVer form (`0.4.0-rc.1` for `0.4.0rc1`);
 `scripts/release.py version set` moves it with the packages.
 
+## Local cluster smoke (kind)
+
+`deploy/helm/kind/smoke.sh` (or `smoke.ps1`) builds the control-plane image, creates a
+throw-away kind cluster, starts a Postgres in it, installs the chart, runs `helm test`,
+upgrades it (the migration hook again) and tests again. kind, kubectl and helm run in a
+pinned tool container that drives your Docker through its socket, so nothing native is
+installed. It needs Docker and about 4 GB of free memory, and takes a few minutes.
+`KEEP=1` keeps the cluster; `SKIP_BUILD=1 CP_IMAGE=<image>` reuses an image.
+
 ## Tests
 
 `scripts/tests/test_helm_chart.py` renders the chart with helm 4.3.1 for default and full
