@@ -32,3 +32,18 @@ def guard(tmp_path) -> Guard:
 )
 def test_a_script_on_a_shells_input_is_refused(guard, command):
     assert "destructive" in {block.wall for block in guard.command(command)}
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'rm -rf x' | sh",  # a printer piped into a shell (DF-681)
+        "printf 'rm -rf x' | bash",
+        "bash -c \"echo 'rm -rf x' | sh\"",  # the same, inside a command string
+        "del -Recurse x",  # PowerShell aliases of Remove-Item (DF-722)
+        "erase -r x",
+        "del -rec x",
+    ],
+)
+def test_a_script_piped_into_a_shell_and_a_recursive_del_are_refused(guard, command):
+    assert "destructive" in {block.wall for block in guard.command(command)}
