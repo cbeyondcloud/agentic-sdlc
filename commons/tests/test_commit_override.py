@@ -211,6 +211,58 @@ def test_a_commit_script_the_step_changed_is_refused(repo):
     assert tool_calls(repo) == []
 
 
+def test_a_program_by_name_found_inside_the_checkout_is_refused(tmp_path, monkeypatch):
+    """Windows looks in the current folder first: an agent's `monotool.bat` in the checkout
+    must never be what the framework runs outside the sandbox."""
+    repo = make_in_place_repo(tmp_path / "named", commit="monotool commit {message_file}")
+    monkeypatch.setenv("VCS_TOOL_LOG", str(tmp_path / "tool.log"))
+    planted = repo / "monotool.bat"
+    found = {"monotool": str(planted)}
+    monkeypatch.setattr("sdlc_commons.commit_override.shutil.which", lambda name: found.get(name))
+    [cmds] = override(repo, allow=("monotool commit", *ALLOW)).resolve(in_place(repo)).values()
+    planted.write_text("@echo off\n", encoding="utf-8")
+    with pytest.raises(OverrideError, match="inside the checkout"):
+        override(repo, allow=("monotool commit", *ALLOW)).commit(cmds, "step")
+
+
+@pytest.mark.parametrize(
+    "commit, refused",
+    [
+        ("monotool commit {message}", True),  # the message has a line break and a quote
+        ("monotool commit {message_file}", False),  # a path cmd.exe leaves alone
+    ],
+)
+def test_a_batch_file_gets_no_argument_cmd_would_reinterpret(
+    tmp_path, monkeypatch, commit, refused
+):
+    repo = make_in_place_repo(tmp_path / "batch", commit=commit)
+    monkeypatch.setenv("VCS_TOOL_LOG", str(tmp_path / "tool.log"))
+    tool = tmp_path / "bin" / "monotool.cmd"  # installed on the machine, outside the checkout
+    tool.parent.mkdir()
+    tool.write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setattr("sdlc_commons.commit_override._WINDOWS", True)
+    monkeypatch.setattr("sdlc_commons.commit_override.shutil.which", lambda name: str(tool))
+    ran, real = [], subprocess.run
+
+    def spy(argv, **kwargs):
+        if argv[0] == "git":
+            return real(argv, **kwargs)  # the framework's own git reads
+        ran.append(argv)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr("sdlc_commons.commit_override.subprocess.run", spy)
+    allow = ("monotool commit", *ALLOW)
+    [cmds] = override(repo, allow=allow).resolve(in_place(repo)).values()
+    (repo / "app.py").write_text("x = 2\n", encoding="utf-8")
+    if refused:
+        with pytest.raises(OverrideError, match="batch file"):
+            override(repo, allow=allow).commit(cmds, 'step: one\n\nsaid "x" & more')
+        assert ran == []
+    else:
+        override(repo, allow=allow).commit(cmds, 'step: one\n\nsaid "x" & more')
+        assert ran and ran[0][0] == str(tool)
+
+
 def test_org_policy_revoked_mid_run_stops_the_next_command(repo):
     cmds = override(repo).resolve(in_place(repo))["repo"]
     with pytest.raises(OverrideError, match="not allowed by org policy"):

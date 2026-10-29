@@ -66,8 +66,10 @@ LOG_FILE = "vcs-commands.jsonl"
 MESSAGE_FILE = "vcs-message.txt"
 _COMMIT = re.compile(r"[0-9a-f]{7,64}")
 _BRANCH = re.compile(r"[A-Za-z0-9._/-]+")
-#: What cmd.exe leaves alone in a batch file's arguments (Windows: Python cannot quote them).
-_BATCH_SAFE = re.compile(r"[A-Za-z0-9._/:\\=@+,-]*")
+#: What cmd.exe leaves alone in a batch file's arguments (Windows: Python cannot quote them
+#: for it). A space is safe inside the quotes Python adds; `=`, `,` and `;` split arguments.
+_WINDOWS = os.name == "nt"
+_BATCH_SAFE = re.compile(r"[A-Za-z0-9 ._/:\\@+-]*")
 #: The framework's plain settings; every other `AGENTIC_*` variable may be a credential.
 _PLAIN_SETTINGS = frozenset(
     {"AGENTIC_HOME", "AGENTIC_TEAM", "AGENTIC_USER", "AGENTIC_DEBUG", "AGENTIC_TRACES"}
@@ -280,7 +282,7 @@ class CommitOverride:
         template = getattr(cmds, action)
         argv = [values.get(word, word) for word in template]
         argv[0] = self._program_path(cmds, argv[0])
-        if os.name == "nt" and Path(argv[0]).suffix.lower() in (".bat", ".cmd"):
+        if _WINDOWS and Path(argv[0]).suffix.lower() in (".bat", ".cmd"):
             if unsafe := [w for w in argv[1:] if not _BATCH_SAFE.fullmatch(w)]:
                 raise OverrideError(
                     f"component {cmds.component}: its {action} command is a batch file, and "
@@ -333,6 +335,14 @@ class CommitOverride:
         found = shutil.which(program)
         if found is None:
             raise OverrideError(f"component {cmds.component}: {program} is not on PATH")
+        # Windows looks in the current folder before PATH: a program by name found in the
+        # checkout or the repository may be an agent's file, run outside the sandbox
+        if any(_within(Path(found), folder) for folder in (cmds.checkout, self.target)):
+            raise OverrideError(
+                f"component {cmds.component}: {program} was found inside the checkout, not on "
+                f"PATH - name a tool installed on the machine, or give the checkout's own "
+                f"script by its path"
+            )
         return found
 
     def _record(self, cmds: InPlace, action: str, code: int | None, started: float) -> None:
@@ -378,6 +388,14 @@ def _starts_with(words: Sequence[str], rule: Sequence[str]) -> bool:
 
 def _same(word: str, rule: str) -> bool:
     return word.replace("\\", "/") == rule.replace("\\", "/")
+
+
+def _within(path: Path, folder: Path) -> bool:
+    try:
+        path.resolve().relative_to(folder.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
 
 
 def _program(word: str) -> str:

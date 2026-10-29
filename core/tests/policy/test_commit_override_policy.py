@@ -45,10 +45,11 @@ def test_org_yaml_allows_override_commands_by_prefix(policy_dir: Path):
         "   ",
         "monotool commit {message}",  # a placeholder is a value, never part of a rule
         "monotool\ncommit",
+        "'monotool commit",  # unbalanced quotes: no command would ever match it
     ],
 )
 def test_an_unusable_allow_rule_is_refused(policy_dir: Path, rule: str):
-    quoted = rule.replace("'", "''").replace("\n", "\\n")
+    quoted = rule.replace("\n", "\\n")  # inside a YAML double-quoted string
     _append(policy_dir / "org.yaml", f'commit_override:\n  allow: ["{quoted}"]\n')
     with pytest.raises(PolicyError, match="commit_override"):
         load_policy(policy_dir)

@@ -5,6 +5,7 @@ resolver (agentic.policy.resolve, M1-04) checks every request against.
 """
 
 import re
+import shlex
 from datetime import date
 from decimal import Decimal
 from typing import Annotated, Literal, Self
@@ -528,6 +529,12 @@ def _override_rule(rule: str) -> str:
         raise ValueError("an allow rule names at least the program; an empty one allows all")
     if any(c in rule for c in "\r\n") or "{" in rule or "}" in rule:
         raise ValueError(f"{rule!r}: one line of words, without {{placeholders}}")
+    lexer = shlex.shlex(rule, posix=True)  # read as the override's commands are read
+    lexer.whitespace_split, lexer.escape, lexer.commenters = True, "", ""
+    try:
+        list(lexer)
+    except ValueError as error:
+        raise ValueError(f"{rule!r}: {error} (quote a word with spaces in full)") from None
     return rule.strip()
 
 
