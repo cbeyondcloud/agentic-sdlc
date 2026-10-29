@@ -48,6 +48,11 @@ def test_every_kind_renders_text_and_html():
             "reset": "5.00 USD per hour",
             "clear_phrase": "a person clears the pause switch",
         },
+        "learning.digest": {
+            "team": "payments",
+            "count": "2",
+            "proposals": "- lp-1 (developer, repo): Wrap HTTP calls in <with_retry>.",
+        },
     }
     assert set(values) == set(KINDS)
     for kind, given in values.items():

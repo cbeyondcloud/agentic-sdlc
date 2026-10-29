@@ -528,9 +528,10 @@ feedback = Table(
     Index("feedback_tenant_id_team_given_at_idx", "tenant_id", "team", "given_at"),
 )
 
-#: Proposals made from repeated corrections (M3-13): created here, never applied here
-#: (L4-L6). `authors` are the users whose feedback is the evidence; a rejected proposal is
-#: kept so its lesson is not proposed again without new evidence.
+#: Proposals made from repeated corrections (M3-13) and their owner's decisions (M3-15):
+#: the change itself is made by the approver's CLI and only reported here (M3-16).
+#: `authors` are the users whose feedback is the evidence; a rejected or reverted proposal
+#: is kept so its lesson is not proposed again without new evidence.
 learning_proposals = Table(
     "learning_proposals",
     metadata,
@@ -548,7 +549,22 @@ learning_proposals = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("decided_at", DateTime(timezone=True), nullable=True),
     Column("decided_by", Text, nullable=True),
-    CheckConstraint("status in ('pending', 'rejected')", name="learning_proposals_status_known"),
+    # M3-14..M3-16: who decides it, a person's edits, endorsements, the draft as approved,
+    # how it was applied and reverted, the regression case before and after
+    Column("owner", Text, nullable=True),
+    Column("kind", Text, nullable=True),
+    Column("edited_lesson", Text, nullable=True),
+    Column("endorsements", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("draft", JSONB, nullable=True),
+    Column("applied_at", DateTime(timezone=True), nullable=True),
+    Column("applied_ref", JSONB, nullable=True),
+    Column("reverted_at", DateTime(timezone=True), nullable=True),
+    Column("reverted_ref", JSONB, nullable=True),
+    Column("measurement", JSONB, nullable=True),
+    CheckConstraint(
+        "status in ('pending', 'approved', 'rejected', 'deferred', 'applied', 'reverted')",
+        name="learning_proposals_status_known",
+    ),
 )
 
 #: Unique constraints that deliberately span tenants: credential hashes, looked up before

@@ -646,9 +646,14 @@ class AttributionCorrection(RequestModel):
     reason: Annotated[str, StringConstraints(min_length=1, max_length=500)]
 
 
+ProposalStatusName = Literal["pending", "approved", "rejected", "deferred", "applied", "reverted"]
+
+
 class ProposalInfo(BaseModel):
-    """A proposal made from repeated corrections (M3-13). Created only: approving and
-    applying it are later steps (L4-L6), so nothing has changed because it exists."""
+    """A proposal made from repeated corrections (M3-13) and where it stands (M3-15, M3-16).
+    Nothing changes because a proposal exists: only its owner's approval leads to `applied`
+    (D29). `target` is the narrowest scope its evidence supports (personal, repo, team) and
+    `owner` who decides it: the user (personal), the repo or the team."""
 
     id: str
     team: str
@@ -656,9 +661,57 @@ class ProposalInfo(BaseModel):
     scope: str
     lesson: str
     evidence: list[str]
-    status: Literal["pending", "rejected"]
+    status: ProposalStatusName
     created_at: datetime
     decided_at: datetime | None = None
+    decided_by: str | None = None
+    target: Literal["personal", "repo", "team", "org"] = "repo"
+    owner: str | None = None
+    actors: list[str] = []
+    endorsements: list[str] = []
+    kind: str | None = None  # a person's retargeting (`agentic learn edit --kind`)
+    edited_lesson: str | None = None  # ... and rewording
+    applied_ref: dict | None = None  # how it was applied (a personal write, a pull request)
+    reverted_ref: dict | None = None
+    measurement: dict | None = None  # the regression case before and after
+
+
+class ProposalDetail(ProposalInfo):
+    """One proposal with the feedback records behind it (the evidence) and the draft its
+    owner approved (M3-14: the diff and the regression case)."""
+
+    feedback: list[FeedbackInfo] = []
+    draft: dict | None = None
+
+
+class ProposalDecision(RequestModel):
+    """`POST /v1/learning/proposals/{id}/decision` (M3-15): the owner's decision. An approval
+    carries the draft being approved, kept with the proposal for the audit."""
+
+    action: Literal["approve", "reject", "defer"]
+    reason: Annotated[str, StringConstraints(max_length=500)] = ""
+    draft: dict | None = None
+
+
+class ProposalEdit(RequestModel):
+    """`PUT /v1/learning/proposals/{id}/draft`: retarget or reword before deciding."""
+
+    kind: Annotated[str, StringConstraints(pattern=r"^[a-z][a-z-]{1,39}$")] | None = None
+    lesson: Annotated[str, StringConstraints(min_length=1, max_length=200)] | None = None
+
+
+class ProposeFrom(RequestModel):
+    """`POST /v1/learning/proposals`: teach one correction now (an explicit request)."""
+
+    feedback_id: Annotated[str, StringConstraints(pattern=r"^fb-[0-9a-f]{20}$")]
+    agent: Annotated[str, StringConstraints(pattern=AGENT_NAME)] | None = None
+
+
+class ChangeReport(RequestModel):
+    """`POST .../applied` and `.../reverted`: how the approver's CLI made the change."""
+
+    ref: dict
+    measurement: dict | None = None
 
 
 def invite_url(public_url: str, token: str) -> str:

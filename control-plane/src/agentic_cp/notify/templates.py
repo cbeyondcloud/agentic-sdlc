@@ -18,6 +18,7 @@ _FILES = {
     "gate.waiting": "gate_waiting",
     "budget.threshold": "budget",
     "auto_trip": "auto_trip",
+    "learning.digest": "learning_digest",
 }
 KINDS = tuple(_FILES)
 
@@ -26,6 +27,7 @@ _SUBJECTS = {
     "gate.waiting": "Run $run_id is waiting for approval at $gate",
     "budget.threshold": "$what has used $percent % of its budget",
     "auto_trip": "Team $team is paused: its $what passed the auto-trip threshold",
+    "learning.digest": "$count learning proposal(s) in team $team wait for your decision",
 }
 
 
