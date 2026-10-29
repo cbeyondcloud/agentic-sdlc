@@ -1,0 +1,342 @@
+{
+  "requests": 87696,
+  "errors": 2875,
+  "error_rate": 0.032784,
+  "errors_by_status": {
+    "timeout": 2875
+  },
+  "routes": {
+    "GET /v1/killswitch/state": {
+      "count": 21774,
+      "p50_ms": 2736.3,
+      "p95_ms": 6328.4,
+      "p99_ms": 7538.1,
+      "max_ms": 8687.6,
+      "statuses": {
+        "timeout": 1023,
+        "200": 7080,
+        "304": 13671
+      }
+    },
+    "GET /v1/me": {
+      "count": 1000,
+      "p50_ms": 212.6,
+      "p95_ms": 8322.1,
+      "p99_ms": 11169.1,
+      "max_ms": 16202.2,
+      "statuses": {
+        "timeout": 2,
+        "200": 998
+      }
+    },
+    "GET /v1/policy/active": {
+      "count": 1938,
+      "p50_ms": 3292.6,
+      "p95_ms": 7935.7,
+      "p99_ms": 10812.3,
+      "max_ms": 14731.6,
+      "statuses": {
+        "200": 1938
+      }
+    },
+    "GET /v1/policy/versions/{version}/bundle": {
+      "count": 998,
+      "p50_ms": 95.6,
+      "p95_ms": 6575.4,
+      "p99_ms": 9089.4,
+      "max_ms": 15549.8,
+      "statuses": {
+        "200": 998
+      }
+    },
+    "POST /v1/runs": {
+      "count": 1938,
+      "p50_ms": 3589.4,
+      "p95_ms": 7961.2,
+      "p99_ms": 10313.9,
+      "max_ms": 16871.9,
+      "statuses": {
+        "200": 1938
+      }
+    },
+    "POST /v1/runs/{run_id}/events": {
+      "count": 45385,
+      "p50_ms": 4071.9,
+      "p95_ms": 8324.9,
+      "p99_ms": 10704.4,
+      "max_ms": 17641.6,
+      "statuses": {
+        "timeout": 5,
+        "200": 45380
+      }
+    },
+    "POST /v1/runs/{run_id}/heartbeat": {
+      "count": 14663,
+      "p50_ms": 4099.9,
+      "p95_ms": 7476.5,
+      "p99_ms": 8012.7,
+      "max_ms": 8809.6,
+      "statuses": {
+        "timeout": 1845,
+        "200": 12818
+      }
+    }
+  },
+  "ingest_lag_commit_s": {
+    "count": 49927,
+    "p50": 5.86,
+    "p95": 13.047,
+    "p99": 16.156,
+    "max": 26.515
+  },
+  "ingest_lag_visible_s": {
+    "count": 49932,
+    "p50": 5.985,
+    "p95": 13.188,
+    "p99": 16.281,
+    "max": 26.718
+  },
+  "counters": {
+    "bundle_bytes": 13367212,
+    "events_committed": 49927,
+    "events_produced": 49932,
+    "events_undelivered": 0,
+    "events_visible": 49932,
+    "runs_closed": 966,
+    "runs_registered": 1938,
+    "runs_start_failed": 2
+  },
+  "targets": {
+    "ingest_lag_p95_s": {
+      "target": 5.0,
+      "value": 13.188,
+      "met": false
+    },
+    "ingest_lag_p99_s": {
+      "target": 15.0,
+      "value": 16.281,
+      "met": false
+    },
+    "error_rate": {
+      "target": 0.001,
+      "value": 0.032784,
+      "met": false
+    },
+    "kill_poll_p99_s": {
+      "target": 2.0,
+      "value": 7.5381,
+      "met": false
+    },
+    "heartbeat_p99_s": {
+      "target": 2.0,
+      "value": 8.0127,
+      "met": false
+    },
+    "register_p95_s": {
+      "target": 2.0,
+      "value": 7.9612,
+      "met": false
+    }
+  },
+  "database": {
+    "connections_total_max": 49,
+    "connections_total_avg": 49.0,
+    "connections_active_max": 6,
+    "connections_active_avg": 1.9,
+    "connections_idle_in_tx_max": 41,
+    "lock_waits_max": 4,
+    "commits_per_s": 399.9,
+    "sessions_opened": 83,
+    "samples": 85,
+    "top_statements": [
+      {
+        "calls": 7713,
+        "total_ms": 138571,
+        "mean_ms": 17.97,
+        "rows": 7713,
+        "query": "SELECT pg_advisory_xact_lock(hashtextextended($1::VARCHAR, $2::INTEGER)) AS pg_advisory_xact_lock_1"
+      },
+      {
+        "calls": 60206,
+        "total_ms": 65554,
+        "mean_ms": 1.09,
+        "rows": 60206,
+        "query": "SELECT runs.tenant_id, runs.run_id, runs.team, runs.started_by, runs.policy_version, runs.policy_known, runs.status, runs.head_seq, runs.head_hash, runs.opened_at, runs.last_event_at, runs.budget_usd,"
+      },
+      {
+        "calls": 88683,
+        "total_ms": 29028,
+        "mean_ms": 0.33,
+        "rows": 88683,
+        "query": "SELECT anon_1.tenant_id, anon_1.tenant_slug, anon_1.tenant_status, anon_1.rbac_revision, anon_1.token_id, anon_1.user_id, anon_1.email, anon_1.kind, anon_1.user_status, anon_1.expires_at, anon_1.revok"
+      },
+      {
+        "calls": 41156,
+        "total_ms": 12420,
+        "mean_ms": 0.3,
+        "rows": 41156,
+        "query": "INSERT INTO run_events (tenant_id, run_id, seq, hash, prev, event, step, at, entry) VALUES ($1::UUID, $2::VARCHAR, $3::BIGINT, $4::VARCHAR, $5::VARCHAR, $6::VARCHAR, $7::VARCHAR, $8::VARCHAR, $9::JSON"
+      },
+      {
+        "calls": 34308,
+        "total_ms": 7065,
+        "mean_ms": 0.21,
+        "rows": 34308,
+        "query": "SELECT policy_versions.settings FROM policy_versions WHERE policy_versions.version = $1::VARCHAR AND policy_versions.status = $2::VARCHAR"
+      },
+      {
+        "calls": 8155,
+        "total_ms": 3507,
+        "mean_ms": 0.43,
+        "rows": 6107,
+        "query": "UPDATE tokens SET last_used_at=$1::TIMESTAMP WITH TIME ZONE WHERE tokens.id = $2::UUID AND (tokens.last_used_at IS NULL OR tokens.last_used_at < $3::TIMESTAMP WITH TIME ZONE)"
+      },
+      {
+        "calls": 34308,
+        "total_ms": 2842,
+        "mean_ms": 0.08,
+        "rows": 34308,
+        "query": "SELECT policy_active.version, policy_active.branch, policy_active.activated_at, policy_versions.digest, policy_versions.tree_digest, policy_versions.commit_at FROM policy_active JOIN policy_versions O"
+      },
+      {
+        "calls": 1617,
+        "total_ms": 2663,
+        "mean_ms": 1.65,
+        "rows": 724229,
+        "query": "select tenant_id, run_id, head_seq from agentic.runs where run_id = any($1::text[]) and tenant_id = any($2::uuid[])"
+      },
+      {
+        "calls": 21904,
+        "total_ms": 2638,
+        "mean_ms": 0.12,
+        "rows": 21904,
+        "query": "UPDATE runs SET head_seq=$1::BIGINT, head_hash=$2::VARCHAR, last_event_at=$3::TIMESTAMP WITH TIME ZONE WHERE runs.run_id = $4::VARCHAR"
+      },
+      {
+        "calls": 5775,
+        "total_ms": 2106,
+        "mean_ms": 0.36,
+        "rows": 0,
+        "query": "SELECT DISTINCT users.email FROM assignments JOIN users ON users.tenant_id = assignments.tenant_id AND users.id = assignments.user_id JOIN roles ON roles.tenant_id = assignments.tenant_id AND roles.na"
+      },
+      {
+        "calls": 225328,
+        "total_ms": 2065,
+        "mean_ms": 0.01,
+        "rows": 225328,
+        "query": "SELECT current_setting($1::VARCHAR, $2::BOOLEAN) AS current_setting_1"
+      },
+      {
+        "calls": 168518,
+        "total_ms": 1982,
+        "mean_ms": 0.01,
+        "rows": 168518,
+        "query": "SELECT set_config($1::VARCHAR, $2::VARCHAR, $3::BOOLEAN) AS set_config_1"
+      },
+      {
+        "calls": 3876,
+        "total_ms": 1978,
+        "mean_ms": 0.51,
+        "rows": 3876,
+        "query": "SELECT count(*) AS count_1 FROM runs WHERE runs.status = $1::VARCHAR AND coalesce(runs.last_event_at, runs.opened_at) > $2::TIMESTAMP WITH TIME ZONE AND runs.started_by = $3::UUID"
+      },
+      {
+        "calls": 5775,
+        "total_ms": 1950,
+        "mean_ms": 0.34,
+        "rows": 5775,
+        "query": "INSERT INTO notifications (tenant_id, kind, recipient, subject, body_text, body_html, dedupe_key, next_attempt_at, created_at) VALUES ($1::UUID, $2::VARCHAR, $3::VARCHAR, $4::VARCHAR, $5::VARCHAR, $6:"
+      },
+      {
+        "calls": 3876,
+        "total_ms": 1895,
+        "mean_ms": 0.49,
+        "rows": 3876,
+        "query": "SELECT count(*) AS count_1 FROM runs WHERE runs.status = $1::VARCHAR AND coalesce(runs.last_event_at, runs.opened_at) > $2::TIMESTAMP WITH TIME ZONE AND runs.team = $3::VARCHAR"
+      }
+    ]
+  },
+  "containers": {
+    "agentic-m3-load-test-lt-cp-1": {
+      "cpu_pct_avg": 88.3,
+      "cpu_pct_p95": 100.04,
+      "cpu_pct_max": 102.75,
+      "mem_mib_max": 160.2,
+      "samples": 64
+    },
+    "agentic-m3-load-test-lt-cp-2": {
+      "cpu_pct_avg": 88.7,
+      "cpu_pct_p95": 99.51,
+      "cpu_pct_max": 101.8,
+      "mem_mib_max": 159.1,
+      "samples": 64
+    },
+    "agentic-m3-load-test-lt-cp-3": {
+      "cpu_pct_avg": 89.7,
+      "cpu_pct_p95": 99.2,
+      "cpu_pct_max": 102.04,
+      "mem_mib_max": 148.9,
+      "samples": 64
+    },
+    "agentic-m3-load-test-lt-postgres-1": {
+      "cpu_pct_avg": 56.8,
+      "cpu_pct_p95": 67.0,
+      "cpu_pct_max": 68.9,
+      "mem_mib_max": 472.8,
+      "samples": 64
+    },
+    "agentic-m3-load-test-lt-worker-1": {
+      "cpu_pct_avg": 4.2,
+      "cpu_pct_p95": 29.99,
+      "cpu_pct_max": 36.7,
+      "mem_mib_max": 116.5,
+      "samples": 64
+    }
+  },
+  "driver_loop_lag": {
+    "p50_ms": 0.0,
+    "p99_ms": 102.6,
+    "max_ms": 373.7
+  },
+  "metrics_scrape": {
+    "status": 200,
+    "seconds": 14.736
+  },
+  "events_never_visible": 0,
+  "elapsed_s": 426.2,
+  "options": {
+    "runs": 1000,
+    "duration_s": 300.0,
+    "ramp_s": 120.0,
+    "timing": {
+      "step_s": 15.0,
+      "gate_s": 10.0,
+      "heartbeat_s": 60,
+      "kill_poll_s": 10,
+      "jitter": 0.5
+    },
+    "seed": 1,
+    "drain_s": 60.0,
+    "max_runs": null,
+    "retry_s": 5.0
+  },
+  "replicas": 3,
+  "seeding": {
+    "role_import_seconds": [
+      10.86,
+      9.461
+    ],
+    "seconds": 32.5,
+    "tenants": 2,
+    "teams_per_tenant": 10
+  },
+  "machine": {
+    "os": "Windows-11-10.0.26300-SP0",
+    "python": "3.12.6",
+    "host_cpus": 12,
+    "engine": "docker",
+    "vm_cpus": 6,
+    "vm_memory_gib": 15.6,
+    "server_version": "29.8.2"
+  }
+}
