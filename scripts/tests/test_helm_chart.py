@@ -164,6 +164,30 @@ def test_the_runbooks_exist_and_link_each_other():
     assert "(upgrade.md)" in (runbooks / "release.md").read_text(encoding="utf-8")
 
 
+#: Stop writes: only the release's Deployments (review F3: never every Deployment).
+SCALE_DOWN = (
+    "kubectl -n agentic scale deploy -l app.kubernetes.io/instance=agentic,"
+    "app.kubernetes.io/part-of=agentic-platform --replicas=0"
+)
+#: The HPA leaves the API at zero and helm upgrade never sets its replicas: scale it back.
+SCALE_API_UP = (
+    "kubectl -n agentic scale deploy -l app.kubernetes.io/instance=agentic,"
+    "app.kubernetes.io/component=api --replicas=2"
+)
+
+
+def test_the_restore_runbook_scales_only_the_release_and_brings_the_api_back():
+    restore = (ROOT / "docs" / "runbooks" / "postgres-backup-restore.md").read_text(
+        encoding="utf-8"
+    )
+    assert "--all" not in restore
+    assert SCALE_DOWN in restore and SCALE_API_UP in restore
+    # the kind smoke runs the same commands (sh: the namespace is "$NS")
+    inside = (ROOT / "deploy" / "helm" / "kind" / "inside.sh").read_text(encoding="utf-8")
+    for command in (SCALE_DOWN, SCALE_API_UP):
+        assert command.replace("-n agentic", '-n "$NS"') in inside, command
+
+
 def test_the_kind_smoke_is_pinned_and_runs_in_containers():
     kind = ROOT / "deploy" / "helm" / "kind"
     tools = (kind / "tools.Dockerfile").read_text(encoding="utf-8")
@@ -306,6 +330,47 @@ def test_a_secret_setting_in_config_is_refused(chart_tools):
     assert "secrets.existingSecret" in done.stderr
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["AGENTIC_CP_Smtp_Password", "AGENTIC_CP_database_url", "agentic_cp_metrics_token"],
+)
+def test_a_secret_setting_in_config_is_refused_in_any_case(chart_tools, name):
+    # review F1: the control plane lower-cases a setting's name, so the guard must too
+    done = _template(chart_tools, "--set", f"config.{name}=postgresql://evil.example/x")
+    assert done.returncode != 0, f"config.{name} was rendered"
+    assert "secrets.existingSecret" in done.stderr
+
+
+def test_a_config_setting_must_be_in_upper_case(chart_tools):
+    done = _template(chart_tools, "--set", "config.AGENTIC_CP_policy_poll_seconds=60")
+    assert done.returncode != 0
+    assert "AGENTIC_CP_POLICY_POLL_SECONDS" in done.stderr
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("AGENTIC_CP_PUBLIC_URL", "publicUrl"), ("AGENTIC_CP_Gateway_Url", "tokenlean.url")],
+)
+def test_a_config_setting_the_chart_sets_itself_is_refused(chart_tools, name, value):
+    # review F1: a duplicate env name is refused by server-side apply (Helm 4, Argo CD, Flux)
+    done = _template(
+        chart_tools,
+        "--set",
+        f"config.{name}=http://x.example",
+        "--set",
+        "publicUrl=https://y.example.org",
+    )
+    assert done.returncode != 0, f"config.{name} was rendered"
+    assert value in done.stderr
+
+
+def test_no_container_has_a_duplicate_env_name(full_render):
+    for name, spec in _pod_specs(_objects(full_render)):
+        for container in spec["containers"]:
+            names = [item["name"] for item in container.get("env", [])]
+            assert len(names) == len(set(names)), f"{name}: {names}"
+
+
 def test_the_service_points_at_the_api(default_render):
     objects = _objects(default_render)
     service = _one(objects, "Service", "api")
@@ -371,6 +436,63 @@ def test_full_values_add_ingress_monitoring_policy_and_urls(full_render):
     (text,) = datasource[0]["data"].values()
     assert "uid: agentic-postgres" in text
     assert "password: ${AGENTIC_DASH_READER_PASSWORD}" in text
+
+
+def _release_peer() -> dict[str, Any]:
+    return {
+        "podSelector": {
+            "matchLabels": {
+                "app.kubernetes.io/name": "agentic-platform",
+                "app.kubernetes.io/instance": RELEASE,
+            }
+        }
+    }
+
+
+def test_the_network_policy_lets_the_release_reach_the_api_and_names_its_peers(full_render):
+    # review F4: the helm test pod, the ingress controller and Prometheus all reach the API
+    policy = _one(_objects(full_render), "NetworkPolicy", "api")
+    (rule,) = policy["spec"]["ingress"]
+    assert rule["ports"] == [{"port": "http", "protocol": "TCP"}]
+    peers = rule["from"]
+    assert _release_peer() in peers, "the release's own pods (helm test)"
+    namespaces = [
+        p["namespaceSelector"]["matchLabels"]["kubernetes.io/metadata.name"]
+        for p in peers
+        if "namespaceSelector" in p
+    ]
+    assert namespaces == ["ingress-nginx", "monitoring"]
+    api = {**_release_peer()["podSelector"]["matchLabels"], "app.kubernetes.io/component": "api"}
+    to_api = {
+        "to": [{"podSelector": {"matchLabels": api}}],
+        "ports": [{"port": "http", "protocol": "TCP"}],
+    }
+    assert to_api in policy["spec"]["egress"], "egress from the release's pods to the API"
+
+
+def test_the_example_egress_list_keeps_internal_ranges_out():
+    text = (CHART / "ci" / "full-values.yaml").read_text(encoding="utf-8")
+    for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"):
+        assert f"- {cidr}\n" in text, cidr
+    assert "- 100.64.0.0/10\n" in text
+
+
+@pytest.mark.parametrize(
+    ("switch", "needed"),
+    [
+        (["ingress.enabled=true", "ingress.host=agentic.example.org"], "networkPolicy.ingressFrom"),
+        (["metrics.serviceMonitor.enabled=true"], "networkPolicy.metricsFrom"),
+        (["metrics.scrapeAnnotations=true"], "networkPolicy.metricsFrom"),
+    ],
+    ids=["ingress", "servicemonitor", "annotations"],
+)
+def test_a_network_policy_without_the_needed_peers_is_refused(chart_tools, switch, needed):
+    args = ["--set", "networkPolicy.enabled=true"]
+    for item in switch:
+        args += ["--set", item]
+    done = _template(chart_tools, *args)
+    assert done.returncode != 0, "rendered a policy that blocks its own callers"
+    assert needed in done.stderr
 
 
 def test_the_tokenlean_subchart_is_a_placeholder_until_m3_04(chart_tools):

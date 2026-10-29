@@ -273,7 +273,8 @@ def _grant_runtime(args: argparse.Namespace) -> int:
 
 def _verify_restore(args: argparse.Namespace) -> int:
     """Check a restored database (M3-02): this release's migration revision, the runtime
-    role's guarantees and every tenant's audit chain. Exit 1 when it is not usable."""
+    role's guarantees and every tenant's audit chain. Exit 1 when it is not usable, and when
+    it has no tenant unless `--allow-empty`."""
     from agentic_cp.db import make_owner_engine
     from agentic_cp.restore import verify_restored
 
@@ -283,7 +284,9 @@ def _verify_restore(args: argparse.Namespace) -> int:
     async def run():
         engine = make_owner_engine(settings)
         try:
-            return await verify_restored(engine, settings.db_schema, settings.runtime_role)
+            return await verify_restored(
+                engine, settings.db_schema, settings.runtime_role, allow_empty=args.allow_empty
+            )
         finally:
             await engine.dispose()
 
@@ -744,10 +747,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     grant = db.add_parser("grant-runtime", help="create or re-align the runtime role")
     grant.set_defaults(run=_grant_runtime)
-    db.add_parser(
+    verify_restore = db.add_parser(
         "verify-restore",
         help="check a restored database: revision, guarantees, every audit chain",
-    ).set_defaults(run=_verify_restore)
+    )
+    verify_restore.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="accept a database with no tenant (a first install); otherwise it fails",
+    )
+    verify_restore.set_defaults(run=_verify_restore)
     link = db.add_parser(
         "link-usage", help="read the gateway's usage through postgres_fdw (dashboards)"
     )

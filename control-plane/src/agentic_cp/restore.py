@@ -4,7 +4,10 @@ After a point-in-time recovery or a `pg_restore`, three things must hold before 
 plane may serve it: the schema is at this release's migration revision, the runtime role's
 grants and every tenant-isolation and insert-only guarantee are in place
 (`enforcement_status`), and every tenant's audit chain is intact (`audit.verify`). A
-restore that silently lost rows in the middle of a chain fails the last check.
+restore that silently lost rows in the middle of a chain fails the last check. A restore
+with no tenant at all fails too, unless the caller allows it (a first install). A chain
+cannot show that its newest records are missing: compare the tenant and record counts with
+those taken when the backup was made (the runbook).
 
 `filtered_toc` prepares a `pg_restore -l` listing of a `pg_dump -Fc --schema=<schema>` file
 for a fresh database: views are left out and re-created by this release's own DDL
@@ -69,6 +72,9 @@ class RestoreReport:
     enforced: bool
     reasons: list[str] = field(default_factory=list)
     tenants: list[TenantCheck] = field(default_factory=list)
+    allow_empty: bool = False
+    """A restore without tenants passes only with this (a first install); otherwise an
+    empty or wrong dump would read as verified (review F2)."""
 
     @property
     def revision_state(self) -> str:
@@ -83,6 +89,7 @@ class RestoreReport:
         return (
             self.revision_state == "current"
             and self.enforced
+            and (bool(self.tenants) or self.allow_empty)
             and all(not tenant.problems for tenant in self.tenants)
         )
 
@@ -96,8 +103,13 @@ class RestoreReport:
             out.append("  verify it with the release that wrote it")
         out.append(f"database guarantees: {'enforced' if self.enforced else 'MISSING'}")
         out += [f"  - {reason}" for reason in self.reasons]
-        if not self.tenants:
-            out.append("tenants: none (an empty deployment proves little)")
+        if not self.tenants and self.allow_empty:
+            out.append("tenants: none (allowed by --allow-empty: a first install)")
+        elif not self.tenants:
+            out.append(
+                "tenants: none - an empty or wrong dump; pass --allow-empty only for a "
+                "deployment that has no tenant yet"
+            )
         for tenant in self.tenants:
             verdict = "intact" if not tenant.problems else f"BROKEN ({len(tenant.problems)})"
             out.append(f"tenant {tenant.slug}: audit chain {verdict}, {tenant.records} records")
@@ -106,13 +118,20 @@ class RestoreReport:
         return out
 
 
-async def verify_restored(owner: AsyncEngine, schema: str, runtime_role: str) -> RestoreReport:
-    """Check the database behind `owner` (an engine acting as the schema's owner role)."""
+async def verify_restored(
+    owner: AsyncEngine, schema: str, runtime_role: str, *, allow_empty: bool = False
+) -> RestoreReport:
+    """Check the database behind `owner` (an engine acting as the schema's owner role).
+    Without `allow_empty`, a database with no tenant is not usable."""
     async with owner.connect() as conn:
         revision = await current_revision(conn)
         status = await enforcement_status(conn, runtime_role, schema=schema)
     report = RestoreReport(
-        revision=revision, head=head_revision(), enforced=status.enforced, reasons=status.reasons
+        revision=revision,
+        head=head_revision(),
+        enforced=status.enforced,
+        reasons=status.reasons,
+        allow_empty=allow_empty,
     )
     if revision is None:
         return report

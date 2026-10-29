@@ -163,10 +163,15 @@ metrics:
   scrapeAnnotations: false
 
 networkPolicy:
-  # -- A NetworkPolicy for the chart's pods.
+  # -- A NetworkPolicy for the chart's pods (your CNI must enforce policies). The release's
+  # own pods (the `helm test` pod) may always reach the API.
   enabled: false
   # -- Who may reach the API (NetworkPolicy `from` peers); empty: the release namespace.
+  # Required with ingress.enabled: name the ingress controller's namespace or pods.
   ingressFrom: []
+  # -- Who may scrape /metrics (NetworkPolicy `from` peers, for example the monitoring
+  # namespace). Required with metrics.serviceMonitor.enabled or metrics.scrapeAnnotations.
+  metricsFrom: []
   # -- Egress allow-list (NetworkPolicy `to` rules: Postgres, TokenLean, git hosts, SMTP).
   # DNS is always allowed. Empty: egress is not restricted.
   egress: []

@@ -71,6 +71,17 @@ def test_report_lines_name_each_finding():
     assert not report.ok and "NOT usable" in text
 
 
+def test_a_restore_with_no_tenants_is_not_usable_unless_allowed():
+    # review F2: an empty or wrong dump must not pass as "restore verified"
+    report = RestoreReport(revision="m9", head="m9", enforced=True)
+    text = "\n".join(report.lines())
+    assert not report.ok
+    assert "NOT usable" in text and "restore verified" not in text
+    assert "--allow-empty" in text
+    allowed = RestoreReport(revision="m9", head="m9", enforced=True, allow_empty=True)
+    assert allowed.ok and "restore verified" in "\n".join(allowed.lines())
+
+
 async def _bootstrapped(db) -> None:
     clock = FakeClock()
     await bootstrap(db, clock, "tenant-a", "Tenant A")
@@ -109,6 +120,35 @@ async def test_verify_restore_command(db, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "restore verified" in out and "tenant tenant-a: audit chain intact" in out
     assert db.owner_dsn not in out
+
+
+async def test_verify_restore_command_refuses_an_empty_database(db, monkeypatch, capsys):
+    monkeypatch.setenv("AGENTIC_CP_DATABASE_URL", db.app_dsn)
+    monkeypatch.setenv("AGENTIC_CP_OWNER_DATABASE_URL", db.owner_dsn)
+    args = main.build_parser().parse_args(["db", "verify-restore"])
+    assert await _in_thread(args.run, args) == 1
+    assert "restore NOT usable" in capsys.readouterr().out
+    args = main.build_parser().parse_args(["db", "verify-restore", "--allow-empty"])
+    assert await _in_thread(args.run, args) == 0
+    assert "restore verified" in capsys.readouterr().out
+
+
+def test_the_drill_passes_allow_empty_through(monkeypatch, tmp_path):
+    drill = _drill_module()
+    seen = {}
+
+    def fake_run_drill(dump, target, **kwargs):
+        seen.update(kwargs)
+        return RestoreReport(revision="m9", head="m9", enforced=True, allow_empty=True)
+
+    monkeypatch.setattr(drill, "run_drill", fake_run_drill)
+    monkeypatch.setattr(drill, "FreshContainer", lambda: object())
+    dump = tmp_path / "agentic.dump"
+    dump.write_bytes(b"PGDMP")
+    assert drill.main(["--dump", str(dump), "--allow-empty"]) == 0
+    assert seen["allow_empty"] is True
+    assert drill.main(["--dump", str(dump)]) == 0
+    assert seen["allow_empty"] is False
 
 
 async def _in_thread(func, *args):

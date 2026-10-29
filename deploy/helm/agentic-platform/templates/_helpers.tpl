@@ -128,13 +128,21 @@ the Job alone. Pass (list $ includeOwner). */}}
 - name: AGENTIC_CP_GIT_CONFIG_DIR
   value: /etc/agentic/git
 {{- end }}
+{{- /* The control plane lower-cases a setting's name, so every check compares the upper-case
+form (review F1); a name the chart sets itself would be a duplicate env entry, which
+server-side apply refuses. */}}
 {{- $secretSettings := splitList " " (include "agentic.secretSettings" $root) }}
+{{- $chartSet := dict "AGENTIC_CP_POLICY_WORKDIR" "the chart's fixed path" "AGENTIC_CP_PUBLIC_URL" "publicUrl" "AGENTIC_CP_MIN_CLI_VERSION" "minCliVersion" "AGENTIC_CP_GATEWAY_URL" "tokenlean.url" "AGENTIC_CP_GATEWAY_ADMIN_URL" "tokenlean.adminUrl" "AGENTIC_CP_SMTP_HOST" "smtp.host" "AGENTIC_CP_SMTP_PORT" "smtp.port" "AGENTIC_CP_SMTP_SECURITY" "smtp.security" "AGENTIC_CP_SMTP_USERNAME" "smtp.username" "AGENTIC_CP_SMTP_FROM" "smtp.from" "AGENTIC_CP_GIT_CONFIG_DIR" "gitConfigSecret" }}
 {{- range $name, $value := $v.config }}
-{{- if has $name $secretSettings }}
+{{- $upper := upper $name }}
+{{- if has $upper $secretSettings }}
 {{- fail (printf "config.%s holds a secret: put it in the Secret named by secrets.existingSecret" $name) }}
 {{- end }}
-{{- if not (hasPrefix "AGENTIC_CP_" $name) }}
-{{- fail (printf "config.%s: only AGENTIC_CP_* settings belong here" $name) }}
+{{- if hasKey $chartSet $upper }}
+{{- fail (printf "config.%s is set by the chart: use %s" $name (get $chartSet $upper)) }}
+{{- end }}
+{{- if not (regexMatch "^AGENTIC_CP_[A-Z0-9_]+$" $name) }}
+{{- fail (printf "config.%s: only AGENTIC_CP_* settings, in upper case, belong here (%s)" $name $upper) }}
 {{- end }}
 - name: {{ $name }}
   value: {{ $value | toString | quote }}

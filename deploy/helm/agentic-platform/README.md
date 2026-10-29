@@ -109,9 +109,21 @@ A new dashboard in the catalog reaches the chart with
 
 ## Network policy
 
-`networkPolicy.enabled` limits who reaches the API (`ingressFrom`, default: the release
-namespace). With an `egress` list it also limits where every pod may connect: DNS plus
-the list. List Postgres, TokenLean, your git hosts and the SMTP relay. This is also the
+`networkPolicy.enabled` limits who reaches the API. It works only when your CNI enforces
+network policies (Calico and Cilium do; kindnet and plain Flannel do not). The API port is
+open to:
+
+- the release's own pods, so `helm test` always works;
+- `ingressFrom`, default: the release namespace. With `ingress.enabled`, name the ingress
+  controller here (for example its namespace); the chart refuses to render without it;
+- `metricsFrom`: Prometheus, for example the monitoring namespace. It is required with
+  the ServiceMonitor or the scrape annotations.
+
+With an `egress` list the policy also limits where every pod may connect: DNS, the API
+(for the release's own pods) and the list. List Postgres, TokenLean, your git hosts and
+the SMTP relay. When you allow the public internet on a port, keep internal ranges out
+with `except`: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` (cloud
+metadata) and `100.64.0.0/10` (`ci/full-values.yaml` shows it). This is also the
 network-level guard for tenant-set git URLs: a tenant admin cannot make the control plane
 reach an internal host outside the list (DF-484).
 

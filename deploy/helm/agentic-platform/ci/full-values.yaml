@@ -47,6 +47,10 @@ networkPolicy:
     - namespaceSelector:
         matchLabels:
           kubernetes.io/metadata.name: ingress-nginx
+  metricsFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
   egress:
     - to:
         - ipBlock:
@@ -61,6 +65,8 @@ networkPolicy:
               - 10.0.0.0/8
               - 172.16.0.0/12
               - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
       ports:
         - port: 443
           protocol: TCP

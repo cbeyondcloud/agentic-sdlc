@@ -14,8 +14,9 @@ variable; pg_restore must be on PATH), and drops that database again.
 Steps: recreate the schema's owner role if the server lacks it, restore without privileges
 (views left to this release's DDL, `agentic_cp.restore.filtered_toc`), re-create the views,
 grant a throw-away runtime role, then `agentic_cp.restore.verify_restored`: the migration
-revision, every database guarantee, every tenant's audit chain. The source database is
-never touched. Exit codes: 0 usable, 1 not usable, 2 the drill itself could not run."""
+revision, every database guarantee, every tenant's audit chain. A dump with no tenant is
+not usable unless `--allow-empty` (a first install). The source database is never touched.
+Exit codes: 0 usable, 1 not usable, 2 the drill itself could not run."""
 
 from __future__ import annotations
 
@@ -241,7 +242,12 @@ def _database_dsn(admin_dsn: str, database: str) -> str:
 
 
 async def _finish(
-    admin_dsn: str, database: str, schema: str, owner: str, runtime_role: str
+    admin_dsn: str,
+    database: str,
+    schema: str,
+    owner: str,
+    runtime_role: str,
+    allow_empty: bool,
 ) -> RestoreReport:
     """As the owner role (a superuser session with `role` set): views, runtime role, checks."""
     engine = create_async_engine(
@@ -258,7 +264,7 @@ async def _finish(
                 for statement in view_statements(schema):
                     await conn.exec_driver_sql(statement)
             await grant_runtime(conn, runtime_role, secrets.token_hex(16), schema)
-        return await verify_restored(engine, schema, runtime_role)
+        return await verify_restored(engine, schema, runtime_role, allow_empty=allow_empty)
     finally:
         await engine.dispose()
 
@@ -269,6 +275,7 @@ def run_drill(
     *,
     schema: str = SCHEMA,
     owner_role: str | None = None,
+    allow_empty: bool = False,
 ) -> RestoreReport:
     """Restore `dump` into `target` and verify it; the target is cleaned up afterwards."""
     check_dump(dump)
@@ -285,7 +292,9 @@ def run_drill(
         toc_path = tools.put(f"agentic-drill-{suffix}.toc", filtered_toc(toc).encode("utf-8"))
         restore = ["pg_restore", "--no-privileges", "--exit-on-error", "--single-transaction"]
         tools.run([*restore, "-L", toc_path, "-d", database, dump_path], database=database)
-        return asyncio.run(_finish(target.admin_dsn, database, schema, owner, runtime_role))
+        return asyncio.run(
+            _finish(target.admin_dsn, database, schema, owner, runtime_role, allow_empty)
+        )
     finally:
         target.stop(database, runtime_role)
 
@@ -299,6 +308,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--schema", default=SCHEMA)
     parser.add_argument("--owner-role", help="the schema owner (default: from the dump)")
+    parser.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="accept a dump with no tenant (a first install); otherwise it is not usable",
+    )
     args = parser.parse_args(argv)
     try:
         if args.target_dsn_env:
@@ -309,7 +323,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             target = FreshContainer()
         report = run_drill(
-            args.dump.read_bytes(), target, schema=args.schema, owner_role=args.owner_role
+            args.dump.read_bytes(),
+            target,
+            schema=args.schema,
+            owner_role=args.owner_role,
+            allow_empty=args.allow_empty,
         )
     except (DrillError, OSError) as error:
         print(f"restore drill could not run: {error}", file=sys.stderr)

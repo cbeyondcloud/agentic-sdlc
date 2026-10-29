@@ -22,6 +22,14 @@ The restore drill and `python -m agentic_cp db verify-restore` check all three:
 3. **Every tenant's audit chain is intact.** A restore that lost rows in the middle of a
    chain, or changed one, shows up here.
 
+A restore with no tenant at all fails as well: it is an empty or wrong dump. Pass
+`--allow-empty` only for a deployment that has no tenant yet.
+
+A chain cannot show that its newest records are missing: a backup taken before them
+still verifies. So write down the tenant count and each tenant's record count when you
+take a backup, and compare them with the check's output (`tenant <slug>: audit chain
+intact, <n> records`).
+
 ## Option 1: a managed service (Cloud SQL, RDS, Azure Database, ...)
 
 Use the provider's automated backups with PITR turned on.
@@ -112,8 +120,13 @@ incident: the backups are not good enough until a drill passes.
 
 ## Restore for real
 
-1. Stop writes: scale the chart's API and worker to zero
-   (`kubectl -n agentic scale deploy --all --replicas=0`). CLIs queue events offline.
+1. Stop writes: scale the release's API and worker to zero, and nothing else in the
+   namespace (here the release is `agentic` in namespace `agentic`). CLIs queue events
+   offline.
+
+   ```bash
+   kubectl -n agentic scale deploy -l app.kubernetes.io/instance=agentic,app.kubernetes.io/part-of=agentic-platform --replicas=0
+   ```
 2. Restore into a **new** database or instance (PITR, or `pg_restore` of the latest
    logical backup as in the drill, into an empty database).
 3. Run `python -m agentic_cp migrate` if the restore is at an older revision, then
@@ -123,8 +136,17 @@ incident: the backups are not good enough until a drill passes.
    - `python -m agentic_cp db link-usage ...` (the dashboards' link to TokenLean's tables);
    - `python -m agentic_cp db dashboard-role --tenant <slug> --role <reader>` for each
      tenant's Grafana reader role.
-5. Point the chart's Secret at the restored database and scale back up
-   (`helm upgrade` with the same values restores the replica counts).
+5. Point the chart's Secret at the restored database and scale back up. `helm upgrade`
+   with the same values restores the worker. It does not restore the API: the chart
+   leaves the API's replica count to its autoscaler, and an autoscaler never scales a
+   Deployment up from zero. Set the API back to `api.autoscaling.minReplicas` yourself
+   (2 by default; `api.replicas` when autoscaling is off); the autoscaler takes over from
+   there.
+
+   ```bash
+   helm upgrade agentic <chart> --namespace agentic -f <your values> --wait --timeout 15m
+   kubectl -n agentic scale deploy -l app.kubernetes.io/instance=agentic,app.kubernetes.io/component=api --replicas=2
+   ```
 6. Tell users what period was lost (between the restore point and the outage). The
    CLIs' offline queues resend what they still hold.
 

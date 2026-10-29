@@ -6,6 +6,8 @@
 #   3. a throw-away Postgres (postgres.yaml) and the chart's Secret, random passwords
 #   4. helm install (the pre-install migration hook), helm test (/readyz)
 #   5. helm upgrade (the pre-upgrade hook on a migrated database), helm test again
+#   6. the restore runbook's stop and start (only the release's Deployments to zero, helm
+#      upgrade, the API scaled back up), helm test again
 # The cluster is deleted at the end unless KEEP=1. Passwords never leave the cluster.
 set -eu
 
@@ -60,6 +62,16 @@ helm test agentic --namespace "$NS" --logs
 
 say "helm upgrade (the migration hook again, on a migrated database)"
 helm upgrade agentic /w/agentic-platform "$@" --set worker.replicas=1
+helm test agentic --namespace "$NS" --logs
+
+say "stop and start again as the restore runbook does (docs/runbooks/postgres-backup-restore.md)"
+kubectl -n "$NS" scale deploy -l app.kubernetes.io/instance=agentic,app.kubernetes.io/part-of=agentic-platform --replicas=0
+kubectl -n "$NS" rollout status deploy/postgres --timeout=60s
+helm upgrade agentic /w/agentic-platform "$@" --set worker.replicas=1
+api=$(kubectl -n "$NS" get deploy -l app.kubernetes.io/instance=agentic,app.kubernetes.io/component=api -o jsonpath='{.items[0].spec.replicas}')
+say "API replicas after helm upgrade: $api (the autoscaler does not scale up from zero)"
+kubectl -n "$NS" scale deploy -l app.kubernetes.io/instance=agentic,app.kubernetes.io/component=api --replicas=2
+kubectl -n "$NS" rollout status deploy -l app.kubernetes.io/instance=agentic,app.kubernetes.io/component=api --timeout=300s
 helm test agentic --namespace "$NS" --logs
 kubectl -n "$NS" get deploy,hpa,pdb,svc
 say "passed"
