@@ -42,7 +42,7 @@ from rich import box
 from agentic.engine.engine import TERMINAL, EngineError, check_inputs
 from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
-from agentic_cli import housekeeping
+from agentic_cli import housekeeping, learning_apply
 from agentic_cli.commands.catalog import show_definition_warnings
 from agentic_cli.commands.killswitch import resume_scope
 from agentic_cli.config import agentic_home, user_config
@@ -429,6 +429,7 @@ def report_sinks(out: Output, rt: Runtime) -> None:
             "`agentic sync` sends them"
         )
     rt.deliver_feedback(out.warn)  # M3-11: the gate feedback, after the run's events
+    learning_apply.pending_notice(out, rt)  # M3-15: proposals waiting for a decision
 
 
 def _all_runs(rt: Runtime) -> list[RunState]:
