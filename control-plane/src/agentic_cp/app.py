@@ -21,6 +21,7 @@ from agentic_cp.audit.api import router as audit_router
 from agentic_cp.auth.api import router as auth_router
 from agentic_cp.auth.service_accounts import router as service_accounts_router
 from agentic_cp.body_limit import BodyLimit
+from agentic_cp.cost.api import router as cost_router
 from agentic_cp.dashboards.link import linked_views
 from agentic_cp.db import current_revision, head_revision, make_engine
 from agentic_cp.db_roles import AUDIT, TENANCY, enforcement_status
@@ -118,6 +119,7 @@ def create_app(
     app.include_router(routing_router)
     app.include_router(personal_router)
     app.include_router(learning_router)
+    app.include_router(cost_router)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:

@@ -752,3 +752,35 @@ ENDPOINT_CASES += [
         expect_status=409,
     ),
 ]
+
+
+async def _chargeback_in_b(api) -> dict[str, str]:
+    """A run of a team only tenant b has, opened in the previous calendar month (the
+    chargeback's default month), written as the owner role."""
+    from agentic.orgapi.cost import previous_month
+    from agentic_cp.tables import runs
+    from agentic_cp.tenancy.context import tenant_tx
+
+    team = f"b-only-team-{next(_sequence)}"
+    year, month = (int(part) for part in previous_month(api.clock().date()).split("-"))
+    async with tenant_tx(api.db.owner, api.b.id) as conn:
+        await conn.execute(
+            runs.insert().values(
+                tenant_id=api.b.id,
+                run_id=f"iso-cost-{uuid.uuid4().hex[:10]}",
+                team=team,
+                started_by=api.b.admin_id,
+                policy_version="git:" + "c" * 40,
+                policy_known=True,
+                opened_at=datetime(year, month, 15, tzinfo=UTC),
+            )
+        )
+    return {"team": team}
+
+
+ENDPOINT_CASES += [
+    EndpointCase("cost", "GET", "/v1/cost/chargeback", _chargeback_in_b, must_not_list=True),
+    EndpointCase(
+        "cost", "GET", "/v1/cost/chargeback?format=csv", _chargeback_in_b, must_not_list=True
+    ),
+]
