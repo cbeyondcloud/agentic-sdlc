@@ -14,7 +14,8 @@ short timeout, and an error - an unreachable control plane, a refused beat - is 
 once until it changes and tried again at the next beat. Beats are not queued: a beat is a
 sign of life now, and the next one is always newer. `finish` sends one `waiting` beat when
 the command ends with the run waiting for a person or a pause switch, so the control plane
-knows it is paused, not dead."""
+knows it is paused, not dead - also when the engine call raised (a refused decision, a
+`resume` of a run at a gate): the run's stored status (`status`) then decides."""
 
 from __future__ import annotations
 
@@ -63,9 +64,11 @@ class Heartbeat:
         poster: Poster | None = None,
         wall: Callable[[], datetime] = _utc_now,
         join_s: float = JOIN_S,
+        status: Callable[[], str] | None = None,
     ) -> None:
         self.run_dir, self.run_id = Path(run_dir), run_id
         self.interval_s, self.poster, self.wall, self.join_s = interval_s, poster, wall, join_s
+        self.status = status  # the run's stored status, for an engine call that raised
         self.thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._reported: str | None = None  # the last failure logged: logged again on change
@@ -85,8 +88,9 @@ class Heartbeat:
         self._stop.set()
         if self.thread is not None:
             self.thread.join(timeout=self.join_s)  # a post in flight may finish first
-        if self._ended is not None:  # after the thread: no running beat lands after it
-            self.finish(self._ended)
+        ended = self._ended if self._ended is not None else self._stored_status()
+        if ended is not None:  # after the thread: no running beat lands after it
+            self.finish(ended)
         close = getattr(self.poster, "close", None)
         if close is not None and not self.running:  # never under a post still in flight
             close()
@@ -95,6 +99,19 @@ class Heartbeat:
         """The run's status when the engine call returned: leaving the context then sends
         the `waiting` beat (`finish`) once the thread has stopped."""
         self._ended = status
+
+    def _stored_status(self) -> str | None:
+        """The run's status when the engine call raised before `ended` (review F1: a
+        refused decision, `resume` of a run at a gate): the thread's `running` beats
+        cleared the control plane's `waiting`, so a run still waiting must say so again.
+        None when unknown - never fails the command."""
+        if self.status is None:
+            return None
+        try:
+            return self.status()
+        except Exception as error:  # the run's state cannot be read: no beat, no error
+            self._report(f"run {self.run_id}: status not read after the command: {error}")
+            return None
 
     def finish(self, status: str) -> None:
         """After the engine call: one `waiting` beat when the run stopped to wait."""

@@ -133,6 +133,30 @@ def test_the_waiting_beat_is_sent_after_the_thread_stopped(run_dir):
     assert poster.closed
 
 
+@pytest.mark.parametrize(("status", "sent"), [("awaiting_gate", "waiting"), ("running", None)])
+def test_a_failed_engine_call_ends_on_the_runs_own_status(run_dir, status, sent):
+    """Review F1: the engine refused (a decision without the role, `resume` at a gate) and
+    `ended` never ran - the run's stored status still decides the last beat."""
+    poster = Poster()
+    with pytest.raises(RuntimeError):
+        with Heartbeat(run_dir, "run-1", interval_s=60, poster=poster, status=lambda: status):
+            assert poster.posted.wait(5)
+            raise RuntimeError("refused")
+    assert [b["state"] for b in poster.beats][1:] == ([sent] if sent else [])
+
+
+def test_an_unreadable_status_after_a_failure_sends_nothing_more(run_dir):
+    def broken() -> str:
+        raise OSError("run.json is being replaced")
+
+    poster = Poster()
+    with pytest.raises(RuntimeError):
+        with Heartbeat(run_dir, "run-1", interval_s=60, poster=poster, status=broken):
+            assert poster.posted.wait(5)
+            raise RuntimeError("refused")
+    assert [b["state"] for b in poster.beats] == ["running"]
+
+
 def test_the_thread_is_a_daemon_and_never_holds_the_command(run_dir):
     slow = threading.Event()
 

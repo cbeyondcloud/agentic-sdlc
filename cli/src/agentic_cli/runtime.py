@@ -298,6 +298,7 @@ class Runtime:
             run_id,
             interval_s=self.ws.policy().run_health.heartbeat_seconds,
             poster=poster,
+            status=lambda: self.store.load(run_id).status,  # a refused engine call (F1)
         )
 
     def close_sinks(self, timeout: float = SINK_GRACE_S) -> dict[str, int]:

@@ -70,6 +70,32 @@ def test_an_org_run_beats_to_the_control_plane_and_ends_waiting(org, gateway, cl
     assert "running" in states[states.index("waiting") + 1 :]
 
 
+def test_a_refused_approve_leaves_the_run_waiting(org, gateway, cli):
+    """Review F1: the command's first beat is `running`; a decision the engine refuses
+    (here: the person lost the role) still ends with `waiting`, or the control plane would
+    sweep a run that is only waiting at its gate."""
+    org.assignments = [{"role": "team-lead", "scope": "team", "team": "payments"}]
+    run_id = start(cli)
+    before = len(org.heartbeats)
+    org.assignments = []
+    refused = cli("--json", "approve", run_id)
+    assert refused.code == ExitCode.REFUSED, refused.err
+    assert cli("--json", "status", run_id).json()["status"] == "awaiting_gate"
+    states = [b["state"] for b in org.heartbeats[before:] if b["run_id"] == run_id]
+    assert states and states[-1] == "waiting"
+
+
+def test_a_refused_resume_at_a_gate_leaves_the_run_waiting(org, gateway, cli):
+    org.assignments = [{"role": "team-lead", "scope": "team", "team": "payments"}]
+    run_id = start(cli)
+    before = len(org.heartbeats)
+    refused = cli("--json", "resume", run_id)  # a gate is decided, not resumed
+    assert refused.code != ExitCode.OK
+    assert cli("--json", "status", run_id).json()["status"] == "awaiting_gate"
+    states = [b["state"] for b in org.heartbeats[before:] if b["run_id"] == run_id]
+    assert states and states[-1] == "waiting"
+
+
 def test_refused_heartbeats_never_change_the_run(org, gateway, cli):
     org.refuse_heartbeats = True
     run_id = start(cli)
