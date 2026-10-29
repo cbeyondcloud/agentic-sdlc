@@ -56,8 +56,8 @@
 
 **Interfaces:** `ProposalStatus` (six values); `next_status(status, action) -> status` (`DecisionError`); `APPROVE_PERMISSION`; `may_decide(scope, owner, user, allowed) -> bool`; `Proposal.decided_by`, `Proposal.endorsements`; `LocalLearningStore.decide(id, action, by, when)`, `endorse(id, by)`, `change(id)`, `save_change(id, record)`; `LearningSettings.min_confidence`.
 
-- [ ] **Step 1: Failing tests**: `test_only_listed_transitions_are_allowed`, `test_personal_is_decided_by_its_user_only`, `test_shared_needs_the_scope_permission`, `test_reverted_lesson_is_remembered_like_a_rejected_one`, `test_approved_proposal_is_not_proposed_again`, `test_store_records_decisions_endorsements_and_changes`, `test_low_confidence_learners_do_not_count`.
-- [ ] **Step 2: Run** `uv run pytest core/tests/learning -q`: FAIL. **Step 3:** implement. **Step 4:** PASS. Commit.
+- [x] **Step 1: Failing tests**: `test_only_listed_transitions_are_allowed`, `test_personal_is_decided_by_its_user_only`, `test_shared_needs_the_scope_permission`, `test_reverted_lesson_is_remembered_like_a_rejected_one`, `test_approved_proposal_is_not_proposed_again`, `test_store_records_decisions_endorsements_and_changes`, `test_low_confidence_learners_do_not_count`.
+- [x] **Step 2: Run** `uv run pytest core/tests/learning -q`: FAIL. **Step 3:** implement. **Step 4:** PASS. Commit.
 
 ### Task 2: Drafts (`agentic.learning.changes`)
 
@@ -65,36 +65,55 @@
 
 **Interfaces:** `Evidence`, `Scope`, `ChangeKind`, `KINDS`, `narrowest_scope(evidence, cluster_scope)`, `target(kind, agent, team) -> (root, path)`, `render_change(kind, before, lesson, agent, proposal_id)`, `strip_change(text, proposal_id)`, `instruction_only_problems(kind, before, after)`, `Draft`, `draft(proposal, evidence, read, *, kind, lesson, team, at)`.
 
-- [ ] **Step 1: Failing tests**: `test_draft_holds_diff_evidence_and_eval_case`, `test_narrowest_scope_is_chosen`, `test_changes_stay_instruction_only`, `test_new_agents_md_is_proposed_when_missing`, `test_crlf_file_keeps_crlf`, `test_strip_change_restores_the_previous_text`, `test_agent_instruction_needs_an_existing_definition`.
-- [ ] **Step 2-4.** Commit.
+- [x] **Step 1: Failing tests**: `test_draft_holds_diff_evidence_and_eval_case`, `test_narrowest_scope_is_chosen`, `test_changes_stay_instruction_only`, `test_new_agents_md_is_proposed_when_missing`, `test_crlf_file_keeps_crlf`, `test_strip_change_restores_the_previous_text`, `test_agent_instruction_needs_an_existing_definition`.
+- [x] **Step 2-4.** Commit.
 
 ### Task 3: Regression case and measurement (`agentic.learning.regression`)
 
 **Files:** Create `core/src/agentic/learning/regression.py`; test `core/tests/learning/test_regression.py`.
 
-- [ ] **Step 1: Failing tests**: `test_regression_case_is_a_valid_eval_case`, `test_measure_runs_the_case_before_and_after`, `test_lower_after_score_is_a_regression`.
-- [ ] **Step 2-4.** Commit.
+- [x] **Step 1: Failing tests**: `test_regression_case_is_a_valid_eval_case`, `test_measure_runs_the_case_before_and_after`, `test_lower_after_score_is_a_regression`.
+- [x] **Step 2-4.** Commit.
 
 ### Task 4: Personal apply/undo through Zyroflo (`sdlc_commons.learning`)
 
 **Files:** Create `commons/src/sdlc_commons/learning.py`; test `commons/tests/test_learning_changes.py`.
 
-- [ ] **Step 1: Failing tests**: `test_personal_apply_and_revert_restore_bytes`, `test_created_file_is_removed_on_revert`, `test_apply_twice_is_refused`, `test_crlf_kept_through_apply_and_revert`, `test_rows_are_zyroflos_learning_log`.
-- [ ] **Step 2-4.** Commit.
+- [x] **Step 1: Failing tests**: `test_personal_apply_and_revert_restore_bytes`, `test_created_file_is_removed_on_revert`, `test_apply_twice_is_refused`, `test_crlf_kept_through_apply_and_revert`, `test_rows_are_zyroflos_learning_log`.
+- [x] **Step 2-4.** Commit.
 
 ### Task 5: CLI L5/L6 (standalone)
 
 **Files:** Create `cli/src/agentic_cli/learning_apply.py`; modify `cli/src/agentic_cli/commands/learn.py`, `cli/src/agentic_cli/commands/runs.py` (end-of-run notice); tests `cli/tests/run/test_learn_apply.py`.
 
-- [ ] **Step 1: Failing tests**: `test_show_has_diff_evidence_and_eval_case`, `test_nothing_is_applied_without_approve`, `test_personal_approve_applies_and_revert_restores`, `test_reject_is_remembered_and_defer_keeps_it_pending`, `test_edit_changes_kind_and_lesson`, `test_propose_from_one_feedback_record`, `test_end_of_run_shows_pending_proposals`, `test_e2e_three_corrections_to_pr_and_revert`, `test_bad_agent_name_and_run_id_are_usage_errors` (DF-730), `test_corrupt_proposals_file_has_a_hint` (DF-736).
-- [ ] **Step 2-4.** Commit.
+- [x] **Step 1: Failing tests**: `test_show_has_diff_evidence_and_eval_case`, `test_nothing_is_applied_without_approve`, `test_personal_approve_applies_and_revert_restores`, `test_reject_is_remembered_and_defer_keeps_it_pending`, `test_edit_changes_kind_and_lesson`, `test_propose_from_one_feedback_record`, `test_end_of_run_shows_pending_proposals`, `test_e2e_three_corrections_to_pr_and_revert`, `test_bad_agent_name_and_run_id_are_usage_errors` (DF-730), `test_corrupt_proposals_file_has_a_hint` (DF-736).
+- [x] **Step 2-4.** Commit.
 
 ### Task 6: Control plane decisions, digest, dashboard
 
 **Files:** Create `control-plane/src/agentic_cp/migrations/versions/m3_14_learning_apply.py`, `control-plane/src/agentic_cp/learning/decisions.py`, `learning/digest.py`, notify templates `learning_digest.{txt,html}`; modify `tables.py`, `learning/api.py`, `learning/store.py` (authors union DF-737, recluster after correction DF-733, min confidence, digest), `dashboards/views.py`, `dashboards/grafana/agent-quality.json`, `core/src/agentic/orgapi/models.py`, `control-plane/tests/isolation.py`; CLI client `control_plane.py` (org mode commands). Tests `control-plane/tests/test_learning_decisions.py`, dashboard tests.
 
-- [ ] **Step 1: Failing tests**: `test_developer_cannot_approve_a_shared_proposal`, `test_personal_proposal_is_approvable_by_its_user`, `test_repo_maintainer_approves_and_applies_then_reverts` (audit events), `test_endorse_adds_weight_but_never_approves`, `test_propose_from_feedback`, `test_digest_is_queued_for_approvers`, `test_authors_are_kept_when_a_proposal_grows`, `test_learning_effect_view_shows_before_and_after`; isolation picks up the routes.
-- [ ] **Step 2-4.** Commit.
+- [x] **Step 1: Failing tests**: `test_developer_cannot_approve_a_shared_proposal`, `test_personal_proposal_is_approvable_by_its_user`, `test_repo_maintainer_approves_and_applies_then_reverts` (audit events), `test_endorse_adds_weight_but_never_approves`, `test_propose_from_feedback`, `test_digest_is_queued_for_approvers`, `test_authors_are_kept_when_a_proposal_grows`, `test_learning_effect_view_shows_before_and_after`; isolation picks up the routes.
+- [x] **Step 2-4.** Commit.
+
+## Outcome and deferred slices
+
+Tasks 1-6 are built and tested (control plane: `test_learning_decisions.py`,
+`dashboards/test_dash_learning.py`, the isolation cases and a CLI-against-control-plane
+contract test; CLI org mode: `cli/tests/run/test_learn_org.py`). Kept out of this track, each
+recorded for the deferred register:
+
+- **Before/after measurement on approve (CLI).** `agentic.learning.regression.measure` runs the
+  case before and after through `run_eval` (tested with scripted runners) and the control plane
+  stores a reported `measurement`; `approve` does not run it yet, because the eval runner cannot
+  yet run an agent with a candidate instruction overlay. Until then `agentic eval run --tag
+  learning` runs the committed regression cases.
+- **Team-skill changes as policy-repo pull requests.** A team proposal is drafted, decided and
+  audited; applying it is refused with a message (only personal and repo changes are applied).
+- **Org-mode end-of-run notice.** Standalone runs end with the count of waiting proposals; in org
+  mode the daily digest mail is the notice.
+- **Zyroflo PR** for a generic text change in `learning.py` (`apply` renders only
+  `review_suppress`), a configurable log path and removing a created file on undo.
 
 ### Task 7: Full check
 
