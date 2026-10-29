@@ -115,6 +115,22 @@ recorded for the deferred register:
 - **Zyroflo PR** for a generic text change in `learning.py` (`apply` renders only
   `review_suppress`), a configurable log path and removing a created file on undo.
 
+### Final review fixes (974b0e1)
+
+- F1: a file without a final newline keeps its last line; a removed line is not
+  instruction-only (`test_a_file_without_a_final_newline_loses_nothing`).
+- F2: a personal revert takes out only its block when the file changed since
+  (`test_reverting_the_older_of_two_learnings_keeps_the_newer`, `test_a_hand_edit_survives_a_revert`).
+- F3: standalone approve records the decision after the remote and the base render; a failed
+  change is made by approving again or dropped by `reject` (`test_a_failed_apply_is_made_by_approving_again`).
+- F4: `ProposalDetail.may_decide`; org resume and revert ask it first
+  (`test_org_resume_by_a_non_owner_changes_nothing`).
+- F5: org repo changes only from a checkout of that repository
+  (`test_org_approve_from_another_repository_is_refused`).
+- F6: a reported revert sets `decided_at` (`test_a_reverted_lesson_counts_only_corrections_after_the_revert`).
+- F7: `digest_job` in the worker mails waiting proposals daily
+  (`test_the_digest_mails_waiting_proposals_every_day`).
+
 ### Task 7: Full check
 
 - [ ] `uv run python scripts/check.py --all` (Windows + Linux) green; fix with new commits.
