@@ -194,3 +194,36 @@ async def test_chargeback_totals_match_the_gateway(roi_db):
     unteamed = by_key[(SEP, "(unattributed)")]
     assert unteamed["users"] == 0 and unteamed["runs"] == 0
     assert unteamed["unattributed_usd"] == Decimal("0.020000")
+
+
+async def test_roi_month_measures_what_the_records_hold(roi_db):
+    db, seeded = roi_db
+    rows = {
+        (r["month"], r["team"]): r
+        for r in await _rows(db.owner, seeded.a, "select * from dash_roi_month")
+    }
+    september = rows[(SEP, "payments")]  # r1: design, develop x2, review; one gate, 1 h
+    assert september["runs"] == 1 and september["users"] == 1
+    assert september["step_executions"] == 4 and september["step_repeats"] == 1
+    assert september["step_rework_rate"] == Decimal("0.25")
+    assert september["gate_decisions"] == 1
+    assert september["gate_wait_hours"] == 1
+    assert september["gate_wait_median_minutes"] == 60
+    october = rows[(OCT, "payments")]  # r3 (develop x3) and r5 (nothing arrived)
+    assert october["runs"] == 2 and october["users"] == 2
+    assert october["step_executions"] == 4 and october["step_repeats"] == 2
+    assert october["step_rework_rate"] == Decimal("0.5")
+    assert october["gate_decisions"] == 2  # one wait was not recorded: not counted as 0
+    assert october["gate_wait_hours"] == Decimal("0.5")
+    payments = [c for c in a_calls() if month_of(c) == OCT and c.team == "payments"]
+    assert october["cost_usd"] == cost(payments)
+    for column in (
+        "merged_changes",
+        "cost_per_accepted_change_usd",
+        "request_to_merge_hours",
+        "pr_merge_rate",
+        "dora_lead_time_hours",
+        "change_failure_rate",
+        "gateway_savings_usd",
+    ):
+        assert october[column] is None, column  # no source yet: unmeasured, never 0

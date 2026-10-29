@@ -615,6 +615,49 @@ FROM dash_cost_facts f
 GROUP BY f.tenant_id, f.month, f.team
 """
 
+#: ROI measures per month and team. Measured: runs, users, step executions and repeats (a
+#: step run again in the same run: review loops, retries) and their rate, gate decisions
+#: and the human wait at them (a decision without a recorded wait is counted, its wait is
+#: not), total cost. Not measured yet, so NULL (Zyroflo metrics doctrine): the PR measures
+#: (no pull-request outcome reaches the control plane), DORA lead time and change-failure
+#: rate (defined against production; no deployment is recorded) and gateway savings
+#: (optimisations are off until the ST-7 opt-in).
+_ROI_MONTH = """
+SELECT f.tenant_id, f.month, f.team, f.runs, f.users, f.step_executions,
+  f.step_executions - f.step_slots AS step_repeats,
+  ROUND(CAST(f.step_executions - f.step_slots AS numeric) / NULLIF(f.step_executions, 0), 4)
+    AS step_rework_rate,
+  COALESCE(g.gate_decisions, 0) AS gate_decisions,
+  g.gate_wait_hours, g.gate_wait_median_minutes,
+  f.cost_usd,
+  CAST(NULL AS bigint) AS merged_changes,
+  CAST(NULL AS numeric) AS cost_per_accepted_change_usd,
+  CAST(NULL AS numeric) AS request_to_merge_hours,
+  CAST(NULL AS numeric) AS pr_merge_rate,
+  CAST(NULL AS numeric) AS dora_lead_time_hours,
+  CAST(NULL AS numeric) AS change_failure_rate,
+  CAST(NULL AS numeric) AS gateway_savings_usd
+FROM (
+  SELECT tenant_id, month, team,
+    COUNT(DISTINCT run_id) FILTER (WHERE attributed) AS runs,
+    COUNT(DISTINCT user_email) FILTER (WHERE attributed) AS users,
+    SUM(executions) AS step_executions,
+    COUNT(*) FILTER (WHERE executions > 0) AS step_slots,
+    SUM(cost_usd) AS cost_usd
+  FROM dash_cost_facts GROUP BY tenant_id, month, team
+) f
+LEFT JOIN (
+  SELECT r.tenant_id, r.month, r.team, COUNT(*) AS gate_decisions,
+    ROUND(SUM(g.waited_ms) / 3600000, 4) AS gate_wait_hours,
+    ROUND(CAST(percentile_cont(0.5) WITHIN GROUP (ORDER BY g.waited_ms) AS numeric) / 60000, 4)
+      AS gate_wait_median_minutes
+  FROM dash_gates g
+  JOIN dash_cost_runs r ON r.tenant_id = g.tenant_id AND r.run_id = g.run_id
+  WHERE g.event = 'gate_decided'
+  GROUP BY r.tenant_id, r.month, r.team
+) g ON g.tenant_id = f.tenant_id AND g.month = f.month AND g.team = f.team
+"""
+
 #: Every dashboard view of M2-37, in creation order (each reads only those before it).
 M2_37_VIEWS: tuple[str, ...] = (
     "dash_scope",
@@ -645,6 +688,7 @@ ROI_VIEWS: tuple[str, ...] = (
     "dash_cost_drivers_team",
     "dash_cost_drivers_user",
     "dash_chargeback",
+    "dash_roi_month",
 )
 
 #: Every dashboard view, in creation order. A Grafana reader may select exactly these;
@@ -677,6 +721,7 @@ def _bodies(schema: str) -> dict[str, str]:
         "dash_cost_drivers_team": driver_sql(group=("tenant_id", "month", "team")),
         "dash_cost_drivers_user": driver_sql("f.attributed", ("tenant_id", "month", "user_email")),
         "dash_chargeback": _CHARGEBACK,
+        "dash_roi_month": _ROI_MONTH,
     }
 
 
