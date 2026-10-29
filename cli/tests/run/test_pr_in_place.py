@@ -55,6 +55,7 @@ def make_in_place(workspace: Path, *, push: str = support.PUSH) -> None:
     write(workspace / ".agentic" / "config.yaml", f"rollback_commands: {{'.': '{rollback}'}}\n")
     git(workspace, "add", "-A")
     git(workspace, "commit", "-qm", "in place")
+    git(workspace, "switch", "-q", "-c", "work")  # a run never commits on the default branch
 
 
 @pytest.fixture

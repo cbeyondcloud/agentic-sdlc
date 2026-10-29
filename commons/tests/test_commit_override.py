@@ -16,6 +16,7 @@ from in_place_support import (
     ROLLBACK,
     ROLLBACKS,
     RUN,
+    TOOL,
     TOOL_PREFIX,
     git,
     make_in_place_repo,
@@ -147,6 +148,60 @@ def test_a_dirty_checkout_is_refused_before_the_first_step(repo):
     trees = in_place(repo)
     with pytest.raises(OverrideError, match="uncommitted"):
         override(repo).resolve(trees)
+
+
+def test_a_checkout_on_the_default_branch_is_refused(tmp_path, monkeypatch):
+    """Review F4: in place, checkpoint commits land on the branch checked out - never the
+    developer's main."""
+    monkeypatch.setenv("VCS_TOOL_LOG", str(tmp_path / "tool.log"))
+    repo = make_in_place_repo(tmp_path / "on-main", branch="main")
+    with pytest.raises(OverrideError, match="default branch") as refused:
+        override(repo).resolve(in_place(repo))
+    assert "main" in str(refused.value) and "git switch -c" in str(refused.value)
+    assert kept_override(repo, RUN) is None
+
+
+def test_the_remotes_default_branch_is_refused_too(tmp_path, monkeypatch):
+    monkeypatch.setenv("VCS_TOOL_LOG", str(tmp_path / "tool.log"))
+    repo = make_in_place_repo(tmp_path / "on-develop", branch="develop")
+    git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+    with pytest.raises(OverrideError, match="default branch"):
+        override(repo).resolve(in_place(repo))
+
+
+def test_a_hooks_folder_agents_may_write_is_refused(repo):
+    """Review F3: the repository's tool runs outside the sandbox, and git runs its hooks."""
+    git(repo, "config", "core.hooksPath", "tools/hooks")
+    with pytest.raises(OverrideError, match=r"core\.hooksPath") as refused:
+        override(repo).resolve(in_place(repo))
+    assert "tools/hooks" in str(refused.value) and "protected_paths" in str(refused.value)
+
+
+@pytest.mark.parametrize("folder", [".githooks", ".husky/_", ".git/hooks"])
+def test_a_hooks_folder_agents_cannot_write_is_accepted(repo, folder):
+    git(repo, "config", "core.hooksPath", folder)
+    assert override(repo).resolve(in_place(repo))
+
+
+def test_a_repository_may_protect_its_own_hooks_folder(repo):
+    rules = "protected_paths:\n  - 'tools/hooks/**'\n"
+    (repo / ".sdlc" / "policy.yml").write_text(rules, encoding="utf-8")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "protect the hooks")
+    git(repo, "config", "core.hooksPath", "tools/hooks")
+    assert override(repo).resolve(in_place(repo))
+
+
+def test_an_ignored_script_named_in_the_command_is_refused(tmp_path, monkeypatch):
+    """Review F3: a file git ignores (an agent may have made it) counts as changed."""
+    monkeypatch.setenv("VCS_TOOL_LOG", str(tmp_path / "tool.log"))
+    commit = f'"{PY}" .venv/vcs.py commit {{message_file}}'
+    repo = make_in_place_repo(tmp_path / "ignored", commit=commit)
+    (repo / ".venv").mkdir()
+    (repo / ".venv" / "vcs.py").write_text(TOOL, encoding="utf-8")  # .gitignore: .venv/
+    allow = (f'"{PY}" .venv/vcs.py commit', *ALLOW)
+    with pytest.raises(OverrideError, match=r"\.venv/vcs\.py"):
+        override(repo, allow=allow).resolve(in_place(repo))
 
 
 def test_the_kept_override_outlives_an_edit_of_the_profile(repo):

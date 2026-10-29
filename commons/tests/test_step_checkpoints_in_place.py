@@ -114,6 +114,43 @@ def test_a_step_that_changed_nothing_commits_nothing(repo):
     assert tool_calls(repo) == []
 
 
+def test_a_commit_command_that_leaves_changes_is_refused(repo, monkeypatch):
+    """Review F1: work the tool did not commit would be missing from the review and the pull
+    request, and the next rollback would discard it - the step is not checkpointed."""
+    steps = checkpoints(repo)
+    steps.prepare()
+    steps.begin(fresh=True)
+    monkeypatch.setenv("VCS_TOOL_MODE", "lazy")  # commits tracked files only
+    (repo / "app.py").write_text("x = 2\n", encoding="utf-8")
+    (repo / "new_feature.py").write_text("y = 1\n", encoding="utf-8")
+    with pytest.raises(WorktreeError, match="new_feature.py") as refused:
+        steps.finish("build: step 1")
+    assert "commit every change" in str(refused.value)
+
+
+def test_a_rollback_command_that_leaves_changes_is_refused(repo, monkeypatch):
+    """Review F2: HEAD at the commit is half the contract; the rejected work must go too."""
+    steps = checkpoints(repo)
+    steps.prepare()
+    base = steps.begin(fresh=True)
+    (repo / "app.py").write_text("x = 2\n", encoding="utf-8")
+    steps.finish("build: step 1")
+    monkeypatch.setenv("VCS_TOOL_MODE", "lazy")  # moves HEAD back, keeps the work
+    with pytest.raises(WorktreeError, match="left changes") as refused:
+        steps.rollback(base)
+    assert "app.py" in str(refused.value)
+
+
+def test_a_fresh_attempt_whose_discard_leaves_changes_is_refused(repo, monkeypatch):
+    steps = checkpoints(repo)
+    steps.prepare()
+    steps.begin(fresh=True)
+    (repo / "half-done.py").write_text("z = 1\n", encoding="utf-8")
+    monkeypatch.setenv("VCS_TOOL_MODE", "lazy")
+    with pytest.raises(WorktreeError, match="left changes"):
+        steps.begin(fresh=True)
+
+
 def test_rollback_refuses_a_commit_outside_the_checkouts_history(repo):
     steps = checkpoints(repo)
     steps.prepare()

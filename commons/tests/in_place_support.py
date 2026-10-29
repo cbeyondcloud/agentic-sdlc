@@ -33,11 +33,15 @@ def git(*args):
 
 
 action, value = sys.argv[1], sys.argv[2]
+# "lazy": a tool that does half its job (commits tracked files only; moves HEAD, keeps work)
+lazy = os.environ.get("VCS_TOOL_MODE") == "lazy"
 with open(os.path.join(os.environ["VCS_TOOL_LOG"]), "a", encoding="utf-8") as log:
     log.write(action + "\\n")
 if action == "commit":
-    git("add", "-A")
+    git("add", "-u" if lazy else "-A")
     git("commit", "-q", "-F", value)
+elif action == "restore" and lazy:
+    git("reset", "-q", "--soft", value)
 elif action == "restore":
     git("reset", "-q", "--hard", value)
     git("clean", "-q", "-fd")
@@ -65,8 +69,11 @@ def profile(commit: str = COMMIT, push: str = PUSH) -> str:
     return "\n".join(lines) + "\n"
 
 
-def make_in_place_repo(path: Path, *, commit: str = COMMIT, push: str = PUSH) -> Path:
-    """A git repository whose profile denies raw git and names the tool's commands."""
+def make_in_place_repo(
+    path: Path, *, commit: str = COMMIT, push: str = PUSH, branch: str = "work"
+) -> Path:
+    """A git repository whose profile denies raw git and names the tool's commands, checked
+    out on a working `branch` (a run never commits on the default branch, `main`)."""
     path.mkdir(parents=True)
     git(path, "init", "-q", "-b", "main")
     (path / "app.py").write_text("x = 1\n", encoding="utf-8")
@@ -79,6 +86,8 @@ def make_in_place_repo(path: Path, *, commit: str = COMMIT, push: str = PUSH) ->
     (path / ".sdlc" / "profile.yml").write_text(profile(commit, push), encoding="utf-8")
     git(path, "add", "-A")
     git(path, "commit", "-qm", "base")
+    if branch != "main":
+        git(path, "switch", "-q", "-c", branch)
     return path
 
 

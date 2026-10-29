@@ -333,12 +333,17 @@ class StepCheckpoints:
             _git(path, "clean", "-q", "-fd", "--", *generated)
             heads[name] = _git(path, "rev-parse", "HEAD")
         for name, cmds in self._in_place().items():
-            # in place, the component's own commit command commits; what it commits is its
-            # tool's business (the framework's exclusions are git pathspecs it cannot pass)
+            # in place, the component's own commit command commits (the framework's
+            # exclusions are git pathspecs it cannot pass); it must leave nothing behind, or
+            # that work is missing from the review and the pull request (review F1)
             if _git(cmds.checkout, "status", "--porcelain"):
                 self._overridden().commit(cmds, message)
-                if _git(cmds.checkout, "status", "--porcelain"):
-                    _LOG.warning("the commit command of %s left uncommitted changes", name)
+                if left := _left(cmds.checkout):
+                    raise WorktreeError(
+                        f"{name}: the commit command left changes it did not commit "
+                        f"({left}) - it must commit every change, or the repository must "
+                        f"ignore those files; check {cmds.checkout} by hand"
+                    )
             heads[name] = _git(cmds.checkout, "rev-parse", "HEAD")
         self._keep_base(None)  # the next step starts from this checkpoint
         return heads
@@ -417,12 +422,19 @@ class StepCheckpoints:
         return self.override
 
     def _at(self, cmds: InPlace, commit: str) -> str:
-        """The checkout's HEAD after a rollback command, which must have put it at `commit`."""
+        """The checkout's HEAD after a rollback command, which must have put it at `commit`
+        and discarded every uncommitted change (the rollback contract, review F2)."""
         head = _git(cmds.checkout, "rev-parse", "HEAD")
         if head != commit:
             raise WorktreeError(
                 f"{cmds.component}: the rollback command left the checkout at {head}, not "
                 f"{commit} - check {cmds.checkout} by hand"
+            )
+        if left := _left(cmds.checkout):
+            raise WorktreeError(
+                f"{cmds.component}: the rollback command left changes in the checkout "
+                f"({left}) - it must discard uncommitted work, untracked files included; "
+                f"check {cmds.checkout} by hand"
             )
         return head
 
@@ -494,6 +506,18 @@ def _git(where: Path, *args: str, check: bool = True) -> str:
     """A checkpoint git call: never runs an fsmonitor command the tree's or the
     repository's config names (agent-reachable without a sandbox, review I5)."""
     return worktree_git(where, "-c", "core.fsmonitor=false", *args, check=check)
+
+
+def _left(checkout: Path, shown: int = 5) -> str:
+    """What is uncommitted in an in-place checkout (files git ignores aside), a few paths
+    named; "" when it is clean."""
+    if not _git(checkout, "status", "--porcelain"):
+        return ""
+    tracked = _git(checkout, "diff", "--name-only", "--no-renames", "-z", "HEAD", "--")
+    untracked = _git(checkout, "ls-files", "-z", "--others", "--exclude-standard")
+    paths = list(dict.fromkeys(p for p in f"{tracked}\0{untracked}".split("\0") if p))
+    more = f" and {len(paths) - shown} more" if len(paths) > shown else ""
+    return ", ".join(paths[:shown]) + more or "see git status"
 
 
 def _new_files(tree: Path, *pathspecs: str) -> set[str]:

@@ -20,7 +20,9 @@ do, so a repository alone never decides that they run. Every command:
   * passes the guard (`Guard.command`: Zyroflo's destructive floor, the repository's and
     the org's deny lists, the framework floor), with its placeholders unfilled;
   * is never raw git, and never names a file of the checkout that changed since the run's
-    base or is uncommitted (an agent could have rewritten the commit script);
+    base, is uncommitted or is ignored by git (an agent could have rewritten the script);
+  * never runs while the checkout's git hooks folder (`core.hooksPath`) is inside the
+    repository and agents may write it (git runs those hooks when the tool commits);
   * runs as an argv list (never a shell), placeholders filled as whole words only, in the
     component's checkout, without the framework's `AGENTIC_*` credentials, stdin closed,
     under a timeout - on Windows a batch file gets no argument cmd.exe would reinterpret;
@@ -29,7 +31,15 @@ do, so a repository alone never decides that they run. Every command:
 
 The override accepted at a run's first `resolve` is kept in the run folder
 (`worktrees.OVERRIDE_FILE`) and every later step uses that copy: an agent working in the
-checkout cannot change the commands by editing the profile.
+checkout cannot change the commands by editing the profile. That first `resolve` also refuses
+a checkout with uncommitted work (it is the developer's) or one on a default branch (main,
+master, the remote's default): the run's commits land on the branch checked out.
+
+The limit: the tool may read other files an agent can write - its own settings, a
+`package.json` script or `Makefile` target it calls, the modules it imports. Those checks
+cannot follow it there. So org policy should allow the narrowest command, flags included,
+and a repository should list its tool's settings in `protected_paths` (`.sdlc/policy.yml`),
+which the guard keeps agents from writing.
 """
 
 import json
@@ -170,6 +180,13 @@ class CommitOverride:
         for action in PLACEHOLDERS:
             if getattr(cmds, action):
                 self._check(cmds, action)
+        branch = _git(tree.path, "symbolic-ref", "--quiet", "--short", "HEAD", check=False)
+        if branch in _default_branches(tree.path):
+            raise OverrideError(
+                f"component {name} works in place, so the run's checkpoint commits land on the "
+                f"branch its checkout {tree.path} has checked out, and {branch} is a default "
+                f"branch - switch to a working branch first (git switch -c <name>)"
+            )
         if _git(tree.path, "status", "--porcelain"):
             raise OverrideError(
                 f"component {name} works in place and its checkout {tree.path} has uncommitted "
@@ -211,7 +228,8 @@ class CommitOverride:
             )
         shown = " ".join(shlex.quote("VALUE" if w in PLACEHOLDERS[action] else w) for w in words)
         try:
-            blocks = Guard(self.target, self.run_id, deny_shell=self.deny_shell).command(shown)
+            guard = Guard(self.target, self.run_id, deny_shell=self.deny_shell)
+            blocks = guard.command(shown)
         except GuardError as error:
             raise OverrideError(f"component {name}: the guard cannot be read: {error}") from None
         if blocks:
@@ -223,9 +241,35 @@ class CommitOverride:
         if changed:
             raise OverrideError(
                 f"component {name}: its {action} command uses {', '.join(changed)}, which "
-                f"changed in this run or is not committed - it is not run on code an agent "
-                f"may have written"
+                f"changed in this run, is not committed or is ignored by git - it is not run "
+                f"on code an agent may have written"
             )
+        if hooks := self._writable_hooks(cmds, guard):
+            raise OverrideError(
+                f"component {name}: its git hooks folder {hooks} (core.hooksPath) is inside "
+                f"the checkout and agents may write it, so its {action} command could run a "
+                f"hook an agent wrote - protect the folder (protected_paths in "
+                f".sdlc/policy.yml) or keep the hooks outside the checkout"
+            )
+
+    def _writable_hooks(self, cmds: InPlace, guard: Guard) -> str:
+        """The checkout's git hooks folder (`core.hooksPath` honoured) when it is inside the
+        repository and the guard lets agents write it; "" otherwise. The repository's tool
+        runs outside the sandbox, and git runs these hooks when it commits (review F3)."""
+        where = Path(_git(cmds.checkout, "rev-parse", "--git-path", "hooks"))
+        folder = where if where.is_absolute() else cmds.checkout / where
+        roots = (cmds.checkout, self.target)
+        if not any(_within(folder, root) for root in roots):
+            return ""  # outside the repository, where agents do not write
+        walls = {block.wall for block in guard.writes([folder / "pre-commit"])}
+        if walls & {"framework", "protected"}:
+            return ""
+        for root in roots:
+            try:
+                return folder.resolve().relative_to(root.resolve()).as_posix()
+            except (ValueError, OSError):
+                continue
+        return str(folder)
 
     def _checkout_files(self, cmds: InPlace, words: Sequence[str]) -> list[str]:
         """The command's words that name a file inside the checkout, as checkout paths."""
@@ -244,7 +288,9 @@ class CommitOverride:
         return found
 
     def _changed(self, cmds: InPlace, rel: str) -> bool:
-        if _git(cmds.checkout, "status", "--porcelain", "--", rel):
+        # an untracked file counts, even one git ignores: an agent may have made it
+        status = ("status", "--porcelain", "--ignored", "--untracked-files=all", "--", rel)
+        if _git(cmds.checkout, *status):
             return True
         return bool(cmds.base) and bool(
             _git(cmds.checkout, "diff", "--name-only", cmds.base, "HEAD", "--", rel)
@@ -403,9 +449,18 @@ def _program(word: str) -> str:
     return name.removesuffix(".exe")
 
 
-def _git(where: Path, *args: str) -> str:
+def _git(where: Path, *args: str, check: bool = True) -> str:
     """A git read in an in-place checkout (`deny_raw_git` forbids writes, not reads)."""
-    return worktree_git(where, "-c", "core.fsmonitor=false", *args)
+    return worktree_git(where, "-c", "core.fsmonitor=false", *args, check=check)
+
+
+def _default_branches(where: Path) -> set[str]:
+    """Branches a run never commits on in place: main, master and the remote's default
+    (`origin/HEAD`) when it is known."""
+    remote = _git(
+        where, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD", check=False
+    )
+    return {"main", "master"} | ({remote.split("/", 1)[-1]} if remote else set())
 
 
 def _env() -> dict[str, str]:

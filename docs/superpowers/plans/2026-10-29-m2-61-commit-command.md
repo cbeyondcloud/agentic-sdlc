@@ -29,8 +29,11 @@ The framework never runs raw git writes on it. Closes DF-62, DF-287 and DF-360.
   - checks the command with placeholders unfilled against the guard (`Guard.command`:
     Zyroflo's destructive floor, the repo's deny lists, the org's `deny.shell`, the framework
     floor) - a denied command is refused before it runs;
-  - refuses a command that names a file inside the checkout which changed since the run's base
-    or is uncommitted (an agent could have rewritten the commit script);
+  - refuses a command that names a file inside the checkout which changed since the run's base,
+    is uncommitted or is ignored by git (an agent could have rewritten the commit script);
+  - refuses to run while the checkout's git hooks folder (`core.hooksPath`) is inside the
+    repository and the guard lets agents write it (git runs those hooks when the tool
+    commits); `.githooks/` and lefthook's files join the framework floor (review F3);
   - runs `subprocess.run(argv, shell=False)` in the component's checkout, with the
     environment minus the framework's `AGENTIC_*` credentials, stdin closed, a timeout;
     on Windows a `.bat`/`.cmd` program is refused any argument cmd.exe would reinterpret
@@ -42,21 +45,24 @@ The framework never runs raw git writes on it. Closes DF-62, DF-287 and DF-360.
   and every later step and resume uses that copy: an agent working in the checkout cannot
   change the command by editing `.sdlc/profile.yml`. The first `prepare` also refuses a dirty
   checkout: a fresh attempt discards uncommitted work, and in place that work would be the
-  developer's own.
+  developer's own. It also refuses a checkout on a default branch (main, master, the
+  remote's `origin/HEAD`): in place, the run's commits land on the branch checked out, so the
+  developer switches to a working branch first (review F4).
 - **`StepCheckpoints` (commons).** Takes an optional `override`. `prepare` accepts a run whose
   components are all in place when there is exactly one in-place component with an accepted
   override (home = its checkout); a run mixing in-place and worktree components, or with
   several in-place components, is still refused with a precise reason (DF for later).
   Without the override the refusal names the settings to add. `begin(fresh)` discards
   through the rollback command (only when the checkout differs from the base); `finish`
-  commits through the commit command when `git status` shows a change; `rollback` checks the
+  commits through the commit command when `git status` shows a change, and refuses when the
+  command left anything uncommitted (review F1); `rollback` checks the
   target commit is an ancestor (a git read), then runs the rollback command. `changed` and
   `diff` use git reads only (Zyroflo: `deny_raw_git` forbids commit, push and worktree, not a
   read). HEAD is read with `git rev-parse` after each command.
 - **Rollback contract (ruling R4).** `rollback_commands` puts the checkout back at `{commit}`
   (a commit of the checkout's history) and discards uncommitted work, including untracked
   files that are not ignored. The framework then reads HEAD and refuses when it is not
-  `{commit}`.
+  `{commit}`, or when the checkout is not clean (review F2).
 - **Guard.** An in-place home with an accepted override is a place agents may write (file
   tools, `changes`, srt write denials), except the harness's own folders inside it: `.sdlc/`
   and the worktrees root. Everything else (protected paths, deny lists) applies as in a tree.
@@ -94,8 +100,12 @@ reader). No new dependency.
 ## Review Focus
 
 1. **Who can make the framework run a command.** A repository alone cannot: no org allow, no
-   run. The command is fixed at the first `prepare`; an agent's edit of the profile, the repo
-   config or the commit script inside the checkout cannot change what runs.
+   run. The command is fixed at the first `prepare`; an agent's edit of the profile or the repo
+   config cannot change it, and a script named in the command, or a hooks folder agents may
+   write, stops it. The limit (review F3): the tool may read other files an agent can write
+   (its settings, a `package.json` script or `Makefile` target, its own modules). Org policy
+   should allow the narrowest command, and the repository should list those files in
+   `protected_paths` (`.sdlc/policy.yml`).
 2. **No raw git writes on an in-place component**, and no shell anywhere (argv lists; the
    Windows batch-file case).
 3. **The developer's checkout.** In place, the agent works in the developer's own checkout: a

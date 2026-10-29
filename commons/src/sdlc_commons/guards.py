@@ -86,6 +86,11 @@ FRAMEWORK_PROTECTED = (
     "**/.agentic/**",
     "**/.husky/**",
     "**/.pre-commit-config.yaml",
+    "**/.githooks/**",  # git hooks a repository keeps (core.hooksPath), and lefthook's
+    "**/lefthook.yml",
+    "**/.lefthook.yml",
+    "**/lefthook-local.yml",
+    "**/.lefthook/**",
     "**/.gitmodules",
     "**/.vscode/**",
     "**/.devcontainer/**",
