@@ -52,6 +52,10 @@ from agentic_cp.settings import Settings, SettingsError
 
 #: The committed OpenAPI snapshot (only meaningful in a source checkout).
 OPENAPI_PATH = Path(__file__).resolve().parents[2] / "openapi.json"
+#: The umbrella chart's copy of the dashboards (only present in a source checkout).
+CHART_DASHBOARDS = (
+    Path(__file__).resolve().parents[3] / "deploy" / "helm" / "agentic-platform" / "dashboards"
+)
 #: A DSN for building the app without a database (OpenAPI generation never connects).
 _NO_DATABASE = "postgresql+asyncpg://openapi@127.0.0.1:9/none"
 
@@ -85,34 +89,48 @@ def _openapi(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dashboard_dirs() -> list[Path]:
+    """Where the dashboards' JSON is kept: the catalog folder, and in a source checkout the
+    umbrella chart's copy (Helm reads only files inside the chart, M3-02)."""
+    from agentic_cp.dashboards import catalog
+
+    dirs = [catalog.GRAFANA_DIR]
+    if CHART_DASHBOARDS.parent.is_dir():
+        dirs.append(CHART_DASHBOARDS)
+    return dirs
+
+
 def _dashboards(args: argparse.Namespace) -> int:
     """Write or compare the Grafana dashboards' JSON (M2-38) with the catalog."""
-    from agentic_cp.dashboards.catalog import GRAFANA_DIR, rendered_files
+    from agentic_cp.dashboards.catalog import rendered_files
 
     files = rendered_files()
     if args.write:
-        GRAFANA_DIR.mkdir(exist_ok=True)
-        for stale in GRAFANA_DIR.glob("*.json"):
-            if stale.name not in files:
-                stale.unlink()
-        for name, text in files.items():
-            (GRAFANA_DIR / name).write_bytes(text.encode("utf-8"))
-        print(f"wrote {len(files)} dashboards to {GRAFANA_DIR}")
+        for folder in _dashboard_dirs():
+            folder.mkdir(exist_ok=True)
+            for stale in folder.glob("*.json"):
+                if stale.name not in files:
+                    stale.unlink()
+            for name, text in files.items():
+                (folder / name).write_bytes(text.encode("utf-8"))
+            print(f"wrote {len(files)} dashboards to {folder}")
         return 0
-    present = {path.name for path in GRAFANA_DIR.glob("*.json")}
-    stale = sorted(
-        name
-        for name in present | set(files)
-        if name not in files
-        or name not in present
-        or (GRAFANA_DIR / name).read_bytes().decode("utf-8").replace("\r\n", "\n") != files[name]
-    )
-    if stale:
-        print(
-            f"stale dashboards: {', '.join(stale)}: run "
-            "`uv run python -m agentic_cp dashboards --write`",
-            file=sys.stderr,
+    problems = []
+    for folder in _dashboard_dirs():
+        present = {path.name for path in folder.glob("*.json")}
+        stale = sorted(
+            name
+            for name in present | set(files)
+            if name not in files
+            or name not in present
+            or (folder / name).read_bytes().decode("utf-8").replace("\r\n", "\n") != files[name]
         )
+        if stale:
+            problems.append(f"stale dashboards in {folder}: {', '.join(stale)}")
+    if problems:
+        for problem in problems:
+            print(problem, file=sys.stderr)
+        print("run `uv run python -m agentic_cp dashboards --write`", file=sys.stderr)
         return 1
     print(f"{len(files)} dashboards are current")
     return 0
