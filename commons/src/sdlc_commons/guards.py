@@ -4,12 +4,13 @@ May an agent run this command, write these paths, hand over this diff, push
 there? Zyroflo's guard functions (`zyroflo.sdlc.policy`) judge Zyroflo's walls;
 this module adds the framework's rules on top:
 
-  * command - Zyroflo's destructive defaults (`destructive`), plus the agent's
-              resolved deny list (org + team + agent, D31) and the framework's
-              floor (`FRAMEWORK_DENY_SHELL`), matched by where a word stands (a
-              rule's program at a command position, its first word the
-              subcommand - see "how a command is read"). Each is asked of the
-              command as typed AND of the spellings that hide a program from a
+  * command - Zyroflo's destructive defaults (`destructive`, which itself reads
+              the spellings that hide a program and a script a shell takes from
+              its stdin), plus the agent's resolved deny list (org + team + agent,
+              D31) and the framework's floor (`FRAMEWORK_DENY_SHELL`), matched by
+              where a word stands (a rule's program at a command position, its
+              first word the subcommand - see "how a command is read"), in the
+              command as typed AND in the spellings that hide a program from a
               tokenizer (quotes inside a word, a quoted Windows path, a leading
               redirect, `then`/`do`/`!`). Any hit refuses. A command longer than
               MAX_COMMAND is refused unread. Files written past the file tools'
@@ -27,7 +28,7 @@ this module adds the framework's rules on top:
 Zyroflo's defaults are a FLOOR: a repository's own policy file may add to its
 lists, never remove from them.
 
-**What a deny list cannot do.** Text handed to an interpreter (`… | bash`,
+**What a deny list cannot do.** Text handed to an interpreter (`curl … | bash`,
 `$VAR`, `python -c`, `docker run`, `ssh`) is not visible to any command matcher.
 The allow-list (M1-31: an unknown program is refused) and the OS sandbox
 (M1-32/33) are the controls for those; this guard is defence in depth.
@@ -188,12 +189,8 @@ class Guard:
                 )
             ]
         blocks: dict[tuple[str, str], Block] = {}
-        spellings = _spellings(command)
-        for spelling in spellings:
-            for reason in policy.destructive(self.policy, spelling):
-                why = scrub(reason.replace(repr(spelling), "the command", 1))
-                blocks.setdefault(("destructive", why), Block("destructive", why))
         try:
+            scripts = _scripts(command)
             commands = [c for spelling in _rule_spellings(command) for c in _commands(spelling)]
         except _TooComplex:
             return [
@@ -203,6 +200,19 @@ class Guard:
                     f"in one segment - refused unread (framework floor)",
                 )
             ]
+        # Zyroflo reads the spellings that hide a program and a script handed to a
+        # shell on its stdin (T695, T697); each reason names the command as typed.
+        # Two shapes it misses are judged here (M2-58): the text an interpreter is
+        # told to run, as a command of its own (`bash -c "{ rm -rf x; }"`, DF-780),
+        # and, for a command that pipes into a shell, agentic's own spellings - it
+        # reads only what echo/printf print there (`cat <<< 'rm -rf x' | sh`, DF-779).
+        for text in [command, *scripts]:
+            fed = _fed_spellings(text) if _pipes_into_shell(text) else []
+            for spelling in [text, *fed]:
+                for reason in policy.destructive(self.policy, spelling):
+                    why = scrub(reason.replace(repr(spelling), "the command", 1))
+                    blocks.setdefault(("destructive", why), Block("destructive", why))
+        spellings = policy.spellings(command)
         layers = (
             ("denied-command", self.deny_shell, "org, team or agent policy"),
             ("framework", FRAMEWORK_DENY_SHELL, "framework floor"),
@@ -660,17 +670,113 @@ def _words(text: str) -> list[str]:
     return [t.text for t in _tokens(text) if not t.sep]
 
 
-def _spellings(command: str) -> list[str]:
-    """The command as typed, and as it reads once structure (keywords,
-    redirects), cmd's doubled quotes, quotes and quoted program paths no longer
-    hide its programs."""
+#: Programs that run a script handed to them on stdin (`… | sh`, `… | powershell -`).
+_STDIN_RUNNERS = _SHELLS | _POWERSHELL | {"cmd"}
+
+
+def _pipes_into_shell(command: str) -> bool:
+    """Whether a pipe hands text to a shell at a command position of the next
+    segment: `… | sh`, `… |& sudo bash`, `… | 2>&1 /bin/sh`, `… | cmd` - never
+    `… || sh` or `… | grep bash`."""
+    for text in _rule_spellings(command):
+        tokens = _tokens(text)
+        for i, token in enumerate(tokens):
+            if token.text != "|" or not token.sep:
+                continue
+            if i and tokens[i - 1].sep and tokens[i - 1].text == "|":
+                continue  # the second `|` of `||`
+            j = i + 1
+            if j < len(tokens) and tokens[j].sep and tokens[j].text == "|":
+                continue  # `||` runs a second command, it pipes nothing
+            if j < len(tokens) and tokens[j].sep and tokens[j].text == "&":
+                j += 1  # `|&` pipes both streams
+            segment: list[_Word] = []
+            target = False  # the next word is a redirect's target, not a command
+            for k in range(j, len(tokens)):
+                word, after = tokens[k], tokens[k + 1] if k + 1 < len(tokens) else None
+                if word.sep and word.text in "({" and not segment and not target:
+                    continue  # `… | (sh)`, `… | { sh; }`: a subshell or group reads the pipe
+                if word.sep:
+                    if word.text not in "<>&":
+                        break
+                    target = True
+                elif target:
+                    target = False
+                elif not (word.text.isdigit() and after and after.sep and after.text in "<>"):
+                    segment.append(word)  # `2` of `2>&1` is a stream, not a program
+            start = 0
+            while start < len(segment) and (
+                _ENV_ASSIGNMENT.match(segment[start].text) or segment[start].text in _TRANSPARENT
+            ):
+                start += 1
+            try:
+                positions = _positions(segment, start)
+            except _TooComplex:
+                return True
+            if any(_program(segment[k].text) in _STDIN_RUNNERS for k in positions):
+                return True
+    return False
+
+
+def _fed_spellings(command: str) -> list[str]:
+    """For a command that pipes into a shell: the spellings agentic asked of every
+    command before Zyroflo read a shell's stdin (M2-58) - structure (keywords,
+    redirects, a here-string) as separators and every quote removed, so text a
+    program passes into the pipe (`cat <<< 'rm -rf x' | sh`, `cat <(echo rm -rf x)
+    | sh`) is judged as a command. The command as typed is not among them."""
     out: dict[str, None] = {}
     for base in (command, command.replace('""', '"')):
         for shaped in (base, _STRUCTURE.sub(";", base)):
             for text in (shaped, _with_paths_as_programs(shaped)):
                 light = re.sub(r"""['"^`]""", "", text)
                 out.update({text: None, light: None, light.replace("\\", ""): None})
+    out.pop(command, None)
     return list(out)
+
+
+def _scripts(text: str, depth: int = 0) -> list[str]:
+    """The text an interpreter in `text` is told to run - the quoted word after
+    `bash -c`, `cmd /c` or `powershell -Command`, and the line `watch` runs with
+    `sh -c` - and the text those hand on in turn, to _MAX_DEPTH. (`find -exec`
+    runs a quoted word as one program name, never as shell text.)"""
+    if depth >= _MAX_DEPTH:
+        return []
+    found: list[str] = []
+    segment: list[_Word] = []
+    after = ""  # the separator before this segment
+    for token in [*_tokens(text), _Word(";", sep=True)]:
+        if not token.sep:
+            segment.append(token)
+            continue
+        start = 1 if after in "<>" and after else 0  # a redirect's target is not a command
+        while start < len(segment) and (
+            _ENV_ASSIGNMENT.match(segment[start].text) or segment[start].text in _TRANSPARENT
+        ):
+            start += 1
+        for j in _positions(segment, start):
+            program = _program(segment[j].text)
+            k = _carried(segment, j, program) if program != "find" else None
+            word = segment[k] if k is not None else None
+            if word and word.quoted and any(ch.isspace() for ch in word.text):
+                found += [word.text, *_scripts(word.text, depth + 1)]
+            if program == "watch" and (line := _watched(segment[j + 1 :])):
+                found += [line, *_scripts(line, depth + 1)]
+        segment, after = [], token.text
+    return list(dict.fromkeys(found))
+
+
+#: watch's options that take a value; `-x`/`--exec` runs its words with no shell.
+_WATCH_VALUES = frozenset({"-n", "--interval", "-q", "--equexit"})
+
+
+def _watched(args: list[_Word]) -> str:
+    """The line `watch` hands to `sh -c`: its words after its options, joined by
+    spaces - only when one of them was quoted (Zyroflo reads the plain ones)."""
+    while args and args[0].text.startswith("-"):
+        if args[0].text in ("-x", "--exec"):
+            return ""
+        args = args[2:] if args[0].text in _WATCH_VALUES else args[1:]
+    return " ".join(w.text for w in args) if any(w.quoted for w in args) else ""
 
 
 def _rule_spellings(command: str) -> list[str]:
