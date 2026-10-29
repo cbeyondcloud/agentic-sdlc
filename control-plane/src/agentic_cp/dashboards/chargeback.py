@@ -7,12 +7,20 @@ runtime role SELECT on this view only (`db_roles.RUNTIME_VIEWS`)."""
 
 from __future__ import annotations
 
-from sqlalchemy import column, select, table
+from sqlalchemy import column, func, select, table
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from agentic.orgapi.cost import CSV_COLUMNS, Chargeback, ChargebackRow
 
 dash_chargeback = table("dash_chargeback", *(column(name) for name in CSV_COLUMNS))
+
+
+async def limit_statement_time(conn: AsyncConnection, seconds: int) -> None:
+    """Stop each later statement of this transaction after `seconds` (review F1): the cost
+    views read the gateway through the shared pool. Postgres cancels such a statement with
+    SQLSTATE 57014; the setting ends with the transaction."""
+    milliseconds = str(int(seconds) * 1000)
+    await conn.execute(select(func.set_config("statement_timeout", milliseconds, True)))
 
 
 async def read_chargeback(conn: AsyncConnection, month: str, team: str | None) -> Chargeback:

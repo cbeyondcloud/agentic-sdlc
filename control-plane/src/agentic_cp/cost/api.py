@@ -15,7 +15,6 @@ from typing import Literal
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import Response
-from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncConnection
 from starlette.datastructures import State
@@ -26,7 +25,7 @@ from agentic.orgapi.models import TEAM_SLUG
 from agentic_cp.audit.chain import AuditEvent, append
 from agentic_cp.auth.deps import Caller
 from agentic_cp.auth.tokens import TokenContext
-from agentic_cp.dashboards.chargeback import read_chargeback
+from agentic_cp.dashboards.chargeback import limit_statement_time, read_chargeback
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem
 from agentic_cp.rbac.authz import Org, Team, authorize, require
 from agentic_cp.tenancy.context import tenant_tx
@@ -98,7 +97,7 @@ async def _export(
         scope = Org() if team is None else Team(team)
         permission = "dashboard.view.org" if team is None else "dashboard.view.team"
         await require(ctx, permission, scope, conn=conn, cache=state.enforcers)
-    await conn.execute(text(f"SET LOCAL statement_timeout = {int(limit) * 1000}"))
+    await limit_statement_time(conn, limit)
     report = await read_chargeback(conn, month, team)
     await append(
         conn,
