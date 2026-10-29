@@ -32,6 +32,11 @@ pytestmark = pytest.mark.anyio
 
 REPO = "github.com/acme/app"
 DRAFT = {"kind": "repo-memory", "diff": "+ - Wrap HTTP calls in with_retry().\n"}
+WHILE_APPLIED = [  # alike each of RETRY[:3], whichever of them seeds the cluster
+    "Remember the with_retry() helper for HTTP calls.",
+    "Wrap HTTP calls with the with_retry() helper.",
+    "Use the with_retry() helper for outbound HTTP calls.",
+]
 
 
 @pytest.fixture
@@ -283,6 +288,69 @@ async def test_digest_is_queued_for_approvers(api, dev, lead, tmp_path):
     assert "a1@a.example.test" not in to  # an author of shared evidence does not decide it
     assert "personal" in to["dev@a.example.test"].body_text
     assert "repo" not in to["dev@a.example.test"].body_text.split("wait for your decision")[1]
+
+
+async def test_detail_says_whether_the_caller_may_decide(api, lead):
+    """Review F4: the CLI asks before it makes a change (resuming an approval, a revert),
+    so the detail says whether the caller owns the proposal."""
+    a_id, _ = await person(api, "a1@a.example.test")
+    b_id, _ = await person(api, "b1@a.example.test")
+    pid = await shared_proposal(api, [a_id, b_id])
+    _, auditor = await person(api, "audit@a.example.test", "auditor")
+    seen = await api.get(f"/v1/learning/proposals/{pid}", auditor)
+    assert seen.status_code == 200, seen.text  # a team viewer reads it ...
+    assert seen.json()["may_decide"] is False  # ... and may not decide it
+    assert (await api.get(f"/v1/learning/proposals/{pid}", lead)).json()["may_decide"] is True
+
+
+async def test_a_reverted_lesson_counts_only_corrections_after_the_revert(api, dev, tmp_path):
+    """Review F6: the corrections made while a learning was in force (why it was reverted)
+    do not propose it again at once: only corrections after the revert count."""
+    journal = await corrections(api, dev, tmp_path)
+    (listed,) = (await api.get("/v1/learning/proposals", dev)).json()
+    pid = listed["id"]
+    assert (await decide(api, dev, pid, "approve", draft=DRAFT)).status_code == 200
+    ref = {"ref": {"kind": "personal"}}
+    assert (await api.post(f"/v1/learning/proposals/{pid}/applied", dev, ref)).status_code == 200
+    api.clock.advance(timedelta(hours=3))
+    for n, text in enumerate(WHILE_APPLIED, start=3):
+        journal.capture(record(api, text, n=n, path="a.py", line=n + 1), rules("developer"), text)
+    assert (await send(api, dev, journal.pending())).status_code == 200
+    api.clock.advance(timedelta(hours=2))
+    reverted = await api.post(f"/v1/learning/proposals/{pid}/reverted", dev, ref)
+    assert reverted.json()["decided_at"] > listed["created_at"]  # the revert is the decision
+    api.clock.advance(timedelta(hours=3))
+    late = "Wrap the HTTP call in with_retry, as everywhere else."
+    journal.capture(record(api, late, n=6, path="a.py", line=9), rules("developer"), late)
+    assert (await send(api, dev, journal.pending())).status_code == 200
+    statuses = [p["status"] for p in (await api.get("/v1/learning/proposals", dev)).json()]
+    assert statuses == ["reverted"]
+
+
+async def test_the_digest_mails_waiting_proposals_every_day(api, lead):
+    """Review F7: a proposal made after the day's mail went out is mailed the next day by
+    the worker's digest job, not only when another proposal appears."""
+    from agentic_cp.learning.digest import digest_job
+    from agentic_cp.policy_sync.worker import EXTRA_JOBS
+
+    assert digest_job in EXTRA_JOBS
+    a_id, _ = await person(api, "a1@a.example.test")
+    b_id, _ = await person(api, "b1@a.example.test")
+    await shared_proposal(api, [a_id, b_id])  # in the morning: a proposal, the day's mail
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        assert await queue_digest(conn, "payments", clock=api.clock) == 1
+    api.clock.advance(timedelta(hours=6))
+    later = await shared_proposal(api, [a_id, b_id])  # in the afternoon: no mail today
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        assert await queue_digest(conn, "payments", clock=api.clock) == 0  # deduped today
+    api.clock.advance(timedelta(days=1))
+    await digest_job(api.db.app, None, api.a.id, api.settings, api.clock)
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        mails = (
+            await conn.execute(select(notifications).where(notifications.c.kind == KIND))
+        ).all()
+    lead_mails = [m for m in mails if m.recipient == "lead@a.example.test"]
+    assert lead_mails and later in lead_mails[-1].body_text
 
 
 async def test_authors_are_kept_when_a_proposal_grows(api, dev, tmp_path):

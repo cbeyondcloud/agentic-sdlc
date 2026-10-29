@@ -182,12 +182,12 @@ async def _audit(conn, ctx, row, event: str, clock, *, after: dict, reason: str 
     )
 
 
-async def _detail(conn, row) -> ProposalDetail:
+async def _detail(conn, row, mine: bool) -> ProposalDetail:
     found = await conn.execute(_feedback_query().where(feedback.c.id.in_(list(row.evidence))))
     info = proposal_info(row, await _owner_email(conn, row), cls=ProposalDetail)
     order = {fid: n for n, fid in enumerate(row.evidence)}
     records = sorted((_info(r) for r in found), key=lambda f: order.get(f.id, 0))
-    return info.model_copy(update={"feedback": records, "draft": row.draft})
+    return info.model_copy(update={"feedback": records, "draft": row.draft, "may_decide": mine})
 
 
 async def _updated(conn, row, values: dict):
@@ -201,12 +201,14 @@ async def _updated(conn, row, values: dict):
 
 @router.get("/learning/proposals/{pid}")
 async def get_proposal(pid: str, request: Request, ctx: Caller) -> ProposalDetail:
-    """One proposal, its evidence (the feedback records behind it) and, once approved, the
-    draft its owner approved."""
+    """One proposal, its evidence (the feedback records behind it), once approved the draft
+    its owner approved, and whether the caller may decide it (`may_decide`: the CLI asks
+    before it makes or undoes the change, so a reader who does not own it changes nothing,
+    review F4)."""
     state = request.app.state
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         row = await _row_for(ctx, conn, pid, state.enforcers)
-        return await _detail(conn, row)
+        return await _detail(conn, row, await may_decide(ctx, conn, row, state.enforcers))
 
 
 @router.put("/learning/proposals/{pid}/draft")
@@ -299,7 +301,15 @@ async def _report(request: Request, ctx, pid: str, body: ChangeReport, action: s
                 values["measurement"] = body.measurement
             event = "applied"
         else:
-            values = {"status": status, "reverted_at": now, "reverted_ref": body.ref}
+            # a revert is a decision: a reverted lesson is proposed again only on corrections
+            # made after it, not on those made while it was in force (review F6)
+            values = {
+                "status": status,
+                "reverted_at": now,
+                "reverted_ref": body.ref,
+                "decided_at": now,
+                "decided_by": ctx.email,
+            }
             event = "reverted"
         ref = {k: body.ref.get(k) for k in ("kind", "url", "number", "branch") if k in body.ref}
         await _audit(conn, ctx, row, event, state.clock, after={"status": status, **ref})

@@ -1876,6 +1876,11 @@
             "title": "Lesson",
             "type": "string"
           },
+          "may_decide": {
+            "default": false,
+            "title": "May Decide",
+            "type": "boolean"
+          },
           "measurement": {
             "anyOf": [
               {
@@ -4154,7 +4159,7 @@
     },
     "/v1/learning/proposals/{pid}": {
       "get": {
-        "description": "One proposal, its evidence (the feedback records behind it) and, once approved, the\ndraft its owner approved.",
+        "description": "One proposal, its evidence (the feedback records behind it), once approved the draft\nits owner approved, and whether the caller may decide it (`may_decide`: the CLI asks\nbefore it makes or undoes the change, so a reader who does not own it changes nothing,\nreview F4).",
         "operationId": "get_proposal_v1_learning_proposals__pid__get",
         "parameters": [
           {

@@ -38,7 +38,8 @@ from typing import Literal
 from agentic.learning.lessons import LexicalSimilarity, Similarity, alike, tokens
 
 #: A proposal's life (M3-15, M3-16; `agentic.learning.approval.TRANSITIONS`): pending ->
-#: approved -> applied -> reverted, or pending -> rejected, or pending -> deferred.
+#: approved -> applied -> reverted, or pending (or approved, unmade) -> rejected, or pending ->
+#: deferred.
 ProposalStatus = Literal["pending", "approved", "rejected", "deferred", "applied", "reverted"]
 #: A person said no to the lesson (or took it back): proposed again only on new evidence.
 REMEMBERED = ("rejected", "reverted")

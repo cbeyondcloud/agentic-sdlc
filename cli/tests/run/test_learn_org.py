@@ -206,10 +206,52 @@ def test_org_refused_approval_applies_nothing(org, cli, workspace, tmp_path):
     assert "endorse" in json.loads(refused.err)["error"]
     assert not (workspace / "AGENTS.md").exists()
     assert not (tmp_path / "home" / "skills").exists()
-    assert [call for call, _ in org.learning_calls] == ["decision"]
+    assert org.learning_calls == []  # refused before it asks for a decision (review F4)
     endorsed = cli("--json", "learn", "endorse", PID)
     assert endorsed.code == ExitCode.OK, endorsed.err
     assert endorsed.json()["endorsements"] == ["dev@example.invalid"]
+
+
+def test_org_resume_by_a_non_owner_changes_nothing(org, cli, tmp_path):
+    """Review F4: an approved proposal whose change is not made yet is resumed only by its
+    owner - asked before anything is written, not after."""
+    org.learning[PID] = {**personal_detail(owner="alice@example.invalid"), "status": "approved"}
+    org.refuse_decisions = True  # the caller may read it (a team viewer) but not decide it
+    refused = cli("--json", "learn", "approve", PID)
+    assert refused.code == ExitCode.REFUSED, refused.err
+    assert not (tmp_path / "home" / "skills").exists()
+    assert org.learning_calls == []
+
+
+def test_org_revert_by_a_non_owner_changes_nothing(org, cli, tmp_path):
+    org.learning[PID] = personal_detail()
+    assert cli("--json", "learn", "approve", PID).code == ExitCode.OK
+    skill = tmp_path / "home" / "skills" / "learned-ba" / "SKILL.md"
+    org.refuse_decisions = True
+    refused = cli("--json", "learn", "revert", PID)
+    assert refused.code == ExitCode.REFUSED, refused.err
+    assert skill.is_file() and org.learning[PID]["status"] == "applied"
+    assert [call for call, _ in org.learning_calls] == ["decision", "applied"]
+
+
+def test_org_approve_from_another_repository_is_refused(org, cli, workspace):
+    """Review F5: a repo proposal is approved from a checkout of its own repository only;
+    elsewhere the diff and the pull request would be built on the wrong files."""
+    detail = personal_detail()
+    detail.update(
+        scope="repo:github.com/acme/billing",
+        target="repo",
+        owner="repo:github.com/acme/billing",
+        actors=["a@x.test", "b@x.test"],
+    )
+    for n, record in enumerate(detail["feedback"]):
+        record.update(actor=["a@x.test", "b@x.test"][n % 2], repo="github.com/acme/billing")
+    org.learning[PID] = detail
+    for command in ("show", "approve"):
+        refused = cli("--json", "learn", command, PID)
+        assert refused.code == ExitCode.REFUSED, refused.err
+        assert "github.com/acme/billing" in json.loads(refused.err)["hint"]
+    assert org.learning_calls == [] and not (workspace / "AGENTS.md").exists()
 
 
 def test_org_approve_resumes_an_approved_proposal(org, cli, tmp_path):

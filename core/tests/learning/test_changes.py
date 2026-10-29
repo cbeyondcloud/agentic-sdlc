@@ -147,3 +147,34 @@ def test_agent_instruction_needs_an_existing_definition():
     with pytest.raises(DraftError, match="not a repo"):
         draft(proposal(), evidence("a", "b"), no_files, kind="personal-note", team="t")
     assert target("personal-note", "qa", None) == ("home", "memory/learned-qa.md")
+
+
+@pytest.mark.parametrize(
+    "before",
+    [
+        "# App\n\nUse uv.\nNever force push.",  # no final newline (common from Windows editors)
+        "# App\r\n\r\nUse uv.\r\nNever force push.",  # ... CRLF
+        "x",  # one line, no newline
+        "# App\n\n## Learned from corrections\n\n- keep it\n\n## Next\nlast line",
+    ],
+)
+def test_a_file_without_a_final_newline_loses_nothing(before):
+    """Review F1: the last line of a file without a final newline is kept, the diff shows
+    no removal, and a revert gives back exactly the original text."""
+    after = render_change("repo-memory", before, LESSON, "developer", PID)
+    last = before.replace("\r\n", "\n").split("\n")[-1]
+    assert last in after.replace("\r\n", "\n").split("\n")
+    found = draft(proposal(), evidence("alice", "bob"), lambda root, path: before, team="p")
+    removed = [line for line in found.diff.splitlines() if line.startswith("-")]
+    assert removed == ["--- a/AGENTS.md"]  # only the header: nothing of the file goes
+    assert found.problems == ()
+    assert strip_change(after, PID) == before
+
+
+def test_a_removed_line_is_not_instruction_only():
+    """Review F1: a change that removes anything is more than an added instruction."""
+    before = "# App\n\nUse uv.\nNever force push.\n"
+    after = render_change("repo-memory", before, LESSON, "developer", PID)
+    truncated = after.replace("Never force push.\n", "")
+    problems = instruction_only_problems("repo-memory", before, truncated)
+    assert any("removes" in p for p in problems)

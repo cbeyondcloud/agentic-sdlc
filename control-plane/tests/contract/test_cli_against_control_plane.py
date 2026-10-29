@@ -298,6 +298,7 @@ async def test_learning_decisions_end_to_end(live, db):
     draft = {"kind": "repo-memory", "path": "AGENTS.md", "diff": "+ - with_retry()\n"}
     with ControlPlaneClient(base, a.admin_token) as client:
         assert client.proposal(pid).target == "repo"
+        assert client.proposal(pid).may_decide  # asked before a change is made (review F4)
         assert client.edit_proposal(pid, None, "Use with_retry().").edited_lesson == (
             "Use with_retry()."
         )

@@ -32,6 +32,8 @@ TRANSITIONS: dict[tuple[str, str], ProposalStatus] = {
     ("deferred", "reject"): "rejected",
     ("pending", "defer"): "deferred",
     ("approved", "apply"): "applied",
+    # an approved change that could not be made (no remote, a failed push) may be dropped
+    ("approved", "reject"): "rejected",
     ("applied", "revert"): "reverted",
 }
 #: The permission that approves a shared proposal of each scope (the same ones that approve

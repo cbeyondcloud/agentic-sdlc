@@ -682,6 +682,8 @@ class ProposalDetail(ProposalInfo):
 
     feedback: list[FeedbackInfo] = []
     draft: dict | None = None
+    # whether the caller owns it (D30): the CLI asks before it makes or undoes a change
+    may_decide: bool = False
 
 
 class ProposalDecision(RequestModel):

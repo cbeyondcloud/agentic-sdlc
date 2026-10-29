@@ -120,6 +120,21 @@ def test_personal_approve_applies_and_revert_restores(
     assert only_proposal(cli)["status"] == "reverted"
 
 
+def test_personal_revert_keeps_a_hand_edit(workspace, gateway, cli, monkeypatch, tmp_path):
+    """Review F2: a revert takes out only the learning's block; a line the person added to
+    the file since stays, and they are told the file had changed."""
+    corrections(cli, monkeypatch, PEOPLE[:1])
+    row = only_proposal(cli)
+    assert cli("--json", "learn", "approve", row["id"]).code == ExitCode.OK
+    skill = tmp_path / "home" / "skills" / "learned-ba" / "SKILL.md"
+    skill.write_bytes(skill.read_bytes() + b"\nMy own line.\n")
+    reverted = cli("learn", "revert", row["id"])
+    assert reverted.code == ExitCode.OK, reverted.err
+    text = skill.read_text("utf-8")
+    assert "My own line." in text and "CSV column" not in text
+    assert "changed since" in " ".join(reverted.err.split())
+
+
 def test_reject_is_remembered_and_defer_keeps_it_pending(workspace, gateway, cli, monkeypatch):
     run_id = corrections(cli, monkeypatch, PEOPLE[:1])
     row = only_proposal(cli)
@@ -255,3 +270,62 @@ def test_e2e_three_corrections_to_pr_and_revert(workspace, gateway, github, cli,
     assert at(remote, back["branch"], "AGENTS.md") == AGENTS_MD  # the previous content
     assert len(fake.pulls) == 2 and fake.pulls[1]["head"]["ref"] == back["branch"]
     assert only_proposal(cli)["status"] == "reverted"
+
+
+# ── a change that cannot be made leaves no dead end (review F3) ──
+
+
+def test_no_remote_leaves_the_proposal_pending(workspace, gateway, cli, monkeypatch):
+    corrections(cli, monkeypatch, PEOPLE)
+    row = only_proposal(cli)
+    refused = cli("--json", "learn", "approve", row["id"])
+    assert refused.code == ExitCode.REFUSED and "remote" in error(refused)["hint"]
+    assert only_proposal(cli)["status"] == "pending"  # nothing decided: nothing was made
+    assert cli("--json", "learn", "reject", row["id"]).code == ExitCode.OK
+
+
+def test_a_failed_apply_is_made_by_approving_again(
+    workspace, gateway, github, cli, monkeypatch, tmp_path
+):
+    fake, remote = github
+    corrections(cli, monkeypatch, PEOPLE)
+    row = only_proposal(cli)
+    git(workspace, "remote", "set-url", "--push", "origin", str(tmp_path / "missing.git"))
+    failed = cli("--json", "learn", "approve", row["id"])
+    assert failed.code == ExitCode.ERROR, failed.err
+    assert only_proposal(cli)["status"] == "approved"
+    stuck = cli("--json", "learn", "revert", row["id"])
+    assert stuck.code == ExitCode.REFUSED and "learn approve" in error(stuck)["hint"]
+
+    git(workspace, "remote", "set-url", "--push", "origin", str(remote))
+    again = cli("--json", "learn", "approve", row["id"])
+    assert again.code == ExitCode.OK, again.err
+    assert again.json()["status"] == "applied" and len(fake.pulls) == 1
+
+
+def test_an_approved_change_that_is_not_made_can_be_rejected(
+    workspace, gateway, github, cli, monkeypatch, tmp_path
+):
+    corrections(cli, monkeypatch, PEOPLE)
+    row = only_proposal(cli)
+    git(workspace, "remote", "set-url", "--push", "origin", str(tmp_path / "missing.git"))
+    assert cli("--json", "learn", "approve", row["id"]).code == ExitCode.ERROR
+    assert cli("--json", "learn", "reject", row["id"]).code == ExitCode.OK
+    assert only_proposal(cli)["status"] == "rejected"
+
+
+def test_a_target_missing_on_the_default_branch_is_refused_with_a_hint(
+    workspace, gateway, github, cli, monkeypatch
+):
+    """The agent definition exists only in this checkout: the change cannot be made on the
+    default branch, which is said before anything is decided."""
+    fake, _ = github
+    corrections(cli, monkeypatch, PEOPLE)
+    row = only_proposal(cli)
+    write(workspace / ".agentic" / "agents" / "ba.md", "---\nname: ba\n---\n\nYou analyse.\n")
+    edited = cli("--json", "learn", "edit", row["id"], "--kind", "agent-instruction")
+    assert edited.code == ExitCode.OK, edited.err
+    refused = cli("--json", "learn", "approve", row["id"])
+    assert refused.code == ExitCode.INVALID, refused.err
+    assert "learn edit" in error(refused)["hint"]
+    assert only_proposal(cli)["status"] == "pending" and fake.pulls == []

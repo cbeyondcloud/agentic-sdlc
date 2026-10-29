@@ -28,7 +28,8 @@ download-and-run line, no hidden characters), and a personal skill must load as 
 (`load_personal`). `strip_change` takes the block out again - the content of a revert.
 
 **Line endings.** The text is changed on its LF view and written back in the file's own
-majority convention, so a CRLF file on Windows stays CRLF.
+majority convention, so a CRLF file on Windows stays CRLF; a file without a final newline
+keeps its last line and stays without one. A change that removes any line is refused.
 """
 
 import difflib
@@ -151,11 +152,18 @@ def _crlf(text: str) -> bool:
 
 
 def _lines(text: str) -> list[str]:
-    return text.replace("\r\n", "\n").split("\n")[:-1] if text else []
+    """The LF view's lines, losing nothing: a last line without a final newline is kept
+    (review F1: the files people edit often end without one)."""
+    lines = text.replace("\r\n", "\n").split("\n")
+    return lines[:-1] if lines[-1] == "" else lines
 
 
-def _text(lines: list[str], crlf: bool) -> str:
-    joined = "".join(f"{line}\n" for line in lines)
+def _final_newline(text: str | None) -> bool:
+    return not text or text.endswith("\n")
+
+
+def _text(lines: list[str], crlf: bool, final_newline: bool = True) -> str:
+    joined = "\n".join(lines) + ("\n" if lines and final_newline else "")
     return joined.replace("\n", "\r\n") if crlf else joined
 
 
@@ -197,7 +205,7 @@ def render_change(kind: str, before: str | None, lesson: str, agent: str, propos
         lines[end:end] = block if end > start + 1 else ["", *block]
     else:
         lines += ["", HEADING, "", *block]
-    return _text(lines, _crlf(before or ""))
+    return _text(lines, _crlf(before or ""), _final_newline(before))
 
 
 def strip_change(text: str, proposal_id: str) -> str:
@@ -218,7 +226,7 @@ def strip_change(text: str, proposal_id: str) -> str:
         if not any(line.strip() for line in rest[:stop]):
             gap = 1 if at > 0 and not lines[at - 1].strip() else 0
             del lines[at - gap : at + 1 + stop]
-    return _text(lines, _crlf(text))
+    return _text(lines, _crlf(text), _final_newline(text))
 
 
 # ── instruction-only ────────────────────────────────────────────────────────
@@ -251,10 +259,12 @@ def instruction_only_problems(kind: str, before: str | None, after: str) -> list
                     f"front matter {extra} is not allowed: a learning never widens tools, "
                     "models or limits"
                 )
-    before_lines = _lines(before or "")
-    added = [
-        line[2:] for line in difflib.ndiff(before_lines, _lines(after)) if line.startswith("+ ")
-    ]
+    compared = list(difflib.ndiff(_lines(before or ""), _lines(after)))
+    if removed := sum(line.startswith("- ") for line in compared):
+        problems.append(
+            f"the change removes {removed} line(s) of the file: a learning adds instructions only"
+        )
+    added = [line[2:] for line in compared if line.startswith("+ ")]
     problems += [f"line {n} of the addition: {why}" for n, why in scan_text("\n".join(added))]
     if kind == "personal-skill" and not problems:
         problems += _personal_skill_problems(after)

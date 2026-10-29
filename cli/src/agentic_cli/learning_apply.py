@@ -12,8 +12,11 @@
     regression case; a repo change is a pull request on a new branch
     (`agentic/learning/<id>`) built on the remote default branch with git plumbing - the
     checkout, its index and its current branch never change, and nothing is ever
-    committed to the default branch;
-  * `revert` - Zyroflo's undo for a personal change; for a shared one a revert pull
+    committed to the default branch. The approval is recorded once the remote is reached
+    and the change rendered on its base; a change that still fails stays approved, and
+    `approve` again makes it (`reject` drops it);
+  * `revert` - Zyroflo's undo for a personal change (only the learning's block when the
+    file changed since, so a later learning or a hand edit stays); for a shared one a revert pull
     request that takes the learned block out of the default branch's file (the content
     before the learning). The regression case stays: it records the correction;
   * `pending_notice` - the end of a run says how many proposals wait for a decision.
@@ -21,7 +24,9 @@
 Each step is recorded in the proposal's change record (`.agentic/local/learning/changes/`).
 In org mode the control plane holds the proposals and decides who may act; the change is
 still made from the approver's machine, and the control plane is told (`applied`,
-`reverted`), so its audit chain shows every step.
+`reverted`), so its audit chain shows every step. Before anything is written there, the
+control plane's `may_decide` must say the caller owns the proposal, and a repo change is
+made only from a checkout of its own repository.
 """
 
 from __future__ import annotations
@@ -34,7 +39,15 @@ from typing import TYPE_CHECKING
 from agentic.hosting import HostingError
 from agentic.hosting.git import fetch_branch, push_branch, rev_parse
 from agentic.learning.approval import DecisionError, may_decide, next_status
-from agentic.learning.changes import Draft, DraftError, Evidence, draft, render_change, strip_change
+from agentic.learning.changes import (
+    Draft,
+    DraftError,
+    Evidence,
+    draft,
+    instruction_only_problems,
+    render_change,
+    strip_change,
+)
 from agentic.learning.clustering import Proposal, proposal_id
 from agentic.learning.store import LocalLearningStore, StoreError
 from agentic.yamlio import dump_yaml
@@ -207,7 +220,22 @@ def _allowed(proposal: Proposal, action: str) -> None:
     try:
         next_status(proposal.status, action)
     except DecisionError as error:
-        raise CliError(str(error), ExitCode.REFUSED) from None
+        raise CliError(str(error), ExitCode.REFUSED, hint=_status_hint(proposal)) from None
+
+
+def _status_hint(proposal: Proposal) -> str:
+    """The commands that do work for a proposal where it stands."""
+    pid = proposal.id
+    if proposal.status == "approved":  # approved, but its change was not made
+        return (
+            f"`agentic learn approve {pid}` makes the approved change; "
+            f"`agentic learn reject {pid}` drops it"
+        )
+    if proposal.status == "applied":
+        return f"`agentic learn revert {pid}` undoes it"
+    if proposal.status in ("pending", "deferred"):
+        return f"`agentic learn approve|reject|defer {pid}` decides it"
+    return f"`agentic learn show {pid}` shows where it stands"
 
 
 def edit(rt: Runtime, pid: str, kind: str | None, lesson: str | None, warn) -> Draft:
@@ -274,9 +302,16 @@ def propose_from(rt: Runtime, feedback_id: str, agent: str | None) -> Proposal:
 
 
 def approve(rt: Runtime, pid: str, warn: Callable[[str], None]) -> tuple[Proposal, dict]:
-    """Approve (owner only), then apply: the only path to a changed skill, note or file."""
+    """Approve (owner only), then apply: the only path to a changed skill, note or file.
+
+    The approval is recorded once everything that can be checked first was (review F3): the
+    hosting remote is reached and the change rendered on the default branch's file. A change
+    that still fails after that (a push, a write) leaves the proposal approved, and running
+    `approve` again makes it without a second decision (or `reject` drops it)."""
     proposal = get(rt, pid)
-    _allowed(proposal, "approve")
+    resuming = proposal.status == "approved"
+    if not resuming:
+        _allowed(proposal, "approve")
     made = draft_for(rt, proposal)
     user = check_owner(rt, made, "approve", warn)
     if made.problems:
@@ -292,22 +327,38 @@ def approve(rt: Runtime, pid: str, warn: Callable[[str], None]) -> tuple[Proposa
             ExitCode.REFUSED,
             hint=f"`agentic learn edit {pid} --kind repo-memory` makes it a repo change",
         )
-    approved = store(rt).decide(pid, "approve", user, _now())
-    applied = _apply(rt, made, user, warn)
+
+    def decided() -> None:
+        if not resuming:
+            store(rt).decide(pid, "approve", user, _now())
+
+    applied = _apply(rt, made, user, warn, decided)
     record = record_of(rt, pid)
     store(rt).save_change(
         pid, {**record, "draft": made.model_dump(mode="json"), "applied": applied}
     )
-    return store(rt).decide(approved.id, "apply", user, _now()), applied
+    return store(rt).decide(pid, "apply", user, _now()), applied
 
 
-def _apply(rt: Runtime, made: Draft, user: str, warn: Callable[[str], None]) -> dict:
+def _apply(
+    rt: Runtime,
+    made: Draft,
+    user: str,
+    warn: Callable[[str], None],
+    ready: Callable[[], None] = lambda: None,
+) -> dict:
+    """Make the approved change; `ready()` records the approval once nothing that can be
+    checked beforehand stands in the way (a personal change: at once, as the audit comes
+    first; a shared one: when the remote is reached and the change rendered on its base)."""
     if made.root == "home":
+        ready()
         return apply_personal(rt, made, user)
-    return apply_shared(rt, made, warn)
+    return apply_shared(rt, made, warn, ready)
 
 
 def apply_personal(rt: Runtime, made: Draft, user: str) -> dict:
+    """The change and its regression case in `~/.agentic`; a part already made by an
+    earlier attempt is not made twice."""
     changes = PersonalChanges(rt.ws.home)
     why = f"agentic learn approve {made.proposal_id}: {made.lesson}"
     try:
@@ -347,7 +398,10 @@ def _branch_off_default(
     title: str,
     body: str,
     warn: Callable[[str], None] | None = None,
+    ready: Callable[[], None] = lambda: None,
 ) -> dict | None:
+    """A pull request of `files_for(base commit)` on `branch`; `ready()` runs once the
+    files are known, before anything is pushed."""
     with connect(rt.ws.repo, rt.ws.settings, remote=REMOTE) as conn, conn.errors():
         provider = conn.provider
         base = provider.default_branch(conn.repo)
@@ -355,6 +409,7 @@ def _branch_off_default(
         files = files_for(base_rev)
         if files is None:
             return None
+        ready()
         message = f"{title}\n\nOpened with agentic learn (the learning loop, M3-16)."
         name, commit = repo_setup.commit_on_branch(
             rt.ws.repo, dict(files), message, branch=branch, base=base_rev
@@ -390,18 +445,37 @@ def _base(repo, conn, base: str, warn: Callable[[str], None]) -> str:
         return found
 
 
-def apply_shared(rt: Runtime, made: Draft, warn: Callable[[str], None] | None = None) -> dict:
+def apply_shared(
+    rt: Runtime,
+    made: Draft,
+    warn: Callable[[str], None] | None = None,
+    ready: Callable[[], None] = lambda: None,
+) -> dict:
     """A pull request with the change re-rendered on the default branch's file (so it
     changes only the learned block, whatever the local checkout holds)."""
     user = rt.known_user()
 
     def files(base_rev: str) -> dict[str, str]:
         current = head_text(rt.ws.repo, made.path, base_rev)
-        after = render_change(made.kind, current, made.lesson, made.agent, made.proposal_id)
+        try:
+            after = render_change(made.kind, current, made.lesson, made.agent, made.proposal_id)
+        except DraftError as error:  # e.g. the agent is defined in this checkout only
+            raise CliError(
+                f"{error} on the default branch",
+                ExitCode.INVALID,
+                hint=f"`agentic learn edit {made.proposal_id} --kind repo-memory` retargets it",
+            ) from None
+        if problems := instruction_only_problems(made.kind, current, after):
+            raise CliError(
+                "on the default branch this change is not instruction-only: " + "; ".join(problems),
+                ExitCode.INVALID,
+                hint=f"`agentic learn edit {made.proposal_id} --lesson ...` rewrites it",
+            )
         return {made.path: after, made.eval_path: dump_yaml(made.eval_case)}
 
     branch = BRANCH.format(id=made.proposal_id)
-    opened = _branch_off_default(rt, files, branch, _title(made), _body(made, user), warn)
+    title, body = _title(made), _body(made, user)
+    opened = _branch_off_default(rt, files, branch, title, body, warn, ready)
     if opened is None:  # files() always has the change; kept for the type
         raise CliError("there was nothing to propose", ExitCode.ERROR)
     return {**opened, "path": made.path}
@@ -415,16 +489,28 @@ def revert(rt: Runtime, pid: str, warn: Callable[[str], None]) -> tuple[Proposal
     user = check_owner(rt, made, "revert", warn)
     applied = record.get("applied") or {}
     if applied.get("kind") == "personal":
-        try:
-            PersonalChanges(rt.ws.home).revert(pid, by=user)
-        except LearningApplyError as error:
-            raise CliError(str(error), ExitCode.REFUSED) from None
-        reverted: dict = {"kind": "personal", "paths": applied.get("paths", [])}
+        reverted = revert_personal(rt, pid, applied, user, warn)
     else:
         reverted = revert_shared(rt, made, applied, warn)
     reverted["at"] = _now().isoformat()
     store(rt).save_change(pid, {**record, "reverted": reverted})
     return store(rt).decide(pid, "revert", user, _now()), reverted
+
+
+def revert_personal(
+    rt: Runtime, pid: str, applied: dict, user: str, warn: Callable[[str], None]
+) -> dict:
+    """Zyroflo's undo; when the file changed since (a later learning on it, a hand edit),
+    only this learning's block is taken out, and the person is told (review F2)."""
+    try:
+        rows = PersonalChanges(rt.ws.home).revert(pid, by=user, strip=strip_change)
+    except LearningApplyError as error:
+        raise CliError(str(error), ExitCode.REFUSED) from None
+    for row in rows:
+        if row.get("drifted"):
+            kept = "only its block was taken out" if row.get("only_block") else "it was restored"
+            warn(f"{row['path']} had changed since the learning was applied: {kept}")
+    return {"kind": "personal", "paths": applied.get("paths", [])}
 
 
 def revert_shared(rt: Runtime, made: Draft, applied: dict, warn) -> dict:
@@ -613,12 +699,41 @@ def org_list(rt: Runtime, status: str | None) -> list[dict]:
     ]
 
 
+def _this_repo(rt: Runtime, scope: str, root: str) -> None:
+    """A repo change is drafted, made and undone from a checkout of its own repository only
+    (review F5): elsewhere the diff and the pull request would be built on the wrong files."""
+    wanted = scope.removeprefix("repo:")
+    if root != "repo" or not scope.startswith("repo:") or wanted == "local":
+        return
+    here = rt.repo_key()
+    if here is None or here.casefold() != wanted.casefold():
+        raise CliError(
+            f"this proposal changes {wanted}; this checkout is "
+            f"{here or 'not a checkout of a hosted repository'}",
+            ExitCode.REFUSED,
+            hint=f"run this from a checkout of {wanted}",
+        )
+
+
+def _owner_only(detail, made: Draft, what: str) -> None:
+    """Asked of the control plane before anything is written (review F4): a reader who does
+    not own the proposal changes nothing on their machine or host."""
+    if not detail.may_decide:
+        raise CliError(
+            f"only {made.owner} (the owner of what it changes) may {what} proposal {detail.id}; "
+            "you may endorse it instead",
+            ExitCode.REFUSED,
+            hint=f"`agentic learn endorse {detail.id}` backs it instead",
+        )
+
+
 def org_show(rt: Runtime, pid: str) -> dict:
     detail = _client(rt, lambda c: c.proposal(pid))
     if detail.draft and detail.status in ("applied", "reverted"):
         made = Draft.model_validate(detail.draft)
     else:
         made = _org_draft(rt, detail)
+        _this_repo(rt, detail.scope, made.root)
     return {
         **detail.model_dump(mode="json", exclude={"feedback"}),
         "draft": made.model_dump(mode="json"),
@@ -639,9 +754,12 @@ def org_edit(rt: Runtime, pid: str, kind: str | None, lesson: str | None) -> Dra
 
 def org_approve(rt: Runtime, pid: str, warn: Callable[[str], None]) -> dict:
     """The control plane approves (owner only, audited); the change is then made from this
-    machine and reported back (`applied`, audited)."""
+    machine and reported back (`applied`, audited). An approval whose change was never
+    made resumes, by its owner only."""
     detail = _client(rt, lambda c: c.proposal(pid))
     made = _org_draft(rt, detail)
+    _this_repo(rt, detail.scope, made.root)
+    _owner_only(detail, made, "approve")
     if made.problems:
         raise CliError(
             "this change is not instruction-only: " + "; ".join(made.problems), ExitCode.INVALID
@@ -652,11 +770,14 @@ def org_approve(rt: Runtime, pid: str, warn: Callable[[str], None]) -> dict:
             "open yet",
             ExitCode.REFUSED,
         )
-    if detail.status != "approved":  # an approval whose change was never made resumes
-        draft_json = made.model_dump(mode="json")
-        _client(rt, lambda c: c.decide_proposal(pid, "approve", "", draft_json))
+    draft_json = made.model_dump(mode="json")
+
+    def decided() -> None:
+        if detail.status != "approved":  # an approval whose change was never made resumes
+            _client(rt, lambda c: c.decide_proposal(pid, "approve", "", draft_json))
+
     user = rt.known_user()
-    applied = _apply(rt, made, user, warn)
+    applied = _apply(rt, made, user, warn, decided)
     store(rt).save_change(pid, {"draft": made.model_dump(mode="json"), "applied": applied})
     info = _client(rt, lambda c: c.report_applied(pid, applied))
     return {**info.model_dump(mode="json"), "applied": applied}
@@ -667,13 +788,11 @@ def org_revert(rt: Runtime, pid: str, warn: Callable[[str], None]) -> dict:
     if detail.status != "applied":
         raise CliError(f"a {detail.status} proposal cannot be reverted", ExitCode.REFUSED)
     made = Draft.model_validate(detail.draft)
+    _this_repo(rt, detail.scope, made.root)
+    _owner_only(detail, made, "revert")
     applied = detail.applied_ref or {}
     if applied.get("kind") == "personal":
-        try:
-            PersonalChanges(rt.ws.home).revert(pid, by=rt.known_user())
-        except LearningApplyError as error:
-            raise CliError(str(error), ExitCode.REFUSED) from None
-        reverted: dict = {"kind": "personal", "paths": applied.get("paths", [])}
+        reverted = revert_personal(rt, pid, applied, rt.known_user(), warn)
     else:
         reverted = revert_shared(rt, made, applied, warn)
     reverted["at"] = _now().isoformat()

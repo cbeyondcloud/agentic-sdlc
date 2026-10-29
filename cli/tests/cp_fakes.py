@@ -618,8 +618,8 @@ class FakeControlPlane:
         held = self.learning.get(parts[4])
         if held is None:
             return _problem(404, "not_found", "proposal not found")
-        if len(parts) == 5:
-            return httpx2.Response(200, json=held)
+        if len(parts) == 5:  # `may_decide`: the caller owns it, unless decisions are refused
+            return httpx2.Response(200, json={"may_decide": not self.refuse_decisions, **held})
         action = parts[5]
         body = json.loads(request.content) if request.content else {}
         self.learning_calls.append((action, body))

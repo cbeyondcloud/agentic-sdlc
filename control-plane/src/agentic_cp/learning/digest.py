@@ -1,8 +1,10 @@
 """The learning digest (M3-15, spec §24 "Approve"): the people who may decide a team's pending
 learning proposals are mailed a list of them, through the notifications outbox (M2-07).
 
-It is queued in the transaction that creates a proposal, at most once per person, team and
-day (the outbox's dedupe key), so a busy day is one mail. Who gets it, per proposal (D30):
+It is queued in the transaction that creates a proposal and by the worker's daily pass
+(`digest_job`), at most once per person, team and day (the outbox's dedupe key), so a busy
+day is one mail and a proposal still waiting is mailed again the next day. Who gets it, per
+proposal (D30):
 
   * **personal** - the person whose corrections it holds (its one author);
   * **repo** - the repository's CODEOWNERS maintainers and the team's holders of
@@ -17,9 +19,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime
+from uuid import UUID
 
 from sqlalchemy import and_, select
-from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from agentic.learning.approval import APPROVE_PERMISSION
 from agentic_cp.alerts.sinks import MAX_RECIPIENTS, active_person, people_holding
@@ -27,6 +30,7 @@ from agentic_cp.learning.targets import target_of
 from agentic_cp.notify.outbox import SYSTEM, enqueue
 from agentic_cp.notify.templates import render
 from agentic_cp.tables import learning_proposals, repo_maintainers, users
+from agentic_cp.tenancy.context import tenant_tx
 from agentic_cp.tenancy.tenants import current_tenant
 
 KIND = "learning.digest"
@@ -112,4 +116,23 @@ async def queue_digest(conn: AsyncConnection, team: str, *, clock: Callable[[], 
     return queued
 
 
-__all__ = ["KIND", "deciders", "queue_digest"]
+async def digest_job(
+    engine: AsyncEngine, git, tenant_id: UUID, settings, clock: Callable[[], datetime]
+) -> int:
+    """The worker's per-tenant job (`policy_sync.worker.EXTRA_JOBS`): today's digest for
+    every team with a pending proposal, so a proposal made after the day's mail went out -
+    or one nobody has decided yet - is mailed the next day (review F7). Each person still
+    gets at most one a day (the dedupe key); returns how many mails were queued."""
+    async with tenant_tx(engine, tenant_id) as conn:
+        teams = (
+            await conn.execute(
+                select(learning_proposals.c.team)
+                .where(learning_proposals.c.status == "pending")
+                .distinct()
+                .order_by(learning_proposals.c.team)
+            )
+        ).scalars()
+        return sum([await queue_digest(conn, team, clock=clock) for team in list(teams)])
+
+
+__all__ = ["KIND", "deciders", "digest_job", "queue_digest"]
