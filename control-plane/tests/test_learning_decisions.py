@@ -233,6 +233,11 @@ async def test_propose_from_one_feedback_record(api, dev, tmp_path):
     assert (made.json()["evidence"], made.json()["status"]) == ([fid], "pending")
     again = await api.post("/v1/learning/proposals", dev, {"feedback_id": fid})
     assert again.json()["id"] == made.json()["id"]
+    async with tenant_tx(api.db.app, api.a.id) as conn:  # its owner hears of it too
+        mailed = await conn.execute(
+            select(notifications.c.recipient).where(notifications.c.kind == KIND)
+        )
+        assert list(mailed.scalars()) == ["dev@a.example.test"]
     proposed = await audit_events(api, api.a.id, "learning.proposed")
     assert [r.target for r in proposed] == [f"proposal:{made.json()['id']}"]
 

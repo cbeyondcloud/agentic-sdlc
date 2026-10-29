@@ -50,6 +50,7 @@ from agentic_cp.auth.deps import Caller
 from agentic_cp.auth.tokens import TokenContext
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
 from agentic_cp.learning.api import VIEW, _feedback_query, _info, _viewable_teams
+from agentic_cp.learning.digest import queue_digest
 from agentic_cp.learning.targets import narrowest_of, target_of
 from agentic_cp.rbac.authz import Org, Repo, Team, authorize
 from agentic_cp.tables import feedback, learning_proposals, users
@@ -386,6 +387,7 @@ async def propose_from(body: ProposeFrom, request: Request, ctx: Caller) -> Prop
             ),
             clock=state.clock,
         )
+        await queue_digest(conn, row.team, clock=state.clock)  # its deciders hear of it
         return proposal_info(made, await _owner_email(conn, made))
 
 
