@@ -4,10 +4,11 @@
 #   TOKENLEAN_DIR=/path/to/token-optimisation ./smoke.sh
 #
 # Checks: the control plane is live and ready (database migrated, isolation enforced);
-# Grafana is healthy, both datasources answer, the seven framework dashboards and the
-# gateway's LITE set are provisioned; the gateway answers; and one tagged call through
-# the gateway (mock mode: no provider, no spend) shows up in the tenant's dash_calls view,
-# read through Grafana's datasource as the tenant's reader. HTTP only, engine-independent.
+# Grafana is healthy, both datasources answer, the eight framework dashboards (Executive
+# ROI alone in its own folder) and the gateway's LITE set are provisioned; the gateway
+# answers; and one tagged call through the gateway (mock mode: no provider, no spend) shows
+# up in the tenant's dash_calls view, read through Grafana's datasource as the tenant's
+# reader. HTTP only, engine-independent.
 set -euo pipefail
 umask 077   # the header files below hold credentials
 # shellcheck source=_lib.sh
@@ -68,7 +69,9 @@ for uid in agentic-postgres app-postgres; do
   case "$BODY" in *'"status":"OK"'*) pass "datasource $uid answers" ;; *) fail "datasource $uid answers" "$BODY" ;; esac
 done
 N=$(grafana "$GRAFANA/api/search?tag=agentic&type=dash-db" | count '"uid":"agentic-')
-if [ "$N" = 7 ]; then pass "7 framework dashboards provisioned"; else fail "7 framework dashboards provisioned" "found $N"; fi
+if [ "$N" = 8 ]; then pass "8 framework dashboards provisioned"; else fail "8 framework dashboards provisioned" "found $N"; fi
+N=$(grafana "$GRAFANA/api/search?type=dash-db&query=" | count '"folderTitle":"Agentic Executive"')
+if [ "$N" = 1 ]; then pass "Executive ROI in its own folder"; else fail "Executive ROI in its own folder" "found $N"; fi
 N=$(grafana "$GRAFANA/api/search?type=dash-db&query=" | count '"folderTitle":"Gateway"')
 EXPECTED=$(echo "$ORG_LITE_DASHBOARDS" | wc -w | tr -d ' ')
 if [ "$N" = "$EXPECTED" ]; then pass "$EXPECTED gateway LITE dashboards provisioned"; else fail "gateway LITE dashboards provisioned" "found $N of $EXPECTED"; fi

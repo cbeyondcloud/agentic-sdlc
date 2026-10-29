@@ -210,7 +210,8 @@ tenant filter is part of the SQL `postgres_fdw` sends).
   tenant's rows only, whatever it sets the setting to. A role a DBA made needs
   `GRANT <role> TO <owner> WITH ADMIN OPTION` first. Each tenant's Grafana organisation
   provisions the datasource uid `agentic-postgres` with its own reader, so every tenant uses
-  the same dashboard JSON (`agentic_cp/dashboards/grafana`, rendered from `catalog.py`).
+  the same dashboard JSON (`agentic_cp/dashboards/grafana` and `grafana-executive`, rendered
+  from `catalog.py`).
 - **One-time DBA steps** (a superuser, once per database): `CREATE EXTENSION postgres_fdw`,
   `GRANT USAGE ON FOREIGN DATA WRAPPER postgres_fdw TO <owner>` and
   `GRANT SET ON PARAMETER app.tenant_id TO <owner>`. The owner role must be neither a
@@ -224,6 +225,13 @@ tenant filter is part of the SQL `postgres_fdw` sends).
   show it next to the unattributed cost and raise `data_quality_alert` above 0.5 %.
   `dash_roi_month` holds the ROI measures; the ones without a source yet (PR measures, DORA,
   gateway savings) are NULL.
+- **Who sees whose cost.** The Executive ROI dashboard shows each person's cost (a row per
+  run owner). Its JSON is in `agentic_cp/dashboards/grafana-executive`, apart from the
+  shared dashboards, and is provisioned into its own Grafana folder, *Agentic Executive*.
+  The reader role can read every `dash_*` view, so the database does not limit who sees
+  that folder: Grafana does. Before you give other people Grafana access, set the folder's
+  permissions so only holders of `dashboard.view.org` (the `exec-viewer` and `auditor`
+  roles, org admins) can view it. The chargeback route checks that permission itself.
 - **Upgrades.** `migrate` points contract views that a migration reset back at the gateway
   tables already imported (no password needed), and `/readyz` reports `gateway_linked`.
 - `deploy/org-local` runs all of it on one machine (control plane, Postgres, Grafana and

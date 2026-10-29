@@ -86,27 +86,36 @@ def _openapi(args: argparse.Namespace) -> int:
 
 
 def _dashboards(args: argparse.Namespace) -> int:
-    """Write or compare the Grafana dashboards' JSON (M2-38) with the catalog."""
-    from agentic_cp.dashboards.catalog import GRAFANA_DIR, rendered_files
+    """Write or compare the Grafana dashboards' JSON (M2-38) with the catalog: one directory
+    per Grafana folder (`GRAFANA_DIRS`, review F3)."""
+    from agentic_cp.dashboards.catalog import GRAFANA_DIRS, rendered_files
 
-    files = rendered_files()
     if args.write:
-        GRAFANA_DIR.mkdir(exist_ok=True)
-        for stale in GRAFANA_DIR.glob("*.json"):
-            if stale.name not in files:
-                stale.unlink()
-        for name, text in files.items():
-            (GRAFANA_DIR / name).write_bytes(text.encode("utf-8"))
-        print(f"wrote {len(files)} dashboards to {GRAFANA_DIR}")
+        count = 0
+        for directory in GRAFANA_DIRS:
+            files = rendered_files(directory)
+            directory.mkdir(exist_ok=True)
+            for old in directory.glob("*.json"):
+                if old.name not in files:
+                    old.unlink()
+            for name, body in files.items():
+                (directory / name).write_bytes(body.encode("utf-8"))
+            count += len(files)
+        print(f"wrote {count} dashboards to {', '.join(str(d) for d in GRAFANA_DIRS)}")
         return 0
-    present = {path.name for path in GRAFANA_DIR.glob("*.json")}
-    stale = sorted(
-        name
-        for name in present | set(files)
-        if name not in files
-        or name not in present
-        or (GRAFANA_DIR / name).read_bytes().decode("utf-8").replace("\r\n", "\n") != files[name]
-    )
+    stale: list[str] = []
+    count = 0
+    for directory in GRAFANA_DIRS:
+        files = rendered_files(directory)
+        count += len(files)
+        present = {path.name for path in directory.glob("*.json")}
+        stale += sorted(
+            f"{directory.name}/{name}"
+            for name in present | set(files)
+            if name not in files
+            or name not in present
+            or (directory / name).read_bytes().decode("utf-8").replace("\r\n", "\n") != files[name]
+        )
     if stale:
         print(
             f"stale dashboards: {', '.join(stale)}: run "
@@ -114,7 +123,7 @@ def _dashboards(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    print(f"{len(files)} dashboards are current")
+    print(f"{count} dashboards are current")
     return 0
 
 

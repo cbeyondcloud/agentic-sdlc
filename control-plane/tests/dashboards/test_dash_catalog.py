@@ -10,7 +10,10 @@ from agentic_cp.dashboards.catalog import (
     DASHBOARDS,
     DATASOURCE,
     GRAFANA_DIR,
+    GRAFANA_DIRS,
+    GRAFANA_EXECUTIVE_DIR,
     MACROS,
+    directory_of,
     render,
     rendered_files,
 )
@@ -64,14 +67,31 @@ def test_no_vendor_names_in_titles():
 
 
 def test_committed_json_is_current():
-    files = rendered_files()
-    assert set(files) == {f"{d.uid.removeprefix('agentic-')}.json" for d in DASHBOARDS}
-    committed = {p.name for p in GRAFANA_DIR.glob("*.json")}
-    assert committed == set(files), "run `uv run python -m agentic_cp dashboards --write`"
-    for name, text in files.items():
-        on_disk = (GRAFANA_DIR / name).read_bytes().decode("utf-8").replace("\r\n", "\n")
-        assert on_disk == text, f"{name} is stale: run `python -m agentic_cp dashboards --write`"
-        json.loads(text)
+    every: set[str] = set()
+    for directory in GRAFANA_DIRS:
+        files = rendered_files(directory)
+        every |= set(files)
+        committed = {p.name for p in directory.glob("*.json")}
+        assert committed == set(files), "run `uv run python -m agentic_cp dashboards --write`"
+        for name, text in files.items():
+            on_disk = (directory / name).read_bytes().decode("utf-8").replace("\r\n", "\n")
+            assert on_disk == text, (
+                f"{name} is stale: run `python -m agentic_cp dashboards --write`"
+            )
+            json.loads(text)
+    assert every == {f"{d.uid.removeprefix('agentic-')}.json" for d in DASHBOARDS}
+
+
+def test_per_person_cost_has_its_own_directory():
+    """Review F3: Executive ROI shows each person's cost, so its JSON lives apart from the
+    other dashboards and is provisioned into its own Grafana folder, which an operator limits
+    to the org viewers; the shared folder never holds it."""
+    assert [d.uid for d in DASHBOARDS if directory_of(d) == GRAFANA_EXECUTIVE_DIR] == [
+        "agentic-executive-roi"
+    ]
+    assert not (GRAFANA_DIR / "executive-roi.json").exists()
+    assert GRAFANA_EXECUTIVE_DIR.parent == GRAFANA_DIR.parent  # a sibling, not a subfolder
+    assert set(GRAFANA_DIRS) == {GRAFANA_DIR, GRAFANA_EXECUTIVE_DIR}
 
 
 def test_panels_use_only_known_macros_and_their_variables():

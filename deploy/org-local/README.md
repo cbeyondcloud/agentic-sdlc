@@ -5,10 +5,14 @@ the eight framework dashboards (Executive ROI among them, M3-01), next to the ga
 (TokenLean) LITE stack in mock mode, so nothing calls a model provider and nothing is
 spent. Windows, macOS and Linux; Docker or Podman.
 
+Executive ROI shows each person's cost, so it has its own folder, *Agentic Executive*. On
+this stack only the Grafana admin signs in. If you add Grafana users, first limit that
+folder's permissions to the people who hold `dashboard.view.org` (exec-viewer, auditor).
+
 | Service | What | Address |
 |---|---|---|
 | `control-plane` | `python -m agentic_cp serve` | http://127.0.0.1:8280 |
-| `grafana` | official Grafana image, provisioned with the framework dashboards (folder *Agentic*) and the gateway's LITE set (folder *Gateway*) | http://127.0.0.1:3300 |
+| `grafana` | official Grafana image, provisioned with the framework dashboards (folder *Agentic*; Executive ROI alone in folder *Agentic Executive*) and the gateway's LITE set (folder *Gateway*) | http://127.0.0.1:3300 |
 | `cp-postgres` | the control plane's database (Postgres 17, `postgres_fdw`) | stack network only |
 | `cp-init` | one-shot: migrate, runtime role, tenant `local`, gateway usage link, Grafana reader role | - |
 | LITE stack | the gateway proxy, its Postgres and Redis, and a mock provider, started by TokenLean's own `deploy/lite/local/up` | http://127.0.0.1:4100 |

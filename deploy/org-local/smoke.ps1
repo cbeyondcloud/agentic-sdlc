@@ -6,10 +6,11 @@
   $env:TOKENLEAN_DIR = 'D:\token-optimisation'; .\smoke.ps1
 
   Checks: the control plane is live and ready (database migrated, isolation enforced);
-  Grafana is healthy, both datasources answer, the seven framework dashboards and the
-  gateway's LITE set are provisioned; the gateway answers; and one tagged call through the
-  gateway (mock mode: no provider, no spend) shows up in the tenant's dash_calls view, read
-  through Grafana's datasource as the tenant's reader. HTTP only, engine-independent.
+  Grafana is healthy, both datasources answer, the eight framework dashboards (Executive
+  ROI alone in its own folder) and the gateway's LITE set are provisioned; the gateway
+  answers; and one tagged call through the gateway (mock mode: no provider, no spend) shows
+  up in the tenant's dash_calls view, read through Grafana's datasource as the tenant's
+  reader. HTTP only, engine-independent.
 #>
 . (Join-Path $PSScriptRoot '_lib.ps1')
 
@@ -52,7 +53,9 @@ foreach ($uid in @('agentic-postgres', 'app-postgres')) {
     if ($body.Contains('"status":"OK"')) { Pass "datasource $uid answers" } else { Fail "datasource $uid answers" $body }
 }
 $n = Count (Invoke-OrgHttp "$grafana/api/search?tag=agentic&type=dash-db" $grafanaAuth) '"uid":"agentic-'
-if ($n -eq 7) { Pass '7 framework dashboards provisioned' } else { Fail '7 framework dashboards provisioned' "found $n" }
+if ($n -eq 8) { Pass '8 framework dashboards provisioned' } else { Fail '8 framework dashboards provisioned' "found $n" }
+$n = Count (Invoke-OrgHttp "$grafana/api/search?type=dash-db&query=" $grafanaAuth) '"folderTitle":"Agentic Executive"'
+if ($n -eq 1) { Pass 'Executive ROI in its own folder' } else { Fail 'Executive ROI in its own folder' "found $n" }
 $n = Count (Invoke-OrgHttp "$grafana/api/search?type=dash-db&query=" $grafanaAuth) '"folderTitle":"Gateway"'
 $expected = $OrgLiteDashboards.Count
 if ($n -eq $expected) { Pass "$expected gateway LITE dashboards provisioned" } else { Fail 'gateway LITE dashboards provisioned' "found $n of $expected" }

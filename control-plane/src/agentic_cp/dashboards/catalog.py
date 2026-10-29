@@ -1,11 +1,15 @@
 """The Grafana dashboards (M2-38, spec §14.4; M3-01 executive ROI) as data, rendered to
 Grafana JSON.
 
-The committed files in `grafana/` equal `rendered_files()` (`python -m agentic_cp dashboards
---check`, and a test). Every panel reads the `dash_*` views through one datasource uid,
-`agentic-postgres`: each tenant's Grafana organisation provisions that uid with the tenant's
-reader role (`db dashboard-role`), so every tenant gets the same JSON and the database keeps
-the tenants apart (ruling D1).
+The committed files in `grafana/` and `grafana-executive/` equal `rendered_files()` of each
+(`python -m agentic_cp dashboards --check`, and a test). `grafana-executive/` holds the
+dashboards that show each person's cost; it is provisioned into its own Grafana folder so
+folder permissions can limit it to the org viewers (review F3).
+
+Every panel reads the `dash_*` views through one datasource uid, `agentic-postgres`: each
+tenant's Grafana organisation provisions that uid with the tenant's reader role (`db
+dashboard-role`), so every tenant gets the same JSON and the database keeps the tenants
+apart (ruling D1).
 
 Panel SQL may use Grafana's `$__timeFilter(col)`, `$__timeGroupAlias(col, '1d')`,
 `$__timeFrom()`, `$__timeTo()` and the dashboard's own variables (`IN ($team)` for a
@@ -23,6 +27,11 @@ from typing import Literal
 from agentic_cp.dashboards.views import FACTORS, driver_sql
 
 GRAFANA_DIR = Path(__file__).resolve().parent / "grafana"
+#: Dashboards that show each person's cost (review F3), provisioned into their own Grafana
+#: folder ("Agentic Executive"). A sibling of `GRAFANA_DIR`, never inside it: a Grafana file
+#: provider reads its path recursively, so a subfolder would land in the shared folder too.
+GRAFANA_EXECUTIVE_DIR = GRAFANA_DIR.parent / "grafana-executive"
+GRAFANA_DIRS = (GRAFANA_DIR, GRAFANA_EXECUTIVE_DIR)
 DATASOURCE = {"type": "grafana-postgresql-datasource", "uid": "agentic-postgres"}
 MACROS = ("timeFilter", "timeGroupAlias", "timeFrom", "timeTo")
 UNATTRIBUTED = "(unattributed)"
@@ -64,6 +73,9 @@ class Dashboard:
     panels: tuple[Panel, ...]
     variables: tuple[Variable, ...] = field(default_factory=tuple)
     time_from: str = "now-30d"
+    per_person_cost: bool = False
+    """Shows each person's cost (review F3): committed in `GRAFANA_EXECUTIVE_DIR` and
+    provisioned into its own folder, which an operator limits to the org viewers."""
 
 
 def stat(
@@ -527,6 +539,7 @@ EXECUTIVE_ROI = Dashboard(
     ),
     variables=(MONTH, COST_TEAM, PIPELINE, AGENT, TARGET_USERS),
     time_from="now-90d",
+    per_person_cost=True,
     panels=(
         stat(
             "Total cost",
@@ -738,10 +751,17 @@ def render(dashboard: Dashboard) -> dict:
     }
 
 
-def rendered_files() -> dict[str, str]:
-    """File name -> JSON text (sorted keys, two-space indent, LF, final newline)."""
+def directory_of(dashboard: Dashboard) -> Path:
+    """Where the dashboard's JSON is committed: one directory per Grafana folder."""
+    return GRAFANA_EXECUTIVE_DIR if dashboard.per_person_cost else GRAFANA_DIR
+
+
+def rendered_files(directory: Path = GRAFANA_DIR) -> dict[str, str]:
+    """File name -> JSON text (sorted keys, two-space indent, LF, final newline) of the
+    dashboards committed in `directory`."""
     return {
         f"{d.uid.removeprefix('agentic-')}.json": json.dumps(render(d), indent=2, sort_keys=True)
         + "\n"
         for d in DASHBOARDS
+        if directory_of(d) == directory
     }

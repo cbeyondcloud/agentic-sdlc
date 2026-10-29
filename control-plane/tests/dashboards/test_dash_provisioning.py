@@ -12,7 +12,12 @@ from grafana_macros import MacroError, TimeRange, expand
 from pg import REPO_ROOT
 
 from agentic.yamlio import load_yaml
-from agentic_cp.dashboards.catalog import DASHBOARDS, GRAFANA_DIR
+from agentic_cp.dashboards.catalog import (
+    DASHBOARDS,
+    GRAFANA_DIR,
+    GRAFANA_DIRS,
+    GRAFANA_EXECUTIVE_DIR,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -47,13 +52,35 @@ def test_providers_load_every_dashboard():
     paths = {p["name"]: p["options"]["path"] for p in providers}
     assert paths == {
         "agentic": "/var/lib/grafana/dashboards/agentic",
+        "agentic-executive": "/var/lib/grafana/dashboards/agentic-executive",
         "gateway": "/var/lib/grafana/dashboards/gateway",
     }
-    files = {path.name for path in GRAFANA_DIR.glob("*.json")}
+    files = {path.name for directory in GRAFANA_DIRS for path in directory.glob("*.json")}
     assert files == {f"{d.uid.removeprefix('agentic-')}.json" for d in DASHBOARDS}
-    for name in files:
-        loaded = json.loads((GRAFANA_DIR / name).read_text(encoding="utf-8"))
-        assert loaded["uid"] and loaded["panels"], name
+    for directory in GRAFANA_DIRS:
+        for path in directory.glob("*.json"):
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            assert loaded["uid"] and loaded["panels"], path.name
+
+
+def test_per_person_cost_is_provisioned_into_its_own_folder():
+    """Review F3: Executive ROI (each person's cost) is mounted and provisioned on its own,
+    into a folder of its own, so Grafana folder permissions can limit it to org viewers. A
+    provider reads its path recursively, so the directories are siblings, never nested."""
+    providers = {
+        p["name"]: p for p in _yaml(PROVISIONING / "dashboards" / "agentic.yaml")["providers"]
+    }
+    folders = [p["folder"] for p in providers.values()]
+    assert len(set(folders)) == len(folders)
+    assert providers["agentic-executive"]["folder"] == "Agentic Executive"
+    compose = _yaml(REPO_ROOT / "deploy" / "org-local" / "docker-compose.yml")
+    mounts = {}
+    for volume in compose["services"]["grafana"]["volumes"]:
+        source, target, *_ = volume.split(":")
+        mounts[target] = source
+    root = "../../control-plane/src/agentic_cp/dashboards"
+    for name, directory in (("agentic", GRAFANA_DIR), ("agentic-executive", GRAFANA_EXECUTIVE_DIR)):
+        assert mounts[providers[name]["options"]["path"]] == f"{root}/{directory.name}"
 
 
 def test_every_datasource_uid_is_provisioned():
@@ -63,7 +90,7 @@ def test_every_datasource_uid_is_provisioned():
         for source in _yaml(path)["datasources"]
     }
     assert provisioned == {"agentic-postgres", "app-postgres"}
-    for path in GRAFANA_DIR.glob("*.json"):
+    for path in (p for directory in GRAFANA_DIRS for p in directory.glob("*.json")):
         assert _uids_in(json.loads(path.read_text(encoding="utf-8"))) == {"agentic-postgres"}
 
 
