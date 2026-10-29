@@ -482,8 +482,9 @@ def change_since_base(target: Path, run_id: str) -> list[tuple[str, Path, str]]:
     """Each live tree's change so far: (component, tree, plain unified diff from the commit
     the tree was made from to its HEAD) - what a reviewer of the run reads (M2-48)."""
     found = []
+    accepted = kept_override(target, run_id) or {}  # in place, with its override (M2-61)
     for name, tree in sorted(RunWorktrees(target, run_id).trees().items()):
-        if tree.mode != "worktree" or not tree.base:
+        if (tree.mode != "worktree" and name not in accepted) or not tree.base:
             continue
         found.append((name, tree.path, _git(tree.path, *_PLAIN_DIFF, tree.base, "HEAD")))
     return found

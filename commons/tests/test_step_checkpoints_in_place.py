@@ -9,7 +9,7 @@ from in_place_support import ALLOW, ROLLBACKS, RUN, git, make_in_place_repo, ope
 
 from sdlc_commons import worktrees
 from sdlc_commons.commit_override import CommitOverride, OverrideError
-from sdlc_commons.worktrees import StepCheckpoints, WorktreeError
+from sdlc_commons.worktrees import StepCheckpoints, WorktreeError, change_since_base
 
 #: The git subcommands that write: none of them may run on an in-place component.
 GIT_WRITES = {"commit", "reset", "clean", "add", "push", "worktree", "checkout", "stash"}
@@ -74,6 +74,17 @@ def test_a_code_step_checkpoints_and_rolls_back_through_the_override(repo, git_c
 
     assert tool_calls(repo) == ["commit", "commit", "restore"]
     assert written(git_calls) == []  # raw git is never run on it
+
+
+def test_the_reviewer_reads_the_in_place_change_since_the_runs_base(repo):  # M2-48 pre-pass
+    assert change_since_base(repo, RUN) == []  # no override accepted yet: nothing in place
+    steps = checkpoints(repo)
+    steps.prepare()
+    steps.begin(fresh=True)
+    (repo / "app.py").write_text("x = 2\n", encoding="utf-8")
+    steps.finish("build: step 1")
+    [(name, where, diff)] = change_since_base(repo, RUN)
+    assert (name, where) == ("repo", repo) and "+x = 2" in diff
 
 
 def test_a_fresh_attempt_discards_through_the_rollback_command(repo, git_calls):
