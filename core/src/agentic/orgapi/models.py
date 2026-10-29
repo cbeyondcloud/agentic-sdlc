@@ -10,7 +10,14 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+)
 
 from agentic.learning.records import AGENT_NAME, Attribution
 from agentic.orgapi.rbac import EffectivePermissions
@@ -328,6 +335,29 @@ class RunSummary(BaseModel):
     head: ChainHead
     opened_at: datetime
     last_event_at: datetime | None = None
+    last_heartbeat_at: datetime | None = None  # M3-07, by the server's clock
+    waiting: bool = False  # for a person or a pause switch: never stale then
+
+
+class HeartbeatRequest(RequestModel):
+    """`POST /v1/runs/{run_id}/heartbeat` (M3-07): the CLI driving the run is alive.
+    `beat_at` is when the beat was taken and `sent_at` when it was sent, both by the
+    client's clock: the server counts the beat at its own now minus their difference, so a
+    beat delivered late (or a client clock that is off) is judged by its true age. `state`
+    `waiting` says the run stopped to wait for a person or a pause switch."""
+
+    beat_at: AwareDatetime
+    sent_at: AwareDatetime
+    state: Literal["running", "waiting"] = "running"
+
+
+class HeartbeatResult(BaseModel):
+    """The run's status after the beat; `counted` is False for a beat too old to be a sign
+    of life (or for a finished run); `revived` is True when it brought a stale run back."""
+
+    status: str
+    counted: bool
+    revived: bool = False
 
 
 ScopeKind = Literal["tenant", "team", "user", "repo", "pipeline", "agent", "model", "backend"]
@@ -365,7 +395,11 @@ class KillState(BaseModel):
 
     switches: list[KillSwitchInfo] = Field(default_factory=list)
     checked_at: datetime
-    ttl_seconds: int
+    ttl_seconds: int = Field(
+        description="The longest a CLI may cache this answer. The CLI caches for the "
+        "smaller of this and its own 10 s, so a value above 10 never lengthens the "
+        "propagation of a switch; a smaller one shortens it."
+    )
 
 
 class RunRegistration(RequestModel):

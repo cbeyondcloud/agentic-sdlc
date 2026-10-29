@@ -776,6 +776,61 @@
         "title": "HandlesUpdate",
         "type": "object"
       },
+      "HeartbeatRequest": {
+        "additionalProperties": false,
+        "description": "`POST /v1/runs/{run_id}/heartbeat` (M3-07): the CLI driving the run is alive.\n`beat_at` is when the beat was taken and `sent_at` when it was sent, both by the\nclient's clock: the server counts the beat at its own now minus their difference, so a\nbeat delivered late (or a client clock that is off) is judged by its true age. `state`\n`waiting` says the run stopped to wait for a person or a pause switch.",
+        "properties": {
+          "beat_at": {
+            "format": "date-time",
+            "title": "Beat At",
+            "type": "string"
+          },
+          "sent_at": {
+            "format": "date-time",
+            "title": "Sent At",
+            "type": "string"
+          },
+          "state": {
+            "default": "running",
+            "enum": [
+              "running",
+              "waiting"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "beat_at",
+          "sent_at"
+        ],
+        "title": "HeartbeatRequest",
+        "type": "object"
+      },
+      "HeartbeatResult": {
+        "description": "The run's status after the beat; `counted` is False for a beat too old to be a sign\nof life (or for a finished run); `revived` is True when it brought a stale run back.",
+        "properties": {
+          "counted": {
+            "title": "Counted",
+            "type": "boolean"
+          },
+          "revived": {
+            "default": false,
+            "title": "Revived",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "counted"
+        ],
+        "title": "HeartbeatResult",
+        "type": "object"
+      },
       "ImportRow": {
         "description": "One CSV row's outcome: `add`, `unchanged` or `error` (with `error` saying why).\n`line` is the row's first line in the file (1 is the header).",
         "properties": {
@@ -1035,6 +1090,7 @@
             "type": "array"
           },
           "ttl_seconds": {
+            "description": "The longest a CLI may cache this answer. The CLI caches for the smaller of this and its own 10 s, so a value above 10 never lengthens the propagation of a switch; a smaller one shortens it.",
             "title": "Ttl Seconds",
             "type": "integer"
           }
@@ -2858,6 +2914,18 @@
             ],
             "title": "Last Event At"
           },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
           "opened_at": {
             "format": "date-time",
             "title": "Opened At",
@@ -2886,6 +2954,11 @@
           "team": {
             "title": "Team",
             "type": "string"
+          },
+          "waiting": {
+            "default": false,
+            "title": "Waiting",
+            "type": "boolean"
           }
         },
         "required": [
@@ -6000,6 +6073,65 @@
         "summary": "Ingest",
         "tags": [
           "learning"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/heartbeat": {
+      "post": {
+        "description": "The CLI driving the run is alive (M3-07): from the run's starter or a holder of\n`run.cancel.any` in its team. A beat too old to be a sign of life is not counted and\nnever revives a stale run.",
+        "operationId": "heartbeat_v1_runs__run_id__heartbeat_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HeartbeatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeartbeatResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Heartbeat",
+        "tags": [
+          "runs"
         ]
       }
     },

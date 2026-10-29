@@ -12,6 +12,8 @@ from agentic.orgapi import (
     API_PREFIX,
     CLI_VERSION_HEADER,
     ChainHead,
+    HeartbeatRequest,
+    HeartbeatResult,
     IngestRequest,
     IngestResult,
     RunPreflight,
@@ -20,6 +22,7 @@ from agentic.orgapi import (
 )
 from agentic_cp.auth.deps import Caller
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
+from agentic_cp.ingest.health import record_heartbeat
 from agentic_cp.ingest.register import register_run, require_cli_version
 from agentic_cp.ingest.store import AUDITED, Unaudited, audit_rejection, ingest_batch
 from agentic_cp.rbac.authz import Team, authorize
@@ -137,7 +140,28 @@ async def get_run(run_id: str, request: Request, ctx: Caller) -> RunSummary:
         head=ChainHead(seq=row.head_seq, hash=row.head_hash),
         opened_at=row.opened_at,
         last_event_at=row.last_event_at,
+        last_heartbeat_at=row.last_heartbeat_at,
+        waiting=row.waiting,
     )
+
+
+@router.post("/{run_id}/heartbeat")
+async def heartbeat(
+    run_id: str, body: HeartbeatRequest, request: Request, ctx: Caller
+) -> HeartbeatResult:
+    """The CLI driving the run is alive (M3-07): from the run's starter or a holder of
+    `run.cancel.any` in its team. A beat too old to be a sign of life is not counted and
+    never revives a stale run."""
+    state = request.app.state
+    async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+        return await record_heartbeat(
+            conn,
+            ctx,
+            _checked_run_id(run_id),
+            body,
+            cache=state.enforcers,
+            clock=state.clock,
+        )
 
 
 @router.get("/{run_id}/events")

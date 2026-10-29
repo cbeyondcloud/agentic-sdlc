@@ -283,7 +283,13 @@ runs = Table(
     # the run budget sent at registration and the spend ingested so far (M2-16)
     Column("budget_usd", Numeric, nullable=True),
     Column("spent_usd", Numeric, nullable=False, server_default="0"),
+    # run health (M3-07): the last counted heartbeat, by the server's clock; whether the
+    # run waits for a person or a pause switch (never a zombie then); when it went stale
+    Column("last_heartbeat_at", DateTime(timezone=True), nullable=True),
+    Column("waiting", Boolean, nullable=False, server_default="false"),
+    Column("stale_at", DateTime(timezone=True), nullable=True),
     ForeignKeyConstraint(["tenant_id", "started_by"], ["users.tenant_id", "users.id"]),
+    Index("runs_tenant_id_status_idx", "tenant_id", "status"),
 )
 
 #: Each run's chained events exactly as received (insert-only evidence; `entry` is the

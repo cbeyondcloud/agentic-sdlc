@@ -98,12 +98,27 @@ class StampingRecorder:
 
     def __init__(self, inner, activity: SkillActivity) -> None:
         self.inner, self.activity = inner, activity
+        self._next_ids: dict[str, str] = {}
 
     @property
     def run_dir(self) -> Path:
         return self.inner.run_dir
 
+    def stamp_next(self, ids: dict[str, str]) -> None:
+        """Declared ledger ids for the next event recorded, whatever it is (a policy change
+        on resume, DF-697): it carries them, and its step says where."""
+        self._next_ids.update(ids)
+
     def record(self, event: str, phase: str = "", **fields: object) -> object:
+        if self._next_ids:
+            given = fields.pop("ext_ids", None)
+            ext_ids = {**(given if isinstance(given, dict) else {}), **self._next_ids}
+            entry = self._record(event, phase, ext_ids=ext_ids, **fields)
+            self._next_ids = {}  # once it is chained: a refused event keeps them for the next
+            return entry
+        return self._record(event, phase, **fields)
+
+    def _record(self, event: str, phase: str, **fields: object) -> object:
         if event == "step_finished" and (skills := self.activity.take()):
             stamped = skills[:MAX_PER_EVENT]
             if left := skills[MAX_PER_EVENT:]:  # still in the audit log, named here

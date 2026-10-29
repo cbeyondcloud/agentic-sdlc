@@ -3,7 +3,7 @@ read, JSON (one document, or JSON Lines while following), and a follow that stop
 the run stops running. The runs and log files are written directly; no model is called."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -12,6 +12,7 @@ from agentic.engine.state import Cursor, RunState, RunStore
 from agentic.telemetry.logs import LogTail
 from agentic_cli.commands import runs
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.heartbeat import Heartbeat
 from agentic_cli.workspace import RUNS
 
 SECRET = "acme-" + "planted-secret-0042"  # gitleaks:allow (not a real key)
@@ -184,3 +185,60 @@ def test_a_half_written_line_of_a_running_run_is_not_shown_as_an_error(workspace
     assert [r["message"] for r in records] == ["whole"]
     save_run(workspace, "r-run", "failed")  # it stopped there: now the line is shown
     assert len(cli("--json", "logs", "r-run").json()) == 2
+
+
+# ── a run whose process died (M3-07: DF-278, DF-282) ─────────────────────────
+
+
+def beat(run_dir: Path, *, ago: timedelta) -> None:
+    """The run's last heartbeat, taken `ago` (a beat a minute: stale after 185 s)."""
+    taken = datetime.now(UTC) - ago
+    Heartbeat(run_dir, run_dir.name, interval_s=60, wall=lambda: taken).beat()
+
+
+def half_line(run_dir: Path) -> None:
+    with (run_dir / "logs" / "build-1.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write('{"at": "2026-10-21T10:00:01')  # the crash cut the record short
+
+
+def test_follow_stops_on_a_running_run_whose_heartbeat_went_stale(workspace, cli, no_sleep):
+    """DF-278: a run whose process died stays `running`; its heartbeat says so, and the
+    follow reads everything (the cut-off last line too) and exits 1 with what to do."""
+    run_dir = save_run(workspace, "r-dead", "running")
+    log(run_dir, "build", 1, "last whole record")
+    half_line(run_dir)
+    beat(run_dir, ago=timedelta(minutes=10))
+    result = cli("--json", "logs", "r-dead", "--follow")
+    assert result.code == ExitCode.ERROR, result.err
+    lines = [json.loads(line) for line in result.out.splitlines()]
+    shown = sorted(r["message"] for r in lines)  # the cut-off line has no time: it sorts first
+    assert shown == ["build-1.jsonl:2: not JSON", "last whole record"]
+    assert "no heartbeat for 10 min" in result.err and "agentic resume r-dead" in result.err
+
+
+def test_follow_keeps_following_a_run_with_a_fresh_heartbeat(workspace, cli, no_sleep):
+    run_dir = save_run(workspace, "r-alive", "running")
+    beat(run_dir, ago=timedelta(seconds=30))
+    no_sleep.append(lambda: save_run(workspace, "r-alive", "completed"))
+    assert cli("logs", "r-alive", "--follow").code == ExitCode.OK
+    assert no_sleep == []  # it followed until the run finished
+
+
+def test_plain_logs_says_how_much_of_an_unfinished_line_it_held_back(workspace, cli):
+    """DF-282: the held-back line is usually the best evidence of a crash; say it is there."""
+    run_dir = save_run(workspace, "r-held", "running")
+    log(run_dir, "build", 1, "whole")
+    half_line(run_dir)
+    result = cli("--json", "logs", "r-held")
+    assert [r["message"] for r in result.json()] == ["whole"]
+    assert "27 bytes of an unfinished last line are not shown" in result.err
+
+
+def test_plain_logs_of_a_dead_running_run_shows_the_cut_off_line(workspace, cli):
+    run_dir = save_run(workspace, "r-cut", "running")
+    log(run_dir, "build", 1, "whole")
+    half_line(run_dir)
+    beat(run_dir, ago=timedelta(hours=2))
+    result = cli("--json", "logs", "r-cut")
+    assert len(result.json()) == 2
+    assert "no heartbeat for 120 min" in result.err

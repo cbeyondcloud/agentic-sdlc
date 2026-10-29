@@ -32,6 +32,7 @@ import os
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated
@@ -50,12 +51,14 @@ from agentic_cli.driving import (
     drive,
     engine_errors,
     exit_code_for,
+    show_policy_change,
     show_state,
     spent,
     summary,
 )
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
+from agentic_cli.heartbeat import stale_for
 from agentic_cli.jira import IssueRun, jira_input
 from agentic_cli.org_preflight import org_checks, plan_section
 from agentic_cli.output import Output
@@ -156,12 +159,13 @@ def register(app: typer.Typer) -> None:
         )
         if issue is not None:
             issue.start(out, jira_transition)
-        with sinks_reported(out, rt):
+        with sinks_reported(out, rt), rt.heartbeat(run_id) as beats:
             state = drive(
                 rt.redact(gateway),
                 rt.store.path(run_id).parent,
                 lambda: engine.start(pipeline, given, starter, run_id),
             )
+            beats.ended(state.status)
         extra = None
         if issue is not None:  # once the run stops running; never fails it
             folder = rt.store.path(run_id).parent
@@ -208,14 +212,14 @@ def register(app: typer.Typer) -> None:
             )
         rt = Runtime(Workspace.load())
         state = _load(rt, run_id)
-        rt.check_same_policy(state)
+        show_policy_change(out, run_id, rt.check_same_policy(state))
         decisions: dict[str, bool | str] | None = None
         if allow or deny:
             decisions = {call: True for call in allow or []} | {call: False for call in deny or []}
         engine = rt.engine(regime=state.regime)
         extra = _usd(extra_budget, "--extra-budget") or Decimal(0)
         who = rt.user if skip else None  # a person's decision: the signed-in one in org mode
-        with sinks_reported(out, rt):
+        with sinks_reported(out, rt), rt.heartbeat(run_id) as beats:
             state = drive(
                 rt.redact(rt.gateway()),
                 rt.store.path(run_id).parent,
@@ -229,6 +233,7 @@ def register(app: typer.Typer) -> None:
                     self_approval=self_approval_refusal,
                 ),
             )
+            beats.ended(state.status)
         _finish(out, state, rt)
 
     @app.command("status")
@@ -288,15 +293,27 @@ def register(app: typer.Typer) -> None:
         if level is not None and level.lower() not in LEVELS:
             raise CliError(f"--level is one of {', '.join(LEVELS)}", ExitCode.USAGE)
         rt = Runtime(Workspace.load())
+        run_dir = rt.store.path(run_id).parent
         running = _load(rt, run_id).status == "running"
+        silent = stale_for(run_dir) if running else None  # its process died (DF-278)
         redact = _log_redactor(rt)
-        tail = LogTail(rt.store.path(run_id).parent, step, level)
+        tail = LogTail(run_dir, step, level)
         if follow:
             _follow(out, rt, run_id, tail, redact)
             return
-        # a running step's last line may be half written: show it once the run stopped
-        records = [redact_record(r, redact) for r in tail.poll(final=not running)]
+        # a running step's last line may be half written: show it once the run stopped,
+        # or once its heartbeat says nothing will finish it
+        final = not running or silent is not None
+        records = [redact_record(r, redact) for r in tail.poll(final=final)]
         out.result(records, lambda c: c.print(render_logs(records), markup=False, end=""))
+        if silent is not None:
+            _warn(out, _dead(run_id, silent) + f": `agentic resume {run_id}` continues it")
+        elif tail.held:  # DF-282: usually the best evidence of where it stands
+            _warn(
+                out,
+                f"{tail.held} bytes of an unfinished last line are not shown (a step is "
+                "still writing it)",
+            )
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -331,21 +348,44 @@ def _follow(
 
     The status is read BEFORE each poll: once a status read says the run stopped
     running, the poll after it has every record written before that, so the last
-    records are never missed. A run whose process died stays `running`: Ctrl-C ends
-    the follow (exit 130). It exits with the run's own exit code, as `run` would (0
-    completed, 1 failed, 4 waiting for a person, 5 stopped; DF-285)."""
+    records are never missed. A run whose process died stays `running`, but its heartbeat
+    goes stale (M3-07, DF-278): the follow then reads everything, the cut-off last line
+    too, and exits 1 saying how to continue it. It exits with the run's own exit code,
+    as `run` would (0 completed, 1 failed, 4 waiting for a person, 5 stopped; DF-285)."""
+    run_dir = rt.store.path(run_id).parent
     while True:
         state = _load(rt, run_id)
         status = state.status
-        for record in tail.poll(final=status != "running"):
+        silent = stale_for(run_dir) if status == "running" else None
+        for record in tail.poll(final=status != "running" or silent is not None):
             clean = redact_record(record, redact)
             out.stream(clean, render_logs([clean]))
+        if silent is not None:
+            raise CliError(
+                _dead(run_id, silent),
+                ExitCode.ERROR,
+                hint=f"`agentic resume {run_id}` continues it from its last checkpoint; "
+                f"`agentic stop {run_id}` ends it",
+            )
         if status != "running":
             break
         _sleep(FOLLOW_INTERVAL_S)
     if not out.json_mode:
         out.err.print(f"run {run_id} is {status}", markup=False)
     raise typer.Exit(exit_code_for(state))
+
+
+def _dead(run_id: str, silent: timedelta) -> str:
+    minutes = int(silent.total_seconds() // 60)
+    return f"run {run_id} is running but has had no heartbeat for {minutes} min: its process died"
+
+
+def _warn(out: Output, message: str) -> None:
+    """A warning a script reading `--json` needs too (stderr, one JSON line)."""
+    if out.json_mode:
+        out.notice({"warning": message}, message)
+    else:
+        out.warn(message)
 
 
 def _from_jira(rt: Runtime, pipeline: str, key: str, given: dict[str, str]) -> IssueRun:

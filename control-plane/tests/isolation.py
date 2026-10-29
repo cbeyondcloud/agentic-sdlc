@@ -765,6 +765,14 @@ ENDPOINT_CASES += [
     EndpointCase("runs", "GET", "/v1/runs/{run_id}", _run_in_b),
     EndpointCase("runs", "GET", "/v1/runs/{run_id}/events", _run_in_b),
     EndpointCase(
+        # another tenant's run is unknown here: its heartbeat is a 404 (M3-07)
+        "runs",
+        "POST",
+        "/v1/runs/{run_id}/heartbeat",
+        _run_in_b,
+        body={"beat_at": "2026-10-29T10:00:00Z", "sent_at": "2026-10-29T10:00:00Z"},
+    ),
+    EndpointCase(
         # another tenant's run id is a new, unknown run here: a batch not starting at
         # seq 1 is a gap at head 0, exactly as for a run id nobody used
         "runs",

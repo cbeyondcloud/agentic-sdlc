@@ -1,0 +1,11 @@
+Run $run_id in team $team ($tenant_name) has sent no heartbeat for $minutes minutes, so the
+control plane marked it stale and released its concurrency slot.
+
+If its computer slept or lost the network, nothing is lost: the run is marked running
+again when its CLI is back.
+
+If the run's process stopped (closed terminal, crash, reboot), continue it or end it from
+the repository it ran in:
+
+Continue it:  agentic resume $run_id
+End it:       agentic stop $run_id --reason "..."

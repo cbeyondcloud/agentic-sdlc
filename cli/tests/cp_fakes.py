@@ -76,6 +76,8 @@ class FakeControlPlane:
     learning: dict[str, dict] = field(default_factory=dict)  # id -> detail (M3-15)
     learning_calls: list[tuple[str, dict]] = field(default_factory=list)  # route, body
     refuse_decisions: bool = False  # decisions answer 403 (the caller does not own it)
+    heartbeats: list[dict] = field(default_factory=list)  # run id + body of each beat (M3-07)
+    refuse_heartbeats: bool = False  # answer every beat 503
 
     def add_audit(self, count: int, *, team_of=lambda seq: "payments") -> list[dict]:
         """`count` chained audit records appended to the tenant's chain."""
@@ -492,6 +494,11 @@ class FakeControlPlane:
             return self._learning(request, path)
         if path == "/v1/learning/proposals":
             return httpx2.Response(200, json=self.proposals)
+        if path.startswith("/v1/runs/") and path.endswith("/heartbeat"):  # M3-07
+            self.heartbeats.append({"run_id": path.split("/")[3], **json.loads(request.content)})
+            if self.refuse_heartbeats:
+                return _problem(503, "unavailable", "the control plane is overloaded")
+            return httpx2.Response(200, json={"status": "open", "counted": True, "revived": False})
         if path.startswith("/v1/runs/") and path.endswith("/events"):
             if self.max_body is not None and len(request.content) > self.max_body:
                 return _problem(413, "too_large", f"the body is over {self.max_body} bytes")

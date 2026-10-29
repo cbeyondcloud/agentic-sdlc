@@ -50,6 +50,43 @@ def test_a_replace_blocked_by_a_reader_is_retried(tmp_path: Path, monkeypatch):
     assert store.load("r-1").status == "running"
 
 
+def busy_reads(monkeypatch, count: int, error: OSError) -> list[Path]:
+    """`run.json` reads fail `count` times with `error` (a writer swapping it on Windows)."""
+    real, calls = Path.read_bytes, []
+
+    def read_bytes(self):
+        if self.name == "run.json":
+            calls.append(self)
+            if len(calls) <= count:
+                raise error
+        return real(self)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+    monkeypatch.setattr(state_module, "_REPLACE_WAIT_S", 0)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "error",
+    [PermissionError(13, "the file is being used by another process"), FileNotFoundError(2, "x")],
+)
+def test_a_read_during_a_swap_is_retried(tmp_path: Path, monkeypatch, error):
+    """DF-280: a reader of run.json can hit the moment the writer swaps it (Windows)."""
+    store = RunStore(tmp_path)
+    store.save(a_state())
+    calls = busy_reads(monkeypatch, 2, error)
+    assert store.load("r-1").status == "running"
+    assert len(calls) == 3
+
+
+def test_a_read_that_keeps_failing_is_a_run_state_error(tmp_path: Path, monkeypatch):
+    store = RunStore(tmp_path)
+    store.save(a_state())
+    busy_reads(monkeypatch, 99, PermissionError(13, "busy"))
+    with pytest.raises(state_module.RunStateError, match="cannot be read"):
+        store.load("r-1")
+
+
 def test_a_replace_that_keeps_failing_raises_and_leaves_no_temporary_file(
     tmp_path: Path, monkeypatch
 ):

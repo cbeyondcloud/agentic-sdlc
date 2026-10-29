@@ -5,6 +5,7 @@ checked; the token is only ever sent to the URL it was verified against (R18).""
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import httpx2
 import pytest
@@ -19,6 +20,7 @@ from agentic_cli.control_plane import (
     ControlPlaneClient,
     ControlPlaneRefused,
     ControlPlaneUnavailable,
+    KillStateReply,
     client_for,
     record_login,
 )
@@ -154,3 +156,29 @@ def test_transport_errors_never_leak_the_token(fake):
     with pytest.raises(ControlPlaneUnavailable) as caught:
         client.me()
     assert TOKEN not in str(caught.value)
+
+
+def test_heartbeat_sends_both_times_and_the_state(fake):
+    """M3-07: the beat's own time and its sending time, so the server judges a late beat by
+    its true age."""
+    taken = datetime(2026, 10, 29, 10, 0, tzinfo=UTC)
+    sent = taken + timedelta(seconds=7)
+    reply = _client(fake).heartbeat("run-1", beat_at=taken, sent_at=sent, state="waiting")
+    assert reply.counted and reply.status == "open"
+    [beat] = fake.heartbeats
+    assert beat == {
+        "run_id": "run-1",
+        "beat_at": taken.isoformat(),
+        "sent_at": sent.isoformat(),
+        "state": "waiting",
+    }
+    assert fake.requests[-1].extensions["timeout"]["read"] == 5.0  # never a long wait
+
+
+def test_kill_state_without_an_answer_is_unavailable(fake, monkeypatch):
+    """DF-706: no assert (gone under python -O): an answer without a state is a clear
+    ControlPlaneUnavailable."""
+    client = _client(fake)
+    monkeypatch.setattr(client, "kill_state_reply", lambda **kw: KillStateReply(None, "t"))
+    with pytest.raises(ControlPlaneUnavailable, match="no kill-switch state"):
+        client.kill_state(team="payments", repo=None, pipeline=None)

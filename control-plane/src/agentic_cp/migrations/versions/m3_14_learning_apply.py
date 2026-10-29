@@ -5,7 +5,7 @@ dashboard view of each applied learning's correction rate before and after
 (`dash_learning_effect`, created here because it reads the M3-11 tables).
 
 Revision ID: m3_14_learning_apply
-Revises: m3_11_learning
+Revises: m3_07_run_health
 Create Date: 2026-10-29
 """
 
@@ -17,7 +17,7 @@ from agentic_cp.dashboards.views import LEARNING_VIEWS, learning_view_statements
 from agentic_cp.tenancy.rls import schema_of
 
 revision = "m3_14_learning_apply"
-down_revision = "m3_11_learning"
+down_revision = "m3_07_run_health"
 branch_labels = None
 depends_on = None
 

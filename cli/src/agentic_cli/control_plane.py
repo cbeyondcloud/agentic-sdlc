@@ -39,6 +39,7 @@ from agentic.orgapi import (
     AuditEntry,
     CheckResult,
     FeedbackInfo,
+    HeartbeatResult,
     IngestResult,
     InviteInfo,
     InviteRedeemed,
@@ -78,6 +79,8 @@ LOGIN_RECORD = "control-plane.json"
 TIMEOUT = httpx2.Timeout(15.0, connect=5.0)
 #: The kill-switch poll waits less: a run asks before every step and turn (M2-19).
 KILL_STATE_TIMEOUT = httpx2.Timeout(5.0, connect=3.0)
+#: A heartbeat is sent from its own thread, and the next one is a beat away (M3-07).
+HEARTBEAT_TIMEOUT = httpx2.Timeout(5.0, connect=3.0)
 #: An audit export streams for as long as it takes; each wait for the next chunk is bounded.
 EXPORT_TIMEOUT = httpx2.Timeout(120.0, connect=5.0)
 #: Serialised entries per ingest request: about half the control plane's default body
@@ -488,8 +491,17 @@ class ControlPlaneClient:
     def kill_state(self, *, team: str | None, repo: str | None, pipeline: str | None) -> KillState:
         """The switches that may apply to a run of this team, repo and pipeline (M2-19)."""
         reply = self.kill_state_reply(team=team, repo=repo, pipeline=pipeline)
-        assert reply.state is not None  # no tag was sent, so the answer is never a 304
+        if reply.state is None:  # no tag was sent, so this is never a 304 (DF-706)
+            raise ControlPlaneUnavailable(f"{self._shown} answered no kill-switch state")
         return reply.state
+
+    def heartbeat(
+        self, run_id: str, *, beat_at: datetime, sent_at: datetime, state: str = "running"
+    ) -> HeartbeatResult:
+        """The run's CLI is alive (M3-07). A short timeout: the beat thread never waits long."""
+        body = {"beat_at": beat_at.isoformat(), "sent_at": sent_at.isoformat(), "state": state}
+        found = self._json("POST", f"/runs/{run_id}/heartbeat", body, timeout=HEARTBEAT_TIMEOUT)
+        return HeartbeatResult.model_validate(found)
 
     def kill_state_reply(
         self,

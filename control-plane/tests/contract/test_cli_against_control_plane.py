@@ -15,7 +15,7 @@ from policy_repos import commit, head, make_policy_repo, url, write
 
 from agentic.orgapi import API_PREFIX
 from agentic.telemetry.sinks import ForwardingRecorder
-from agentic_cli.control_plane import ControlPlaneClient, ControlPlaneSink
+from agentic_cli.control_plane import ControlPlaneClient, ControlPlaneRefused, ControlPlaneSink
 from agentic_cli.policy_source import resolve_policy
 from agentic_cp.app import create_app
 from sdlc_commons import ledger as ledger_module
@@ -134,6 +134,60 @@ async def test_kill_switch_and_registration_end_to_end(live, tmp_path):
         assert not client.clear_switch(str(made.id), "fixed").active
     with ControlPlaneClient(base, b.admin_token) as client:
         assert client.kill_state(team="payments", repo=None, pipeline="deliver").switches == []
+
+
+async def test_heartbeat_and_zombie_sweep_end_to_end(db, tmp_path, monkeypatch):
+    """M3-07: the CLI's client beats for a registered run; with the server's clock moved past
+    `run_health.stale_minutes` the worker's sweep marks it stale, and the CLI's next fresh
+    beat revives it. Tenant b cannot beat for it (404)."""
+    import hashlib
+    from datetime import timedelta
+
+    from agentic_cp.ingest.health import zombie_job
+
+    monkeypatch.setattr(ledger_module, "_IDENTITIES", {})
+    clock = FakeClock()
+    a = await bootstrap(db, clock, "tenant-a", "Tenant A")
+    b = await bootstrap(db, clock, "tenant-b", "Tenant B")
+    pipeline = (
+        "name: deliver\nversion: 1.0.0\nregime: team\n"
+        "steps:\n  - gate: review\n    approver_role: developer\n"
+    )
+    repo = make_policy_repo(tmp_path / "policy")
+    write(repo, "pipelines/deliver.yaml", pipeline)
+    write(repo, "policy/org.yaml", "allow_repo_pipelines: false\n")
+    commit(repo, "a pipeline")
+    settings = settings_for(db)
+    with LiveServer(create_app(settings, clock=clock)) as base:
+        sync = _set_source(base, a.admin_token, repo)["sync"]
+        assert sync["kind"] == "activated", sync
+        version = sync["version"]
+        body = {
+            "run_id": "contract-beat",
+            "team": "payments",
+            "repo": "github.com/acme/app",
+            "pipeline": "deliver",
+            "pipeline_file": "pipelines/deliver.yaml",
+            "pipeline_sha256": "sha256:" + hashlib.sha256(pipeline.encode()).hexdigest(),
+            "policy_version": version,
+            "agents": [],
+            "models": [],
+            "backends": ["native"],
+        }
+        with ControlPlaneClient(base, a.admin_token) as client:
+            answer = client.register_run(body)
+            assert answer.registered, [c for c in answer.checks if not c.passed]
+            beat = client.heartbeat("contract-beat", beat_at=clock.now, sent_at=clock.now)
+            assert beat.counted and beat.status == "open"
+            assert client.run("contract-beat").last_heartbeat_at == clock.now
+            clock.advance(timedelta(minutes=31))  # the policy's default window is 30
+            assert await zombie_job(db.app, None, a.id, settings, clock) == ["contract-beat"]
+            assert client.run("contract-beat").status == "stale"
+            again = client.heartbeat("contract-beat", beat_at=clock.now, sent_at=clock.now)
+            assert again.revived and again.status == "open"
+        with ControlPlaneClient(base, b.admin_token) as client:
+            with pytest.raises(ControlPlaneRefused):
+                client.heartbeat("contract-beat", beat_at=clock.now, sent_at=clock.now)
 
 
 async def test_ledger_forward_to_control_plane_end_to_end(live, tmp_path):
