@@ -151,9 +151,10 @@ name, and a release must stay reproducible.
    `AGENTIC_CP_MIN_CLI_VERSION`), or the pinned-back CLI is refused.
 3. **Yank** the bad version on the index (PEP 592; devpi, Artifactory and Nexus support
    it) so new installs skip it while pinned installs still resolve.
-4. **The control plane** rolls back by deploying the previous image. Its database
-   migrations move forward only: roll back only to a release with the same migration head
-   (compare `alembic heads` at the two tags), otherwise roll forward.
+4. **The control plane** rolls back with `helm rollback` ([upgrade.md](upgrade.md)). Its
+   database migrations move forward only; the previous release serves the newer schema
+   because migrations expand first and contract a release later. If a release broke
+   that rule, roll forward instead.
 
 ## Troubleshooting
 

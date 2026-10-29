@@ -19,8 +19,14 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # A plain CREATE INDEX blocks ingest writes to run_events while it builds (DF-614): on a
+    # large deployment build it first with CREATE INDEX CONCURRENTLY under this name
+    # (docs/runbooks/upgrade.md); the migration then finds it.
     op.create_index(
-        "run_events_tenant_id_received_at_idx", "run_events", ["tenant_id", "received_at"]
+        "run_events_tenant_id_received_at_idx",
+        "run_events",
+        ["tenant_id", "received_at"],
+        if_not_exists=True,
     )
     op.create_table(
         "auto_trips",

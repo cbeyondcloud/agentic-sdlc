@@ -151,6 +151,19 @@ def test_values_yaml_holds_no_secret_value():
     assert not re.search(r"postgres(ql)?://[^\s:@/]+:[^\s@/]+@", text), "a DSN with a password"
 
 
+def test_the_runbooks_exist_and_link_each_other():
+    runbooks = ROOT / "docs" / "runbooks"
+    upgrade = (runbooks / "upgrade.md").read_text(encoding="utf-8")
+    restore = (runbooks / "postgres-backup-restore.md").read_text(encoding="utf-8")
+    readme = (CHART / "README.md").read_text(encoding="utf-8")
+    assert "(release.md)" in upgrade and "(postgres-backup-restore.md)" in upgrade
+    assert "(upgrade.md)" in restore and "scripts/restore_drill.py" in restore
+    assert "min_cli_version" in upgrade and "helm rollback" in upgrade
+    for name in ("upgrade.md", "postgres-backup-restore.md"):
+        assert f"(../../../docs/runbooks/{name})" in readme
+    assert "(upgrade.md)" in (runbooks / "release.md").read_text(encoding="utf-8")
+
+
 # ── default values ────────────────────────────────────────────────────────────
 
 
