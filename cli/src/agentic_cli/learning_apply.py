@@ -652,7 +652,9 @@ def org_approve(rt: Runtime, pid: str, warn: Callable[[str], None]) -> dict:
             "open yet",
             ExitCode.REFUSED,
         )
-    _client(rt, lambda c: c.decide_proposal(pid, "approve", "", made.model_dump(mode="json")))
+    if detail.status != "approved":  # an approval whose change was never made resumes
+        draft_json = made.model_dump(mode="json")
+        _client(rt, lambda c: c.decide_proposal(pid, "approve", "", draft_json))
     user = rt.known_user()
     applied = _apply(rt, made, user, warn)
     store(rt).save_change(pid, {"draft": made.model_dump(mode="json"), "applied": applied})

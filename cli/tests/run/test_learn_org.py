@@ -123,3 +123,100 @@ def test_proposals_in_org_mode_come_from_the_control_plane(org, cli):
     shown = cli("--json", "learn", "proposals")
     assert shown.code == ExitCode.OK, shown.err
     assert [p["id"] for p in json.loads(shown.out)] == ["lp-" + "b" * 20]
+
+
+PID = "lp-" + "c" * 20
+CSV = [
+    "Acceptance criteria must name every CSV column.",
+    "Name every CSV column in the acceptance criteria.",
+    "The acceptance criteria should name each CSV column.",
+]
+
+
+def personal_detail(owner: str = "dev@example.invalid") -> dict:
+    """A personal proposal as `GET /v1/learning/proposals/{id}` answers it (M3-15)."""
+    records = [
+        {
+            "id": f"fb-{n:020x}",
+            "run_id": "run-9",
+            "team": "payments",
+            "repo": "github.com/acme/app",
+            "signal": "gate-rejection",
+            "actor": owner,
+            "given_at": f"2026-10-25T09:0{n}:00+00:00",
+            "text": text,
+            "source": f"gate:requirements:reject:{n}",
+            "lesson": text,
+            "author": owner,
+        }
+        for n, text in enumerate(CSV)
+    ]
+    return {
+        "id": PID,
+        "team": "payments",
+        "agent": "ba",
+        "scope": "repo:github.com/acme/app",
+        "lesson": CSV[0],
+        "evidence": [r["id"] for r in records],
+        "status": "pending",
+        "created_at": "2026-10-25T10:00:00+00:00",
+        "target": "personal",
+        "owner": owner,
+        "actors": [owner],
+        "feedback": records,
+    }
+
+
+def test_org_approve_applies_a_personal_learning_and_revert_restores(org, cli, tmp_path):
+    """M3-15/M3-16 in org mode: the control plane decides (owner only, audited); the change
+    is made on this machine and reported back; revert undoes it and reports that too."""
+    org.learning[PID] = personal_detail()
+    shown = cli("--json", "learn", "show", PID)
+    assert shown.code == ExitCode.OK, shown.err
+    assert shown.json()["draft"]["kind"] == "personal-skill"
+
+    done = cli("--json", "learn", "approve", PID)
+    assert done.code == ExitCode.OK, done.err
+    skill = tmp_path / "home" / "skills" / "learned-ba" / "SKILL.md"
+    assert "CSV column" in skill.read_text("utf-8")
+    (decided, decision), (reported, report) = org.learning_calls
+    assert (decided, decision["action"]) == ("decision", "approve")
+    assert decision["draft"]["path"] == "skills/learned-ba/SKILL.md"
+    assert (reported, report["ref"]["kind"]) == ("applied", "personal")
+    assert done.json()["status"] == "applied"
+
+    reverted = cli("--json", "learn", "revert", PID)
+    assert reverted.code == ExitCode.OK, reverted.err
+    assert not skill.exists()
+    assert org.learning[PID]["status"] == "reverted"
+
+
+def test_org_refused_approval_applies_nothing(org, cli, workspace, tmp_path):
+    """A developer's approval of a shared proposal is refused by the control plane (D30),
+    and nothing is written; endorsing it is accepted."""
+    detail = personal_detail()
+    detail.update(target="repo", owner="repo:github.com/acme/app", actors=["a@x.test", "b@x.test"])
+    for n, record in enumerate(detail["feedback"]):
+        record["actor"] = ["a@x.test", "b@x.test"][n % 2]
+    org.learning[PID] = detail
+    org.refuse_decisions = True
+
+    refused = cli("--json", "learn", "approve", PID)
+    assert refused.code == ExitCode.REFUSED, refused.err
+    assert "endorse" in json.loads(refused.err)["error"]
+    assert not (workspace / "AGENTS.md").exists()
+    assert not (tmp_path / "home" / "skills").exists()
+    assert [call for call, _ in org.learning_calls] == ["decision"]
+    endorsed = cli("--json", "learn", "endorse", PID)
+    assert endorsed.code == ExitCode.OK, endorsed.err
+    assert endorsed.json()["endorsements"] == ["dev@example.invalid"]
+
+
+def test_org_approve_resumes_an_approved_proposal(org, cli, tmp_path):
+    """An approval whose change was not made (the push failed, the laptop slept) is applied
+    by running `approve` again, without a second decision."""
+    org.learning[PID] = {**personal_detail(), "status": "approved"}
+    done = cli("--json", "learn", "approve", PID)
+    assert done.code == ExitCode.OK, done.err
+    assert [call for call, _ in org.learning_calls] == ["applied"]
+    assert (tmp_path / "home" / "skills" / "learned-ba" / "SKILL.md").is_file()

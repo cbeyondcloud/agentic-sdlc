@@ -272,3 +272,41 @@ async def test_audit_export_end_to_end(live, tmp_path):
         data.replace(b'"reason":"payments"', b'"reason":"paymentz"', 1)
     )
     assert subprocess.run(check, capture_output=True).returncode == 3
+
+
+async def test_learning_decisions_end_to_end(live, db):
+    """M3-15, M3-16: the CLI's client reads, edits, endorses, approves and reports a shared
+    proposal against the real routes; another tenant does not see it."""
+    from agentic_cp.tables import learning_proposals
+    from agentic_cp.tenancy.context import tenant_tx
+
+    base, a, b = live
+    pid = "lp-" + "d" * 20
+    async with tenant_tx(db.owner, a.id) as conn:
+        await conn.execute(
+            learning_proposals.insert().values(
+                tenant_id=a.id,
+                id=pid,
+                team="payments",
+                agent="developer",
+                scope="repo:github.com/acme/app",
+                lesson="Wrap HTTP calls in with_retry().",
+                evidence=["fb-" + "1" * 20, "fb-" + "2" * 20],
+                actors=["alice", "bob"],
+            )
+        )
+    draft = {"kind": "repo-memory", "path": "AGENTS.md", "diff": "+ - with_retry()\n"}
+    with ControlPlaneClient(base, a.admin_token) as client:
+        assert client.proposal(pid).target == "repo"
+        assert client.edit_proposal(pid, None, "Use with_retry().").edited_lesson == (
+            "Use with_retry()."
+        )
+        assert client.endorse_proposal(pid).endorsements == ["admin@a.example.test"]
+        assert client.decide_proposal(pid, "approve", "", draft).status == "approved"
+        assert client.proposal(pid).draft == draft
+        applied = client.report_applied(pid, {"kind": "pull-request", "number": 7})
+        assert (applied.status, applied.applied_ref["number"]) == ("applied", 7)
+        assert [p.id for p in client.proposals(status="applied")] == [pid]
+        assert client.report_reverted(pid, {"kind": "pull-request"}).status == "reverted"
+    with httpx2.Client(base_url=base, headers={"Authorization": f"Bearer {b.admin_token}"}) as http:
+        assert http.get(f"{API_PREFIX}/learning/proposals/{pid}").status_code == 404
