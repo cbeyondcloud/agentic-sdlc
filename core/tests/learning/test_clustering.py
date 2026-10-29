@@ -190,3 +190,36 @@ def test_embedding_similarity_is_optional():
     ]
     assert len(propose(lessons, SETTINGS, NOW, similarity=similarity)) == 1
     assert propose(lessons, SETTINGS, NOW) == []  # lexically these are not alike
+
+
+def test_reverted_lesson_is_remembered_like_a_rejected_one():
+    """M3-16: a learning a person reverted is not proposed again without new evidence."""
+    first = [lesson(t, days_ago=10) for t in RETRY[:3]]
+    reverted = replace(
+        propose(first, SETTINGS, NOW)[0], status="reverted", decided_at=NOW - timedelta(days=5)
+    )
+    more = first + [lesson(RETRY[3], days_ago=2)]
+    assert propose(more, SETTINGS, NOW, existing=[reverted]) == []
+    again = first + [lesson(t, days_ago=2) for t in RETRY[3:6]]
+    found = propose(again, SETTINGS, NOW, existing=[reverted])
+    assert len(found) == 1 and found[0].id != reverted.id
+
+
+def test_approved_proposal_is_not_proposed_again():
+    """M3-15: an approved, deferred or applied proposal is the same pattern: matched, never
+    duplicated, and its evidence is frozen at the decision."""
+    lessons = [lesson(t, days_ago=3) for t in RETRY[:3]]
+    made = propose(lessons, SETTINGS, NOW)[0]
+    late = lesson(RETRY[3], days_ago=4)  # older: the cluster's seed (and id) changes
+    for status in ("approved", "deferred", "applied"):
+        settled = replace(made, status=status, decided_at=NOW)
+        assert propose([*lessons, late], SETTINGS, NOW, existing=[settled]) == [], status
+
+
+def test_low_confidence_learners_do_not_count():
+    """DF-732: an analyst's 'cannot tell' (below min_confidence) does not build a pattern."""
+    unsure = [replace(lesson(t), confidence=0.1) for t in RETRY[:3]]
+    assert propose(unsure, SETTINGS, NOW) == []
+    assert SETTINGS.min_confidence == 0.5
+    sure = [replace(item, confidence=0.5) for item in unsure]
+    assert len(propose(sure, SETTINGS, NOW)) == 1
