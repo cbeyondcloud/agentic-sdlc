@@ -117,7 +117,9 @@ class Settings(BaseModel):
     service_token_max_days: Annotated[int, Field(ge=1, le=365)] = 365
     enforcer_cache_tenants: Annotated[int, Field(ge=1)] = 256
     kill_ttl_seconds: Annotated[int, Field(ge=1, le=30)] = 10
-    """How long a CLI may cache the kill-switch state (`KillState.ttl_seconds`, ruling R1)."""
+    """The longest a CLI may cache the kill-switch state (`KillState.ttl_seconds`, ruling R1).
+    The CLI caches for the smaller of this and its own 10 s, so a value above 10 never
+    lengthens propagation; it can only shorten it (DF-707). The ceiling stays 30 (ruling R5)."""
     min_cli_version: Annotated[str, AfterValidator(_pep440)] | None = None
     """The deployment's minimum CLI version (M2-08); a tenant's `org.yaml: min_cli_version`
     can only raise it (ruling R7). A value that is not a PEP 440 version refuses startup

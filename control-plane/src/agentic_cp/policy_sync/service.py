@@ -363,6 +363,7 @@ RUN_SETTINGS_KEYS = (
     "overlays",
     "versions",
     "learning",
+    "run_health",
 )
 
 
@@ -411,10 +412,11 @@ def run_settings(policy: OrgPolicy, root: Path) -> dict:
     decimal strings, never floats (DF-26). `pipelines` are the approved pipelines' hashes
     (D33), `overlays` the tree's `overlay_index` (M2-23) and `versions` the rollout,
     deprecations, each team's pins and the tree's `version_index` (M2-15), so registration
-    checks them all without the bundle."""
+    checks them all without the bundle. `run_health` is the zombie window (M3-07)."""
     return {
         "auto_trip": auto_trip_settings(policy),
         "learning": learning_settings(policy),
+        "run_health": policy.run_health.model_dump(mode="json"),
         "min_cli_version": policy.min_cli_version,
         "concurrency": dict(policy.concurrency),
         "allow_repo_pipelines": policy.allow_repo_pipelines,
