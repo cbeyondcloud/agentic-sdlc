@@ -27,6 +27,19 @@ import asyncpg
 from cp_loadtest.stats import Recorder, percentile
 
 _SCHEMA = re.compile(r"[a-z_][a-z0-9_]{0,62}")
+#: The longest an observer waits on one database call (asyncpg's default is no limit).
+DB_TIMEOUT_S = 10.0
+
+
+async def _close(conn) -> None:
+    """Close, or drop the connection when it will not close: the end of a load test must
+    never wait on a dead connection."""
+    try:
+        await asyncio.wait_for(conn.close(), DB_TIMEOUT_S)
+    except (TimeoutError, OSError, asyncpg.PostgresError):
+        conn.terminate()
+
+
 _UNITS = {"b": 1 / 2**20, "kib": 1 / 1024, "mib": 1, "gib": 1024, "kb": 1e3 / 2**20}
 _UNITS |= {"mb": 1e6 / 2**20, "gb": 1e9 / 2**20}
 
@@ -73,7 +86,7 @@ class HeadWatcher:
         if self._conn is not None:
             if self._expected:
                 await self.read_once()
-            await self._conn.close()
+            await _close(self._conn)
 
     async def _loop(self) -> None:
         while True:
@@ -84,7 +97,9 @@ class HeadWatcher:
     async def read_once(self) -> None:
         keys = list(self._expected)
         tenants = sorted({tenant for tenant, _ in keys}, key=str)
-        rows = await self._conn.fetch(self._query, [run for _, run in keys], tenants)
+        rows = await self._conn.fetch(
+            self._query, [run for _, run in keys], tenants, timeout=DB_TIMEOUT_S
+        )
         seen = time.monotonic()
         for tenant_id, run_id, head in rows:
             key = (tenant_id, run_id)
@@ -143,7 +158,7 @@ class DbSampler:
                 await conn.execute("select pg_stat_statements_reset()")
                 self.statements = True
         finally:
-            await conn.close()
+            await _close(conn)
         self._task = asyncio.create_task(self._loop())
 
     async def top_statements(self, limit: int = 15) -> list[dict]:
@@ -153,9 +168,9 @@ class DbSampler:
             return []
         conn = await asyncpg.connect(self._dsn)
         try:
-            return [dict(row) for row in await conn.fetch(self.TOP, limit)]
+            return [dict(row) for row in await conn.fetch(self.TOP, limit, timeout=DB_TIMEOUT_S)]
         finally:
-            await conn.close()
+            await _close(conn)
 
     async def stop(self) -> None:
         if self._task is not None:
@@ -166,11 +181,11 @@ class DbSampler:
         conn = await asyncpg.connect(self._dsn)
         try:
             while True:
-                row = await conn.fetchrow(self.QUERY)
+                row = await conn.fetchrow(self.QUERY, timeout=DB_TIMEOUT_S)
                 self.samples.append({"t": time.monotonic(), **dict(row)})
                 await asyncio.sleep(self.interval_s)
         finally:
-            await conn.close()
+            await _close(conn)
 
     def summary(self) -> dict:
         if not self.samples:
@@ -222,7 +237,12 @@ class ContainerSampler:
     def _loop(self) -> None:
         command = [self.engine, "stats", "--no-stream", "--format", "{{json .}}", *self.names]
         while not self._stop.is_set():
-            done = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
+            try:
+                done = subprocess.run(
+                    command, capture_output=True, text=True, encoding="utf-8", timeout=60
+                )
+            except subprocess.TimeoutExpired:
+                continue
             for line in done.stdout.splitlines():
                 self.record(line)
             self._stop.wait(self.interval_s)

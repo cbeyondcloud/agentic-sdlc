@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import faulthandler
 import json
 import os
 import platform
@@ -88,7 +89,12 @@ def _run(args) -> int:
         seed=args.seed,
         drain_s=args.drain,
     )
-    summary = asyncio.run(_measure(stack, options, args))
+    # a run that overruns by 10 minutes prints where every thread is (a hang names itself)
+    faulthandler.dump_traceback_later(args.ramp + args.duration + args.drain + 900, exit=False)
+    try:
+        summary = asyncio.run(_measure(stack, options, args))
+    finally:
+        faulthandler.cancel_dump_traceback_later()
     summary["machine"] = {
         "os": platform.platform(),
         "python": platform.python_version(),
