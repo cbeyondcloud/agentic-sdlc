@@ -90,6 +90,12 @@ function Get-OrgValue([string]$Key) {
 # Write text with LF line ends and no BOM (compose and bash read the file too).
 function Write-OrgFile([string]$Path, [string]$Text) {
     [IO.File]::WriteAllText($Path, $Text.Replace("`r`n", "`n"), (New-Object Text.UTF8Encoding($false)))
+    # PowerShell 7 on macOS or Linux: owner-only, as up.sh does - the file holds passwords
+    # (DF-626). Windows PowerShell 5.1 has no $IsWindows and never gets here.
+    if ((Test-Path variable:IsWindows) -and -not $IsWindows) {
+        try { [IO.File]::SetUnixFileMode($Path, [IO.UnixFileMode]'UserRead, UserWrite') }
+        catch { chmod 600 $Path }
+    }
 }
 
 # Set KEY in .env.org: only where it is empty or missing, unless -Overwrite.
