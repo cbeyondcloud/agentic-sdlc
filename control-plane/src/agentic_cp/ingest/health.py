@@ -11,7 +11,9 @@ delivered late never makes a waiting run look dead.
 
 The worker's `zombie_job` marks an open run that is not waiting and has shown no sign of
 life - no counted beat, no event, nothing since it opened - for `run_health.stale_minutes`
-of the tenant's active policy `stale`. `stale` is not `open`, so the run stops counting
+of the tenant's active policy `stale` (a run with events whose CLI never beats - an older
+release - for the deployment's `run_slot_hours`, review F2: a long agent step sends
+nothing). `stale` is not `open`, so the run stops counting
 against the M2-08 caps at once; `run.stale` is on the audit chain and its starter is
 mailed once per episode. A counted beat revives a stale run (`run.revived`, ruling: the
 CLI is alive, so the run is; it takes its slot again even over a cap, which the audit
@@ -24,7 +26,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from agentic.orgapi import HeartbeatRequest, HeartbeatResult
@@ -121,21 +123,44 @@ async def record_heartbeat(
     return HeartbeatResult(status="open", counted=True, revived=revived)
 
 
-async def sweep(conn: AsyncConnection, clock: Callable[[], datetime]) -> list[str]:
-    """One zombie pass over the transaction's tenant: the runs it marked stale."""
+async def sweep(
+    conn: AsyncConnection, clock: Callable[[], datetime], quiet: timedelta | None = None
+) -> list[str]:
+    """One zombie pass over the transaction's tenant: the runs it marked stale.
+
+    A run with events whose CLI never sent a beat (a release before M3-07, review F2) is
+    silent for a whole agent step, and a stale run's events never revive it: it is judged
+    by `quiet` (the deployment's `run_slot_hours`, when it holds no slot anyway) instead of
+    the policy's window. A registered run with no event and no beat (DF-509) and a run
+    that beats are judged by the window."""
     window = await stale_window(conn)
+    quiet = max(quiet or window, window)
     now = clock()
     seen = func.greatest(runs.c.opened_at, runs.c.last_event_at, runs.c.last_heartbeat_at)
+    unbeaten = runs.c.last_heartbeat_at.is_(None) & runs.c.last_event_at.is_not(None)
     found = await conn.execute(
-        select(runs.c.run_id, runs.c.team, runs.c.started_by, seen.label("seen"))
-        .where(runs.c.status == "open", runs.c.waiting.is_(False), seen < now - window)
+        select(
+            runs.c.run_id,
+            runs.c.team,
+            runs.c.started_by,
+            seen.label("seen"),
+            unbeaten.label("unbeaten"),
+        )
+        .where(
+            runs.c.status == "open",
+            runs.c.waiting.is_(False),
+            or_(
+                and_(unbeaten, seen < now - quiet),
+                and_(~unbeaten, seen < now - window),
+            ),
+        )
         .order_by(runs.c.run_id)
         .limit(SWEEP_BATCH)
         .with_for_update(skip_locked=True)
     )
     marked = []
-    minutes = int(window.total_seconds() // 60)
     for row in found.all():
+        minutes = int((quiet if row.unbeaten else window).total_seconds() // 60)
         await conn.execute(
             update(runs).where(runs.c.run_id == row.run_id).values(status="stale", stale_at=now)
         )
@@ -192,4 +217,4 @@ async def zombie_job(
 ) -> list[str]:
     """The worker's per-tenant job (`policy_sync.worker.EXTRA_JOBS`)."""
     async with tenant_tx(engine, tenant_id) as conn:
-        return await sweep(conn, clock)
+        return await sweep(conn, clock, timedelta(hours=settings.run_slot_hours))

@@ -332,23 +332,45 @@ async def test_the_window_comes_from_the_policy(api, tmp_path):
 
 
 async def test_events_count_as_a_sign_of_life(api, made_runs):
-    """A run reported by a CLI that sends no heartbeat (an older release) is judged by its
-    events."""
+    """A run whose CLI beats is judged by its newest beat or event."""
     token = api.a.admin_token
-    run = made_runs("old-cli")
+    run = made_runs("events")
     await run.ingest(api, token)
+    await beat(api, token, "events")
     api.clock.advance(timedelta(minutes=20))
     run.step()
     await run.ingest(api, token)
     api.clock.advance(timedelta(minutes=20))
     assert await sweep(api) == []
     api.clock.advance(timedelta(minutes=11))
+    assert await sweep(api) == ["events"]
+
+
+async def test_a_run_whose_cli_never_beats_is_judged_by_run_slot_hours(api, made_runs):
+    """Review F2: a CLI that sends no heartbeat (an older release, during the rollout) is
+    silent for the whole of a long agent step. Its run is not marked stale - a stale run's
+    events never revive it - until it no longer holds a slot anyway (M2-08 `run_slot_hours`)."""
+    token = api.a.admin_token
+    run = made_runs("old-cli")
+    await run.ingest(api, token)
+    api.clock.advance(timedelta(minutes=45))  # one long step, no event
+    assert await sweep(api) == []
+    run.step()
+    await run.ingest(api, token)
+    assert await status_of(api, "old-cli") == "open"
+    slot = timedelta(hours=api.settings.run_slot_hours)
+    api.clock.advance(slot - timedelta(minutes=1))
+    assert await sweep(api) == []
+    api.clock.advance(timedelta(minutes=2))
     assert await sweep(api) == ["old-cli"]
+    [record] = await audited(api, "run.stale")
+    assert record.after["stale_minutes"] == slot.total_seconds() // 60
 
 
 async def test_tenants_are_swept_separately(api, made_runs):
     run = made_runs("b-run")
     await run.ingest(api, api.b.admin_token)
+    await beat(api, api.b.admin_token, "b-run")
     api.clock.advance(timedelta(hours=1))
     assert await sweep(api) == []
     assert await status_of(api, "b-run", api.b) == "open"
@@ -366,6 +388,7 @@ def test_the_sweep_runs_in_the_worker_before_the_mail_goes_out():
 async def _stale(api, made_runs, run_id):
     run = made_runs(run_id)
     await run.ingest(api, api.a.admin_token)
+    await beat(api, api.a.admin_token, run_id)  # a CLI that beats, then dies
     api.clock.advance(timedelta(minutes=31))
     assert await sweep(api) == [run_id]
     return run
