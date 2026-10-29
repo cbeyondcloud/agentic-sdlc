@@ -79,6 +79,13 @@ review_prepass:
 # It only adds: git globs relative to the repository.
 # checkpoint_exclude: ["**/target/**", "**/build/**", "**/.gradle/**"]
 
+# The commit-command override: a repository whose raw git is unsafe (Zyroflo
+# `vcs.deny_raw_git`) checkpoints, rolls back and publishes through its own tool
+# (`vcs.commit_command` / `vcs.push_command` in .sdlc/profile.yml, `rollback_commands` in
+# .agentic/config.yaml). Those commands run outside the agent sandbox, so nothing runs
+# unless it starts with one of these word prefixes. Empty = no override anywhere.
+# commit_override: { allow: ["monotool commit", "monotool restore", "monotool push"] }
+
 # The learning loop (spec 24): this many similar human corrections of one agent, within
 # this many days, become a proposal a person approves or rejects; nothing changes an
 # agent without that approval. A team may only tighten (a higher threshold, fewer days).

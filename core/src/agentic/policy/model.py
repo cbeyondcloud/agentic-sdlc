@@ -520,6 +520,30 @@ class ReviewBatchPolicy(_Strict):
         return self
 
 
+def _override_rule(rule: str) -> str:
+    """One `commit_override.allow` rule: words a command must start with ("monotool
+    commit"). Never empty (it would allow every command) and never a placeholder, which is a
+    value filled in when the command runs."""
+    if not rule.split():
+        raise ValueError("an allow rule names at least the program; an empty one allows all")
+    if any(c in rule for c in "\r\n") or "{" in rule or "}" in rule:
+        raise ValueError(f"{rule!r}: one line of words, without {{placeholders}}")
+    return " ".join(rule.split())
+
+
+class CommitOverridePolicy(_Strict):
+    """Which commands a repository's commit-command override may run (M2-61, spec §9.2).
+
+    A component Zyroflo makes in place (`vcs.deny_raw_git`) checkpoints, rolls back and
+    publishes through its own commands (`vcs.commit_command` and `vcs.push_command` in
+    `.sdlc/profile.yml`, `rollback_commands` in `.agentic/config.yaml`). They run outside the
+    agent's sandbox, so a repository alone never decides: each command must start with one
+    of these word prefixes, or nothing runs. Empty (the default) = no override anywhere."""
+
+    allow: list[Annotated[str, AfterValidator(_override_rule)]] = []
+    timeout_s: int = Field(default=600, ge=1, le=3600)  # per command
+
+
 class SecretScanPolicy(_Strict):
     """What happens to a secret in content about to leave for a model (M1-41): the call
     is refused (`block`) or the secret is replaced by a marker (`mask`), and either way
@@ -728,6 +752,8 @@ class OrgPolicy(_Strict):
     checkpoint_exclude: list[
         Annotated[str, StringConstraints(min_length=1), AfterValidator(_checkpoint_glob)]
     ] = []
+    # M2-61: the commands an in-place component's commit-command override may run
+    commit_override: CommitOverridePolicy = CommitOverridePolicy()
     # M2-15 (spec §12.5, rollout.yaml): new versions team by team, and deprecations
     rollout: Rollout = Rollout()
     deprecated: Deprecations = Deprecations()

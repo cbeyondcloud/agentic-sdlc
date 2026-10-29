@@ -30,6 +30,20 @@ def test_the_domain_graph_defaults_to_the_local_graph_folder_and_the_workspace_r
     assert "graph:" not in render_repo_config(config)  # an unset default is not written
 
 
+def test_rollback_commands_are_keyed_by_component_path():
+    """M2-61: the rollback half of the commit-command override, per in-place component
+    path ("." is the repository itself); org policy decides whether it may run."""
+    config = load_repo_config(
+        "version: 1\nclassification: internal\n"
+        "rollback_commands: {'.': 'monotool restore {commit}', 'libs/a': 'tool reset {commit}'}\n"
+    )
+    assert config.rollback_commands == {
+        ".": "monotool restore {commit}",
+        "libs/a": "tool reset {commit}",
+    }
+    assert load_repo_config("version: 1\nclassification: internal\n").rollback_commands == {}
+
+
 def test_render_then_load_round_trips():
     config = RepoConfig(
         classification="restricted",
@@ -55,6 +69,9 @@ def test_render_then_load_round_trips():
         ("version: 1\nclassification: internal\ncodeintel: {graph: ''}\n", "graph"),
         ("version: 1\nclassification: internal\ncodeintel: {component: ''}\n", "component"),
         ("version: 1\nclassification: internal\ncodeintel: {grahp: x}\n", "grahp"),
+        ("version: 1\nclassification: internal\nrollback_commands: {'../x': 'a'}\n", "../x"),
+        ("version: 1\nclassification: internal\nrollback_commands: {'/abs': 'a'}\n", "/abs"),
+        ("version: 1\nclassification: internal\nrollback_commands: {'.': ' '}\n", "rollback"),
     ],
 )
 def test_invalid_configs_are_refused_with_the_field(text: str, problem: str):

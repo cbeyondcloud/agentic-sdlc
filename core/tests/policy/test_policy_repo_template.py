@@ -66,6 +66,7 @@ def test_template_shows_the_prepass_and_checkpoint_keys(policy):
     assert "\nreview_prepass:\n" in text and "# checkpoint_exclude:" in text
     assert policy.review_prepass.enabled and not policy.review_prepass.online_vulnerability_lookup
     assert policy.checkpoint_exclude == []
+    assert "# commit_override:" in text and policy.commit_override.allow == []  # M2-61
 
 
 def test_tiers_are_placeholders(policy):
