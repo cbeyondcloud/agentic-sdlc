@@ -25,8 +25,9 @@ that is older than the cut-off. The cut-off is the first of these that is set:
 
 1. `--older-than`;
 2. `gc.older_than_days` in `~/.agentic/config.yaml`;
-3. the org policy's `local.gc_after_days`;
-4. 14 days.
+3. the org policy's `local.gc_after_days`, or, when that is not set, its retention period
+   for run folders (`retention.yaml` `days.run_folders`, 30 by default: OR-01);
+4. 30 days.
 
 **What gc keeps.** Each of these is listed with its reason, and gc still exits 0:
 

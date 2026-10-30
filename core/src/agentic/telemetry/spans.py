@@ -6,7 +6,8 @@ Only the OpenTelemetry API is used here: without an SDK installed and configured
   * `step_span` / `finish_step_span` - the engine's span around one agent step;
   * `model_instrumentation` - the settings Pydantic AI instruments the native
     backend's model with: its `invoke_agent` and `chat` spans, prompts and answers
-    left out (D14: capture is off by default; OR-01);
+    left out (D14: capture is off by default) unless the team opted in and the repo's
+    class allows it (OR-01, M3-06: kept `retention.yaml days.traces` by the trace store);
   * `mark_call` - TokenLean's `X-Trace-ID` and request id, set on the span that is
     current while the call settles (the model-call span), so the framework's trace
     and TokenLean's records can be joined until TokenLean reads `traceparent` (ST-3).
@@ -35,10 +36,12 @@ def tracer() -> trace.Tracer:
     return trace.get_tracer(TRACER_NAME, schema_url=SCHEMA_URL)
 
 
-def model_instrumentation() -> InstrumentationSettings:
-    """How Pydantic AI instruments a model: pinned data format, no content."""
+def model_instrumentation(*, include_content: bool = False) -> InstrumentationSettings:
+    """How Pydantic AI instruments a model: pinned data format, no content unless the
+    resolved agent's `trace_capture` says so (a team opt-in the repo's class allows: M3-06).
+    Binary content and request parameters are never included."""
     return InstrumentationSettings(
-        include_content=False,
+        include_content=include_content,
         include_binary_content=False,
         include_model_request_parameters=False,
         version=INSTRUMENTATION_VERSION,

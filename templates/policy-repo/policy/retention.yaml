@@ -1,3 +1,23 @@
-# How long records are kept, in days (a placeholder until the retention policy is
-# settled, open requirement OR-01).
-days: { audit: 365, traces: 30 }
+# How long each kind of data is kept, in days (M3-06; open requirement OR-01, owner
+# decision 115). null keeps a kind forever. The control plane's retention job
+# (`python -m agentic_cp retention run`, a daily CronJob in the Helm chart) deletes what
+# has expired and writes one `retention.pruned` audit event per run with the counts.
+days:
+  audit: 2555          # the audit chain: 7 years; never less, and never shorter than any other kind
+  runs: 400            # control-plane runs and their events
+  gateway_usage: 400   # the gateway's usage records; never less than 400 (its billing floor).
+                       # Set in the gateway's own config: `python -m agentic_cp retention gateway-config`
+  traces: 30           # prompts and answers in traces: only for teams with `trace_capture: true`
+  feedback: 365        # learning-loop feedback records
+  run_folders: 30      # a laptop's finished run folders and worktrees (`agentic gc`), after the run ends
+  logs: 30             # logs, support bundles and the control plane's sent-mail log
+  backups: 35          # database backups: set in your backup tooling (docs/runbooks/postgres-backup-restore.md)
+
+# Legal holds: nothing in a hold's scope is deleted while it is listed here. `data` names
+# the kinds held (empty or missing: every kind); `teams` the teams (missing: the whole org).
+# legal_holds:
+#   - id: LH-2026-01
+#     reason: "Litigation hold, case 2026-117 (legal@example.com)"
+#     data: [audit, runs, feedback]
+#     teams: [payments]
+legal_holds: []

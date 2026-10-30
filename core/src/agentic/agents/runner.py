@@ -364,7 +364,10 @@ class PydanticAIRunner:
 
     def _pydantic_agent(self, instructions: str) -> Agent:
         agent = Agent(
-            instrument_model(self.model, model_instrumentation()),  # spans, no content (M1-43)
+            # spans (M1-43); prompts and answers only for an opted-in team (M3-06)
+            instrument_model(
+                self.model, model_instrumentation(include_content=self.agent.trace_capture)
+            ),
             name=self.agent.definition.name,
             instructions=instructions,
             tools=self.tools,
