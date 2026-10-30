@@ -462,7 +462,7 @@ Backups and PITR for Postgres (daily restore drill in staging); monitoring via c
 
 ### Sizing (starting point, validated by the M3-22 load test)
 
-Control plane: 2–3 replicas × 1 vCPU / 1 GB; Postgres: 4 vCPU / 16 GB with HA standby; TokenLean: per its own sizing guidance, scaled on request rate; observability: org standard. Revisit after the pilot wave.
+Control plane: 3 replicas × 1 vCPU / 1 GB for 1000 concurrent runs, each keeping a pool of 15 database connections (`AGENTIC_CP_DB_POOL_SIZE`), scaled out on CPU (about 60 %) when runs start more often than about one per person per 15 minutes; Postgres: 4 vCPU / 16 GB with HA standby, `max_connections` ≥ replicas × 15 + worker + Grafana; TokenLean: per its own sizing guidance, scaled on request rate; observability: org standard. Evidence (M3-22, one laptop, indicative): 2 replicas met every target at 1000 runs at about 55 % CPU each with bursts to 100 %, so the third is headroom and covers a rolling deploy or a lost node; 3 replicas saturated at four times the event rate; Postgres used under 0.6 vCPU (`docs/load-test/M3-22-report.md`). Re-measure on staging, then revisit after the pilot wave.
 
 ---
 

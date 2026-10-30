@@ -2,7 +2,7 @@
 token; bad tokens all look alike; tokens are stored hashed and never logged."""
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import func, select, text
@@ -194,6 +194,31 @@ async def test_token_events_are_audited(api):
         assert issued["token"] not in str(record)
     async with tenant_tx(api.db.app, api.b.id) as conn:
         assert all(r.target != f"token:{issued['id']}" for r in await read_records(conn))
+
+
+async def test_last_use_is_written_at_most_once_a_minute_per_process(api, monkeypatch):
+    """M3-22: recording a token's last use was a transaction on every request (a third of
+    each request's database work) though the stored time moves at most once a minute; a
+    process now skips it while its own last write for that token is younger than that."""
+    from agentic_cp.auth import deps
+
+    calls = []
+    real = deps.touch_token
+
+    async def counting(conn, token_id, *, now):
+        calls.append(now)
+        await real(conn, token_id, now=now)
+
+    monkeypatch.setattr(deps, "touch_token", counting)
+    token = api.a.admin_token
+    for _ in range(3):
+        assert (await api.get("/v1/me", token)).status_code == 200
+    assert len(calls) == 1
+    api.clock.advance(timedelta(seconds=61))
+    listed = await api.get("/v1/tokens", token)
+    assert len(calls) == 2
+    stored = {datetime.fromisoformat(t["last_used_at"]) for t in listed.json() if t["last_used_at"]}
+    assert calls[-1] in stored  # the write a minute later still lands
 
 
 class _RefuseTenant:

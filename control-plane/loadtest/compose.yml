@@ -1,0 +1,103 @@
+# =============================================================================
+# The M3-22 load test's target: the control plane as the master plan sizes it ("2-3
+# replicas x 1 vCPU / 1 GB") on its Postgres, with the background worker. Started and
+# stopped by `loadtest.py up` / `down`, which generate the passwords (kept in the
+# git-ignored .state/ folder) and pass them in the environment.
+#
+#   lt-postgres  the pinned postgres image (as scripts/check.py and the org stack), fsync
+#                on; first start creates the owner role and database (the org stack's
+#                cp-postgres/init.sh)
+#   lt-init      one-shot: migrate, then create the runtime role
+#   lt-cp        `python -m agentic_cp serve`, scaled to N replicas (--scale lt-cp=N),
+#                each on its own random 127.0.0.1 port; the driver spreads runs over them
+#   lt-worker    `python -m agentic_cp worker` (zombie sweeps, outbox, auto-trip); policy
+#                polling is slowed down, as the seeded policy repo lives on the host
+#
+# Every container carries the project name agentic-m3-load-test; `down` removes the
+# project's containers and volume, nothing else.
+# =============================================================================
+
+name: agentic-m3-load-test
+
+x-cp-env: &cp-env
+  AGENTIC_CP_DATABASE_URL: postgresql://cp_app:${LT_APP_PASSWORD:?run loadtest.py up}@lt-postgres:5432/agentic
+  AGENTIC_CP_METRICS_TOKEN: ${LT_METRICS_TOKEN:?run loadtest.py up}
+
+services:
+  lt-postgres:
+    image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    command:
+      - postgres
+      - -c
+      - max_connections=300
+      - -c
+      - shared_buffers=1GB
+      - -c
+      - effective_cache_size=3GB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - shared_preload_libraries=pg_stat_statements  # the run reports the costliest queries
+    environment:
+      POSTGRES_PASSWORD: ${LT_SUPERUSER_PASSWORD:?run loadtest.py up}
+      CP_OWNER_PASSWORD: ${LT_OWNER_PASSWORD:?run loadtest.py up}
+      CP_DATABASE: agentic
+    volumes:
+      - ltdata:/var/lib/postgresql/data
+      - ../../deploy/org-local/cp-postgres/init.sh:/docker-entrypoint-initdb.d/10-agentic.sh:ro,z
+    ports:
+      - "127.0.0.1::5432"
+    cpus: ${LT_PG_CPUS:-2}
+    mem_limit: ${LT_PG_MEMORY:-4g}
+    shm_size: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d agentic"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  lt-init:
+    image: agentic-control-plane:m3-load-test
+    build:
+      context: ../..
+      dockerfile: control-plane/Dockerfile
+    entrypoint: ["sh", "-c", "python -m agentic_cp migrate && python -m agentic_cp db grant-runtime"]
+    environment:
+      <<: *cp-env
+      AGENTIC_CP_OWNER_DATABASE_URL: postgresql://cp_owner:${LT_OWNER_PASSWORD}@lt-postgres:5432/agentic
+    depends_on:
+      lt-postgres:
+        condition: service_healthy
+    restart: "no"
+
+  lt-cp:
+    image: agentic-control-plane:m3-load-test
+    pull_policy: never
+    command: ["serve", "--host", "0.0.0.0", "--port", "8080"]
+    environment:
+      <<: *cp-env
+    ports:
+      - "127.0.0.1::8080"
+    cpus: ${LT_CP_CPUS:-1}
+    mem_limit: ${LT_CP_MEMORY:-1g}
+    depends_on:
+      lt-init:
+        condition: service_completed_successfully
+
+  lt-worker:
+    image: agentic-control-plane:m3-load-test
+    pull_policy: never
+    command: ["worker"]
+    environment:
+      <<: *cp-env
+      AGENTIC_CP_POLICY_POLL_SECONDS: "3600"
+    cpus: 0.5
+    mem_limit: 512m
+    depends_on:
+      lt-init:
+        condition: service_completed_successfully
+
+volumes:
+  ltdata:

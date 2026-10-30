@@ -50,6 +50,12 @@ def _checked(body: KillSwitchRequest) -> tuple[str, str, str | None]:
     return kind, value, team
 
 
+def _forget(request: Request, ctx: TokenContext) -> None:
+    cache = getattr(request.app.state, "kill_cache", None)
+    if cache is not None:
+        cache.forget(ctx.tenant_id)
+
+
 async def _may_change(ctx: TokenContext, team: str | None, conn, request: Request) -> None:
     cache = request.app.state.enforcers
     if team is None:
@@ -83,6 +89,7 @@ async def set_switch(body: KillSwitchRequest, request: Request, ctx: Caller) -> 
             actor_kind=ctx.actor_kind,
             clock=state.clock,
         )
+    _forget(request, ctx)  # this process shows its own change at once
     return store.info(row)
 
 
@@ -118,6 +125,7 @@ async def clear_switch(
             actor_kind=ctx.actor_kind,
             clock=state.clock,
         )
+    _forget(request, ctx)  # this process shows its own change at once
     return store.info(row)
 
 
@@ -168,8 +176,14 @@ async def kill_state(
     `If-None-Match` while nothing changed gets 304 with no body."""
     state = request.app.state
     scope = RunScope(team=team, user=ctx.email.lower(), repo=repo, pipeline=pipeline)
-    async with tenant_tx(state.engine, ctx.tenant_id) as conn:
-        found = await store.rows(conn)
+    cache = getattr(state, "kill_cache", None)
+    now = state.clock()
+    found = cache.get(ctx.tenant_id, now) if cache is not None else None
+    if found is None:  # read at most once per `kill_cache_seconds` (M3-22, DF-704)
+        async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+            found = await store.rows(conn)
+        if cache is not None:
+            cache.put(ctx.tenant_id, found, now)
     applying = [store.info(row) for row in found if run_level(store.as_switch(row), scope)]
     state.metrics.observe_kill_state(bool(applying))
     ttl = state.settings.kill_ttl_seconds

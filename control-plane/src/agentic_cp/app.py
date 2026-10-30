@@ -20,6 +20,7 @@ from agentic_cp.alerts.sinks import default_sinks
 from agentic_cp.audit.api import router as audit_router
 from agentic_cp.auth.api import router as auth_router
 from agentic_cp.auth.service_accounts import router as service_accounts_router
+from agentic_cp.auth.tokens import RecentTouches
 from agentic_cp.body_limit import BodyLimit
 from agentic_cp.cost.api import router as cost_router
 from agentic_cp.dashboards.link import linked_views
@@ -31,6 +32,7 @@ from agentic_cp.ingest.api import router as runs_router
 from agentic_cp.keys.api import router as keys_router
 from agentic_cp.keys.gateway import gateway_keys_for
 from agentic_cp.killswitch.api import router as killswitch_router
+from agentic_cp.killswitch.store import SwitchCache
 from agentic_cp.learning.api import router as learning_router
 from agentic_cp.learning.decisions import router as learning_decisions_router
 from agentic_cp.logredact import install_log_redaction
@@ -98,6 +100,8 @@ def create_app(
     # where budget alerts go (M2-16): the mail outbox and the webhook seam
     app.state.alert_sinks = default_sinks(alert_webhook)
     app.state.enforcers = EnforcerCache(settings.enforcer_cache_tenants)
+    app.state.touched = RecentTouches()  # token last-use writes skipped within a minute
+    app.state.kill_cache = SwitchCache(settings.kill_cache_seconds)  # kill polls (DF-704)
     install_problem_handlers(app)
     install_log_redaction()  # the webhook token travels in the path (review F2)
     app.add_middleware(BodyLimit, max_bytes=settings.max_body_bytes)

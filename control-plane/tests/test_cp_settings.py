@@ -3,6 +3,7 @@ refused, and secrets never show in a repr (Review Focus 5)."""
 
 import pytest
 
+from agentic_cp.db import make_engine
 from agentic_cp.settings import Settings, SettingsError
 
 # Built from pieces so no secret scanner mistakes it for a real credential.
@@ -134,3 +135,24 @@ def test_a_short_metrics_token_is_refused():
     with pytest.raises(SettingsError, match="metrics_token") as caught:
         Settings.from_env(_env(AGENTIC_CP_METRICS_TOKEN="short-1"))
     assert "short-1" not in str(caught.value)
+
+
+def test_the_pool_keeps_its_connections_open_by_default():
+    """M3-22: a pool of 5 with 10 overflow connections opened and closed connections all
+    through the load test (each a password exchange and a new Postgres backend). The same
+    15 now stay open; both numbers are settings."""
+    settings = Settings.from_env(_env())
+    assert (settings.db_pool_size, settings.db_max_overflow) == (15, 0)
+    pool = make_engine(settings).sync_engine.pool
+    assert pool.size() == 15 and pool._max_overflow == 0
+    tuned = Settings.from_env(_env(AGENTIC_CP_DB_POOL_SIZE="40", AGENTIC_CP_DB_MAX_OVERFLOW="5"))
+    pool = make_engine(tuned).sync_engine.pool
+    assert pool.size() == 40 and pool._max_overflow == 5
+
+
+@pytest.mark.parametrize(
+    ("name", "value"), [("AGENTIC_CP_DB_POOL_SIZE", "0"), ("AGENTIC_CP_DB_MAX_OVERFLOW", "-1")]
+)
+def test_pool_settings_refuse_bad_values(name, value):
+    with pytest.raises(SettingsError):
+        Settings.from_env(_env(**{name: value}))

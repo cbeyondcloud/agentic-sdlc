@@ -12,9 +12,9 @@ pipelines), `versions` (the agents' and pipeline's versions against the rollout,
 team's pins and deprecations, by the server's clock - M2-15), `concurrency`
 (`per_user` and `per_team` of that version's `limits.yaml`) and `budget` (passed, value
 None: the gateway does not measure a team's remaining budget yet - never reported as 0).
-The run is registered only when every check passes and it is not a dry run; registrations
-of a tenant serialise on an advisory lock, so two at cap-1 get one slot (ruling R8: a slot
-is an open run active within `run_slot_hours`)."""
+The run is registered only when every check passes and it is not a dry run; taking a slot
+serialises per tenant on an advisory lock, under which the caps are counted again, so two at
+cap-1 get one slot (ruling R8: a slot is an open run active within `run_slot_hours`)."""
 
 from __future__ import annotations
 
@@ -348,13 +348,15 @@ async def register_run(
     now: datetime,
     minimum: str | None,
 ) -> RunPreflight:
-    """Every org check for `body` in the caller's tenant; registers the run when all pass."""
+    """Every org check for `body` in the caller's tenant; registers the run when all pass.
+
+    Only taking the slot holds the tenant's registration lock: the concurrency count is
+    taken again under it, right before the insert (R8). The checks run before it, so a dry
+    run or a refused run never waits on it, and a registration holds it for two counts and
+    an insert - not for every check (M3-22: under load the lock queued registrations, each
+    holding a pool connection, and starved every other route)."""
     tenant_id = await require_tenant_id(conn)
-    key = func.hashtextextended(f"agentic.runs.register:{tenant_id}", 0)
-    await conn.execute(select(func.pg_advisory_xact_lock(key)))
-    exists = await conn.execute(select(runs.c.run_id).where(runs.c.run_id == body.run_id))
-    if exists.first() is not None:
-        raise ApiProblem(409, "runs.exists", f"run {body.run_id} is already registered")
+    await _require_new(conn, body.run_id)
     version = await version_settings(conn, body.policy_version)
     policy = (
         OrgCheck(check="policy", passed=True, detail=f"{body.policy_version} is accepted")
@@ -379,6 +381,14 @@ async def register_run(
     ]
     registered = all(check.passed for check in checks) and not body.dry_run
     if registered:
+        key = func.hashtextextended(f"agentic.runs.register:{tenant_id}", 0)
+        await conn.execute(select(func.pg_advisory_xact_lock(key)))
+        await _require_new(conn, body.run_id)  # a twin registered while we checked
+        since = now - timedelta(hours=settings.run_slot_hours)
+        slot = await _concurrency(conn, ctx, body, version, since)
+        checks = [slot if check.check == "concurrency" else check for check in checks]
+        registered = slot.passed
+    if registered:
         await conn.execute(
             runs.insert().values(
                 tenant_id=tenant_id,
@@ -393,3 +403,9 @@ async def register_run(
             )
         )
     return RunPreflight(registered=registered, checks=checks, min_cli_version=minimum)
+
+
+async def _require_new(conn: AsyncConnection, run_id: str) -> None:
+    exists = await conn.execute(select(runs.c.run_id).where(runs.c.run_id == run_id))
+    if exists.first() is not None:
+        raise ApiProblem(409, "runs.exists", f"run {run_id} is already registered")

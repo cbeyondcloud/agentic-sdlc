@@ -223,8 +223,31 @@ async def effective_permissions(
     """The caller's permissions at org scope, in each team they hold a role in, and in each
     repo they maintain (with that repo's team)."""
     enforcer, repo_teams = await cache.entry(ctx.tenant_id, ctx.rbac_revision, conn)
-    subject = f"user:{ctx.user_id}"
-    prefix = f"{ctx.tenant_id}|"
+    return permissions_for(enforcer, ctx.tenant_id, ctx.user_id, ctx.kind, repo_teams)
+
+
+def held_in(enforcer: casbin.Enforcer, tenant_id: UUID, user_id: UUID, scope: str) -> set[str]:
+    """What the user's grants in one scope give: the permissions of every role casbin's role
+    manager links them to in that domain - the matcher's `g(r.sub, p.sub, r.dom) && r.act ==
+    p.act` read from the role side, so casbin is not run once per permission (DF-406)."""
+    subject = f"user:{user_id}"
+    linked = {subject, *enforcer.get_implicit_roles_for_user(subject, domain(tenant_id, scope))}
+    return {rule[1] for rule in enforcer.get_policy() if rule[0] in linked}
+
+
+def permissions_for(
+    enforcer: casbin.Enforcer,
+    tenant_id: UUID,
+    user_id: UUID,
+    kind: str,
+    repo_teams: dict[str, str],
+) -> EffectivePermissions:
+    """`effective_permissions` without a database: the same answer as `decide` asked for every
+    permission in every scope (the scopes of `candidate_scopes`), computed once per scope.
+    At 500 people per tenant asking per permission cost about 318 ms of CPU per `/v1/me`
+    (M3-22)."""
+    subject = f"user:{user_id}"
+    prefix = f"{tenant_id}|"
     scopes = sorted(
         {
             rule[2][len(prefix) :]
@@ -232,30 +255,23 @@ async def effective_permissions(
             if rule[0] == subject and rule[2].startswith(prefix)
         }
     )
-    org = frozenset(
-        p for p in PERMISSIONS if decide(enforcer, ctx.tenant_id, ctx.user_id, p, Org()).allowed
-    )
+    at_org = held_in(enforcer, tenant_id, user_id, "org")
+    org = frozenset(p for p in PERMISSIONS if p in at_org)
     teams = {}
     repos = {}
     for scope in scopes:
         if scope.startswith("team:"):
-            slug = scope[len("team:") :]
-            teams[slug] = frozenset(
-                p
-                for p in PERMISSIONS
-                if PERMISSIONS[p] != "org"
-                and decide(enforcer, ctx.tenant_id, ctx.user_id, p, Team(slug)).allowed
+            granted = at_org | held_in(enforcer, tenant_id, user_id, scope)
+            teams[scope[len("team:") :]] = frozenset(
+                p for p in PERMISSIONS if PERMISSIONS[p] != "org" and p in granted
             )
         elif scope.startswith("repo:"):
-            key = scope[len("repo:") :]
-            repos[key] = frozenset(
-                p
-                for p in PERMISSIONS
-                if PERMISSIONS[p] == "repo"
-                and decide(enforcer, ctx.tenant_id, ctx.user_id, p, Repo(key)).allowed
+            granted = at_org | held_in(enforcer, tenant_id, user_id, scope)
+            repos[scope[len("repo:") :]] = frozenset(
+                p for p in PERMISSIONS if PERMISSIONS[p] == "repo" and p in granted
             )
     shown = {key: team for key, team in repo_teams.items() if key in repos}
-    if ctx.kind == "service":  # as `authorize` decides for a service principal
+    if kind == "service":  # as `authorize` decides for a service principal
         org = org & SERVICE_PERMISSIONS
         teams = {slug: held & SERVICE_PERMISSIONS for slug, held in teams.items()}
         repos = {key: held & SERVICE_PERMISSIONS for key, held in repos.items()}

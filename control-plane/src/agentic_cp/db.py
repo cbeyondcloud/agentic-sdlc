@@ -30,13 +30,14 @@ def async_url(dsn: str) -> URL:
     raise ValueError("the control plane needs a postgresql:// DSN")
 
 
-def engine_for(dsn: str, schema: str, *, pool_size: int = 5) -> AsyncEngine:
+def engine_for(dsn: str, schema: str, *, pool_size: int = 5, max_overflow: int = 10) -> AsyncEngine:
     """An engine on `dsn` whose connections resolve unqualified names in `schema` only and
     whose every transaction runs in the context's tenant (or in none)."""
     engine = create_async_engine(
         async_url(dsn),
         pool_pre_ping=True,
         pool_size=pool_size,
+        max_overflow=max_overflow,
         connect_args={"server_settings": {"search_path": _checked_schema(schema)}},
     )
     install_tenant_guc(engine)
@@ -44,8 +45,14 @@ def engine_for(dsn: str, schema: str, *, pool_size: int = 5) -> AsyncEngine:
 
 
 def make_engine(settings: Settings) -> AsyncEngine:
-    """The runtime engine (the API's role: no ownership, no BYPASSRLS)."""
-    return engine_for(settings.database_url.get_secret_value(), settings.db_schema)
+    """The runtime engine (the API's role: no ownership, no BYPASSRLS), with the
+    deployment's pool (`db_pool_size`, `db_max_overflow`)."""
+    return engine_for(
+        settings.database_url.get_secret_value(),
+        settings.db_schema,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+    )
 
 
 def make_owner_engine(settings: Settings) -> AsyncEngine:
