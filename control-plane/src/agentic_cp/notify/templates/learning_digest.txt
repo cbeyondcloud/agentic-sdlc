@@ -1,0 +1,8 @@
+$count learning proposal(s) in team $team ($tenant_name) wait for your decision. Each was
+made from repeated corrections of an agent's work; nothing changes until you approve it.
+
+$proposals
+
+See one:     agentic learn show <id>
+Approve it:  agentic learn approve <id>
+Or:          agentic learn reject <id> --reason "..."   (or defer, edit)

@@ -73,6 +73,9 @@ class FakeControlPlane:
     export_cut: bool = False  # the export stream stops before its proof line (M2-13)
     corrections: list[dict] = field(default_factory=list)  # attribution corrections (M3-12)
     proposals: list[dict] = field(default_factory=list)  # GET /v1/learning/proposals (M3-13)
+    learning: dict[str, dict] = field(default_factory=dict)  # id -> detail (M3-15)
+    learning_calls: list[tuple[str, dict]] = field(default_factory=list)  # route, body
+    refuse_decisions: bool = False  # decisions answer 403 (the caller does not own it)
     heartbeats: list[dict] = field(default_factory=list)  # run id + body of each beat (M3-07)
     refuse_heartbeats: bool = False  # answer every beat 503
     chargeback: list[dict] = field(default_factory=list)  # dash_chargeback rows (M3-01)
@@ -488,6 +491,8 @@ class FakeControlPlane:
             body = json.loads(request.content)
             self.corrections.append({"id": path.split("/")[4], **body})
             return httpx2.Response(200, json=self._feedback_info(path.split("/")[4], body))
+        if path.startswith("/v1/learning/proposals/"):  # M3-15, M3-16
+            return self._learning(request, path)
         if path == "/v1/learning/proposals":
             return httpx2.Response(200, json=self.proposals)
         if path == "/v1/cost/chargeback":  # M3-01
@@ -634,6 +639,38 @@ class FakeControlPlane:
                     "at": entry["at"],
                 }
         return [item for item in newest.values() if "kind" in item]
+
+    def _learning(self, request: httpx2.Request, path: str) -> httpx2.Response:
+        """One proposal's routes: read it, decide, edit, endorse, report applied/reverted."""
+        parts = path.split("/")  # "", v1, learning, proposals, <id>[, <action>]
+        held = self.learning.get(parts[4])
+        if held is None:
+            return _problem(404, "not_found", "proposal not found")
+        if len(parts) == 5:  # `may_decide`: the caller owns it, unless decisions are refused
+            return httpx2.Response(200, json={"may_decide": not self.refuse_decisions, **held})
+        action = parts[5]
+        body = json.loads(request.content) if request.content else {}
+        self.learning_calls.append((action, body))
+        if action in ("decision", "draft", "applied", "reverted") and self.refuse_decisions:
+            return _problem(
+                403,
+                "rbac.forbidden",
+                f"only a holder of agent.approve.repo may approve proposal {held['id']}; "
+                "you may endorse it instead",
+            )
+        decided = {"approve": "approved", "reject": "rejected", "defer": "deferred"}
+        if action == "decision":
+            held["status"] = decided[body["action"]]
+            held["draft"] = body.get("draft") or held.get("draft")
+        elif action in ("applied", "reverted"):
+            held["status"] = action
+            held[f"{action}_ref"] = body["ref"]
+        elif action == "endorse" and self.email not in held.setdefault("endorsements", []):
+            held["endorsements"].append(self.email)
+        elif action == "draft":
+            held.update(kind=body.get("kind"), edited_lesson=body.get("lesson"))
+        info = {k: v for k, v in held.items() if k not in ("feedback", "draft")}
+        return httpx2.Response(200, json=info)
 
     def _feedback_info(self, feedback_id: str, body: dict) -> dict:
         learners = [{"agent": agent, "confidence": 1.0} for agent in body["agents"]]

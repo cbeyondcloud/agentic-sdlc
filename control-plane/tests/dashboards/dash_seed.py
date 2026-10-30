@@ -19,7 +19,7 @@ import asyncpg
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from agentic_cp.audit import AuditEvent, append
-from agentic_cp.tables import kill_switches, repos, run_events, runs, users
+from agentic_cp.tables import kill_switches, learning_proposals, repos, run_events, runs, users
 from agentic_cp.tenancy.context import tenant_tx
 from agentic_cp.tenancy.tenants import create_tenant
 
@@ -191,6 +191,22 @@ class _Chain:
         )
 
 
+async def _applied_learning(conn, tenant: UUID, team: str) -> None:
+    """A learning applied after the team's seeded runs opened (M3-16, `dash_learning_effect`)."""
+    await conn.execute(
+        learning_proposals.insert().values(
+            tenant_id=tenant,
+            id=f"lp-{uuid.uuid4().hex[:20]}",
+            team=team,
+            agent="developer",
+            scope=f"repo:git.example.test/{team}/app",
+            lesson="Wrap HTTP calls in with_retry().",
+            status="applied",
+            applied_at=at(250),
+        )
+    )
+
+
 async def _run(conn, tenant: UUID, run_id: str, team: str, starter: UUID) -> _Chain:
     await conn.execute(
         runs.insert().values(
@@ -241,6 +257,7 @@ async def seed_framework(engine, a: UUID, b: UUID) -> None:
                 waited_ms=waited,
             )
         await r1.add("run_closed", status="completed")
+        await _applied_learning(conn, a, "payments")
         await conn.execute(
             repos.insert().values(
                 tenant_id=a,
@@ -281,6 +298,7 @@ async def seed_framework(engine, a: UUID, b: UUID) -> None:
         chains = {"b-r1": await _run(conn, b, "b-r1", "platform", carol)}
         await _steps(chains, STEPS_B)
         await chains["b-r1"].add("gate_waiting", "develop", gate="b-gate", hard=True)
+        await _applied_learning(conn, b, "platform")
         await conn.execute(
             repos.insert().values(
                 tenant_id=b,

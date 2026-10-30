@@ -178,6 +178,40 @@
       ],
       "title": "Decisions by approver",
       "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "Each applied learning (M3-16): its agent's corrections per run of its team in the 30 days before and after it was applied. A window without a run is empty, not zero.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "id": 6,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT agent, team, lesson, status, applied_at, corrections_before, runs_before, rate_before, corrections_after, runs_after, rate_after FROM dash_learning_effect ORDER BY applied_at DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Correction rate per agent before and after each learning",
+      "type": "table"
     }
   ],
   "refresh": "",

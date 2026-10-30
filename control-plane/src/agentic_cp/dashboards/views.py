@@ -658,7 +658,48 @@ LEFT JOIN (
 ) g ON g.tenant_id = f.tenant_id AND g.month = f.month AND g.team = f.team
 """
 
-#: Every dashboard view of M2-37, in creation order (each reads only those before it).
+#: Each applied learning (M3-16): its agent's corrections and its team's runs in the 30 days
+#: before and after it was applied, and the correction rate (corrections per run) of each
+#: window. A window without a run is NULL (unmeasured), never 0.
+_LEARNING_WINDOW = "INTERVAL '30 days'"
+_LEARNING_EFFECT = f"""
+WITH applied AS (
+  SELECT p.tenant_id, p.id AS proposal_id, p.team, p.agent, p.scope, p.lesson, p.status,
+    p.applied_at, p.reverted_at
+  FROM learning_proposals p JOIN dash_scope s ON s.tenant_id = p.tenant_id
+  WHERE p.applied_at IS NOT NULL
+), corrections AS (
+  SELECT a.tenant_id, a.proposal_id,
+    COUNT(f.id) FILTER (WHERE f.given_at >= a.applied_at - {_LEARNING_WINDOW}
+      AND f.given_at < a.applied_at) AS corrections_before,
+    COUNT(f.id) FILTER (WHERE f.given_at >= a.applied_at
+      AND f.given_at < a.applied_at + {_LEARNING_WINDOW}) AS corrections_after
+  FROM applied a LEFT JOIN feedback f
+    ON f.tenant_id = a.tenant_id AND f.team = a.team AND a.agent = ANY(f.agents)
+  GROUP BY a.tenant_id, a.proposal_id
+), team_runs AS (
+  SELECT a.tenant_id, a.proposal_id,
+    COUNT(r.run_id) FILTER (WHERE r.opened_at >= a.applied_at - {_LEARNING_WINDOW}
+      AND r.opened_at < a.applied_at) AS runs_before,
+    COUNT(r.run_id) FILTER (WHERE r.opened_at >= a.applied_at
+      AND r.opened_at < a.applied_at + {_LEARNING_WINDOW}) AS runs_after
+  FROM applied a LEFT JOIN runs r ON r.tenant_id = a.tenant_id AND r.team = a.team
+  GROUP BY a.tenant_id, a.proposal_id
+)
+SELECT a.tenant_id, a.proposal_id, a.team, a.agent, a.scope, a.lesson, a.status,
+  a.applied_at, a.reverted_at, c.corrections_before, c.corrections_after,
+  t.runs_before, t.runs_after,
+  CASE WHEN t.runs_before > 0
+    THEN ROUND(CAST(c.corrections_before AS numeric) / t.runs_before, 4) END AS rate_before,
+  CASE WHEN t.runs_after > 0
+    THEN ROUND(CAST(c.corrections_after AS numeric) / t.runs_after, 4) END AS rate_after
+FROM applied a
+JOIN corrections c ON c.tenant_id = a.tenant_id AND c.proposal_id = a.proposal_id
+JOIN team_runs t ON t.tenant_id = a.tenant_id AND t.proposal_id = a.proposal_id
+"""
+
+#: The views the M2-37 migration creates, in creation order (each reads only those before
+#: it). Views over newer tables are created by the migration that adds those tables.
 M2_37_VIEWS: tuple[str, ...] = (
     "dash_scope",
     "dash_calls",
@@ -676,7 +717,8 @@ M2_37_VIEWS: tuple[str, ...] = (
     "dash_audit",
     "dash_repos",
 )
-
+#: The learning loop's views (migration `m3_14_learning_apply`; they read the M3-11 tables).
+LEARNING_VIEWS: tuple[str, ...] = ("dash_learning_effect",)
 
 #: The executive cost views of M3-01 (migration `m3_01_roi`), in creation order.
 ROI_VIEWS: tuple[str, ...] = (
@@ -693,7 +735,7 @@ ROI_VIEWS: tuple[str, ...] = (
 
 #: Every dashboard view, in creation order. A Grafana reader may select exactly these;
 #: `test_every_dash_view_is_registered` keeps the list equal to the schema's `dash_*` views.
-DASH_VIEWS: tuple[str, ...] = M2_37_VIEWS + ROI_VIEWS
+DASH_VIEWS: tuple[str, ...] = M2_37_VIEWS + LEARNING_VIEWS + ROI_VIEWS
 
 
 def _bodies(schema: str) -> dict[str, str]:
@@ -722,6 +764,7 @@ def _bodies(schema: str) -> dict[str, str]:
         "dash_cost_drivers_user": driver_sql("f.attributed", ("tenant_id", "month", "user_email")),
         "dash_chargeback": _CHARGEBACK,
         "dash_roi_month": _ROI_MONTH,
+        "dash_learning_effect": _LEARNING_EFFECT,
     }
 
 
@@ -744,3 +787,8 @@ def drop_statements(views: tuple[str, ...] = M2_37_VIEWS) -> list[str]:
     first."""
     contracts = CONTRACT_VIEWS if views == M2_37_VIEWS else ()
     return [f"DROP VIEW IF EXISTS {name}" for name in (*reversed(views), *contracts)]
+
+
+def learning_view_statements(schema: str) -> list[str]:
+    """`CREATE VIEW` for the learning loop's views (M3-16), after `view_statements`."""
+    return view_statements(schema, LEARNING_VIEWS)

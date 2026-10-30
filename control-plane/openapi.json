@@ -403,6 +403,34 @@
         "title": "ChainHead",
         "type": "object"
       },
+      "ChangeReport": {
+        "additionalProperties": false,
+        "description": "`POST .../applied` and `.../reverted`: how the approver's CLI made the change.",
+        "properties": {
+          "measurement": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measurement"
+          },
+          "ref": {
+            "additionalProperties": true,
+            "title": "Ref",
+            "type": "object"
+          }
+        },
+        "required": [
+          "ref"
+        ],
+        "title": "ChangeReport",
+        "type": "object"
+      },
       "Chargeback": {
         "description": "The chargeback of `month` (for `team`, or every team when None).",
         "properties": {
@@ -2066,12 +2094,70 @@
         "title": "Problem",
         "type": "object"
       },
-      "ProposalInfo": {
-        "description": "A proposal made from repeated corrections (M3-13). Created only: approving and\napplying it are later steps (L4-L6), so nothing has changed because it exists.",
+      "ProposalDecision": {
+        "additionalProperties": false,
+        "description": "`POST /v1/learning/proposals/{id}/decision` (M3-15): the owner's decision. An approval\ncarries the draft being approved, kept with the proposal for the audit.",
         "properties": {
+          "action": {
+            "enum": [
+              "approve",
+              "reject",
+              "defer"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "title": "ProposalDecision",
+        "type": "object"
+      },
+      "ProposalDetail": {
+        "description": "One proposal with the feedback records behind it (the evidence) and the draft its\nowner approved (M3-14: the diff and the regression case).",
+        "properties": {
+          "actors": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Actors",
+            "type": "array"
+          },
           "agent": {
             "title": "Agent",
             "type": "string"
+          },
+          "applied_ref": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied Ref"
           },
           "created_at": {
             "format": "date-time",
@@ -2090,6 +2176,274 @@
             ],
             "title": "Decided At"
           },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft"
+          },
+          "edited_lesson": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edited Lesson"
+          },
+          "endorsements": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Endorsements",
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "feedback": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FeedbackInfo"
+            },
+            "title": "Feedback",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "lesson": {
+            "title": "Lesson",
+            "type": "string"
+          },
+          "may_decide": {
+            "default": false,
+            "title": "May Decide",
+            "type": "boolean"
+          },
+          "measurement": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measurement"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "reverted_ref": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reverted Ref"
+          },
+          "scope": {
+            "title": "Scope",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "rejected",
+              "deferred",
+              "applied",
+              "reverted"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "target": {
+            "default": "repo",
+            "enum": [
+              "personal",
+              "repo",
+              "team",
+              "org"
+            ],
+            "title": "Target",
+            "type": "string"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "team",
+          "agent",
+          "scope",
+          "lesson",
+          "evidence",
+          "status",
+          "created_at"
+        ],
+        "title": "ProposalDetail",
+        "type": "object"
+      },
+      "ProposalEdit": {
+        "additionalProperties": false,
+        "description": "`PUT /v1/learning/proposals/{id}/draft`: retarget or reword before deciding.",
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z-]{1,39}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "lesson": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lesson"
+          }
+        },
+        "title": "ProposalEdit",
+        "type": "object"
+      },
+      "ProposalInfo": {
+        "description": "A proposal made from repeated corrections (M3-13) and where it stands (M3-15, M3-16).\nNothing changes because a proposal exists: only its owner's approval leads to `applied`\n(D29). `target` is the narrowest scope its evidence supports (personal, repo, team) and\n`owner` who decides it: the user (personal), the repo or the team.",
+        "properties": {
+          "actors": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Actors",
+            "type": "array"
+          },
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "applied_ref": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied Ref"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decided_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By"
+          },
+          "edited_lesson": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edited Lesson"
+          },
+          "endorsements": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Endorsements",
+            "type": "array"
+          },
           "evidence": {
             "items": {
               "type": "string"
@@ -2101,9 +2455,55 @@
             "title": "Id",
             "type": "string"
           },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
           "lesson": {
             "title": "Lesson",
             "type": "string"
+          },
+          "measurement": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measurement"
+          },
+          "owner": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner"
+          },
+          "reverted_ref": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reverted Ref"
           },
           "scope": {
             "title": "Scope",
@@ -2112,9 +2512,24 @@
           "status": {
             "enum": [
               "pending",
-              "rejected"
+              "approved",
+              "rejected",
+              "deferred",
+              "applied",
+              "reverted"
             ],
             "title": "Status",
+            "type": "string"
+          },
+          "target": {
+            "default": "repo",
+            "enum": [
+              "personal",
+              "repo",
+              "team",
+              "org"
+            ],
+            "title": "Target",
             "type": "string"
           },
           "team": {
@@ -2133,6 +2548,34 @@
           "created_at"
         ],
         "title": "ProposalInfo",
+        "type": "object"
+      },
+      "ProposeFrom": {
+        "additionalProperties": false,
+        "description": "`POST /v1/learning/proposals`: teach one correction now (an explicit request).",
+        "properties": {
+          "agent": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z][a-z0-9-]{0,63}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent"
+          },
+          "feedback_id": {
+            "pattern": "^fb-[0-9a-f]{20}$",
+            "title": "Feedback Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "feedback_id"
+        ],
+        "title": "ProposeFrom",
         "type": "object"
       },
       "ProxyKeyIssued": {
@@ -4079,7 +4522,7 @@
     },
     "/v1/learning/proposals": {
       "get": {
-        "description": "The proposals the caller may read, newest first. Proposals are created only: nothing\nhas been applied because one is listed here.",
+        "description": "The proposals the caller may read, newest first, with where each stands. Only an\napproved proposal is ever applied (M3-15, M3-16).",
         "operationId": "list_proposals_v1_learning_proposals_get",
         "parameters": [
           {
@@ -4106,7 +4549,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "pattern": "^(pending|rejected)$",
+                  "pattern": "^(pending|approved|rejected|deferred|applied|reverted)$",
                   "type": "string"
                 },
                 {
@@ -4150,6 +4593,386 @@
           }
         ],
         "summary": "List Proposals",
+        "tags": [
+          "learning"
+        ]
+      },
+      "post": {
+        "description": "Teach one correction now (spec §24 step 3: an explicit request). The record's author\nor a viewer of its team; the same request again returns the same proposal.",
+        "operationId": "propose_from_v1_learning_proposals_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposeFrom"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Propose From",
+        "tags": [
+          "learning"
+        ]
+      }
+    },
+    "/v1/learning/proposals/{pid}": {
+      "get": {
+        "description": "One proposal, its evidence (the feedback records behind it), once approved the draft\nits owner approved, and whether the caller may decide it (`may_decide`: the CLI asks\nbefore it makes or undoes the change, so a reader who does not own it changes nothing,\nreview F4).",
+        "operationId": "get_proposal_v1_learning_proposals__pid__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pid",
+            "required": true,
+            "schema": {
+              "title": "Pid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Proposal",
+        "tags": [
+          "learning"
+        ]
+      }
+    },
+    "/v1/learning/proposals/{pid}/applied": {
+      "post": {
+        "description": "The owner's CLI applied the approved change (a personal write, a pull request).",
+        "operationId": "report_applied_v1_learning_proposals__pid__applied_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pid",
+            "required": true,
+            "schema": {
+              "title": "Pid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Report Applied",
+        "tags": [
+          "learning"
+        ]
+      }
+    },
+    "/v1/learning/proposals/{pid}/decision": {
+      "post": {
+        "description": "Approve, reject or defer: the owner of what it changes, only (D30). A rejected lesson\nis remembered: it is proposed again only with new evidence.",
+        "operationId": "decide_proposal_v1_learning_proposals__pid__decision_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pid",
+            "required": true,
+            "schema": {
+              "title": "Pid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposalDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Decide Proposal",
+        "tags": [
+          "learning"
+        ]
+      }
+    },
+    "/v1/learning/proposals/{pid}/draft": {
+      "put": {
+        "description": "Retarget (`kind`) or reword (`lesson`) a pending or deferred proposal: its owner only.\nA kind narrower than the evidence supports is refused (422).",
+        "operationId": "edit_proposal_v1_learning_proposals__pid__draft_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pid",
+            "required": true,
+            "schema": {
+              "title": "Pid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposalEdit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Edit Proposal",
+        "tags": [
+          "learning"
+        ]
+      }
+    },
+    "/v1/learning/proposals/{pid}/endorse": {
+      "post": {
+        "description": "Back a proposal (weight for its owner; never a decision). Once per person.",
+        "operationId": "endorse_proposal_v1_learning_proposals__pid__endorse_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pid",
+            "required": true,
+            "schema": {
+              "title": "Pid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Endorse Proposal",
+        "tags": [
+          "learning"
+        ]
+      }
+    },
+    "/v1/learning/proposals/{pid}/reverted": {
+      "post": {
+        "description": "The owner's CLI reverted the applied change (Zyroflo's undo, a revert pull request).",
+        "operationId": "report_reverted_v1_learning_proposals__pid__reverted_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pid",
+            "required": true,
+            "schema": {
+              "title": "Pid",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeReport"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProposalInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              },
+              "application/problem+json": {}
+            },
+            "description": "An RFC 9457 problem document"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Report Reverted",
         "tags": [
           "learning"
         ]

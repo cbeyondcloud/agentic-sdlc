@@ -6,7 +6,7 @@ at, and every reader's grants stay as they are (ruling R5). A reader bound befor
 revision is granted the new views here; one bound later gets them from `bind_reader`.
 
 Revision ID: m3_01_roi
-Revises: m3_07_run_health
+Revises: m3_14_learning_apply
 Create Date: 2026-10-29
 """
 
@@ -18,7 +18,7 @@ from agentic_cp.dashboards.views import ROI_VIEWS, drop_statements, view_stateme
 from agentic_cp.tenancy.rls import schema_of
 
 revision = "m3_01_roi"
-down_revision = "m3_07_run_health"
+down_revision = "m3_14_learning_apply"
 branch_labels = None
 depends_on = None
 

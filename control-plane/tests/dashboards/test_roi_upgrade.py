@@ -14,7 +14,13 @@ from sqlalchemy import text
 from agentic_cp.__main__ import main
 from agentic_cp.app import create_app
 from agentic_cp.dashboards.link import relink_contracts
-from agentic_cp.dashboards.views import CONTRACTS, M2_37_VIEWS, ROI_VIEWS, placeholder_sql
+from agentic_cp.dashboards.views import (
+    CONTRACTS,
+    LEARNING_VIEWS,
+    M2_37_VIEWS,
+    ROI_VIEWS,
+    placeholder_sql,
+)
 from agentic_cp.db import downgrade_async, migrate_async
 from agentic_cp.settings import Settings
 from agentic_cp.tenancy.context import tenant_tx
@@ -86,10 +92,10 @@ async def test_readyz_reports_whether_the_gateway_is_linked(dash_db, make_gatewa
 
 async def test_bound_reader_reads_new_views_after_upgrade(readers, monkeypatch):
     db, seeded, made = readers
-    await downgrade_async(db.owner_dsn, db.schema, "m3_07_run_health")
+    await downgrade_async(db.owner_dsn, db.schema, "m3_14_learning_apply")
     role, password = made.name("old"), secrets.token_hex(12)
-    # bound by a release before M3-01: it granted the M2-37 views only
-    monkeypatch.setattr("agentic_cp.dashboards.readers.DASH_VIEWS", M2_37_VIEWS)
+    # bound by a release before M3-01: it granted the M2-37 and learning views only
+    monkeypatch.setattr("agentic_cp.dashboards.readers.DASH_VIEWS", M2_37_VIEWS + LEARNING_VIEWS)
     await made.bind(seeded.a, role, password)
     await migrate_async(db.owner_dsn, db.schema)
     reader = await made.connect(role, password)

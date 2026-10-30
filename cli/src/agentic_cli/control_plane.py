@@ -49,6 +49,7 @@ from agentic.orgapi import (
     NotificationInfo,
     OffboardResult,
     PersonalFile,
+    ProposalDetail,
     ProposalInfo,
     ProxyKeyIssued,
     ProxyKeysRevoked,
@@ -426,10 +427,53 @@ class ControlPlaneClient:
         body = {"agents": list(agents), "reason": reason}
         return FeedbackInfo.model_validate(self._json("PUT", path, body))
 
-    def proposals(self, *, team: str | None = None) -> list[ProposalInfo]:
-        params = {"team": team} if team else None
-        found = self._json("GET", "/learning/proposals", params=params)
+    def proposals(
+        self, *, team: str | None = None, status: str | None = None
+    ) -> list[ProposalInfo]:
+        params = {k: v for k, v in (("team", team), ("status", status)) if v}
+        found = self._json("GET", "/learning/proposals", params=params or None)
         return [ProposalInfo.model_validate(item) for item in found]
+
+    def proposal(self, pid: str) -> ProposalDetail:
+        """One proposal with its evidence and, once approved, the draft approved (M3-15)."""
+        return ProposalDetail.model_validate(self._json("GET", _proposal_path(pid)))
+
+    def decide_proposal(
+        self, pid: str, action: str, reason: str = "", draft: dict | None = None
+    ) -> ProposalInfo:
+        """Approve, reject or defer: the control plane refuses anyone but its owner (D30)."""
+        body: dict[str, Any] = {"action": action, "reason": reason}
+        if draft is not None:
+            body["draft"] = draft
+        found = self._json("POST", _proposal_path(pid, "decision"), body)
+        return ProposalInfo.model_validate(found)
+
+    def edit_proposal(self, pid: str, kind: str | None, lesson: str | None) -> ProposalInfo:
+        body = {k: v for k, v in (("kind", kind), ("lesson", lesson)) if v is not None}
+        return ProposalInfo.model_validate(self._json("PUT", _proposal_path(pid, "draft"), body))
+
+    def endorse_proposal(self, pid: str) -> ProposalInfo:
+        """Back a proposal: weight for its owner, never a decision."""
+        return ProposalInfo.model_validate(self._json("POST", _proposal_path(pid, "endorse")))
+
+    def propose_from(self, feedback_id: str, agent: str | None = None) -> ProposalInfo:
+        """Teach one correction now (`agentic learn propose --from`)."""
+        body = {"feedback_id": feedback_id, **({"agent": agent} if agent else {})}
+        return ProposalInfo.model_validate(self._json("POST", "/learning/proposals", body))
+
+    def report_applied(
+        self, pid: str, ref: Mapping[str, object], measurement: dict | None = None
+    ) -> ProposalInfo:
+        """This machine made the approved change (a personal write, a pull request)."""
+        body: dict[str, Any] = {"ref": dict(ref)}
+        if measurement is not None:
+            body["measurement"] = measurement
+        found = self._json("POST", _proposal_path(pid, "applied"), body)
+        return ProposalInfo.model_validate(found)
+
+    def report_reverted(self, pid: str, ref: Mapping[str, object]) -> ProposalInfo:
+        found = self._json("POST", _proposal_path(pid, "reverted"), {"ref": dict(ref)})
+        return ProposalInfo.model_validate(found)
 
     def personal_files(self) -> list[PersonalFile]:
         """The caller's newest backed-up copy of each personal skill file and note, read a
@@ -624,6 +668,11 @@ class ControlPlaneClient:
             else None,
             problems=[str(p) for p in found] if isinstance(found, list) else None,
         )
+
+
+def _proposal_path(pid: str, action: str | None = None) -> str:
+    path = f"/learning/proposals/{quote(pid, safe='')}"
+    return f"{path}/{action}" if action else path
 
 
 def _retry_after(response: httpx2.Response, longest: float) -> float | None:
