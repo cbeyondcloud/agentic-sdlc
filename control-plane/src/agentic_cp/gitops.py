@@ -47,6 +47,53 @@ FLAGS = (
 #: proxy. Everything else - GIT_DIR, GIT_CONFIG_PARAMETERS, GIT_SSH_COMMAND (an ssh key) -
 #: is dropped: a credential reaches git only through the tenant's own config (R25).
 _KEPT_GIT_VARS = frozenset({"GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "GIT_PROXY_COMMAND"})
+#: Everything else git and ssh may inherit (DF-496): path, home, locale, temp folders,
+#: proxies, CA bundles and what Windows needs to start a process. The server's own settings
+#: (its DSNs, SMTP password, gateway key) never reach a child.
+_KEPT_VARS = frozenset(
+    {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "LANG",
+        "LANGUAGE",
+        "TZ",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "CURL_CA_BUNDLE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "USERPROFILE",
+        "HOMEDRIVE",
+        "HOMEPATH",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "NUMBER_OF_PROCESSORS",
+        "PROCESSOR_ARCHITECTURE",
+        "OS",
+    }
+    | _KEPT_GIT_VARS
+)
+
+
+def _kept(name: str) -> bool:
+    upper = name.upper()  # proxies are often lower case; Windows names any case
+    return upper in _KEPT_VARS or upper.startswith("LC_")
+
+
 #: ssh without the service account's own keys, agent or config: a tenant without its own
 #: git config fetches anonymously (its config may set `core.sshCommand` with its key).
 _ANONYMOUS_SSH = (
@@ -137,11 +184,7 @@ class GitRunner:
         config when mounted, else none at all; never the system config, the service
         account's `~/.gitconfig`, credential helpers or ssh keys - one tenant must not
         fetch another tenant's private repo with credentials the server happens to hold."""
-        env = {
-            key: value
-            for key, value in os.environ.items()
-            if not key.startswith("GIT_") or key in _KEPT_GIT_VARS
-        }
+        env = {key: value for key, value in os.environ.items() if _kept(key)}
         env["GIT_TERMINAL_PROMPT"] = "0"
         env["GIT_CONFIG_NOSYSTEM"] = "1"
         env["GIT_CONFIG_GLOBAL"] = os.devnull

@@ -272,10 +272,22 @@ async def test_serve_refuses_to_start_on_an_unenforced_database(db):
 
 async def test_readyz_reports_pending_migrations(db):
     async with db.owner.begin() as conn:
-        await conn.exec_driver_sql("UPDATE alembic_version SET version_num = '0000'")
+        await conn.exec_driver_sql("UPDATE alembic_version SET version_num = '0001'")  # older
     reply = await _get(_app(db, require=True), "/readyz")
     assert reply.status_code == 503
     assert reply.json()["code"] == "db.migrations_pending"
+
+
+async def test_readyz_is_ready_on_a_database_newer_than_this_release(db):
+    # DF-413: during a rolling upgrade the pre-upgrade hook migrates first; the old pods
+    # must stay ready on the newer schema (expand/contract), and so must a rolled-back one
+    async with db.owner.begin() as conn:
+        await conn.exec_driver_sql("UPDATE alembic_version SET version_num = 'm9_99_future'")
+    reply = await _get(_app(db, require=True), "/readyz")
+    assert reply.status_code == 200
+    assert reply.json() == {"status": "ready", "db_enforced": True, "gateway_linked": False}
+    settings = Settings.from_env({"AGENTIC_CP_DATABASE_URL": db.app_dsn})
+    assert await serve_preflight(settings, db.app) is None
 
 
 async def test_readyz_reports_an_unreachable_database():

@@ -1,0 +1,41 @@
+{{- /* `helm test <release>`: the control-plane image (no extra image to pin) asks the Service's
+/readyz, which answers 200 only when the database is reachable, migrated and enforcing
+tenant isolation and insert-only audit. */ -}}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "agentic.fullname" . }}-test-ready
+  labels:
+    {{- include "agentic.labels" (list . "test") | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  {{- include "agentic.podCommon" (list . "") | nindent 2 }}
+  restartPolicy: Never
+  containers:
+    - name: ready
+      image: {{ include "agentic.image" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      command: ["python", "-c"]
+      args:
+        - |
+          import sys, urllib.request
+          url = "http://{{ include "agentic.fullname" . }}-api:{{ .Values.service.port }}/readyz"
+          with urllib.request.urlopen(url, timeout=10) as reply:
+              body = reply.read().decode()
+          print(reply.status, body)
+          sys.exit(0 if reply.status == 200 and '"ready"' in body else 1)
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 200m
+          memory: 128Mi
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      volumeMounts:
+        {{- include "agentic.volumeMounts" . | nindent 8 }}
+  volumes:
+    {{- include "agentic.volumes" . | nindent 4 }}

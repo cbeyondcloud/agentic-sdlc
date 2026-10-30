@@ -15,6 +15,8 @@
     db dashboard-role --tenant S --role R [--password-env VAR]
                           bind one Grafana reader role to one tenant: the dash_* views,
                           that tenant's rows only
+    db verify-restore     check a restored database (owner role): migration revision, the
+                          runtime role's guarantees, every tenant's audit chain
     admin audit verify --tenant S
                           verify one tenant's audit chain
     admin tenant create --slug S --name N --admin-email E [--policy-repo URL]
@@ -52,6 +54,10 @@ from agentic_cp.settings import Settings, SettingsError
 
 #: The committed OpenAPI snapshot (only meaningful in a source checkout).
 OPENAPI_PATH = Path(__file__).resolve().parents[2] / "openapi.json"
+#: The umbrella chart's copy of the dashboards (only present in a source checkout).
+CHART_DASHBOARDS = (
+    Path(__file__).resolve().parents[3] / "deploy" / "helm" / "agentic-platform" / "dashboards"
+)
 #: A DSN for building the app without a database (OpenAPI generation never connects).
 _NO_DATABASE = "postgresql+asyncpg://openapi@127.0.0.1:9/none"
 
@@ -85,37 +91,61 @@ def _openapi(args: argparse.Namespace) -> int:
     return 0
 
 
+def _dashboard_dirs() -> list[tuple[Path, list[Path]]]:
+    """Each Grafana folder's catalog directory (`GRAFANA_DIRS`, review F3) with every folder
+    its JSON is kept in: the catalog directory and, in a source checkout, the umbrella
+    chart's copy of that folder (Helm reads only files inside the chart, M3-02):
+    `grafana` -> `dashboards`, `grafana-executive` -> `dashboards-executive`."""
+    from agentic_cp.dashboards import catalog
+
+    copies = {
+        catalog.GRAFANA_DIR: "dashboards",
+        catalog.GRAFANA_EXECUTIVE_DIR: "dashboards-executive",
+    }
+    assert set(catalog.GRAFANA_DIRS) == set(copies), "every Grafana folder needs a chart copy"
+    chart = CHART_DASHBOARDS.parent.is_dir()
+    return [
+        (
+            directory,
+            [directory, CHART_DASHBOARDS.with_name(copies[directory])] if chart else [directory],
+        )
+        for directory in catalog.GRAFANA_DIRS
+    ]
+
+
 def _dashboards(args: argparse.Namespace) -> int:
     """Write or compare the Grafana dashboards' JSON (M2-38) with the catalog: one directory
-    per Grafana folder (`GRAFANA_DIRS`, review F3)."""
-    from agentic_cp.dashboards.catalog import GRAFANA_DIRS, rendered_files
+    per Grafana folder (`GRAFANA_DIRS`, review F3), each also copied into the chart."""
+    from agentic_cp.dashboards.catalog import rendered_files
 
     if args.write:
-        count = 0
-        for directory in GRAFANA_DIRS:
+        written: list[str] = []
+        for directory, folders in _dashboard_dirs():
             files = rendered_files(directory)
-            directory.mkdir(exist_ok=True)
-            for old in directory.glob("*.json"):
-                if old.name not in files:
-                    old.unlink()
-            for name, body in files.items():
-                (directory / name).write_bytes(body.encode("utf-8"))
-            count += len(files)
-        print(f"wrote {count} dashboards to {', '.join(str(d) for d in GRAFANA_DIRS)}")
+            for folder in folders:
+                folder.mkdir(exist_ok=True)
+                for old in folder.glob("*.json"):
+                    if old.name not in files:
+                        old.unlink()
+                for name, body in files.items():
+                    (folder / name).write_bytes(body.encode("utf-8"))
+                written.append(f"{len(files)} to {folder}")
+        print(f"wrote dashboards: {', '.join(written)}")
         return 0
     stale: list[str] = []
     count = 0
-    for directory in GRAFANA_DIRS:
+    for directory, folders in _dashboard_dirs():
         files = rendered_files(directory)
         count += len(files)
-        present = {path.name for path in directory.glob("*.json")}
-        stale += sorted(
-            f"{directory.name}/{name}"
-            for name in present | set(files)
-            if name not in files
-            or name not in present
-            or (directory / name).read_bytes().decode("utf-8").replace("\r\n", "\n") != files[name]
-        )
+        for folder in folders:
+            present = {path.name for path in folder.glob("*.json")}
+            stale += sorted(
+                f"{folder.parent.name}/{folder.name}/{name}"
+                for name in present | set(files)
+                if name not in files
+                or name not in present
+                or (folder / name).read_bytes().decode("utf-8").replace("\r\n", "\n") != files[name]
+            )
     if stale:
         print(
             f"stale dashboards: {', '.join(stale)}: run "
@@ -263,6 +293,31 @@ def _grant_runtime(args: argparse.Namespace) -> int:
     asyncio.run(run())
     print(f"runtime role {settings.runtime_role} granted")
     return 0
+
+
+def _verify_restore(args: argparse.Namespace) -> int:
+    """Check a restored database (M3-02): this release's migration revision, the runtime
+    role's guarantees and every tenant's audit chain. Exit 1 when it is not usable, and when
+    it has no tenant unless `--allow-empty`."""
+    from agentic_cp.db import make_owner_engine
+    from agentic_cp.restore import verify_restored
+
+    settings = _settings()
+    _owner_dsn(settings)
+
+    async def run():
+        engine = make_owner_engine(settings)
+        try:
+            return await verify_restored(
+                engine, settings.db_schema, settings.runtime_role, allow_empty=args.allow_empty
+            )
+        finally:
+            await engine.dispose()
+
+    report = asyncio.run(run())
+    for line in report.lines():
+        print(line)
+    return 0 if report.ok else 1
 
 
 class CommandError(Exception):
@@ -716,6 +771,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     grant = db.add_parser("grant-runtime", help="create or re-align the runtime role")
     grant.set_defaults(run=_grant_runtime)
+    verify_restore = db.add_parser(
+        "verify-restore",
+        help="check a restored database: revision, guarantees, every audit chain",
+    )
+    verify_restore.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="accept a database with no tenant (a first install); otherwise it fails",
+    )
+    verify_restore.set_defaults(run=_verify_restore)
     link = db.add_parser(
         "link-usage", help="read the gateway's usage through postgres_fdw (dashboards)"
     )

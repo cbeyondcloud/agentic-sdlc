@@ -109,6 +109,48 @@ def test_bump_parts(current: str, part: str, expected: str):
     assert v.bump(current, part) == expected
 
 
+@pytest.mark.parametrize(
+    ("release", "chart"),
+    [
+        ("0.1.0", "0.1.0"),
+        ("1.4.0rc1", "1.4.0-rc.1"),
+        ("2.0.0a3", "2.0.0-alpha.3"),
+        ("2.0.0b1", "2.0.0-beta.1"),
+    ],
+)
+def test_chart_version_is_the_release_as_semver(release: str, chart: str):
+    assert v.chart_version(release) == chart
+
+
+def _with_chart(workspace: Path) -> Path:
+    chart = workspace / v.CHART
+    chart.parent.mkdir(parents=True)
+    shutil.copy2(REPO / v.CHART, chart)
+    return chart
+
+
+def test_set_moves_the_chart_version_and_app_version(workspace: Path):
+    # M3-02: the umbrella chart is released in lockstep with the packages
+    chart = _with_chart(workspace)
+    assert v.check_versions(workspace) == []
+    changed = v.set_version(workspace, "0.2.0rc1")
+    assert chart in changed
+    text = chart.read_text(encoding="utf-8")
+    assert "\nversion: 0.2.0-rc.1\n" in text
+    assert '\nappVersion: "0.2.0rc1"\n' in text
+    assert v.check_versions(workspace) == []
+
+
+def test_check_reports_a_chart_at_another_version(workspace: Path):
+    chart = _with_chart(workspace)
+    current = v.read_version(workspace)
+    edit(chart, f'appVersion: "{current}"', 'appVersion: "9.9.9"')
+    edit(chart, f"\nversion: {current}\n", "\nversion: 9.9.8\n")
+    problems = "\n".join(v.check_versions(workspace))
+    assert f"{v.CHART.as_posix()}: version 9.9.8" in problems
+    assert f"{v.CHART.as_posix()}: appVersion 9.9.9" in problems
+
+
 @pytest.mark.parametrize("good", ["0.1.0", "1.0.0", "2.10.3", "1.0.0a1", "1.0.0b2", "1.0.0rc1"])
 def test_version_matches_min_cli_version_pattern(good: str):
     """Any release can be an org's min_cli_version (M2-08)."""

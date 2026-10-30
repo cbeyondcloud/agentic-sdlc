@@ -9,7 +9,9 @@ internal pin with it, and `check_versions` (run before each build) fails on any 
 * each internal requirement (`agentic-core`, `sdlc-commons`, ...) is pinned `==<source>`,
   so a published CLI can never resolve another release's core from the index;
 * each git-sourced requirement (Zyroflo's `sdlc-harness`) is pinned exactly, and to the
-  version in `uv.lock`, so an index can never offer a look-alike in its place.
+  version in `uv.lock`, so an index can never offer a look-alike in its place;
+* the umbrella Helm chart (M3-02) has the release as `version` (SemVer: 1.4.0rc1 is
+  1.4.0-rc.1) and as `appVersion` (the control-plane image tag).
 
 A version is MAJOR.MINOR.PATCH with an optional aN, bN or rcN: always a valid value for
 an org's `min_cli_version` (M2-08), and always greater than the release before it.
@@ -33,6 +35,12 @@ _PIN = re.compile(
     r'(?P<extras>\[[^\]]*\])?==[^"]*"'
 )
 _PROJECT_VERSION = re.compile(r'(?ms)^(\[project\]\n(?:(?!^\[).)*?^version = ")([^"]*)(")')
+#: The umbrella Helm chart (M3-02), released with the packages: `version` is the release as
+#: SemVer (Helm requires it), `appVersion` the release itself (the image tag).
+CHART = Path("deploy/helm/agentic-platform/Chart.yaml")
+_CHART_VERSION = re.compile(r"(?m)^version: *(\S*) *$")
+_CHART_APP_VERSION = re.compile(r'(?m)^appVersion: *"?([^"\s]*)"? *$')
+_SEMVER_PRE = {"a": "alpha", "b": "beta", "rc": "rc"}
 
 
 class VersionError(ValueError):
@@ -56,6 +64,35 @@ def _project(path: Path) -> dict:
 def read_version(root: Path) -> str:
     """The release version: the root pyproject's `[project].version`."""
     return str(_project(root / "pyproject.toml")["project"]["version"])
+
+
+def chart_version(release: str) -> str:
+    """`release` as the chart's SemVer version: 1.4.0rc1 is 1.4.0-rc.1, a3 alpha.3, b1
+    beta.1 (SemVer orders alpha < beta < rc, as PEP 440 does)."""
+    found = parse(release)
+    core = ".".join(str(part) for part in found.release)
+    if found.pre is None:
+        return core
+    label, number = found.pre
+    return f"{core}-{_SEMVER_PRE[label]}.{number}"
+
+
+def _chart_problems(root: Path, current: str) -> list[str]:
+    path = root / CHART
+    if not path.is_file():
+        return []
+    text = path.read_text(encoding="utf-8")
+    problems = []
+    found = _CHART_VERSION.search(text)
+    want = chart_version(current) if RELEASE_PATTERN.fullmatch(current) else current
+    if found is None or found[1] != want:
+        shown = found[1] if found else "missing"
+        problems.append(f"{CHART.as_posix()}: version {shown} (the release is {want})")
+    app = _CHART_APP_VERSION.search(text)
+    if app is None or app[1] != current:
+        shown = app[1] if app else "missing"
+        problems.append(f"{CHART.as_posix()}: appVersion {shown} (the release is {current})")
+    return problems
 
 
 def _locked_versions(root: Path) -> dict[str, str]:
@@ -113,7 +150,7 @@ def check_versions(root: Path) -> list[str]:
                         f"{rel}: {req.name} comes from git and must be pinned {shown}, the "
                         f"version in uv.lock, so no index can offer another (found {text!r})"
                     )
-    return problems
+    return problems + _chart_problems(root, current)
 
 
 def set_version(root: Path, new: str) -> list[Path]:
@@ -133,6 +170,14 @@ def set_version(root: Path, new: str) -> list[Path]:
         if updated != text:
             path.write_text(updated, encoding="utf-8", newline="\n")
             changed.append(path)
+    chart = root / CHART
+    if chart.is_file():
+        text = chart.read_text(encoding="utf-8")
+        updated = _CHART_VERSION.sub(f"version: {chart_version(str(wanted))}", text, count=1)
+        updated = _CHART_APP_VERSION.sub(f'appVersion: "{wanted}"', updated, count=1)
+        if updated != text:
+            chart.write_text(updated, encoding="utf-8", newline="\n")
+            changed.append(chart)
     return changed
 
 

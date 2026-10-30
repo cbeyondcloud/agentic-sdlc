@@ -96,6 +96,24 @@ def test_git_env_holds_no_server_credentials(tmp_path, monkeypatch):
     assert "GIT_SSH_COMMAND" not in own and own["GIT_CONFIG_NOSYSTEM"] == "1"
 
 
+def test_git_env_is_an_allow_list(tmp_path, monkeypatch):
+    """DF-496: git and ssh children get only what they need (path, locale, temp, proxies,
+    CA bundles, the Windows basics), never the server's own settings such as its DSNs."""
+    secret = "postgresql://cp_owner:" + "not-a-real-password" + "@db/agentic"  # gitleaks:allow
+    monkeypatch.setenv("AGENTIC_CP_OWNER_DATABASE_URL", secret)
+    monkeypatch.setenv("AGENTIC_CP_SMTP_PASSWORD", "x" * 20)
+    monkeypatch.setenv("SOME_VENDOR_API_KEY", "y" * 20)
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    monkeypatch.setenv("LC_ALL", "C.UTF-8")
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/corp.pem")
+    env = GitRunner(_settings(tmp_path)).env("tenant-a")
+    assert not {"AGENTIC_CP_OWNER_DATABASE_URL", "AGENTIC_CP_SMTP_PASSWORD"} & env.keys()
+    assert "SOME_VENDOR_API_KEY" not in env and secret not in env.values()
+    assert env["HTTPS_PROXY"] == "http://proxy.example:3128"
+    assert env["LC_ALL"] == "C.UTF-8" and env["SSL_CERT_FILE"] == "/etc/ssl/corp.pem"
+    assert env["PATH"] == os.environ["PATH"]
+
+
 def test_fetch_codeowners_from_git_default_branch(tmp_path):
     repo = make_app_repo(tmp_path / "app", "/.agentic/ @alice\n")
     git(repo, "switch", "-q", "-c", "feature")

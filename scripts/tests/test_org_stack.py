@@ -129,6 +129,21 @@ def test_secrets_are_generated_into_a_git_ignored_file():
     assert "deploy/org-local/.state/" in ignored
 
 
+def test_powershell_makes_the_env_file_owner_only_off_windows():
+    # DF-626: PowerShell 7 on macOS or Linux writes files 0644; .env.org holds passwords
+    lib = _text("_lib.ps1")
+    body = lib[lib.index("function Write-OrgFile") :]
+    body = body[: body.index("\n}\n")]
+    assert "$IsWindows" in body and "SetUnixFileMode" in body and "UserRead" in body
+
+
+def test_the_control_plane_image_runs_as_a_numeric_user():
+    # Kubernetes runAsNonRoot can only check a numeric USER (M3-02 chart)
+    lines = (ROOT / "control-plane" / "Dockerfile").read_text(encoding="utf-8").splitlines()
+    users = [line for line in lines if line.startswith("USER ")]
+    assert users == ["USER 10001:10001"]
+
+
 def test_bind_mounts_carry_selinux_label():
     """DF-162 M11: Podman on an SELinux host refuses an unlabelled bind mount."""
     for name, service in _compose()["services"].items():

@@ -1,0 +1,33 @@
+{{- /* One ConfigMap per framework dashboard for Grafana's dashboard sidecar (the label
+convention of the Grafana chart and kube-prometheus-stack). Each chart folder mirrors one
+catalog folder and goes to its own Grafana folder: `dashboards` to `folder`, and
+`dashboards-executive` (Executive ROI, each person's cost; M3-01 review F3) to
+`executiveFolder`, whose permissions an operator limits to the org viewers. The folders are
+globbed, so a dashboard added to the catalog (`python -m agentic_cp dashboards --write`
+refreshes the chart's copy) is provisioned without a template change. */ -}}
+{{- if .Values.grafana.dashboards.enabled }}
+{{- $root := . }}
+{{- $d := .Values.grafana.dashboards }}
+{{- if or (not $d.executiveFolder) (eq $d.executiveFolder $d.folder) }}
+{{- fail "grafana.dashboards.executiveFolder must be set and differ from grafana.dashboards.folder: Executive ROI shows each person's cost" }}
+{{- end }}
+{{- range $dir, $folder := dict "dashboards" $d.folder "dashboards-executive" $d.executiveFolder }}
+{{- range $path, $_ := $root.Files.Glob (printf "%s/*.json" $dir) }}
+{{- $base := regexReplaceAll "[^a-z0-9-]" (base $path | trimSuffix ".json" | lower) "-" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-dashboard-%s" (include "agentic.fullname" $root) $base | trunc 63 | trimSuffix "-" }}
+  namespace: {{ default $root.Release.Namespace $d.namespace }}
+  labels:
+    {{- include "agentic.labels" (list $root "dashboards") | nindent 4 }}
+    {{ $d.label }}: {{ $d.labelValue | quote }}
+  annotations:
+    {{ $d.folderAnnotation }}: {{ $folder | quote }}
+data:
+  {{ base $path }}: |
+    {{- $root.Files.Get $path | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}

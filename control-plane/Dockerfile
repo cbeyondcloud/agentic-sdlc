@@ -23,10 +23,12 @@ FROM ghcr.io/astral-sh/uv:0.12.1-python3.12-trixie-slim@sha256:fce651fe385e83c69
 RUN apt-get update -qq \
     && apt-get install -y -qq --no-install-recommends git ca-certificates >/dev/null \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 10001 agentic
+    && groupadd --gid 10001 agentic \
+    && useradd --create-home --uid 10001 --gid 10001 agentic
 COPY --from=build /opt/agentic /opt/agentic
 ENV PATH=/opt/agentic/bin:$PATH PYTHONUNBUFFERED=1
-USER agentic
+# numeric, so Kubernetes runAsNonRoot can check it (M3-02 chart)
+USER 10001:10001
 WORKDIR /home/agentic
 EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --retries=12 \

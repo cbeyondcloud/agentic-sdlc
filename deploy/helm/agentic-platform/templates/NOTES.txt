@@ -1,0 +1,12 @@
+agentic-platform {{ .Chart.Version }} (control plane {{ .Chart.AppVersion }}) is installed as {{ .Release.Name }}.
+
+Check it:
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "agentic.fullname" . }}-api
+  helm -n {{ .Release.Namespace }} test {{ .Release.Name }}
+
+Create the first tenant and org admin with the operator commands (the chart's README,
+"First tenant"). Runbooks: docs/runbooks/upgrade.md, docs/runbooks/postgres-backup-restore.md.
+{{- if not .Values.tokenlean.url }}
+
+Note: tokenlean.url is empty, so the control plane hands out no gateway URL with invites.
+{{- end }}

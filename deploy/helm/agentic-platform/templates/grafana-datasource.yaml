@@ -1,0 +1,35 @@
+{{- /* The framework dashboards' one datasource (uid agentic-postgres) for Grafana's datasource
+sidecar. The reader's password is never here: Grafana expands ${<passwordEnv>} from its own
+environment (for the Grafana chart: envFromSecret). In a multi-tenant deployment each
+tenant's Grafana organisation provisions this uid with its own reader role. */ -}}
+{{- if .Values.grafana.datasource.enabled }}
+{{- $ds := .Values.grafana.datasource }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentic.fullname" . }}-datasource
+  namespace: {{ default .Release.Namespace $ds.namespace }}
+  labels:
+    {{- include "agentic.labels" (list . "dashboards") | nindent 4 }}
+    {{ $ds.label }}: {{ $ds.labelValue | quote }}
+data:
+  agentic-datasource.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Agentic
+        type: grafana-postgresql-datasource
+        uid: agentic-postgres
+        orgId: {{ $ds.orgId }}
+        url: {{ required "grafana.datasource.host is required" $ds.host }}
+        user: {{ required "grafana.datasource.user is required (the tenant's reader role)" $ds.user }}
+        secureJsonData:
+          password: ${{ "{" }}{{ $ds.passwordEnv }}{{ "}" }}
+        jsonData:
+          database: {{ $ds.database }}
+          sslmode: {{ $ds.sslmode }}
+          postgresVersion: 1700
+          maxOpenConns: 5
+          maxIdleConns: 2
+        isDefault: false
+        editable: false
+{{- end }}
