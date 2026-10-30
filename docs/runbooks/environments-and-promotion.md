@@ -87,8 +87,13 @@ externalSecrets:
 writes `secrets.existingSecret`. It is a `pre-install,pre-upgrade` hook that runs before
 the migration Job, so the Job finds its Secret (its pod waits until the operator has
 written it). The Secret is orphaned on purpose: re-creating the hook on each upgrade, or
-`helm uninstall`, never deletes the Secret the running pods read. Delete it yourself when
-the environment is retired.
+`helm uninstall`, never deletes the Secret the running pods read. Helm does not remove
+hook objects on uninstall either, so the `ExternalSecret` keeps refreshing the Secret
+afterwards: delete both yourself when the environment is retired
+(`kubectl -n agentic delete externalsecret,secret -l app.kubernetes.io/instance=agentic`
+for the ExternalSecret, then the Secret by name). Helm waits for the migration Job, not for
+the operator: on a first install the Job's pod waits (up to `migrations.activeDeadlineSeconds`,
+15 minutes) until the operator has written the Secret.
 
 ### cert-manager TLS (optional)
 

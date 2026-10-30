@@ -10,7 +10,8 @@ libpq URL form (a +driver suffix such as +asyncpg is dropped). */ -}}
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: {{ include "agentic.fullname" . }}-backup
+  {{- /* a CronJob's name is limited to 52 characters (its Jobs add a suffix) */}}
+  name: {{ printf "%s-backup" (include "agentic.fullname" . | trunc 45 | trimSuffix "-") }}
   labels:
     {{- include "agentic.labels" (list . "backup") | nindent 4 }}
 spec:
@@ -42,7 +43,8 @@ spec:
                   set -eu;
                   dsn=$(printf '%s' "$AGENTIC_BACKUP_DSN" | sed -E 's#^(postgres(ql)?)\+[a-z0-9]+:#\1:#');
                   file="/backups/agentic-$(date -u +%Y%m%dT%H%M%SZ).dump";
-                  pg_dump -Fc --schema={{ $schema }} -f "$file.partial" -d "$dsn";
+                  trap 'rm -f "$file.partial"' EXIT;
+                  pg_dump -Fc --schema={{ $schema | quote }} -f "$file.partial" -d "$dsn";
                   mv "$file.partial" "$file";
                   find /backups -name 'agentic-*.dump' -mtime +{{ int $b.retentionDays }} -delete;
                   ls -l "$file"

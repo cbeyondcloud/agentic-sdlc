@@ -294,7 +294,7 @@ def test_the_backup_cronjob_dumps_the_schema_as_the_backup_role(renders):
     pod = cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]
     (container,) = pod["containers"]
     script = " ".join(container["args"])
-    assert "pg_dump -Fc --schema=agentic" in script
+    assert 'pg_dump -Fc --schema="agentic"' in script
     env = _env(cron)
     assert env["AGENTIC_BACKUP_DSN"]["valueFrom"]["secretKeyRef"] == {
         "name": SECRET,
@@ -356,3 +356,32 @@ def test_the_kind_smoke_installs_an_environment_and_runs_the_dry_run():
     assert "AGENTIC_CP_POLICY_BRANCH" in promotion and "--branch main" in promotion
     assert "<redacted>" in promotion, "the first admin's token never reaches the log"
     assert "create job backup-dry-run --from=" in promotion
+
+
+def test_the_backup_cronjob_name_fits_for_a_long_release_name(chart_tools):
+    # review: Kubernetes limits a CronJob's name to 52 characters
+    done = chart_tools.helm(
+        [
+            "template",
+            "r" * 53,
+            "agentic-platform",
+            "--namespace",
+            NAMESPACE,
+            "-f",
+            _values("staging"),
+        ]
+    )
+    assert done.returncode == 0, done.stderr
+    assert len(_one(manifests(done.stdout), "CronJob", "backup")["metadata"]["name"]) <= 52
+
+
+def test_a_failed_backup_leaves_no_partial_dump(renders):
+    cron = _one(manifests(renders["staging"]), "CronJob", "backup")
+    script = cron["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["args"][0]
+    assert "trap" in script and ".partial" in script
+
+
+def test_prod_needs_the_ingress_host(chart_tools):
+    done = _prod_without(chart_tools, "--set", "ingress.host=")
+    assert done.returncode != 0
+    assert "ingress.host" in done.stderr

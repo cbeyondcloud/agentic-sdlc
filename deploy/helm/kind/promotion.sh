@@ -18,10 +18,16 @@ for component in api worker; do
   [ "$branch" = "$expected" ] || die "$component tracks '$branch', expected '$expected'"
 done
 
-# operator NAME EXPECT ARGS...: `python -m agentic_cp ARGS` in a one-off pod; EXPECT is
-# Succeeded or Failed (the pod's phase)
+# The pod's output with the first admin's token replaced, on every path.
+redacted_logs() {
+  kubectl -n "$NS" logs "$1" 2>&1 | sed '/^token (shown once/{n;s/.*/<redacted>/;}' | sed 's/^/  | /'
+}
+
+# operator NAME EXPECT SAYS ARGS...: `python -m agentic_cp ARGS` in a one-off pod. EXPECT is
+# Succeeded or Failed (the pod's phase); SAYS is text the output must hold ('-': none), so
+# a pod that fails for another reason (a missing Secret, a bad image) never passes
 operator() {
-  name=$1; expect=$2; shift 2
+  name=$1; expect=$2; says=$3; shift 3
   args=""
   for arg in "$@"; do args="$args, \"$arg\""; done
   kubectl -n "$NS" apply -f - >/dev/null <<POD
@@ -48,21 +54,25 @@ spec:
       securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: ["ALL"]}}
 POD
   kubectl -n "$NS" wait "pod/$name" --for=jsonpath='{.status.phase}'="$expect" --timeout=180s >/dev/null \
-    || { kubectl -n "$NS" logs "$name" || true; die "operator $* did not end $expect"; }
-  kubectl -n "$NS" logs "$name" | sed '/^token (shown once/{n;s/.*/<redacted>/;}' | sed 's/^/  | /'
+    || { redacted_logs "$name"; die "operator $* did not end $expect"; }
+  out=$(redacted_logs "$name")
+  echo "$out"
   kubectl -n "$NS" delete pod "$name" --wait=false >/dev/null
+  if [ "$says" != - ]; then
+    case "$out" in *"$says"*) ;; *) die "operator $* did not say: $says" ;; esac
+  fi
 }
 
 say "promotion dry run: a new tenant follows the environment's branch"
-operator op-create Succeeded admin tenant create --slug dry-run --name "Dry run" \
+operator op-create Succeeded "tenant dry-run created" admin tenant create --slug dry-run --name "Dry run" \
   --admin-email admin@dry-run.example.test
 say "promotion dry run: pointing it at main from $ENVIRONMENT is refused"
-operator op-refuse Failed admin tenant set-policy-repo --tenant dry-run \
+operator op-refuse Failed "tracks the policy branch '$branch'" admin tenant set-policy-repo --tenant dry-run \
   --repo https://git.example.test/org/policy.git --branch main
 say "promotion dry run: the policy repo, on the environment's branch"
-operator op-source Succeeded admin tenant set-policy-repo --tenant dry-run \
+operator op-source Succeeded "(branch $branch)" admin tenant set-policy-repo --tenant dry-run \
   --repo https://git.example.test/org/policy.git
-operator op-list Succeeded admin tenant list
+operator op-list Succeeded "policy.git@$branch" admin tenant list
 
 say "promotion dry run: one backup with the chart's CronJob"
 cron=$(kubectl -n "$NS" get cronjob -l "$selector,app.kubernetes.io/component=backup" -o jsonpath='{.items[*].metadata.name}')

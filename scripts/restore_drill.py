@@ -199,7 +199,12 @@ class ExistingServer:
 
     def stop(self, database: str, runtime_role: str, owner_role: str | None = None) -> None:
         self.tools.close()
-        asyncio.run(_drop(self.admin_dsn, database, runtime_role, owner_role))
+        try:
+            asyncio.run(_drop(self.admin_dsn, database, runtime_role, owner_role))
+        except DRILL_COULD_NOT_RUN as error:
+            # the verdict stands; a leftover on the scratch server is reported, not fatal
+            leftovers = ", ".join(n for n in (database, runtime_role, owner_role) if n)
+            print(f"restore drill could not clean up {leftovers}: {error}", file=sys.stderr)
 
 
 #: Postgres keeps the first 63 bytes of a name (NAMEDATALEN - 1).
@@ -231,7 +236,12 @@ async def _prepare(admin_dsn: str, database: str, owner: str) -> bool:
         created = not await admin.fetchval("select 1 from pg_roles where rolname = $1", owner)
         if created:
             await admin.execute(f"CREATE ROLE {_ident(owner)} NOLOGIN CREATEROLE")
-        await admin.execute(f"CREATE DATABASE {_ident(database)} OWNER {_ident(owner)}")
+        try:
+            await admin.execute(f"CREATE DATABASE {_ident(database)} OWNER {_ident(owner)}")
+        except BaseException:
+            if created:  # never leave the role behind on a shared scratch server
+                await admin.execute(f"DROP ROLE IF EXISTS {_ident(owner)}")
+            raise
         return created
     finally:
         await admin.close()

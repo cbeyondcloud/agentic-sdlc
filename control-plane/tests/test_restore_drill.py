@@ -324,3 +324,43 @@ def test_the_scratch_server_drops_the_owner_role_after_the_database(monkeypatch)
         'DROP ROLE IF EXISTS "agentic_drill_1_app"',
         'DROP ROLE IF EXISTS "app-owner"',
     ]
+
+
+def test_a_failed_database_create_drops_the_owner_role_it_made(monkeypatch):
+    # review: the role must not leak when CREATE DATABASE fails after CREATE ROLE
+    drill = _drill_module()
+    statements = []
+
+    class Admin:
+        async def fetchval(self, sql, *args):
+            return None  # the server lacks the owner role
+
+        async def execute(self, sql):
+            statements.append(sql)
+            if sql.startswith("CREATE DATABASE"):
+                raise asyncpg.PostgresError("disk full")
+
+        async def close(self):
+            pass
+
+    async def connect(dsn, timeout=60.0):
+        return Admin()
+
+    monkeypatch.setattr(drill, "_connect", connect)
+    with pytest.raises(asyncpg.PostgresError):
+        asyncio.run(drill._prepare("postgresql://x", "agentic_drill_1", "app-owner"))
+    assert statements[-1] == 'DROP ROLE IF EXISTS "app-owner"'
+
+
+def test_a_failed_cleanup_does_not_replace_the_verdict(monkeypatch, capsys):
+    drill = _drill_module()
+
+    async def broken(*args):
+        raise asyncpg.PostgresError("server gone")
+
+    monkeypatch.setattr(drill, "_drop", broken)
+    server = drill.ExistingServer("postgresql://postgres@scratch/postgres")
+    server.start()
+    server.stop("agentic_drill_1", "agentic_drill_1_app", "app-owner")
+    err = capsys.readouterr().err
+    assert "could not clean up" in err and "agentic_drill_1" in err

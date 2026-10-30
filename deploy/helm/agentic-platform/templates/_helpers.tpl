@@ -93,7 +93,7 @@ prod refuses plaintext TLS, a Secret no secret manager writes, and a movable ima
 {{- fail (printf "environment.name %q: use dev, staging or prod (or leave it empty)" $name) }}
 {{- end }}
 {{- if eq $name "prod" }}
-{{- if not (and $v.ingress.enabled $v.ingress.tlsSecretName) }}
+{{- if not (and $v.ingress.enabled $v.ingress.host $v.ingress.tlsSecretName) }}
 {{- fail "prod serves TLS only: set ingress.enabled, ingress.host and ingress.tlsSecretName (ingress.certManager makes the certificate)" }}
 {{- end }}
 {{- if not (hasPrefix "https://" (default "" $v.publicUrl)) }}

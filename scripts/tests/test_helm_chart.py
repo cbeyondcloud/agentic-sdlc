@@ -582,3 +582,17 @@ def test_dashboard_configmap_names_stay_unique_for_a_long_release_name(chart_too
     assert len(names) == expected
     assert len(set(names)) == len(names), names
     assert all(len(name) <= 63 for name in names)
+
+
+def test_two_long_release_names_with_one_prefix_get_different_dashboard_names(chart_tools):
+    # review of DF-808: cutting the fullname to 40 characters alone would collide
+    def names(release: str) -> set[str]:
+        done = chart_tools.helm(["template", release, "agentic-platform", "--namespace", NAMESPACE])
+        assert done.returncode == 0, done.stderr
+        return {
+            o["metadata"]["name"]
+            for o in _objects(done.stdout)
+            if o["kind"] == "ConfigMap" and "grafana_dashboard" in o["metadata"]["labels"]
+        }
+
+    assert not names("p" * 45 + "-blue") & names("p" * 45 + "-green")
