@@ -69,3 +69,33 @@ RUN set -e; arch="$(dpkg --print-architecture)"; \
       "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_${arch}.tar.gz"; \
     echo "$sum  /tmp/actionlint.tgz" | sha256sum -c -; \
     tar -xzf /tmp/actionlint.tgz -C /usr/local/bin actionlint; rm /tmp/actionlint.tgz
+# helm and kubeconform for the umbrella chart's tests (M3-02): the release binaries
+# (Apache-2.0; helm 4.3.1 of 2026-10-15, kubeconform 0.8.0 of 2026-06-04), pinned by version
+# and sha256 for both architectures. scripts/tests/helm_support.py names the same releases.
+ARG HELM_VERSION=4.3.1
+RUN set -e; arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) sum=0403a88ae20913d11b10a2467b50087721fea7581736da6b9d3992f5357fe54b ;; \
+      arm64) sum=8cf8f66ecbc252ac8f7f06cca68aba88508ddfde3a6a34feb1678ad1694b4f88 ;; \
+      *) echo "no pinned helm for $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -sSfL -o /tmp/helm.tgz "https://get.helm.sh/helm-v${HELM_VERSION}-linux-${arch}.tar.gz"; \
+    echo "$sum  /tmp/helm.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/helm.tgz -C /usr/local/bin --strip-components=1 "linux-${arch}/helm"; \
+    rm /tmp/helm.tgz
+ARG KUBECONFORM_VERSION=0.8.0
+RUN set -e; arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) sum=9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883 ;; \
+      arm64) sum=1f53fc8e81258197a35e8603054162a5af1de8c5af13746c71ab680d9534ed87 ;; \
+      *) echo "no pinned kubeconform for $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -sSfL -o /tmp/kubeconform.tgz \
+      "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-${arch}.tar.gz"; \
+    echo "$sum  /tmp/kubeconform.tgz" | sha256sum -c -; \
+    tar -xzf /tmp/kubeconform.tgz -C /usr/local/bin kubeconform; rm /tmp/kubeconform.tgz
+# pg_dump and pg_restore for the restore drill's test (M3-02): Debian trixie's PostgreSQL
+# 17 client (PostgreSQL licence), the same major version as the test server.
+RUN apt-get update -qq \
+    && apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null \
+    && rm -rf /var/lib/apt/lists/*

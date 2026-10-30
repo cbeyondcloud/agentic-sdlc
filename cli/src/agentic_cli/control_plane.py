@@ -61,6 +61,7 @@ from agentic.orgapi import (
     ServiceAccountInfo,
     ServiceAccountIssued,
 )
+from agentic.orgapi.cost import Chargeback
 from agentic.security.pii import PiiDetector
 from agentic.security.publish_scan import PublishBlocked, PublishGuard
 from agentic.security.secret_scan import SecretScanner
@@ -358,6 +359,14 @@ class ControlPlaneClient:
                 hint="run the export again",
             ) from None
 
+    def chargeback(self, *, month: str | None, team: str | None) -> Chargeback:
+        """The month's chargeback per team (M3-01): `dashboard.view.org`, or
+        `dashboard.view.team` for one team. No month: the previous calendar month. It reads
+        the gateway's usage for the month, so it waits as long as an export (review F1)."""
+        params = {k: v for k, v in (("month", month), ("team", team)) if v}
+        found = self._json("GET", "/cost/chargeback", params=params, timeout=EXPORT_TIMEOUT)
+        return Chargeback.model_validate(found)
+
     def register_repo(self, remote: str, team: str) -> RepoInfo:
         return RepoInfo.model_validate(
             self._json("POST", "/repos", {"remote": remote, "team": team})
@@ -605,6 +614,20 @@ class ControlPlaneClient:
         for attempt in range(retries + 1):
             try:
                 response = self._http.request(method, f"{API_PREFIX}{path}", **options)
+            except httpx2.TimeoutException as error:
+                if isinstance(error, httpx2.ConnectTimeout):
+                    raise ControlPlaneUnavailable(
+                        f"cannot reach the control plane at {self._shown} (ConnectTimeout)",
+                        hint="check the network or VPN, and control_plane_url",
+                    ) from None
+                # connected, then no answer in time: busy, not unreachable (M3-01 review F1)
+                waited = (timeout or self._http.timeout).read
+                within = f" within {waited:g} s" if waited else ""
+                raise ControlPlaneUnavailable(
+                    f"the control plane at {self._shown} did not answer{within} "
+                    f"({type(error).__name__})",
+                    hint="it may be busy: try again later",
+                ) from None
             except httpx2.HTTPError as error:
                 raise ControlPlaneUnavailable(
                     f"cannot reach the control plane at {self._shown} ({type(error).__name__})",

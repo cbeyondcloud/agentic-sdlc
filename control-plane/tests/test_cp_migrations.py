@@ -1,13 +1,23 @@
 """Alembic migrations: `upgrade head` on an empty database, idempotent, matching the table
 metadata, and reversible during development."""
 
+import asyncio
+
 import pytest
+from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from pg import SCHEMA
 from sqlalchemy import text
 
-from agentic_cp.db import downgrade_async, engine_for, head_revision, migrate_async
+from agentic_cp.db import (
+    _run_alembic,
+    downgrade_async,
+    engine_for,
+    head_revision,
+    migrate_async,
+    revision_is_known,
+)
 from agentic_cp.tables import metadata
 
 pytestmark = pytest.mark.anyio
@@ -62,3 +72,34 @@ async def test_downgrade_to_base_and_upgrade_again(blank_db):
     tables = {row[0] for row in await _catalogue(blank_db)}
     assert tables <= {"alembic_version"}
     assert await migrate_async(blank_db, SCHEMA) == head_revision()
+
+
+async def test_two_migrate_runs_at_once_both_succeed(blank_db):
+    # DF-413: several pods (or a retried hook) may migrate at once; they serialise on an
+    # advisory lock instead of failing with 'relation already exists'
+    # (without the lock the two runs block each other: the timeout turns that into a failure)
+    both = asyncio.gather(migrate_async(blank_db, SCHEMA), migrate_async(blank_db, SCHEMA))
+    results = await asyncio.wait_for(both, timeout=120)
+    assert results == [head_revision(), head_revision()]
+
+
+async def test_a_run_events_index_built_beforehand_is_kept(blank_db):
+    # DF-614: operators build the large index CONCURRENTLY before upgrading past 0011
+    await _run_alembic(blank_db, SCHEMA, command.upgrade, "0010")
+    engine = engine_for(blank_db, SCHEMA)
+    try:
+        async with engine.connect() as conn:
+            await conn.execution_options(isolation_level="AUTOCOMMIT")
+            await conn.exec_driver_sql(
+                "CREATE INDEX CONCURRENTLY run_events_tenant_id_received_at_idx "
+                "ON run_events (tenant_id, received_at)"
+            )
+    finally:
+        await engine.dispose()
+    assert await migrate_async(blank_db, SCHEMA) == head_revision()
+
+
+def test_revision_is_known():
+    assert revision_is_known(head_revision())
+    assert revision_is_known("0001")
+    assert not revision_is_known("m9_99_future")

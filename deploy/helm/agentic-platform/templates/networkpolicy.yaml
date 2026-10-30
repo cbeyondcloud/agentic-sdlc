@@ -1,0 +1,63 @@
+{{- /* Optional NetworkPolicy for the chart's pods (it needs a CNI that enforces policies).
+Ingress: only the API port, from the release's own pods (helm test), networkPolicy.ingressFrom
+(default: the release namespace) and networkPolicy.metricsFrom (Prometheus). Egress, when an
+allow-list is given: DNS, the API from the release's own pods, plus that list (Postgres,
+TokenLean, git hosts, SMTP) - the network-level guard for tenant-set git URLs (DF-484).
+A policy that would block the chart's own ingress or scraping is refused (review F4). */ -}}
+{{- if .Values.networkPolicy.enabled }}
+{{- $np := .Values.networkPolicy }}
+{{- if and .Values.ingress.enabled (not $np.ingressFrom) }}
+{{- fail "networkPolicy.ingressFrom must name the ingress controller's pods or namespace when ingress.enabled is set" }}
+{{- end }}
+{{- if and (or .Values.metrics.serviceMonitor.enabled .Values.metrics.scrapeAnnotations) (not $np.metricsFrom) }}
+{{- fail "networkPolicy.metricsFrom must name Prometheus's pods or namespace when metrics scraping is on" }}
+{{- end }}
+{{- $release := dict "app.kubernetes.io/name" (include "agentic.name" .) "app.kubernetes.io/instance" .Release.Name }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "agentic.fullname" . }}-api
+  labels:
+    {{- include "agentic.labels" (list . "api") | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- toYaml $release | nindent 6 }}
+  policyTypes:
+    - Ingress
+    {{- if $np.egress }}
+    - Egress
+    {{- end }}
+  ingress:
+    - ports:
+        - port: http
+          protocol: TCP
+      from:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $release | nindent 14 }}
+        {{- if $np.ingressFrom }}
+        {{- toYaml $np.ingressFrom | nindent 8 }}
+        {{- else }}
+        - podSelector: {}
+        {{- end }}
+        {{- with $np.metricsFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+  {{- with $np.egress }}
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml (merge (dict "app.kubernetes.io/component" "api") $release) | nindent 14 }}
+      ports:
+        - port: http
+          protocol: TCP
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

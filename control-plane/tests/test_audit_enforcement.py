@@ -100,4 +100,4 @@ async def test_readyz_fails_closed_when_audit_unenforced(db):
     assert reply.json()["code"] == "audit.unenforced"
     relaxed = await _readyz(db.owner_dsn, db.owner, require=False)
     assert relaxed.status_code == 200
-    assert relaxed.json() == {"status": "ready", "db_enforced": False}
+    assert relaxed.json() == {"status": "ready", "db_enforced": False, "gateway_linked": False}

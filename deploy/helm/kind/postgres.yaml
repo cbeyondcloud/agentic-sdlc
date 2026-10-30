@@ -1,0 +1,49 @@
+# A throw-away Postgres for the kind smoke only (the chart itself never runs one: BYO).
+# First start runs the local org stack's init script (deploy/org-local/cp-postgres/init.sh,
+# mounted from the ConfigMap `pg-init`): cp_owner, the database and postgres_fdw. Passwords
+# come from the Secret `pg-passwords`, made by inside.sh. Data is an emptyDir.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels: {app: postgres}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: postgres}
+  template:
+    metadata:
+      labels: {app: postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: pg-passwords, key: superuser}}
+            - name: CP_OWNER_PASSWORD
+              valueFrom: {secretKeyRef: {name: pg-passwords, key: owner}}
+            - name: CP_DATABASE
+              value: agentic
+          ports:
+            - {name: pg, containerPort: 5432}
+          readinessProbe:
+            exec: {command: ["pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "agentic"]}
+            periodSeconds: 3
+          volumeMounts:
+            - {name: init, mountPath: /docker-entrypoint-initdb.d}
+            - {name: data, mountPath: /var/lib/postgresql/data}
+      volumes:
+        - name: init
+          configMap: {name: pg-init}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector: {app: postgres}
+  ports:
+    - {name: pg, port: 5432, targetPort: pg}

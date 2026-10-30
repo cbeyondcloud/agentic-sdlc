@@ -11,8 +11,8 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
     retention.yaml        days                      (placeholder until OR-01)
     tool-pins.yaml        tools (per-platform artefacts `init` fetches from the mirror)
     org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines,
-                          required_steps, checkpoint_exclude, index_export_workflow,
-                          sandbox, unhonoured, secret_scan, publish_scan,
+                          required_steps, checkpoint_exclude, commit_override,
+                          index_export_workflow, sandbox, unhonoured, secret_scan, publish_scan,
                           review_prepass, review_batch, auto_trip, learning,
                           run_health
     eval.yaml            eval                      (agent evaluation defaults, M1-63)
@@ -65,6 +65,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "allow_repo_pipelines": "allow_repo_pipelines",
         "required_steps": "required_steps",
         "checkpoint_exclude": "checkpoint_exclude",
+        "commit_override": "commit_override",
         "min_cli_version": "min_cli_version",
         "index_export_workflow": "index_export_workflow",
         "sandbox": "sandbox",

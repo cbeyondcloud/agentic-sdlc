@@ -1,0 +1,762 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "description": "Total cost as users x sessions per user x turns per session x requests per turn x tokens per request x cost per token, reconciled with the gateway's actual cost; ROI measures; what-if projection.",
+  "editable": false,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "Actual gateway cost of the selection: attributed calls plus the unattributed line.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "id": 1,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT total_usd FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) d",
+          "refId": "A"
+        }
+      ],
+      "title": "Total cost",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "The six factors multiplied: equals the attributed actual cost.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "id": 2,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT product_usd FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) d",
+          "refId": "A"
+        }
+      ],
+      "title": "Product of factors",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "Calls without a run tag, or tagged with a run the control plane does not know. No data: there were none.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "id": 3,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT unattributed_usd FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) d",
+          "refId": "A"
+        }
+      ],
+      "title": "Unattributed cost",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "Product of factors against total cost; above 0.5 % is a data-quality alert (usually untagged calls).",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "id": 4,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT diff_pct FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) d",
+          "refId": "A"
+        }
+      ],
+      "title": "Reconciliation difference",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "A ratio of measured totals of the selection; NULL when unmeasured.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 4
+      },
+      "id": 5,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT users FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) d",
+          "refId": "A"
+        }
+      ],
+      "title": "Users",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "A ratio of measured totals of the selection; NULL when unmeasured.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 4
+      },
+      "id": 6,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT sessions_per_user FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) d",
+          "refId": "A"
+        }
+      ],
+      "title": "Sessions per user",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "A ratio of measured totals of the selection; NULL when unmeasured.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 4
+      },
+      "id": 7,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT turns_per_session FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) d",
+          "refId": "A"
+        }
+      ],
+      "title": "Turns per session",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "A ratio of measured totals of the selection; NULL when unmeasured.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 4
+      },
+      "id": 8,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT requests_per_turn FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) d",
+          "refId": "A"
+        }
+      ],
+      "title": "Requests per turn",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "A ratio of measured totals of the selection; NULL when unmeasured.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2,
+          "unit": "none"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 8
+      },
+      "id": 9,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT tokens_per_request FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) d",
+          "refId": "A"
+        }
+      ],
+      "title": "Tokens per request",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "A ratio of measured totals of the selection; NULL when unmeasured.",
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 8,
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 8
+      },
+      "id": 10,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT cost_per_token FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) d",
+          "refId": "A"
+        }
+      ],
+      "title": "Cost per token",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "Cache-read tokens over all tokens; no data when the gateway records no cache counts.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 8
+      },
+      "id": 11,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT cached_share FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) d",
+          "refId": "A"
+        }
+      ],
+      "title": "Cached-token share",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "What-if users x the per-user median (per month) of every other factor.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 8
+      },
+      "id": 12,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT ROUND(CAST(CAST(${target_users:sqlstring} AS numeric) * percentile_cont(0.5) WITHIN GROUP (ORDER BY u.sessions_per_user) * percentile_cont(0.5) WITHIN GROUP (ORDER BY u.turns_per_session) * percentile_cont(0.5) WITHIN GROUP (ORDER BY u.requests_per_turn) * percentile_cont(0.5) WITHIN GROUP (ORDER BY u.tokens_per_request) * percentile_cont(0.5) WITHIN GROUP (ORDER BY u.cost_per_token) AS numeric), 2) AS projected_usd FROM (SELECT t.month, t.user_email, t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT f.month AS month, f.user_email AS user_email, COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.attributed AND f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent) GROUP BY f.month, f.user_email) t) u WHERE u.actual_usd IS NOT NULL",
+          "refId": "A"
+        }
+      ],
+      "title": "What-if: projected monthly cost",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "The six factors per month, the product next to the actual and unattributed cost, and the data-quality alert.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "id": 13,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT * FROM (SELECT t.month, t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT f.month AS month, COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent) GROUP BY f.month) t) d ORDER BY month DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Cost drivers by month",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "The newest selected month against the month before it. contribution_usd: each factor's share of the cost change (LMDI); they add up to the change of the product.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 20
+      },
+      "id": 14,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT v.factor, v.previous, v.current, ROUND(100 * (v.current - v.previous) / NULLIF(v.previous, 0), 2) AS change_pct, CASE WHEN v.current > 0 AND v.previous > 0 AND c.product_usd > 0 AND p.product_usd > 0 THEN ROUND((CASE WHEN c.product_usd = p.product_usd THEN c.product_usd ELSE (c.product_usd - p.product_usd) / ln(c.product_usd / p.product_usd) END) * ln(v.current / v.previous), 6) END AS contribution_usd FROM (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month = (SELECT MAX(month) FROM dash_cost_facts WHERE month IN ($month)) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) c CROSS JOIN (SELECT t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.month = to_char(to_date((SELECT MAX(month) FROM dash_cost_facts WHERE month IN ($month)), 'YYYY-MM') - interval '1 month', 'YYYY-MM') AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent)) t) p CROSS JOIN LATERAL (VALUES (1, 'Users', CAST(p.users AS numeric), CAST(c.users AS numeric)), (2, 'Sessions per user', CAST(p.sessions_per_user AS numeric), CAST(c.sessions_per_user AS numeric)), (3, 'Turns per session', CAST(p.turns_per_session AS numeric), CAST(c.turns_per_session AS numeric)), (4, 'Requests per turn', CAST(p.requests_per_turn AS numeric), CAST(c.requests_per_turn AS numeric)), (5, 'Tokens per request', CAST(p.tokens_per_request AS numeric), CAST(c.tokens_per_request AS numeric)), (6, 'Cost per token', CAST(p.cost_per_token AS numeric), CAST(c.cost_per_token AS numeric)), (7, 'Cost (product of factors)', p.product_usd, c.product_usd)) v(n, factor, previous, current) ORDER BY v.n",
+          "refId": "A"
+        }
+      ],
+      "title": "Month-over-month change by factor",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "Click a column header to sort by any factor.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 28
+      },
+      "id": 15,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT * FROM (SELECT t.user_email, t.sessions, t.turns, t.requests, t.input_tokens, t.output_tokens, t.cache_read_tokens, t.cache_write_tokens, t.tokens, t.users AS users, CAST(t.sessions AS numeric) / NULLIF(t.users, 0) AS sessions_per_user, CAST(t.turns AS numeric) / NULLIF(t.sessions, 0) AS turns_per_session, CAST(t.requests AS numeric) / NULLIF(t.turns, 0) AS requests_per_turn, CAST(t.tokens AS numeric) / NULLIF(t.requests, 0) AS tokens_per_request, t.actual_usd / NULLIF(t.tokens, 0) AS cost_per_token, (t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) AS product_usd, t.actual_usd, t.unattributed_usd, t.unattributed_requests, CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END AS total_usd, ROUND(100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / NULLIF(CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END, 0), 4) AS diff_pct, CASE WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) IS NULL THEN false WHEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) IS NULL THEN true WHEN (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) = 0 THEN ((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0))) <> 0 ELSE 100 * ABS((t.users) * (CAST(t.sessions AS numeric) / NULLIF(t.users, 0)) * (CAST(t.turns AS numeric) / NULLIF(t.sessions, 0)) * (CAST(t.requests AS numeric) / NULLIF(t.turns, 0)) * (CAST(t.tokens AS numeric) / NULLIF(t.requests, 0)) * (t.actual_usd / NULLIF(t.tokens, 0)) - (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END)) / (CASE WHEN t.actual_usd IS NULL AND t.unattributed_usd IS NULL THEN NULL ELSE COALESCE(t.actual_usd, 0) + COALESCE(t.unattributed_usd, 0) END) > 0.5 END AS data_quality_alert, ROUND(CAST(t.all_cache_read AS numeric) / NULLIF(t.all_tokens, 0), 6) AS cached_share FROM (SELECT f.user_email AS user_email, COUNT(DISTINCT f.user_email) FILTER (WHERE f.attributed) AS users, COUNT(DISTINCT f.run_id) FILTER (WHERE f.attributed) AS sessions, SUM(f.executions) FILTER (WHERE f.attributed) AS turns, SUM(f.calls) FILTER (WHERE f.attributed) AS requests, SUM(f.input_tokens) FILTER (WHERE f.attributed) AS input_tokens, SUM(f.output_tokens) FILTER (WHERE f.attributed) AS output_tokens, SUM(f.cache_read_tokens) FILTER (WHERE f.attributed) AS cache_read_tokens, SUM(f.cache_write_tokens) FILTER (WHERE f.attributed) AS cache_write_tokens, SUM(f.tokens) FILTER (WHERE f.attributed) AS tokens, SUM(f.cost_usd) FILTER (WHERE f.attributed) AS actual_usd, SUM(f.cost_usd) FILTER (WHERE NOT f.attributed) AS unattributed_usd, SUM(f.calls) FILTER (WHERE NOT f.attributed) AS unattributed_requests, SUM(f.cache_read_tokens) AS all_cache_read, SUM(f.tokens) AS all_tokens FROM dash_cost_facts f WHERE f.attributed AND f.month IN ($month) AND f.team IN ($team) AND f.pipeline IN ($pipeline) AND f.agent IN ($agent) GROUP BY f.user_email) t) d ORDER BY actual_usd DESC NULLS LAST",
+          "refId": "A"
+        }
+      ],
+      "title": "Cost drivers per user",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "The model that served each call (routed, else requested).",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 38
+      },
+      "id": 16,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT c.model, COUNT(*) AS requests, SUM(c.tokens) AS tokens, SUM(c.cache_read_tokens) AS cache_read_tokens, SUM(c.cost_usd) AS cost_usd, ROUND(SUM(c.cost_usd) / NULLIF(SUM(c.tokens), 0), 10) AS cost_per_token, ROUND(CAST(SUM(c.cache_read_tokens) AS numeric) / NULLIF(SUM(c.tokens), 0), 4) AS cached_share FROM dash_cost_calls c WHERE c.month IN ($month) AND c.team IN ($team) AND c.pipeline IN ($pipeline) AND c.agent IN ($agent) GROUP BY c.model ORDER BY cost_usd DESC NULLS LAST",
+          "refId": "A"
+        }
+      ],
+      "title": "Cost per token by model",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "The chargeback export's numbers (`agentic report chargeback`).",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 38
+      },
+      "id": 17,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT month, team, users, runs, calls, attributed_usd, unattributed_usd, cost_usd FROM dash_chargeback WHERE month IN ($month) AND team IN ($team) ORDER BY month DESC, cost_usd DESC NULLS LAST",
+          "refId": "A"
+        }
+      ],
+      "title": "Monthly cost per team",
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "agentic-postgres"
+      },
+      "description": "A value nobody can measure yet is empty, never 0; the reason says why.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 46
+      },
+      "id": 18,
+      "options": {},
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "agentic-postgres"
+          },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT v.metric, v.value, v.unit, v.reason FROM (SELECT SUM(cost_usd) AS cost_usd, SUM(gate_wait_hours) AS wait_hours, CAST(SUM(gate_decisions) AS numeric) AS decisions, ROUND(CAST(SUM(step_repeats) AS numeric) / NULLIF(SUM(step_executions), 0), 4) AS rework FROM dash_roi_month WHERE month IN ($month) AND team IN ($team)) r CROSS JOIN LATERAL (VALUES (1, 'Total cost', r.cost_usd, 'USD', ''), (2, 'Human wait at gates', r.wait_hours, 'hours', 'decisions without a recorded wait are not counted'), (3, 'Gate decisions', r.decisions, 'count', ''), (4, 'Step rework rate', r.rework, 'share', 'step executions that repeat a step of the same run (review loops, retries)'), (5, 'Cost per accepted change', CAST(NULL AS numeric), 'USD', 'no pull-request outcome reaches the control plane yet'), (6, 'Request to merged PR', CAST(NULL AS numeric), 'hours', 'no pull-request outcome reaches the control plane yet'), (7, 'PR merge rate', CAST(NULL AS numeric), 'share', 'no pull-request outcome reaches the control plane yet'), (8, 'DORA lead time for changes', CAST(NULL AS numeric), 'hours', 'defined against production; no deployment is recorded (Zyroflo metrics.dora)'), (9, 'Change-failure rate', CAST(NULL AS numeric), 'share', 'defined against production; no deployment is recorded (Zyroflo metrics.dora)'), (10, 'Gateway savings', CAST(NULL AS numeric), 'USD', 'gateway optimisations are off until the ST-7 opt-in')) v(n, metric, value, unit, reason) ORDER BY v.n",
+          "refId": "A"
+        }
+      ],
+      "title": "ROI measures",
+      "type": "table"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 39,
+  "tags": [
+    "agentic"
+  ],
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "agentic-postgres"
+        },
+        "definition": "SELECT DISTINCT month FROM dash_cost_facts ORDER BY 1 DESC",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Month",
+        "multi": true,
+        "name": "month",
+        "options": [],
+        "query": "SELECT DISTINCT month FROM dash_cost_facts ORDER BY 1 DESC",
+        "refresh": 2,
+        "sort": 2,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "agentic-postgres"
+        },
+        "definition": "SELECT DISTINCT team FROM dash_cost_facts ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Team",
+        "multi": true,
+        "name": "team",
+        "options": [],
+        "query": "SELECT DISTINCT team FROM dash_cost_facts ORDER BY 1",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "agentic-postgres"
+        },
+        "definition": "SELECT DISTINCT pipeline FROM dash_cost_facts ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Pipeline",
+        "multi": true,
+        "name": "pipeline",
+        "options": [],
+        "query": "SELECT DISTINCT pipeline FROM dash_cost_facts ORDER BY 1",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {},
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "agentic-postgres"
+        },
+        "definition": "SELECT DISTINCT agent FROM dash_cost_facts ORDER BY 1",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Agent",
+        "multi": true,
+        "name": "agent",
+        "options": [],
+        "query": "SELECT DISTINCT agent FROM dash_cost_facts ORDER BY 1",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": {
+          "text": "1000",
+          "value": "1000"
+        },
+        "hide": 0,
+        "label": "What-if users",
+        "name": "target_users",
+        "options": [
+          {
+            "selected": true,
+            "text": "1000",
+            "value": "1000"
+          }
+        ],
+        "query": "1000",
+        "type": "textbox"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-90d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "title": "Agentic - Executive ROI",
+  "uid": "agentic-executive-roi",
+  "version": 1
+}

@@ -458,6 +458,12 @@ def test_a_long_but_allowed_command_is_still_judged_fast(guard):
         ".gitmodules",
         ".vscode/tasks.json",
         ".devcontainer/devcontainer.json",
+        # git hook folders and hook managers' settings (M2-61 review F3)
+        ".githooks/pre-commit",
+        "lefthook.yml",
+        ".lefthook.yml",
+        "lefthook-local.yml",
+        ".lefthook/pre-commit/check.sh",
     ],
 )
 def test_files_that_run_commands_on_commit_or_open_are_framework_protected(guard, tree, rel):

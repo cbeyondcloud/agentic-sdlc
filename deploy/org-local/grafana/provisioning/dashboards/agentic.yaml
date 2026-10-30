@@ -1,9 +1,19 @@
 # Dashboard providers for the local org stack (M2-38). Grafana reads JSON files only; no
 # Grafana code is shipped or changed (ruling G1: the official image runs unmodified).
 #
-#   agentic  the seven framework dashboards, generated from agentic_cp.dashboards.catalog
-#            (control-plane/src/agentic_cp/dashboards/grafana, mounted read-only)
-#   gateway  the gateway's LITE dashboard set (spec 25), mounted read-only from TOKENLEAN_DIR
+#   agentic            the seven shared framework dashboards, generated from
+#                      agentic_cp.dashboards.catalog
+#                      (control-plane/src/agentic_cp/dashboards/grafana, mounted read-only)
+#   agentic-executive  Executive ROI (M3-01), which shows each person's cost: its own folder,
+#                      so Grafana folder permissions can limit it to the org viewers (the
+#                      exec-viewer and auditor roles). Restrict the folder before you give
+#                      other people Grafana access (review F3)
+#                      (control-plane/src/agentic_cp/dashboards/grafana-executive)
+#   gateway            the gateway's LITE dashboard set (spec 25), mounted read-only from
+#                      TOKENLEAN_DIR
+#
+# A provider reads its path recursively, so the mounted directories are siblings, never
+# nested.
 apiVersion: 1
 
 providers:
@@ -16,6 +26,16 @@ providers:
     updateIntervalSeconds: 60
     options:
       path: /var/lib/grafana/dashboards/agentic
+      foldersFromFilesStructure: false
+  - name: agentic-executive
+    orgId: 1
+    folder: Agentic Executive
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 60
+    options:
+      path: /var/lib/grafana/dashboards/agentic-executive
       foldersFromFilesStructure: false
   - name: gateway
     orgId: 1

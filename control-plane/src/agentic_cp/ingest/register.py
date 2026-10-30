@@ -399,6 +399,7 @@ async def register_run(
                 policy_known=True,
                 opened_at=now,
                 budget_usd=Decimal(body.budget_usd) if body.budget_usd else None,  # M2-16
+                pipeline=body.pipeline,  # M3-01: cost by pipeline
             )
         )
     return RunPreflight(registered=registered, checks=checks, min_cli_version=minimum)

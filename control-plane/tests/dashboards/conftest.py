@@ -111,6 +111,36 @@ async def linked_db(dash_db, make_gateway):
     return db, seeded, gateway
 
 
+@pytest.fixture
+async def roi_db(db, make_gateway):
+    """Tenants a and b with the executive cost seed (`roi_seed`) and its gateway linked."""
+    from roi_seed import CALLS as ROI_CALLS
+    from roi_seed import seed_roi
+
+    a, b = await make_tenants(db.owner)
+    await seed_roi(db.owner, a, b)
+    gateway = await make_gateway(calls=ROI_CALLS)
+    async with db.owner.begin() as conn:
+        await link_usage(conn, db.schema, gateway.db)
+    return db, Seeded(a=a, b=b, gateway_dsn=gateway.dsn)
+
+
+@pytest.fixture
+async def roi_queued_db(db, make_gateway):
+    """The executive cost seed plus `roi_seed.QUEUED`: a registered run with gateway calls
+    and no ingested event (review F2)."""
+    from roi_seed import CALLS as ROI_CALLS
+    from roi_seed import QUEUED_CALLS, seed_queued, seed_roi
+
+    a, b = await make_tenants(db.owner)
+    await seed_roi(db.owner, a, b)
+    await seed_queued(db.owner, a)
+    gateway = await make_gateway(calls=ROI_CALLS + QUEUED_CALLS)
+    async with db.owner.begin() as conn:
+        await link_usage(conn, db.schema, gateway.db)
+    return db, Seeded(a=a, b=b, gateway_dsn=gateway.dsn)
+
+
 def _clock():
     from dash_seed import NOW
 
@@ -161,6 +191,19 @@ async def readers(linked_db, pg_server):
     made = Readers(db, pg_server)
     try:
         yield db, seeded, made
+    finally:
+        await made.close()
+
+
+@pytest.fixture
+async def roi_reader(roi_db, pg_server):
+    """Tenant a's dashboard reader on the executive cost seed, connected as Grafana is."""
+    db, seeded = roi_db
+    made = Readers(db, pg_server)
+    try:
+        role, password = made.name("roi"), secrets.token_hex(12)
+        await made.bind(seeded.a, role, password)
+        yield await made.connect(role, password)
     finally:
         await made.close()
 
