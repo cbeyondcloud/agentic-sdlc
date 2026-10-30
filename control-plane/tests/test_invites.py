@@ -201,7 +201,8 @@ async def test_without_a_relay_the_invite_is_queued_not_mailed(inviting):
     finally:
         await quiet.http.aclose()
     assert reply.status_code == 201 and reply.json()["mailed"] is False
-    [*_, mail] = await _mails(api, api.a)
+    # the first invite's mail was cancelled by the re-invite (DF-572): the queued one is new
+    (mail,) = [m for m in await _mails(api, api.a) if m.status == "pending"]
     assert "auditor" in mail.body_text  # an org-scope person's own role, not a made-up one
 
 
