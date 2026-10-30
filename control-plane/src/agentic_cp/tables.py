@@ -288,6 +288,8 @@ runs = Table(
     Column("last_heartbeat_at", DateTime(timezone=True), nullable=True),
     Column("waiting", Boolean, nullable=False, server_default="false"),
     Column("stale_at", DateTime(timezone=True), nullable=True),
+    # the pipeline named at registration (M3-01: cost by pipeline); NULL before M3-01
+    Column("pipeline", Text, nullable=True),
     ForeignKeyConstraint(["tenant_id", "started_by"], ["users.tenant_id", "users.id"]),
     Index("runs_tenant_id_status_idx", "tenant_id", "status"),
 )

@@ -186,6 +186,9 @@ grafana:
     # -- The folder annotation (the Grafana chart's sidecar.dashboards.folderAnnotation).
     folderAnnotation: grafana_folder
     folder: Agentic
+    # -- Grafana folder of Executive ROI (each person's cost, M3-01 review F3); limit its
+    # permissions to the org viewers.
+    executiveFolder: Agentic Executive
     # -- Namespace of the ConfigMaps; empty: the release namespace.
     namespace: ""
   datasource:

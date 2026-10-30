@@ -1,11 +1,15 @@
 {{- /* One ConfigMap per framework dashboard for Grafana's dashboard sidecar (the label
-convention of the Grafana chart and kube-prometheus-stack). The folder is globbed, so a
-dashboard added to the catalog (`python -m agentic_cp dashboards --write` refreshes the
-chart's copy) is provisioned without a template change. */ -}}
+convention of the Grafana chart and kube-prometheus-stack). Each chart folder mirrors one
+catalog folder and goes to its own Grafana folder: `dashboards` to `folder`, and
+`dashboards-executive` (Executive ROI, each person's cost; M3-01 review F3) to
+`executiveFolder`, whose permissions an operator limits to the org viewers. The folders are
+globbed, so a dashboard added to the catalog (`python -m agentic_cp dashboards --write`
+refreshes the chart's copy) is provisioned without a template change. */ -}}
 {{- if .Values.grafana.dashboards.enabled }}
 {{- $root := . }}
 {{- $d := .Values.grafana.dashboards }}
-{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+{{- range $dir, $folder := dict "dashboards" $d.folder "dashboards-executive" $d.executiveFolder }}
+{{- range $path, $_ := $root.Files.Glob (printf "%s/*.json" $dir) }}
 {{- $base := regexReplaceAll "[^a-z0-9-]" (base $path | trimSuffix ".json" | lower) "-" }}
 ---
 apiVersion: v1
@@ -17,9 +21,10 @@ metadata:
     {{- include "agentic.labels" (list $root "dashboards") | nindent 4 }}
     {{ $d.label }}: {{ $d.labelValue | quote }}
   annotations:
-    {{ $d.folderAnnotation }}: {{ $d.folder | quote }}
+    {{ $d.folderAnnotation }}: {{ $folder | quote }}
 data:
   {{ base $path }}: |
     {{- $root.Files.Get $path | nindent 4 }}
+{{- end }}
 {{- end }}
 {{- end }}

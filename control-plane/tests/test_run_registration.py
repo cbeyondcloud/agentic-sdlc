@@ -340,6 +340,16 @@ async def test_a_registered_run_keeps_its_budget_for_alerts(api, version):
     assert found == {"b-1": Decimal("12.50"), "b-2": None}
 
 
+async def test_a_registered_run_keeps_its_pipeline_for_cost(api, version):
+    """M3-01: cost by pipeline counts a run that made no gateway call too."""
+    from sqlalchemy import select
+
+    await _register(api, api.a.admin_token, _body(version, "p-1"))
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        found = dict((await conn.execute(select(runs.c.run_id, runs.c.pipeline))).all())
+    assert found == {"p-1": "deliver"}
+
+
 # ── overlays and versions (M2-23, M2-15; D33 integrity of the resolved pipeline) ─────────
 
 OVERLAY = "pipelines:\n  deliver:\n    max_minutes: 30\n"

@@ -20,9 +20,7 @@ exclude-newer = "14 days"
 # CVE-2026-112940 in 4.0.12; fastmcp/fastmcp-slim 3.4.10 (uploaded 2026-10-20; through
 # code-review-graph, an optional extra) fix GHSA-7xgj-8392-5q4r in 3.4.8. pip-audit fails
 # without them; each cutoff admits the fix and nothing newer.
-# authlib 1.9.1 (uploaded 2026-10-14T14:17Z; fastmcp's dependency) fixes CVE-2026-114616;
-# 1.9.0 fixes the other five authlib advisories. pip-audit fails without it.
-exclude-newer-package = { certifi = "2026-10-21T00:00:00Z", virtualenv = "2026-10-18T00:00:00Z", filelock = "2026-10-18T00:00:00Z", fastmcp = "2026-10-20T15:00:00Z", fastmcp-slim = "2026-10-20T15:00:00Z", authlib = "2026-10-14T15:00:00Z" }
+exclude-newer-package = { certifi = "2026-10-21T00:00:00Z", virtualenv = "2026-10-18T00:00:00Z", filelock = "2026-10-18T00:00:00Z", fastmcp = "2026-10-20T15:00:00Z", fastmcp-slim = "2026-10-20T15:00:00Z" }
 
 [tool.uv.workspace]
 members = ["core", "commons", "cli", "control-plane"]

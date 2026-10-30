@@ -13,7 +13,7 @@ Create Date: 2026-10-24
 import sqlalchemy as sa
 from alembic import op
 
-from agentic_cp.dashboards.views import drop_statements, view_statements
+from agentic_cp.dashboards.views import M2_37_VIEWS, drop_statements, view_statements
 from agentic_cp.tenancy.rls import schema_of
 
 revision = "m2_37_usage_views"
@@ -25,12 +25,12 @@ depends_on = None
 def upgrade() -> None:
     op.add_column("tenants", sa.Column("dashboard_role", sa.Text, nullable=True))
     op.create_unique_constraint("tenants_dashboard_role_key", "tenants", ["dashboard_role"])
-    for statement in view_statements(schema_of(op)):
+    for statement in view_statements(schema_of(op), M2_37_VIEWS):
         op.execute(statement)
 
 
 def downgrade() -> None:
-    for statement in drop_statements():
+    for statement in drop_statements(M2_37_VIEWS):
         op.execute(statement)
     op.drop_constraint("tenants_dashboard_role_key", "tenants", type_="unique")
     op.drop_column("tenants", "dashboard_role")

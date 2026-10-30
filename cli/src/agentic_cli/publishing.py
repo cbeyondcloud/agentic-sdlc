@@ -47,11 +47,12 @@ from agentic_cli.driving import spent
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.hosting import Connection, connect
-from agentic_cli.workspace import RUNS, Workspace
+from agentic_cli.workspace import RUNS, Workspace, rollback_commands
+from sdlc_commons.commit_override import CommitOverride, OverrideError, without_push
 from sdlc_commons.guards import Guard, GuardError
 from sdlc_commons.redaction import redactor
 from sdlc_commons.release import GREEN, NONE, PENDING, ci_verdict
-from sdlc_commons.worktrees import RunWorktrees, Tree, WorktreeError
+from sdlc_commons.worktrees import RunWorktrees, Tree, WorktreeError, kept_override
 
 PR_FILE = "pr.json"
 CI_FILE = "ci.json"
@@ -88,7 +89,10 @@ def publish_run(ws: Workspace, store_root: Path, state: RunState, kind: str | No
                     ExitCode.REFUSED,
                     hint="use `action: open_pr`, which opens it on whatever host origin is",
                 )
-            push_branch(tree.path, conn.remote, tree.branch, secrets=[conn.token])
+            if tree.mode == "worktree":
+                push_branch(tree.path, conn.remote, tree.branch, secrets=[conn.token])
+            else:  # in place: its own push command (M2-61)
+                _push_in_place(ws, state.run_id, component, tree)
             redact = redactor(extra=[conn.token])
             block = _marked(redact(_body(ws, state, found)))
             provider, repo = conn.provider, conn.repo
@@ -144,8 +148,15 @@ def publish_action(ws: Workspace, store_root: Path, kind: str | None) -> Callabl
 
 def publish_check(ws: Workspace, kind: str | None) -> str | None:
     """Why a publish step of this workspace would be refused - origin not on a known
-    host, no token, a host of another kind - or None. Checked at preflight, so a run
-    does not spend its budget on agents only to fail at the last step."""
+    host, no token, a host of another kind, an in-place component with no push command
+    (M2-61) - or None. Checked at preflight, so a run does not spend its budget on agents
+    only to fail at the last step."""
+    if names := without_push(ws.repo):
+        return (
+            f"component(s) {', '.join(names)} work in place (vcs.deny_raw_git) and set no "
+            "push command, so the run could not be published. Set vcs.push_command (with "
+            "{branch}) in .sdlc/profile.yml and allow it in org policy (commit_override.allow)"
+        )
     try:
         with connect(ws.repo, ws.settings, remote=REMOTE) as conn:
             if kind is not None and conn.kind != kind:
@@ -342,14 +353,44 @@ def _trees(repo: Path, run_id: str) -> dict[str, Tree]:
             f"run {run_id} has no branch to publish: none of its steps made a tree",
             ExitCode.REFUSED,
         )
-    in_place = sorted(name for name, tree in trees.items() if tree.mode != "worktree")
+    accepted = kept_override(repo, run_id) or {}
+    in_place = sorted(
+        name for name, tree in trees.items() if tree.mode != "worktree" and name not in accepted
+    )
     if in_place:
         raise CliError(
-            f"component(s) {', '.join(in_place)} have no run branch (worked in place), so "
-            "there is nothing to push",
+            f"component(s) {', '.join(in_place)} have no run branch (worked in place without "
+            "a commit-command override), so there is nothing to push",
             ExitCode.REFUSED,
         )
     return trees
+
+
+def _push_in_place(ws: Workspace, run_id: str, component: str, tree: Tree) -> None:
+    """Publish an in-place component through its own push command (M2-61): the override
+    the run accepted, checked again against org policy and the guard before it runs."""
+    policy = ws.policy()
+    override = CommitOverride(
+        ws.repo,
+        run_id,
+        allow=policy.commit_override.allow,
+        rollback_commands=rollback_commands(ws.config),
+        deny_shell=policy.deny.shell,
+        timeout_s=policy.commit_override.timeout_s,
+    )
+    cmds = (kept_override(ws.repo, run_id) or {})[component]
+    if not cmds.push:
+        raise CliError(
+            f"component {component} works in place and its profile sets no push command, "
+            "so its work cannot be pushed",
+            ExitCode.REFUSED,
+            hint="set vcs.push_command (with {branch}) in .sdlc/profile.yml and allow it in "
+            "org policy (commit_override.allow), or push and open the pull request by hand",
+        )
+    try:
+        override.push(cmds, tree.branch)
+    except OverrideError as error:
+        raise CliError(f"the push of {component} was refused: {error}", ExitCode.REFUSED) from None
 
 
 def _wall(repo: Path, run_id: str, tree: Tree) -> None:

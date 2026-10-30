@@ -91,50 +91,66 @@ def _openapi(args: argparse.Namespace) -> int:
     return 0
 
 
-def _dashboard_dirs() -> list[Path]:
-    """Where the dashboards' JSON is kept: the catalog folder, and in a source checkout the
-    umbrella chart's copy (Helm reads only files inside the chart, M3-02)."""
+def _dashboard_dirs() -> list[tuple[Path, list[Path]]]:
+    """Each Grafana folder's catalog directory (`GRAFANA_DIRS`, review F3) with every folder
+    its JSON is kept in: the catalog directory and, in a source checkout, the umbrella
+    chart's copy of that folder (Helm reads only files inside the chart, M3-02):
+    `grafana` -> `dashboards`, `grafana-executive` -> `dashboards-executive`."""
     from agentic_cp.dashboards import catalog
 
-    dirs = [catalog.GRAFANA_DIR]
-    if CHART_DASHBOARDS.parent.is_dir():
-        dirs.append(CHART_DASHBOARDS)
-    return dirs
+    chart = CHART_DASHBOARDS.parent.is_dir()
+    return [
+        (
+            directory,
+            [directory, CHART_DASHBOARDS.with_name(directory.name.replace("grafana", "dashboards"))]
+            if chart
+            else [directory],
+        )
+        for directory in catalog.GRAFANA_DIRS
+    ]
 
 
 def _dashboards(args: argparse.Namespace) -> int:
-    """Write or compare the Grafana dashboards' JSON (M2-38) with the catalog."""
+    """Write or compare the Grafana dashboards' JSON (M2-38) with the catalog: one directory
+    per Grafana folder (`GRAFANA_DIRS`, review F3), each also copied into the chart."""
     from agentic_cp.dashboards.catalog import rendered_files
 
-    files = rendered_files()
     if args.write:
-        for folder in _dashboard_dirs():
-            folder.mkdir(exist_ok=True)
-            for stale in folder.glob("*.json"):
-                if stale.name not in files:
-                    stale.unlink()
-            for name, text in files.items():
-                (folder / name).write_bytes(text.encode("utf-8"))
-            print(f"wrote {len(files)} dashboards to {folder}")
+        written: list[str] = []
+        for directory, folders in _dashboard_dirs():
+            files = rendered_files(directory)
+            for folder in folders:
+                folder.mkdir(exist_ok=True)
+                for old in folder.glob("*.json"):
+                    if old.name not in files:
+                        old.unlink()
+                for name, body in files.items():
+                    (folder / name).write_bytes(body.encode("utf-8"))
+                written.append(f"{len(files)} to {folder}")
+        print(f"wrote dashboards: {', '.join(written)}")
         return 0
-    problems = []
-    for folder in _dashboard_dirs():
-        present = {path.name for path in folder.glob("*.json")}
-        stale = sorted(
-            name
-            for name in present | set(files)
-            if name not in files
-            or name not in present
-            or (folder / name).read_bytes().decode("utf-8").replace("\r\n", "\n") != files[name]
+    stale: list[str] = []
+    count = 0
+    for directory, folders in _dashboard_dirs():
+        files = rendered_files(directory)
+        count += len(files)
+        for folder in folders:
+            present = {path.name for path in folder.glob("*.json")}
+            stale += sorted(
+                f"{folder.parent.name}/{folder.name}/{name}"
+                for name in present | set(files)
+                if name not in files
+                or name not in present
+                or (folder / name).read_bytes().decode("utf-8").replace("\r\n", "\n") != files[name]
+            )
+    if stale:
+        print(
+            f"stale dashboards: {', '.join(stale)}: run "
+            "`uv run python -m agentic_cp dashboards --write`",
+            file=sys.stderr,
         )
-        if stale:
-            problems.append(f"stale dashboards in {folder}: {', '.join(stale)}")
-    if problems:
-        for problem in problems:
-            print(problem, file=sys.stderr)
-        print("run `uv run python -m agentic_cp dashboards --write`", file=sys.stderr)
         return 1
-    print(f"{len(files)} dashboards are current")
+    print(f"{count} dashboards are current")
     return 0
 
 
@@ -211,6 +227,7 @@ def _migrate(args: argparse.Namespace) -> int:
 
 async def _migrate_and_regrant(settings: Settings) -> str:
     from agentic_cp.app import utc_now
+    from agentic_cp.dashboards.link import relink_contracts
     from agentic_cp.db import make_owner_engine, migrate_async
     from agentic_cp.db_roles import enforcement_status, grant_runtime, runtime_role_exists
     from agentic_cp.rbac.defaults import seed_roles
@@ -225,6 +242,10 @@ async def _migrate_and_regrant(settings: Settings) -> str:
             if present:
                 await grant_runtime(conn, settings.runtime_role, None, settings.db_schema)
             known = await list_tenants(conn)
+            # a migration that recreated the views reset the gateway link (DF-631)
+            relinked = await relink_contracts(conn, settings.db_schema)
+        if relinked:
+            print(f"gateway link restored: {', '.join(relinked)}")
         for tenant in known:  # a release's new builtin roles reach every tenant
             async with tenant_tx(engine, tenant.id) as conn:
                 added = await seed_roles(conn, clock=utc_now)

@@ -246,7 +246,7 @@ async def _get(app, path):
 async def test_readyz_is_ready_on_an_enforced_database(db):
     reply = await _get(_app(db, require=True), "/readyz")
     assert reply.status_code == 200
-    assert reply.json() == {"status": "ready", "db_enforced": True}
+    assert reply.json() == {"status": "ready", "db_enforced": True, "gateway_linked": False}
 
 
 async def test_readyz_fails_closed_when_tenancy_unenforced(db):
@@ -258,7 +258,7 @@ async def test_readyz_fails_closed_when_tenancy_unenforced(db):
     assert "stray" not in reply.text  # details go to the server log, not to callers
     relaxed = await _get(_app(db, require=False), "/readyz")
     assert relaxed.status_code == 200
-    assert relaxed.json() == {"status": "ready", "db_enforced": False}
+    assert relaxed.json() == {"status": "ready", "db_enforced": False, "gateway_linked": False}
 
 
 async def test_serve_refuses_to_start_on_an_unenforced_database(db):

@@ -104,6 +104,7 @@ services:
       - grafanadata:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro,z
       - ../../control-plane/src/agentic_cp/dashboards/grafana:/var/lib/grafana/dashboards/agentic:ro,z
+      - ../../control-plane/src/agentic_cp/dashboards/grafana-executive:/var/lib/grafana/dashboards/agentic-executive:ro,z
       - ./.state/gateway-dashboards:/var/lib/grafana/dashboards/gateway:ro,z
     ports:
       - "${ORG_BIND:-127.0.0.1}:${ORG_GRAFANA_PORT:-3300}:3000"

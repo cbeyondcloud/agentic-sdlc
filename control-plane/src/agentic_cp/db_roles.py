@@ -69,6 +69,10 @@ INSERT_ONLY: tuple[str, ...] = (
     "feedback_events",
 )
 
+#: The dashboard views the runtime role may read (M3-01: `GET /v1/cost/chargeback`). Views
+#: run with their owner's rights and `dash_scope` binds them to the session's tenant.
+RUNTIME_VIEWS: tuple[str, ...] = ("dash_chargeback",)
+
 TENANCY = "tenancy.unenforced"
 AUDIT = "audit.unenforced"
 _IDENT = re.compile(r"[a-z_][a-z0-9_]{0,62}")
@@ -190,6 +194,13 @@ async def grant_runtime(
     await _execute(owner_conn, f"GRANT UPDATE ({writable}) ON tenants TO {role}")
     if "alembic_version" in existing:
         await _execute(owner_conn, f"GRANT SELECT ON alembic_version TO {role}")
+    views = await owner_conn.execute(
+        text("select viewname from pg_views where schemaname = :s"), {"s": schema}
+    )
+    present_views = {name for (name,) in views}
+    for view in RUNTIME_VIEWS:  # M3-01: the chargeback route reads its view
+        if view in present_views:
+            await _execute(owner_conn, f"GRANT SELECT ON {_ident(view)} TO {role}")
 
     await _execute(owner_conn, f"REVOKE ALL ON ALL FUNCTIONS IN SCHEMA {schema} FROM {role}")
     functions = await _existing_functions(owner_conn, schema)

@@ -78,7 +78,7 @@ helm test agentic --namespace agentic
 | `ingress.*` | off | host, class, TLS Secret (cert-manager works through annotations) |
 | `metrics.serviceMonitor.enabled` | false | a prometheus-operator ServiceMonitor with the metrics token |
 | `networkPolicy.*` | off | allowed callers and an egress allow-list (below) |
-| `grafana.dashboards.*`, `grafana.datasource.*` | dashboards on, datasource off | sidecar labels, folder, namespace |
+| `grafana.dashboards.*`, `grafana.datasource.*` | dashboards on, datasource off | sidecar labels, folders, namespace |
 
 ## First tenant
 
@@ -103,8 +103,14 @@ role, made with `python -m agentic_cp db dashboard-role`), and give Grafana the 
 password as the environment variable `AGENTIC_DASH_READER_PASSWORD` (the Grafana chart's
 `envFromSecret`). TokenLean's own dashboards come with TokenLean.
 
+Executive ROI shows each person's cost, so it goes to its own Grafana folder,
+`grafana.dashboards.executiveFolder` (default *Agentic Executive*); the other dashboards go
+to `grafana.dashboards.folder` (*Agentic*). Limit the executive folder's permissions to the
+org viewers in Grafana.
+
 A new dashboard in the catalog reaches the chart with
-`uv run python -m agentic_cp dashboards --write`, which refreshes `dashboards/` here;
+`uv run python -m agentic_cp dashboards --write`, which refreshes `dashboards/` and
+`dashboards-executive/` here;
 `--check` and the chart tests fail while the copy differs.
 
 ## Network policy

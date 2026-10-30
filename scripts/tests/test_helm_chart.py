@@ -27,7 +27,7 @@ from helm_support import (
 )
 from ruamel.yaml import YAML
 
-from agentic_cp.dashboards.catalog import GRAFANA_DIR
+from agentic_cp.dashboards.catalog import GRAFANA_DIR, GRAFANA_EXECUTIVE_DIR
 
 RELEASE = "agentic"
 NAMESPACE = "agentic"
@@ -388,23 +388,32 @@ def test_every_catalog_dashboard_is_in_a_grafana_configmap(default_render):
         for o in objects
         if o["kind"] == "ConfigMap" and o["metadata"]["labels"].get("grafana_dashboard") == "1"
     ]
-    rendered = {key: text for o in dashboards for key, text in o["data"].items()}
-    catalog = {p.name: p.read_bytes().decode("utf-8") for p in GRAFANA_DIR.glob("*.json")}
-    assert catalog and set(rendered) == set(catalog)
-    for name, text in catalog.items():
-        assert rendered[name].replace("\r\n", "\n") == text.replace("\r\n", "\n"), name
-    for o in dashboards:
-        assert o["metadata"]["annotations"]["grafana_folder"] == "Agentic"
-        (key,) = o["data"]
-        assert o["metadata"]["name"] == f"{RELEASE}-agentic-platform-dashboard-{key[:-5]}"
+    rendered = {key: o for o in dashboards for key in o["data"]}
+    # each catalog folder lands in its own Grafana folder: Executive ROI shows each person's
+    # cost and must never be provisioned into the shared one (M3-01 review F3)
+    folders = {GRAFANA_DIR: "Agentic", GRAFANA_EXECUTIVE_DIR: "Agentic Executive"}
+    catalog = {p.name: (p, folders[d]) for d in folders for p in d.glob("*.json")}
+    assert any(folder == "Agentic Executive" for _, folder in catalog.values())
+    assert set(rendered) == set(catalog)
+    for name, (path, folder) in catalog.items():
+        o = rendered[name]
+        text = path.read_bytes().decode("utf-8")
+        assert o["data"][name].replace("\r\n", "\n") == text.replace("\r\n", "\n"), name
+        assert o["metadata"]["annotations"]["grafana_folder"] == folder, name
+        assert o["metadata"]["name"] == f"{RELEASE}-agentic-platform-dashboard-{name[:-5]}"
 
 
 def test_the_chart_copy_of_the_dashboards_matches_the_catalog():
-    copy = {p.name: p.read_bytes() for p in (CHART / "dashboards").glob("*.json")}
-    catalog = {p.name: p.read_bytes() for p in GRAFANA_DIR.glob("*.json")}
-    assert copy.keys() == catalog.keys(), "run `uv run python -m agentic_cp dashboards --write`"
-    for name in catalog:
-        assert copy[name].replace(b"\r\n", b"\n") == catalog[name].replace(b"\r\n", b"\n")
+    for source, chart_folder in (
+        (GRAFANA_DIR, "dashboards"),
+        (GRAFANA_EXECUTIVE_DIR, "dashboards-executive"),
+    ):
+        copy = {p.name: p.read_bytes() for p in (CHART / chart_folder).glob("*.json")}
+        catalog = {p.name: p.read_bytes() for p in source.glob("*.json")}
+        assert catalog, source
+        assert copy.keys() == catalog.keys(), "run `uv run python -m agentic_cp dashboards --write`"
+        for name in catalog:
+            assert copy[name].replace(b"\r\n", b"\n") == catalog[name].replace(b"\r\n", b"\n")
 
 
 # ── full values ───────────────────────────────────────────────────────────────
