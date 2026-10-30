@@ -741,7 +741,7 @@ class RetentionDays(_Strict):
     gc`, counted from the run's end); `logs` logs, support bundles and the sent-mail log;
     `backups` the database backups (set in the backup tooling, docs/runbooks)."""
 
-    audit: int | None = Field(default=AUDIT_FLOOR_DAYS, ge=AUDIT_FLOOR_DAYS)
+    audit: int | None = AUDIT_FLOOR_DAYS  # never below the floor (the validator)
     runs: int | None = Field(default=400, ge=1)
     gateway_usage: int | None = Field(default=400, ge=GATEWAY_USAGE_FLOOR_DAYS)
     traces: int | None = Field(default=30, ge=1)
@@ -754,6 +754,12 @@ class RetentionDays(_Strict):
     def audit_is_kept_longest(self) -> Self:
         if self.audit is None:
             return self
+        if self.audit < AUDIT_FLOOR_DAYS:
+            # the placeholder retention.yaml before OR-01 said `audit: 365`
+            raise ValueError(
+                f"audit {self.audit} is below the audit chain's floor of {AUDIT_FLOOR_DAYS} "
+                f"days (7 years, OR-01) - set audit: {AUDIT_FLOOR_DAYS} or more, or null"
+            )
         longer = [
             name
             for name, days in self.model_dump().items()
@@ -771,7 +777,10 @@ class LegalHold(_Strict):
     """One legal hold (`retention.yaml legal_holds:`): nothing in its scope is deleted while
     it is listed. `data` names the kinds it holds (empty: every kind); `teams` the teams
     (empty: the whole tenant). An audit hold stops the audit chain's pruning at the first
-    held record, so the chain stays continuous."""
+    held record, so the chain stays continuous. The control plane enforces holds
+    on what it deletes itself (audit, runs, feedback, its mail log); for the gateway's usage,
+    traces, backups and laptops' run folders a hold is a record that people act on
+    (docs/runbooks/retention.md)."""
 
     id: Annotated[str, StringConstraints(pattern=_HOLD_ID)]
     reason: Annotated[str, StringConstraints(min_length=1, strip_whitespace=True)]

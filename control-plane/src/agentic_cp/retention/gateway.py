@@ -11,13 +11,16 @@ from collections.abc import Mapping
 
 def gateway_config(stored: Mapping) -> dict:
     """TokenLean's `retention:` block for a tenant's stored retention settings. 0 means
-    "keep forever" there; a legal hold on gateway usage keeps it forever too, as the
-    gateway's purge cannot exempt a scope."""
+    "keep forever" there; a legal hold on gateway usage or audit (of any team) keeps
+    that forever too, as the gateway's purge cannot exempt a scope."""
     days = stored.get("days", {})
     holds = stored.get("legal_holds", [])
-    usage_held = any(not hold.get("data") or "gateway_usage" in hold["data"] for hold in holds)
-    usage = 0 if usage_held else days.get("gateway_usage") or 0
-    audit = days.get("audit") or 0
+
+    def is_held(kind: str) -> bool:
+        return any(not hold.get("data") or kind in hold["data"] for hold in holds)
+
+    usage = 0 if is_held("gateway_usage") else days.get("gateway_usage") or 0
+    audit = 0 if is_held("audit") else days.get("audit") or 0
     return {
         "retention": {
             "enabled": bool(usage or audit),

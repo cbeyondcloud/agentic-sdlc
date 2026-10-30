@@ -38,6 +38,11 @@ class TenantDeleteError(Exception):
     """The tenant may not be deleted (not suspended, on legal hold, unknown)."""
 
 
+def deleted_slug(tenant_id) -> str:
+    """The slug a deleted tenant keeps until it is purged (its old one is in the chain)."""
+    return f"deleted-{tenant_id.hex[:12]}"
+
+
 def erase_order() -> list:
     """The tenant's tables but the audit chain, children before their parents."""
     wanted = set(TENANT_TABLES) - {"audit_log"}
@@ -59,6 +64,9 @@ async def delete_tenant(
             "(`admin tenant suspend`), so nobody is using it while it is erased"
         )
     async with tenant_tx(owner, tenant.id) as conn:
+        locked = select(tenants.c.status).where(tenants.c.id == tenant.id).with_for_update()
+        if (await conn.execute(locked)).scalar_one() != "suspended":  # resumed meanwhile
+            raise TenantDeleteError(f"tenant {slug} is no longer suspended; nothing deleted")
         active = await active_policy(conn)
         stored = (await version_settings(conn, active.version) or {}) if active else {}
         retention = stored.get("retention") or {}
@@ -85,6 +93,7 @@ async def delete_tenant(
             .where(tenants.c.id == tenant.id)
             .values(
                 status="deleted",
+                slug=deleted_slug(tenant.id),  # the slug is free again; the chain keeps it
                 policy_repo_url=None,
                 webhook_token_sha256=None,
                 mail_from=None,

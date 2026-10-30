@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from agentic_cp.__main__ import main
 from agentic_cp.audit import read_records, verify
 from agentic_cp.retention import LEADER_KEY, gateway_config, prune_tenant, run_retention
+from agentic_cp.retention.tenants import deleted_slug
 from agentic_cp.tables import (
     audit_log,
     feedback,
@@ -401,13 +402,15 @@ async def test_delete_erases_all_but_the_audit_chain(operator_env, tmp_path):
     assert records[-1].after["audit_days"] == 2555
     assert (await api.get("/v1/me", api.a.admin_token)).status_code == 401
     assert (await api.get("/v1/me", api.b.admin_token)).status_code == 200
-    assert await _run("admin", "tenant", "resume", "--tenant", "tenant-a", "--reason", "x") == 2
+    # the slug is free again: the deleted tenant is `deleted-<id>` and cannot be resumed
+    assert await _run("admin", "tenant", "resume", "--tenant", "tenant-a", "--reason", "x") == 3
 
     # the chain stays for its period, then the retention run removes it and the tenant
+    deleted = deleted_slug(api.a.id)
     kept = await run_retention(api.db.owner, at_day(api, 100))
-    assert "kept 2555 days" in kept["tenant-a"].skipped
+    assert "kept 2555 days" in kept[deleted].skipped
     gone = await run_retention(api.db.owner, at_day(api, 2600))
-    assert gone["tenant-a"].counts["audit"] == len(records)
+    assert gone[deleted].counts["audit"] == len(records)
     async with api.db.owner.begin() as conn:
         slugs = [row[0] for row in await conn.execute(select(tenants.c.slug))]
     assert slugs == ["tenant-b"]
@@ -419,3 +422,37 @@ async def test_a_held_tenant_is_not_deleted(operator_env, tmp_path, capsys):
     assert await _run("admin", "tenant", "suspend", "--tenant", "tenant-a", "--reason", "x") == 0
     assert await _delete("tenant-a") == 2
     assert "legal hold (LH-9)" in capsys.readouterr().err
+
+
+async def test_a_run_catches_up_on_a_backlog_in_several_passes(api, tmp_path):
+    await sync_policy(api, tmp_path)
+    for n in range(5):
+        await add_run(api, f"r-{n}", "payments", api.clock.now, events=1)
+    results = await run_retention(api.db.owner, at_day(api, 500), batch=2)
+    report = results["tenant-a"]
+    assert report.counts["runs"] == 5 and not report.more
+    assert await names(api, runs, runs.c.run_id) == []
+    assert len(await prune_events(api)) == 3  # one event per pass (2 + 2 + 1)
+
+
+async def test_a_deleted_tenant_frees_its_slug_and_refuses_other_commands(operator_env):
+    api = operator_env
+    assert await _run("admin", "tenant", "suspend", "--tenant", "tenant-a", "--reason", "x") == 0
+    assert await _delete("tenant-a") == 0
+    async with api.db.owner.begin() as conn:
+        found = select(tenants.c.slug, tenants.c.status).where(tenants.c.id == api.a.id)
+        slug, status = (await conn.execute(found)).one()
+    assert status == "deleted" and slug.startswith("deleted-")
+    assert await _run("admin", "audit", "verify", "--tenant", slug) == 0
+    command = ("admin", "tenant", "set-mail-from", "--tenant", slug, "--address", "a@b.c")
+    assert await _run(*command) == 2
+    assert await _run("admin", "tenant", "resume", "--tenant", slug, "--reason", "x") == 2
+
+
+def test_gateway_config_keeps_held_audit_forever():
+    stored = {
+        "days": {"audit": 2555, "gateway_usage": 400},
+        "legal_holds": [{"id": "LH-1", "reason": "x", "data": ["audit"], "teams": ["payments"]}],
+    }
+    block = gateway_config(stored)["retention"]
+    assert block["audit_days"] == 0 and block["usage_days"] == 400

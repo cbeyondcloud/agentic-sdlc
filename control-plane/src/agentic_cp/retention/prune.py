@@ -21,7 +21,11 @@ the same transaction, so `audit.verify` finds the checkpoint inside the hash cha
 chain verifies from its new first record. A legal hold stops deletion in its scope: its
 `data` kinds (all when empty) for its `teams` (the whole tenant when empty). A kind kept
 forever (`null`) is skipped. Each kind deletes at most `batch` rows (runs: `batch` runs) a
-pass; `more` says that some were left for the next one.
+pass; `more` says that some were left, and `run_retention` makes further passes (each its
+own transaction and event) up to `MAX_PASSES`. A dry run makes one pass and counts what
+that pass would delete: runs that become free only once their feedback goes are counted
+the next time. A run with feedback is kept as long as its feedback (feedback `null` keeps
+such runs too).
 
 `run_retention` runs every tenant under the session advisory lock `agentic.retention`, so
 two replicas or two overlapping CronJob runs never prune at once (the worker's pattern)."""
@@ -55,8 +59,10 @@ log = logging.getLogger("agentic_cp.retention")
 #: The actor of the retention job in the audit chain.
 RETENTION_ACTOR = "system:retention"
 LEADER_KEY = "agentic.retention"
-#: Rows deleted per kind per pass (runs: runs, each with all its events).
+#: Rows deleted per kind per pass (runs: runs, each with all its events), and the passes
+#: one run makes over a tenant while rows are left (a bigger backlog takes several runs).
 BATCH = 5000
+MAX_PASSES = 20
 COUNTED = ("feedback", "feedback_events", "runs", "run_events", "notifications", "audit")
 
 
@@ -232,7 +238,7 @@ async def _audit_prefix(
     oldest = (await conn.execute(select(func.min(audit_log.c.seq)))).scalar()
     if oldest is None:
         return
-    blocking = audit_log.c.at >= format_at(before)
+    blocking = audit_log.c.at.collate("C") >= format_at(before)  # byte order
     if teams:
         blocking = blocking | audit_log.c.team.in_(teams)
     first_kept = (await conn.execute(select(func.min(audit_log.c.seq)).where(blocking))).scalar()
@@ -256,6 +262,29 @@ async def _audit_prefix(
     count = select(func.count()).where(audit_log.c.seq <= through)
     report.counts["audit"] = (await conn.execute(count)).scalar_one()
     report.audit_through = (through, last)
+
+
+async def _prune_passes(owner, tenant_id, clock, dry_run: bool, batch: int) -> PruneReport:
+    """Passes over one tenant, each in its own transaction, while rows are left (at most
+    `MAX_PASSES`; a dry run makes one, as it deletes nothing); the counts added up."""
+    total: PruneReport | None = None
+    for _ in range(1 if dry_run else MAX_PASSES):
+        async with tenant_tx(owner, tenant_id) as conn:
+            report = await prune_tenant(
+                conn, now=clock(), clock=clock, dry_run=dry_run, batch=batch
+            )
+        if total is None:
+            total = report
+        else:
+            for kind, count in report.counts.items():
+                total.counts[kind] += count
+            total.audit_through = report.audit_through or total.audit_through
+            total.problems += report.problems
+            total.more = report.more
+        if not report.more or report.skipped or report.problems:
+            break
+    assert total is not None
+    return total
 
 
 async def run_retention(
@@ -289,10 +318,7 @@ async def run_retention(
                     if row.status == "deleted":
                         results[row.slug] = await purge_deleted(owner, row, clock, dry_run=dry_run)
                         continue
-                    async with tenant_tx(owner, row.id) as conn:
-                        report = await prune_tenant(
-                            conn, now=clock(), clock=clock, dry_run=dry_run, batch=batch
-                        )
+                    report = await _prune_passes(owner, row.id, clock, dry_run, batch)
                     for problem in report.problems:
                         log.warning("tenant %s: retention: %s", row.slug, problem)
                     results[row.slug] = report

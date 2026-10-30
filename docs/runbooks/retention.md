@@ -23,6 +23,11 @@ request like any other policy file, and the control plane checks it before accep
 A policy that breaks a floor, keeps any kind longer than the audit chain, or names a team
 that does not exist is refused with the reason, and the previous version stays active.
 
+**Upgrading from the placeholder.** Before OR-01 the template's `retention.yaml` said
+`days: { audit: 365, traces: 30 }`. That `audit` is below the floor, so a policy repo that
+still has it is refused at its next change (the active version stays). Replace the file
+with the current template (`templates/policy-repo/policy/retention.yaml`).
+
 **Trace capture is off.** Prompts and answers reach a trace only when the team opts in
 (`trace_capture: true` in `policy/teams/<team>.yaml`) **and** the repository's
 classification allows it (`trace_capture: true` under that class in
@@ -51,10 +56,14 @@ the command holds a Postgres advisory lock (a second run prints that another is 
 exits 4 and deletes nothing). With Docker Compose, run the command from cron or a scheduled
 task on one host.
 
-- `--dry-run` counts what would go and changes nothing.
+- `--dry-run` counts what one pass would delete and changes nothing. Runs that become free
+  only once their feedback goes are counted the time after.
 - `--tenant <slug>` handles one tenant.
-- Each kind deletes at most 5000 rows (runs: 5000 runs) a run; the output says when more
-  are left for the next run.
+- Each pass deletes at most 5000 rows of each kind (runs: 5000 runs, with all their
+  events), in its own transaction with its own `retention.pruned` event; a run makes up to
+  20 passes per tenant and says when rows are still left for the next run.
+- A run with feedback is kept until its feedback goes: with `feedback: null`, such runs are
+  kept forever too.
 - A tenant without an accepted policy, or whose policy cannot be read, is skipped: nothing
   is deleted.
 
@@ -143,10 +152,14 @@ python -m agentic_cp admin tenant delete --tenant acme --confirm acme --reason "
 Only a suspended tenant is deleted, never one on legal hold or with gateway keys the gateway
 has not revoked (`agentic rbac revoke-keys`). Every row of the tenant goes except its audit
 chain, which is kept for the audit period in force when it was deleted; `tenant.deleted`
-closes the chain with the counts. The tenant shows as `deleted`, cannot be resumed, and the
-retention job removes its chain and its row once the newest record is older than that
+closes the chain with the counts. The tenant shows as `deleted` under the slug `deleted-<id>`
+(the old slug is free for a new tenant; the chain's `tenant.deleted` event keeps it), no
+operator command but `admin audit verify` accepts it, and the retention job removes its chain and its row once the newest record is older than that
 period (that last step is in the job's log, as no chain is left to hold it). Then:
 
 - erase the tenant at the gateway with the gateway's own tenant erasure;
 - drop its Grafana reader role (`db dashboard-role` made it) and delete its policy work
   folder (`AGENTIC_CP_POLICY_WORKDIR/<tenant id>`).
+
+Migration `m3_06_retention` only widens the tenant status check. Its downgrade fails while
+a deleted tenant exists: downgrade only before deleting any tenant.

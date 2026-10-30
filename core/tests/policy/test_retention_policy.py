@@ -72,7 +72,7 @@ def test_periods_and_holds_are_read(fixtures: Path, tmp_path: Path):
 @pytest.mark.parametrize(
     ("text", "message"),
     [
-        ("days: { audit: 365 }", "2555"),
+        ("days: { audit: 365 }", "set audit: 2555 or more"),
         ("days: { audit: 400, runs: 500 }", "2555"),
         ("days: { audit: 3000, runs: 3100 }", "audit is kept longest"),
         ("days: { audit: 3000, runs: null }", "audit is kept longest"),

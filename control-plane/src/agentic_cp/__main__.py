@@ -429,9 +429,10 @@ def _dashboard_role(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _with_tenant(settings: Settings, slug: str, work):
+async def _with_tenant(settings: Settings, slug: str, work, *, allow_deleted: bool = False):
     """Run `work(conn, tenant)` as the owner role inside `slug`'s tenant context: an
-    operator command never touches a tenant without setting it (Review Focus 6)."""
+    operator command never touches a tenant without setting it (Review Focus 6). A deleted
+    tenant (M3-06) is refused unless `allow_deleted` (reading its kept audit chain)."""
     from agentic_cp.db import make_owner_engine
     from agentic_cp.tenancy.context import tenant_tx
     from agentic_cp.tenancy.tenants import tenant_by_slug
@@ -442,6 +443,8 @@ async def _with_tenant(settings: Settings, slug: str, work):
             tenant = await tenant_by_slug(conn, slug)
         if tenant is None:
             raise CommandError(f"no tenant {slug!r}", 3)
+        if tenant.status == "deleted" and not allow_deleted:
+            raise CommandError(f"tenant {slug} is deleted", 2)
         async with tenant_tx(engine, tenant.id) as conn:
             return await work(conn, tenant)
     finally:
@@ -457,7 +460,7 @@ def _audit_verify(args: argparse.Namespace) -> int:
     async def work(conn, tenant):
         return await verify(conn), len(await read_records(conn))
 
-    problems, total = asyncio.run(_with_tenant(settings, args.tenant, work))
+    problems, total = asyncio.run(_with_tenant(settings, args.tenant, work, allow_deleted=True))
     for problem in problems:
         print(problem)
     if problems:
