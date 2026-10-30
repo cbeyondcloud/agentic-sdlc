@@ -13,7 +13,12 @@ from agentic.policy import gateway_model
 
 def test_the_org_stack_is_the_real_control_plane(org, tmp_path):
     ready = httpx2.get(org.url + "/readyz", trust_env=False).json()
-    assert ready == {"status": "ready", "db_enforced": True}  # forced RLS, insert-only audit
+    # forced RLS, insert-only audit; whether a gateway is linked is informational (M3-01)
+    assert {k: ready[k] for k in ("status", "db_enforced")} == {
+        "status": "ready",
+        "db_enforced": True,
+    }
+    assert isinstance(ready["gateway_linked"], bool)
     me = org.ok("GET", "/v1/me")
     assert (me["tenant"]["slug"], me["user"]["email"]) == (TENANT, ADMIN)
 

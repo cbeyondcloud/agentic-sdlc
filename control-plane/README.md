@@ -128,6 +128,21 @@ and run `python auditproof.py export.jsonl` (exit 0 intact, 3 broken). Keep each
 end anchor: the next export's start must continue it. CSV cells that a spreadsheet would
 run as a formula carry one leading `'`, which the verifier strips.
 
+### Monthly chargeback (M3-01)
+
+`GET /v1/cost/chargeback?month=YYYY-MM&team=&format=json|csv` (CLI: `agentic report
+chargeback`) gives one row per team for the month: users, runs, step executions, calls,
+tokens and cost split into attributed and unattributed. The default month is the previous
+calendar month (UTC). The whole org needs `dashboard.view.org` (`exec-viewer`, `auditor`,
+org admins); one team needs `dashboard.view.team` there, or the org permission. Every
+export is audited (`cost.chargeback_exported`). The numbers come from `dash_chargeback`,
+the view the Executive ROI dashboard reads, so the file and the dashboard agree. A
+registered run's cost belongs to its team and to the month it opened; a call that cannot
+be attributed to a run belongs to its own month and authenticated team. Empty cells are
+unmeasured, never 0. The report reads the gateway's usage through the shared connection
+pool, so its queries stop after `AGENTIC_CP_REPORT_TIMEOUT_SECONDS` (30) with a 503
+`cost.report_timeout`; the CLI waits up to 120 s.
+
 ### Gateway routing (M2-09)
 
 With `AGENTIC_CP_GATEWAY_ADMIN_URL` and `AGENTIC_CP_GATEWAY_ADMIN_KEY` set (a TokenLean
@@ -169,7 +184,7 @@ A batch past a cap is refused with 429 `personal.quota`; the laptop keeps it que
 A laptop whose journal no longer continues its chain (a copied or reset `~/.agentic`) sends
 it again under a new device id, which counts toward the device cap.
 
-## Dashboards (M2-37, M2-38)
+## Dashboards (M2-37, M2-38, M3-01)
 
 Grafana reads the `dash_*` views (`agentic_cp/dashboards/views.py`): runs, steps, gates,
 limits, audit and repos, joined with the gateway's usage rows through their tags (run, step,
@@ -195,11 +210,30 @@ tenant filter is part of the SQL `postgres_fdw` sends).
   tenant's rows only, whatever it sets the setting to. A role a DBA made needs
   `GRANT <role> TO <owner> WITH ADMIN OPTION` first. Each tenant's Grafana organisation
   provisions the datasource uid `agentic-postgres` with its own reader, so every tenant uses
-  the same dashboard JSON (`agentic_cp/dashboards/grafana`, rendered from `catalog.py`).
+  the same dashboard JSON (`agentic_cp/dashboards/grafana` and `grafana-executive`, rendered
+  from `catalog.py`).
 - **One-time DBA steps** (a superuser, once per database): `CREATE EXTENSION postgres_fdw`,
   `GRANT USAGE ON FOREIGN DATA WRAPPER postgres_fdw TO <owner>` and
   `GRANT SET ON PARAMETER app.tenant_id TO <owner>`. The owner role must be neither a
   superuser nor `BYPASSRLS` (the views run with its rights; `db dashboard-role` checks).
+- **Executive cost (M3-01).** `dash_cost_calls` gives every call one attribution and
+  `dash_cost_facts` (one row per run step) is what the Executive ROI dashboard filters by
+  month, team, pipeline and agent. `dash_cost_drivers` (org), `dash_cost_drivers_team` and
+  `dash_cost_drivers_user` break each month's cost into users x sessions per user x turns
+  per session x requests per turn x tokens per request x cost per token. Each factor is a
+  ratio of measured totals, so their product equals the attributed actual cost; the views
+  show it next to the unattributed cost and raise `data_quality_alert` above 0.5 %.
+  `dash_roi_month` holds the ROI measures; the ones without a source yet (PR measures, DORA,
+  gateway savings) are NULL.
+- **Who sees whose cost.** The Executive ROI dashboard shows each person's cost (a row per
+  run owner). Its JSON is in `agentic_cp/dashboards/grafana-executive`, apart from the
+  shared dashboards, and is provisioned into its own Grafana folder, *Agentic Executive*.
+  The reader role can read every `dash_*` view, so the database does not limit who sees
+  that folder: Grafana does. Before you give other people Grafana access, set the folder's
+  permissions so only holders of `dashboard.view.org` (the `exec-viewer` and `auditor`
+  roles, org admins) can view it. The chargeback route checks that permission itself.
+- **Upgrades.** `migrate` points contract views that a migration reset back at the gateway
+  tables already imported (no password needed), and `/readyz` reports `gateway_linked`.
 - `deploy/org-local` runs all of it on one machine (control plane, Postgres, Grafana and
   the gateway's LITE stack).
 

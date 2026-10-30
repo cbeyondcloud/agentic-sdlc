@@ -182,6 +182,10 @@ class Settings(BaseModel):
     """Tenants labelled by slug in the per-tenant gauges; the rest are summed as `_other`."""
     metrics_refresh_seconds: Annotated[int, Field(ge=1, le=3600)] = 30
     """The per-tenant gauges are read from the database at most this often."""
+    report_timeout_seconds: Annotated[int, Field(ge=1, le=600)] = 30
+    """The longest a cost report's queries may run (M3-01 review F1): they read the gateway's
+    usage through the shared connection pool, so a slow read stops with a 503 instead of
+    holding a connection that ingest and audit need."""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Settings:

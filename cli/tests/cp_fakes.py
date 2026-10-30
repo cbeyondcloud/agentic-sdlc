@@ -78,6 +78,7 @@ class FakeControlPlane:
     refuse_decisions: bool = False  # decisions answer 403 (the caller does not own it)
     heartbeats: list[dict] = field(default_factory=list)  # run id + body of each beat (M3-07)
     refuse_heartbeats: bool = False  # answer every beat 503
+    chargeback: list[dict] = field(default_factory=list)  # dash_chargeback rows (M3-01)
 
     def add_audit(self, count: int, *, team_of=lambda seq: "payments") -> list[dict]:
         """`count` chained audit records appended to the tenant's chain."""
@@ -494,6 +495,8 @@ class FakeControlPlane:
             return self._learning(request, path)
         if path == "/v1/learning/proposals":
             return httpx2.Response(200, json=self.proposals)
+        if path == "/v1/cost/chargeback":  # M3-01
+            return self._chargeback(request)
         if path.startswith("/v1/runs/") and path.endswith("/heartbeat"):  # M3-07
             self.heartbeats.append({"run_id": path.split("/")[3], **json.loads(request.content)})
             if self.refuse_heartbeats:
@@ -504,6 +507,24 @@ class FakeControlPlane:
                 return _problem(413, "too_large", f"the body is over {self.max_body} bytes")
             return self._ingest(path.split("/")[3], json.loads(request.content)["entries"])
         return _problem(404, "not_found", "no such route or object")
+
+    def _chargeback(self, request: httpx2.Request) -> httpx2.Response:
+        from agentic.orgapi.cost import Chargeback, ChargebackRow
+
+        month = request.url.params.get("month") or "2026-09"
+        team = request.url.params.get("team")
+        if "dashboard.view.org" not in self.allowed and (
+            team is None or "dashboard.view.team" not in self.allowed
+        ):
+            need = "dashboard.view.org" if team is None else "dashboard.view.team"
+            return _problem(403, "rbac.forbidden", f"you do not hold {need}")
+        rows = [
+            ChargebackRow.model_validate(row)
+            for row in self.chargeback
+            if row["month"] == month and team in (None, row["team"])
+        ]
+        report = Chargeback.of(month, team, rows)
+        return httpx2.Response(200, json=report.model_dump(mode="json"))
 
     def _may_switch(self, team: str | None) -> bool:
         if "killswitch.global" in self.allowed:

@@ -21,6 +21,7 @@ from agentic_cli.commands import (
     login,
     pr,
     rbac,
+    report,
     runs,
     skills,
     sync,
@@ -45,4 +46,5 @@ COMMANDS: list[Callable[[typer.Typer], None]] = [
     gc.register,
     doctor.register,
     learn.register,
+    report.register,
 ]
