@@ -1,5 +1,3 @@
 $what has used $percent % of its budget in $tenant_name: $spent_usd of $budget_usd USD$period_phrase.
 
-At 100 % the gateway refuses further calls for this budget; a team lead can raise a team
-budget in the policy repo, and a paused run continues with more budget through
-`agentic resume <run> --extra-budget <USD>`.
+$limit_phrase

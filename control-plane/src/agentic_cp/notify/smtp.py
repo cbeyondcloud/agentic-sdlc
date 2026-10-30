@@ -20,8 +20,9 @@ from uuid import UUID
 
 from agentic_cp.settings import Settings
 
-#: The Message-ID domain: the id is the outbox row's, so a resend is recognisable (P2).
-MESSAGE_ID_DOMAIN = "agentic-control-plane"
+#: The Message-ID domain when the sender's has no dot (DF-577); the id's local part is
+#: the outbox row's, so a resend is recognisable (P2).
+MESSAGE_ID_DOMAIN = "agentic-control-plane.invalid"
 
 
 class DeliveryFailure(Exception):
@@ -58,6 +59,13 @@ class Notifier(Protocol):
         ...
 
 
+def message_id_domain(sender: str) -> str:
+    """The sender's domain, lower case (DF-577: some spam filters score down a dotless
+    Message-ID domain); MESSAGE_ID_DOMAIN when it has no dot."""
+    domain = sender.rpartition("@")[2].strip().lower()
+    return domain if "." in domain.strip(".") else MESSAGE_ID_DOMAIN
+
+
 def build_message(message: Outgoing) -> EmailMessage:
     """multipart/alternative: the plain text first, then the HTML part."""
     mail = EmailMessage()
@@ -65,7 +73,7 @@ def build_message(message: Outgoing) -> EmailMessage:
     mail["To"] = message.recipient
     mail["Subject"] = message.subject
     mail["Date"] = formatdate(usegmt=True)
-    mail["Message-ID"] = f"<{message.id}@{MESSAGE_ID_DOMAIN}>"
+    mail["Message-ID"] = f"<{message.id}@{message_id_domain(message.sender)}>"
     mail["Auto-Submitted"] = "auto-generated"  # RFC 3834: no auto-replies to it
     mail.set_content(message.text)
     mail.add_alternative(message.html, subtype="html")
