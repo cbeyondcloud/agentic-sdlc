@@ -32,6 +32,7 @@ from agentic_cp.keys.gateway import gateway_keys_for
 from agentic_cp.killswitch.api import router as killswitch_router
 from agentic_cp.killswitch.store import SwitchCache
 from agentic_cp.learning.api import router as learning_router
+from agentic_cp.learning.decisions import router as learning_decisions_router
 from agentic_cp.logredact import install_log_redaction
 from agentic_cp.metrics import Metrics, MetricsMiddleware
 from agentic_cp.notify.api import router as notify_router
@@ -121,6 +122,7 @@ def create_app(
     app.include_router(routing_router)
     app.include_router(personal_router)
     app.include_router(learning_router)
+    app.include_router(learning_decisions_router)
 
     @app.get("/healthz", tags=["health"])
     async def healthz() -> dict[str, str]:

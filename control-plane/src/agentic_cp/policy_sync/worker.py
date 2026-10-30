@@ -22,6 +22,7 @@ from agentic_cp.alerts.autotrip import auto_trip_job
 from agentic_cp.gitops import GitRunner
 from agentic_cp.ingest.health import zombie_job
 from agentic_cp.keys.store import retry_job
+from agentic_cp.learning.digest import digest_job
 from agentic_cp.notify.delivery import deliver_job
 from agentic_cp.policy_sync.service import sync_once
 from agentic_cp.rbac.repos import refresh_due
@@ -33,15 +34,16 @@ from agentic_cp.tenancy.tenants import current_tenant
 log = logging.getLogger("agentic_cp.worker")
 
 #: Per-tenant jobs run after the policy sync: the CODEOWNERS refresh (M2-03), auto-trip
-#: (M2-11) and the zombie pass (M3-07; both before the outbox, so their mail goes out in the
-#: same pass), the mail outbox (M2-07), pending proxy-key revocations (M2-17) and the
-#: gateway's routing (M2-09; after the sync, so a version accepted in this pass is applied
-#: in it).
+#: (M2-11), the zombie pass (M3-07) and the learning digest (M3-15; once a day per person),
+#: all before the outbox so their mail goes out in the same pass, the mail outbox (M2-07),
+#: pending proxy-key revocations (M2-17) and the gateway's routing (M2-09; after the sync, so
+#: a version accepted in this pass is applied in it).
 TenantJob = Callable[[AsyncEngine, GitRunner, UUID, Settings, Callable[[], datetime]], Awaitable]
 EXTRA_JOBS: list[TenantJob] = [
     refresh_due,
     auto_trip_job,
     zombie_job,
+    digest_job,
     deliver_job,
     retry_job,
     routing_job,

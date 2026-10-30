@@ -14,9 +14,11 @@ create or update out. The same input gives the same clusters and ids on every ma
   * **Narrowest scope.** Repo first. A team-wide cluster (the team's repos together)
     becomes a team proposal only when no single repo holds enough of it on its own - its
     evidence comes from at least two repos.
-  * **Rejected lessons are remembered.** A cluster similar to a rejected proposal of the
-    same agent and scope is proposed again only when its corrections made after the
-    rejection reach the threshold by themselves; that proposal gets a new id.
+  * **Rejected lessons are remembered.** A cluster similar to a rejected (or reverted)
+    proposal of the same agent and scope is proposed again only when its corrections made
+    after that decision reach the threshold by themselves; that proposal gets a new id.
+  * **Decided proposals are not proposed twice.** An approved, deferred or applied
+    proposal is matched like a pending one, but its evidence stays as it was decided.
   * **Pending proposals grow.** A cluster matching a pending proposal updates its
     evidence instead of making a second one. It matches by id, and - since the id comes
     from the cluster's first lesson, which changes when an older correction arrives late
@@ -35,16 +37,25 @@ from typing import Literal
 
 from agentic.learning.lessons import LexicalSimilarity, Similarity, alike, tokens
 
-ProposalStatus = Literal["pending", "rejected"]
+#: A proposal's life (M3-15, M3-16; `agentic.learning.approval.TRANSITIONS`): pending ->
+#: approved -> applied -> reverted, or pending (or approved, unmade) -> rejected, or pending ->
+#: deferred.
+ProposalStatus = Literal["pending", "approved", "rejected", "deferred", "applied", "reverted"]
+#: A person said no to the lesson (or took it back): proposed again only on new evidence.
+REMEMBERED = ("rejected", "reverted")
+#: The same pattern is already decided or waiting on a person: matched, never duplicated.
+SETTLED = ("approved", "deferred", "applied")
 
 
 @dataclass(frozen=True)
 class LearningSettings:
-    """The policy's learning thresholds for one team (`OrgPolicy.learning`)."""
+    """The policy's learning thresholds for one team (`OrgPolicy.learning`). A learner the
+    Learning Analyst named with less than `min_confidence` does not count (DF-732)."""
 
     threshold: int = 3
     window_days: int = 30
     similarity: float = 0.5
+    min_confidence: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -59,6 +70,7 @@ class Lesson:
     actor: str
     team: str | None = None
     repo: str | None = None
+    confidence: float = 1.0  # the attribution's confidence for this agent
 
     @property
     def repo_scope(self) -> str:
@@ -81,6 +93,8 @@ class Proposal:
     created_at: datetime
     status: ProposalStatus = "pending"
     decided_at: datetime | None = None
+    decided_by: str | None = None
+    endorsements: tuple[str, ...] = ()  # people who back it (weight, never a decision)
 
 
 @dataclass
@@ -123,10 +137,15 @@ def propose(
     """The proposals to create, and the pending ones whose evidence grew."""
     similarity = similarity or LexicalSimilarity(settings.similarity)
     start = now - timedelta(days=settings.window_days)
-    recent = [item for item in lessons if start <= item.at <= now]
+    recent = [
+        item
+        for item in lessons
+        if start <= item.at <= now and item.confidence >= settings.min_confidence
+    ]
     by_id = {p.id: p for p in existing}
     pending = sorted(
-        (p for p in existing if p.status == "pending"), key=lambda p: (p.created_at, p.id)
+        (p for p in existing if p.status == "pending" or p.status in SETTLED),
+        key=lambda p: (p.created_at, p.id),
     )
     out: dict[str, Proposal] = {}  # by id: one cluster's update never hides another's
 
@@ -150,7 +169,7 @@ def propose(
         rejected = [
             p
             for p in existing
-            if p.status == "rejected"
+            if p.status in REMEMBERED
             and (p.agent, p.scope) == (agent, scope)
             and alike(similarity, p.lesson, cluster.seed.text)
         ]
@@ -204,4 +223,13 @@ def propose(
     return list(out.values())
 
 
-__all__ = ["LearningSettings", "Lesson", "Proposal", "proposal_id", "propose"]
+__all__ = [
+    "REMEMBERED",
+    "SETTLED",
+    "LearningSettings",
+    "Lesson",
+    "Proposal",
+    "ProposalStatus",
+    "proposal_id",
+    "propose",
+]

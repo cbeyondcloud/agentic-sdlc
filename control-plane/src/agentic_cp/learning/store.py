@@ -50,6 +50,7 @@ from agentic_cp.auth.tokens import TokenContext
 from agentic_cp.errors import not_found
 from agentic_cp.ingest.register import version_settings
 from agentic_cp.ingest.store import broken, head_problem
+from agentic_cp.learning.digest import queue_digest
 from agentic_cp.rbac.authz import EnforcerCache, Team, require
 from agentic_cp.tables import feedback, feedback_events, learning_proposals, runs
 from agentic_cp.tenancy.context import require_tenant_id
@@ -376,30 +377,36 @@ async def recluster(
             actor=row.actor,
             team=team,
             repo=row.repo,
+            confidence=_confidence(row.attribution, agent),
         )
         for row in rows
         for agent in row.agents
         if agent in agents
     ]
-    existing = [
-        _proposal(row)
-        for row in (
-            await conn.execute(
-                select(learning_proposals).where(
-                    learning_proposals.c.team == team,
-                    learning_proposals.c.agent.in_(sorted(agents)),
-                )
+    held = (
+        await conn.execute(
+            select(learning_proposals).where(
+                learning_proposals.c.team == team,
+                learning_proposals.c.agent.in_(sorted(agents)),
             )
-        ).all()
-    ]
+        )
+    ).all()
+    existing = [_proposal(row) for row in held]
+    held_authors = {row.id: set(row.authors) for row in held}
     known = {p.id for p in existing}
+    made: list[Proposal] = []
     changed = propose(lessons, settings, now, existing=existing)
     for proposal in changed:
         values = {
             "evidence": list(proposal.evidence),
             "sources": list(proposal.sources),
             "actors": list(proposal.actors),
-            "authors": sorted({authors[f] for f in proposal.evidence if f in authors}, key=str),
+            # DF-737: an author of evidence that left the window keeps seeing the proposal
+            "authors": sorted(
+                {authors[f] for f in proposal.evidence if f in authors}
+                | held_authors.get(proposal.id, set()),
+                key=str,
+            ),
         }
         if proposal.id in known:
             await conn.execute(
@@ -437,7 +444,18 @@ async def recluster(
             ),
             clock=clock,
         )
+        made.append(proposal)
+    if made:  # M3-15: the people who may decide them get the day's digest
+        await queue_digest(conn, team, clock=clock)
     return changed
+
+
+def _confidence(attribution: Mapping | None, agent: str) -> float:
+    """The attribution's confidence for `agent` (1.0 when it names none)."""
+    for learner in (attribution or {}).get("learners") or []:
+        if learner.get("agent") == agent:
+            return float(learner.get("confidence", 1.0))
+    return 1.0
 
 
 __all__ = ["entry_problems", "ingest_feedback", "learning_settings", "recluster", "set_attribution"]
