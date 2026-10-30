@@ -3,3 +3,5 @@
 eval:
   repeats: 3                            # runs per case per variant
   budget_usd: 100                       # the spend cap of one evaluation
+  # Costlier agents get a higher cap (spike S10): at the cap a run stops as INCOMPLETE.
+  budget_usd_by_agent: { qa: 250, developer: 750 }

@@ -155,3 +155,22 @@ The `restricted` class may use only the `local` tier, so its code never leaves y
 machines, and it turns personal skills and personal memory off: only reviewed, shared
 skills shape agents there. Give `local` a model served inside your network before a
 restricted repository runs its first pipeline.
+
+## Starting defaults (spec §22)
+
+The template answers the spec's open questions with defaults an org can change later:
+
+| Question | Default here | Where to change it |
+|---|---|---|
+| Repo class when a repo declares none | `internal`; its full prompts and responses stay off the control plane | `policy/classifications.yaml` `default_classification` |
+| Caps per agent | each agent type's `limits` (for example the Developer: 5 USD, 80 turns, 60 minutes a run) | `policy/agent-types.yaml`; a team lowers them in `limits_max` |
+| Runs at once | 3 a person, 20 a team | `policy/limits.yaml` `concurrency` |
+| Team monthly budget | every team sets `monthly_budget_usd`, one cap per team for the whole team's gateway spend: start at 20 USD a developer a month (a 10-person team: 200), then adjust after the first month from the Team view and Executive ROI dashboards. Org admins change any team's value; a team lead may only lower their own. Both by pull request to this repo | `policy/teams/<team>.yaml` |
+| Evaluation spend cap | 100 USD an evaluation; 250 for QA, 750 for the Developer. These are org budgets for an evaluation the platform team runs (a quality gate or an A/B), not part of any team's monthly budget: run them with the platform team's own gateway key, since under a product team's key its monthly cap (200 USD for 10 people) would stop a 750 USD Developer evaluation early | `policy/eval.yaml` |
+| Code-intelligence index | each laptop builds its own; `index_export_workflow: true` adds a nightly CI export. No refresh on every merge by default: a busy repo adds the commented `push` trigger to its workflow | `policy/org.yaml` |
+
+**Notifications** (invites, gate waits, budget alerts) go through your org's own SMTP relay,
+which is set on the control plane, not in this repository: `smtp.host` and the other
+`smtp.*` values in the Helm chart, or `AGENTIC_CP_SMTP_HOST`, `AGENTIC_CP_SMTP_PORT` (587),
+`AGENTIC_CP_SMTP_SECURITY` (`starttls`), `AGENTIC_CP_SMTP_FROM` and the relay login. Until
+a relay is set, mail is queued and nothing is sent; invites need it.

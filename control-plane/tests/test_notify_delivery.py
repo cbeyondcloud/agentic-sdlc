@@ -85,7 +85,7 @@ async def test_a_queued_mail_arrives_over_starttls_with_the_tenants_sender(api):
     assert mail.rcpt_tos == ["dev@a.example.test"]
     message = mail.message
     assert message["From"] == "Tenant A tools <dev-tools@a.example.test>"
-    assert message["Message-ID"].startswith(f"<{queued}@")
+    assert message["Message-ID"] == f"<{queued}@a.example.test>"  # DF-577
     assert message["Auto-Submitted"] == "auto-generated"
     assert message.get_content_type() == "multipart/alternative"
     parts = [part.get_content_type() for part in message.iter_parts()]

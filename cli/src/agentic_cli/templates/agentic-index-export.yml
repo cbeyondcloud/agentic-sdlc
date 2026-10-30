@@ -47,6 +47,11 @@ on:
         description: Build and check the export; publish nothing
         type: boolean
         default: false
+  # A repository with many merges a day may also refresh on every merge (spec 22.4):
+  # remove the "# " from the two lines below. The concurrency group runs one export at
+  # a time and keeps only the latest waiting one, so a burst of merges costs one build.
+  # push:
+  #   branches: [main]                  # EDIT: your default branch
 
 permissions:
   contents: read

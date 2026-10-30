@@ -24,6 +24,13 @@ required_steps:
 # The lowest CLI version that may register runs with the control plane.
 # min_cli_version: "1.0.0"
 
+# The nightly code-intelligence index export (D39, spec §10.3). Off: every laptop builds
+# its own index. On: `agentic init --repo` adds a workflow that builds it once a night in
+# CI, outside main, and each run catches up from it with an incremental update. There is
+# no refresh on every merge by default (spec §22.4): a repo with many merges a day may add
+# the `push` trigger shown, commented, in its workflow.
+index_export_workflow: false
+
 # OS sandbox for agent commands (D38). Runs in these regimes refuse to start without
 # one; the library pipelines run in the `team` regime. On Windows the sandbox needs
 # WSL2 (`agentic init` says what to install).

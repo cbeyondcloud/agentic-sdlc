@@ -7,6 +7,7 @@
 | Owner | Sumit Gupta |
 | Supporting research | [OSS reuse report](../../../reports/Agentic%20SDLC%20OSS%20reuse.md) · [research notes](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/) · [Zyroflo comparison](../../../research_notes/Agentic%20SDLC%20OSS%20reuse/sdlc_harness_comparison.md) |
 | Revision | r3 (2026-10-18): decisions D26-D35 folded in; new §23 Users and roles, §24 Developer onboarding (init, skills, custom skills, learning loop), §25 Deployment landscape (incl. TokenLean LITE), §26 Executive cost breakdown, §27 Enterprise coverage; §5 agent types and deny lists; §19 milestones. Since r3: D36 (httpx2), D37 (handoff templates inherit a base, extend-only layering, §7.4), D38 (sandbox: `srt` on every OS, Windows via WSL2, spike S6), D39 (code-intelligence index built locally; opt-in export outside `main`, spike S9); S4 re-confirms D1/D17 (build, not adopt); S7: ACP v1 is the single phase-2 adapter, opencode moves onto it (D32 revised), Antigravity via its official ACP server, OpenHands dropped; D40 (engine-neutral containers, S12), D41 (eval method, S10), D42 (Responses translation and codex lock-down, S3), D43 (supply-chain checks, P0-03) - confirmed by the owner 2026-10-21 with the D32 revision; D44 (pycasbin RBAC) and D45 (multi-tenant control plane) - owner decisions 2026-10-22 |
+| r4 | 2026-10-30: §22 open questions resolved with template defaults (M3-19): org SMTP relay, `internal` by default, per-type and per-team caps, nightly index only; OR-01 defined by owner decision 115 (balanced retention defaults) |
 | Earlier | r2 (2026-10-17): Zyroflo (sdlc-harness) artefacts folded in — §1.4, D16, D25, §6, §7, §9.2, §10, §14.5, §16, §18–§21 |
 
 ---
@@ -771,7 +772,7 @@ The PR body links the run and its handoffs (the "why").
 
 ### 14.6 Retention
 
-**Open requirement OR-01 (to be defined later):** retention period and end-of-life action per data type, legal hold, per-user erasure and how deletion is proven. Until defined, nothing is deleted automatically and trace capture stays off by default. Mechanism once defined: per data type in `retention.yaml` (audit longest; traces shortest), applied in control plane and mapped to TokenLean retention settings. Per-user erasure is a later phase (TokenLean GDPR is tenant-level today).
+**OR-01 retention (defined 2026-10-30, owner decision 115):** audit chain 7 years, never deleted early and still verifiable; control-plane runs, events and gateway usage 400 days; prompts and traces off by default, 30 days when a team opts in; learning feedback 1 year; local run folders and worktrees 30 days after the run ends; logs and support bundles 30 days; backups 35 days; a legal hold pauses deletion for its scope. Org admins change periods in the policy repo's `retention.yaml`, and every deletion is audited. The retention jobs are M3-06.
 
 ---
 
@@ -913,13 +914,18 @@ Key risks: fast churn in Pydantic AI, Graphify and backend CLI flags (mitigation
 
 ---
 
-## 22. Open questions for review
+## 22. Open questions — resolved (M3-19, r4)
 
-1. Email provider/SMTP for v1 notifications — use an existing org relay?
-2. Default repo classification for repos that don't declare one (`internal`?).
-3. Initial cap defaults per agent type and per team (needed to seed `agent-types.yaml`).
-5. **OR-01** data retention policy (see §14.6) — deliberately left open.
-4. Whether nightly index refresh should also run on every merge for high-traffic repos.
+Each question has a default the templates carry (`templates/policy-repo`, `templates/standalone`); every one can be changed later without a migration.
+
+| # | Question | Default | Where it lives |
+|---|---|---|---|
+| 1 | Email provider for v1 notifications | The org's **existing SMTP relay**; no vendor mail API. STARTTLS on 587 by default (`tls` and `none` are explicit choices); without a relay, mail stays queued and nothing is sent (invites need one). The sender is the deployment's `smtp_from`, or a tenant's `mail_from`; the Message-ID uses the sender's domain. | Control-plane settings `AGENTIC_CP_SMTP_*` / Helm `smtp.*` (deployment config, not the policy repo); the policy-repo README says where |
+| 2 | Default classification of a repo that declares none | **`internal`**, with trace capture off (full prompts and responses stay off the control plane). A repo that needs more protection declares `confidential` or `restricted`. | `classifications.yaml` `default_classification` |
+| 3 | Initial caps per agent type and per team | Per run, the agent types' caps (BA 2 USD / 40 turns / 30 min; Design 4 / 60 / 45; Developer 5 / 80 / 60 with up to 5 child agents; Code Review 3 / 60 / 30; QA 3 / 60 / 45; general 1 / 30 / 20). Runs at once: 3 a person, 20 a team. **Every team sets `monthly_budget_usd`**, one cap per team for the team's whole gateway spend, in the policy repo: start at 20 USD a developer a month (owner, 2026-10-30) and adjust from the dashboards after the first month. Org admins change any team's value; a team lead may only lower their own; both by policy-repo pull request. Evaluations: 100 USD a run, 250 for QA, 750 for the Developer (S10): org budgets for evaluations the platform team runs, outside the team budgets. | `agent-types.yaml`, `limits.yaml`, `teams/<team>.yaml`, `eval.yaml` |
+| 4 | Index refresh on every merge for high-traffic repos | **No, nightly only**: each run already catches up from the last export with an incremental update. The export workflow stays off until the org sets `index_export_workflow: true`; a busy repo may uncomment the `push` trigger in its workflow (one build at a time, bursts collapse). | `org.yaml`; `.github/workflows/agentic-index-export.yml` |
+| 5 | **OR-01** data retention policy (§14.6) | **Defined by owner decision 115** (balanced defaults, see §14.6); the retention jobs that apply it are M3-06. | Decision 115; M3-06 |
+| 6 | Jira REST API version (DF-539) | v2 stays the default: Cloud and Data Center both serve it. If Atlassian retires v2 on Cloud, Cloud sites set `jira.api_version: 3` (ADF comments, already supported). | User `jira.json` |
 
 ---
 
