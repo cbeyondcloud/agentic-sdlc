@@ -55,6 +55,14 @@ def test_it_runs_nightly_and_by_hand_with_a_dry_run(workflow):
     assert workflow["concurrency"]["cancel-in-progress"] is False
 
 
+def test_a_refresh_on_every_merge_is_opt_in_and_commented(workflow):
+    """Spec §22.4 (M3-19): nightly and by hand only; a busy repository uncomments the
+    `push` trigger on its default branch, and the concurrency group queues the bursts."""
+    assert set(workflow["on"]) == {"schedule", "workflow_dispatch"}
+    text = TEMPLATE.read_text(encoding="utf-8")
+    assert "  # push:\n  #   branches: [main]" in text
+
+
 def test_the_workflow_never_writes_main(workflow):
     assert workflow["permissions"] == {"contents": "read"}
     writers = {

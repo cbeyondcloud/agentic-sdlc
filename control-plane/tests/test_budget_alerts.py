@@ -105,6 +105,9 @@ async def test_a_run_alerts_once_at_80_and_once_at_100(api, made_runs):
     await run.ingest(api, dev)
     [mail] = await _mails(api, api.a)
     assert mail.recipient == "dev@a.example.test" and "80 %" in mail.subject
+    # DF-577: a run's budget pauses the run; the gateway refuses nothing for it
+    assert "the run pauses" in mail.body_text and "gateway refuses" not in mail.body_text
+    assert "--extra-budget" in mail.body_text and "the run pauses" in mail.body_html
     await run.ingest(api, dev, replay=True)  # a replay counts nothing again
     run.step("0.50")
     await run.ingest(api, dev)  # 9.00: no new threshold
@@ -170,6 +173,7 @@ async def test_team_spend_this_month_alerts_the_team_leads(api, made_runs):
     [mail] = await _mails(api, api.a)
     assert mail.recipient == "lead@a.example.test"
     assert "Team payments" in mail.subject and "80 %" in mail.subject
+    assert "gateway refuses" in mail.body_text and "the run pauses" not in mail.body_text
     [record] = await _crossings(api, api.a)
     assert record.after["scope"] == "team" and record.after["period"] == api.clock.now.strftime(
         "%Y-%m"
