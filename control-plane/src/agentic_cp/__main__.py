@@ -98,13 +98,16 @@ def _dashboard_dirs() -> list[tuple[Path, list[Path]]]:
     `grafana` -> `dashboards`, `grafana-executive` -> `dashboards-executive`."""
     from agentic_cp.dashboards import catalog
 
+    copies = {
+        catalog.GRAFANA_DIR: "dashboards",
+        catalog.GRAFANA_EXECUTIVE_DIR: "dashboards-executive",
+    }
+    assert set(catalog.GRAFANA_DIRS) == set(copies), "every Grafana folder needs a chart copy"
     chart = CHART_DASHBOARDS.parent.is_dir()
     return [
         (
             directory,
-            [directory, CHART_DASHBOARDS.with_name(directory.name.replace("grafana", "dashboards"))]
-            if chart
-            else [directory],
+            [directory, CHART_DASHBOARDS.with_name(copies[directory])] if chart else [directory],
         )
         for directory in catalog.GRAFANA_DIRS
     ]

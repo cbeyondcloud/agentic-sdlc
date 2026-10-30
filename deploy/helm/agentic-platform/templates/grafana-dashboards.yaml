@@ -8,6 +8,9 @@ refreshes the chart's copy) is provisioned without a template change. */ -}}
 {{- if .Values.grafana.dashboards.enabled }}
 {{- $root := . }}
 {{- $d := .Values.grafana.dashboards }}
+{{- if or (not $d.executiveFolder) (eq $d.executiveFolder $d.folder) }}
+{{- fail "grafana.dashboards.executiveFolder must be set and differ from grafana.dashboards.folder: Executive ROI shows each person's cost" }}
+{{- end }}
 {{- range $dir, $folder := dict "dashboards" $d.folder "dashboards-executive" $d.executiveFolder }}
 {{- range $path, $_ := $root.Files.Glob (printf "%s/*.json" $dir) }}
 {{- $base := regexReplaceAll "[^a-z0-9-]" (base $path | trimSuffix ".json" | lower) "-" }}

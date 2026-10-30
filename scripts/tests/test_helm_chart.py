@@ -394,13 +394,22 @@ def test_every_catalog_dashboard_is_in_a_grafana_configmap(default_render):
     folders = {GRAFANA_DIR: "Agentic", GRAFANA_EXECUTIVE_DIR: "Agentic Executive"}
     catalog = {p.name: (p, folders[d]) for d in folders for p in d.glob("*.json")}
     assert any(folder == "Agentic Executive" for _, folder in catalog.values())
-    assert set(rendered) == set(catalog)
+    assert set(rendered) == set(catalog) and len(dashboards) == len(catalog)
     for name, (path, folder) in catalog.items():
         o = rendered[name]
         text = path.read_bytes().decode("utf-8")
         assert o["data"][name].replace("\r\n", "\n") == text.replace("\r\n", "\n"), name
         assert o["metadata"]["annotations"]["grafana_folder"] == folder, name
         assert o["metadata"]["name"] == f"{RELEASE}-agentic-platform-dashboard-{name[:-5]}"
+
+
+@pytest.mark.parametrize("folder", ["", "Agentic"])
+def test_an_executive_folder_that_is_empty_or_shared_is_refused(chart_tools, folder):
+    # Executive ROI shows each person's cost (M3-01 review F3): an empty annotation lands it
+    # in Grafana's General folder, the shared one in "Agentic"
+    done = _template(chart_tools, "--set-string", f"grafana.dashboards.executiveFolder={folder}")
+    assert done.returncode != 0
+    assert "grafana.dashboards.executiveFolder" in done.stderr
 
 
 def test_the_chart_copy_of_the_dashboards_matches_the_catalog():

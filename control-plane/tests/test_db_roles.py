@@ -285,7 +285,7 @@ async def test_readyz_is_ready_on_a_database_newer_than_this_release(db):
         await conn.exec_driver_sql("UPDATE alembic_version SET version_num = 'm9_99_future'")
     reply = await _get(_app(db, require=True), "/readyz")
     assert reply.status_code == 200
-    assert reply.json() == {"status": "ready", "db_enforced": True}
+    assert reply.json() == {"status": "ready", "db_enforced": True, "gateway_linked": False}
     settings = Settings.from_env({"AGENTIC_CP_DATABASE_URL": db.app_dsn})
     assert await serve_preflight(settings, db.app) is None
 
