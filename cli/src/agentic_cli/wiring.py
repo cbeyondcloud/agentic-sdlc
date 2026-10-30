@@ -29,14 +29,21 @@ from pathlib import Path
 from agentic.agents.tools import LocalProcessSandbox, SkillCatalog, ToolContext
 from agentic.codeintel import Candidates, CodeIntel, CodeIntelError
 from agentic.engine.engine import StepContext
-from agentic.policy import OrgPolicy, ResolvedAgent, ReviewBatchPolicy, SandboxPolicy
+from agentic.policy import (
+    CommitOverridePolicy,
+    OrgPolicy,
+    ResolvedAgent,
+    ReviewBatchPolicy,
+    SandboxPolicy,
+)
 from agentic.sandbox import SandboxRules, SrtSandbox, expand_home
 from agentic.sandbox.egress import egress_hosts
 from agentic.sandbox.readiness import SandboxDecision
 from agentic.security.secret_scan import SecretScanEvent, SecretScanner
+from sdlc_commons.commit_override import CommitOverride
 from sdlc_commons.guards import Guard
 from sdlc_commons.review_batches import ReviewBatchBudget
-from sdlc_commons.worktrees import RunWorktrees, StepCheckpoints
+from sdlc_commons.worktrees import RunWorktrees, StepCheckpoints, override_homes
 
 
 class NoCodeIntel:
@@ -81,15 +88,34 @@ class StepWiring:
     gateway_url: str | None = None  # TokenLean: the one model host an agent process reaches
     # org policy's `checkpoint_exclude`: added to what a checkpoint leaves out (DF-315)
     checkpoint_exclude: tuple[str, ...] = ()
+    # M2-61: the commit-command override of an in-place component - org policy's
+    # `commit_override` and `deny.shell`, the repo config's `rollback_commands`
+    commit_override: CommitOverridePolicy = field(default_factory=CommitOverridePolicy)
+    deny_shell: tuple[str, ...] = ()
+    rollback_commands: dict[str, str] = field(default_factory=dict)
     _trees: dict[str, StepCheckpoints] = field(default_factory=dict, repr=False)
     _homes: dict[str, Path] = field(default_factory=dict, repr=False)
 
     def trees_for(self, run_id: str) -> StepCheckpoints:
         if run_id not in self._trees:
             self._trees[run_id] = StepCheckpoints(
-                self.target, run_id, exclude=self.checkpoint_exclude
+                self.target,
+                run_id,
+                exclude=self.checkpoint_exclude,
+                override=self.override_for(run_id),
             )
         return self._trees[run_id]
+
+    def override_for(self, run_id: str) -> CommitOverride:
+        """The run's commit-command override: org policy decides which commands may run."""
+        return CommitOverride(
+            self.target,
+            run_id,
+            allow=self.commit_override.allow,
+            rollback_commands=self.rollback_commands,
+            deny_shell=self.deny_shell,
+            timeout_s=self.commit_override.timeout_s,
+        )
 
     def batch_budget_for(self, run_id: str) -> ReviewBatchBudget:
         """The run's review batch budget: the guard's (Zyroflo's, which a repository may
@@ -232,4 +258,6 @@ class StepWiring:
         """Write denials per component tree: deny globs are relative to a repository."""
         self._home(run_id)
         trees = RunWorktrees(self.target, run_id).trees().values()
-        return [guard.write_denials(t.path) for t in trees if t.mode == "worktree"]
+        homes = [t.path for t in trees if t.mode == "worktree"]
+        homes += override_homes(self.target, run_id)  # an accepted in-place checkout (M2-61)
+        return [guard.write_denials(home) for home in homes]
