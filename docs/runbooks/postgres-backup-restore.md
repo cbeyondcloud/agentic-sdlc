@@ -28,13 +28,18 @@ A restore with no tenant at all fails as well: it is an empty or wrong dump. Pas
 A chain cannot show that its newest records are missing: a backup taken before them
 still verifies. So write down the tenant count and each tenant's record count when you
 take a backup, and compare them with the check's output (`tenant <slug>: audit chain
-intact, <n> records`).
+intact, <n> records`). The retention job (M3-06) prunes a chain's oldest records after the
+audit period: a record count can then be lower than at an earlier backup, and the chain
+still verifies from its first kept record through the checkpoint in its `retention.pruned`
+event.
 
 ## Option 1: a managed service (Cloud SQL, RDS, Azure Database, ...)
 
 Use the provider's automated backups with PITR turned on.
 
-- Retention: at least 14 days of PITR in prod, 7 in staging.
+- Retention: 35 days of backups and PITR (`retention.yaml` `days.backups`, OR-01; at
+  least 14 in prod, 7 in staging if you shorten it). Older backups must go: a row the
+  retention job deleted lives on in every backup that still holds it ([retention.md](retention.md)).
 - High availability: a standby in another zone (the master plan's sizing: 4 vCPU /
   16 GB with an HA standby).
 - Restore = the provider creates a **new instance** at a point in time. Never restore
@@ -79,8 +84,8 @@ docker run --rm -e PGPASSWORD postgres:17.10-alpine \
 ```
 
 In the cluster, run the same command as a CronJob with the same image, the password from
-the chart's Secret, and the file written to object storage with a retention rule
-(for example 35 days). Keep backups as sensitive as the database: they hold the audit
+the chart's Secret, and the file written to object storage with a lifecycle rule that
+deletes it after `days.backups` (35 days by default, OR-01; [retention.md](retention.md)). Keep backups as sensitive as the database: they hold the audit
 trail and people's emails. Encrypt them at rest and limit who can read them.
 
 ## The restore drill

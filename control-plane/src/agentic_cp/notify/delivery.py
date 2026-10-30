@@ -30,6 +30,7 @@ from agentic_cp.notify.smtp import (
     RelayUnusable,
     notifier_for,
 )
+from agentic_cp.provisioning.invites import cancel_dead_invite_mails
 from agentic_cp.settings import Settings
 from agentic_cp.tables import notifications
 from agentic_cp.tenancy.context import tenant_tx
@@ -65,8 +66,10 @@ async def deliver_due(
     settings: Settings,
     batch: int = 50,
 ) -> DeliveryReport:
-    """Send up to `batch` due mails of one tenant."""
+    """Send up to `batch` due mails of one tenant, after cancelling the mails of dead
+    invites (DF-572)."""
     report = DeliveryReport()
+    await _cancel_dead_invites(engine, tenant_id, clock)
     for _ in range(batch):
         async with tenant_tx(engine, tenant_id) as conn:
             now = clock()
@@ -148,8 +151,16 @@ async def deliver_due(
     return report
 
 
+async def _cancel_dead_invites(engine: AsyncEngine, tenant_id: UUID, clock) -> None:
+    async with tenant_tx(engine, tenant_id) as conn:
+        await cancel_dead_invite_mails(conn, now=clock(), clock=clock)
+
+
 async def deliver_job(engine, git, tenant_id, settings: Settings, clock) -> None:
-    """The worker's per-tenant mail job (`EXTRA_JOBS`): nothing without a relay."""
+    """The worker's per-tenant mail job (`EXTRA_JOBS`): nothing is sent without a relay,
+    but the mails of dead invites lose their links either way (DF-572)."""
     notifier = notifier_for(settings)
     if notifier is not None:
         await deliver_due(engine, tenant_id, notifier, clock, settings=settings)
+    else:
+        await _cancel_dead_invites(engine, tenant_id, clock)

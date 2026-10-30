@@ -15,16 +15,16 @@ import secrets
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Text, cast, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from agentic.orgapi import INVITE_PREFIX, InviteInfo, invite_url
 from agentic_cp.audit import AuditEvent, append, format_at
 from agentic_cp.auth.users import UserRow
-from agentic_cp.notify.outbox import enqueue
+from agentic_cp.notify.outbox import SYSTEM, enqueue
 from agentic_cp.notify.templates import render
 from agentic_cp.settings import Settings
-from agentic_cp.tables import invites
+from agentic_cp.tables import invites, notifications
 from agentic_cp.tenancy.context import require_tenant_id
 from agentic_cp.tenancy.tenants import current_tenant
 
@@ -73,6 +73,7 @@ async def revoke_unused(
         .returning(invites.c.id)
     )
     ids = [row.id for row in revoked]
+    await cancel_dead_invite_mails(conn, now=now, clock=clock, invite_ids=ids)
     for invite_id in ids:
         await append(
             conn,
@@ -86,6 +87,67 @@ async def revoke_unused(
             clock=clock,
         )
     return len(ids)
+
+
+async def cancel_dead_invite_mails(
+    conn: AsyncConnection,
+    *,
+    now: datetime,
+    clock: Callable[[], datetime],
+    invite_ids: list | None = None,
+) -> int:
+    """DF-572: mark failed every queued invite mail whose invite was revoked, used or has
+    expired (only those of `invite_ids`, when given), clearing its body - it holds the live
+    link - and audit `notification.cancelled`; how many. Called when invites are revoked
+    and before each outbox pass, with or without a relay."""
+    if invite_ids is not None and not invite_ids:
+        return 0
+    found = (
+        select(
+            notifications.c.id, notifications.c.recipient, invites.c.revoked_at, invites.c.used_at
+        )
+        .join(
+            invites, notifications.c.dedupe_key == func.concat("invite:", cast(invites.c.id, Text))
+        )
+        .where(
+            notifications.c.kind == "invite",
+            notifications.c.status == "pending",
+            or_(
+                invites.c.revoked_at.is_not(None),
+                invites.c.used_at.is_not(None),
+                invites.c.expires_at <= now,
+            ),
+        )
+        .with_for_update(of=notifications, skip_locked=True)
+    )
+    if invite_ids is not None:
+        found = found.where(invites.c.id.in_(invite_ids))
+    rows = list(await conn.execute(found))
+    for row in rows:
+        if row.revoked_at is not None:
+            reason = "the invite was revoked"
+        elif row.used_at is not None:
+            reason = "the invite was already used"
+        else:
+            reason = "the invite expired"
+        await conn.execute(
+            update(notifications)
+            .where(notifications.c.id == row.id)
+            .values(status="failed", body_text="", body_html="", last_error=reason)
+        )
+        await append(
+            conn,
+            AuditEvent(
+                event="notification.cancelled",
+                actor=SYSTEM,
+                actor_kind="system",
+                target=f"notification:{row.id}",
+                reason=reason,
+                after={"kind": "invite", "to": row.recipient},
+            ),
+            clock=clock,
+        )
+    return len(rows)
 
 
 async def create_invite(

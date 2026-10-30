@@ -318,3 +318,42 @@ def test_control_plane_refusal_exits_2(plane, monkeypatch, capsys, tmp_path):
 def test_control_plane_needs_org_mode(home, monkeypatch, capsys, tmp_path):
     monkeypatch.chdir(tmp_path)
     assert main(["audit", "verify", "--control-plane"]) == ExitCode.REFUSED
+
+
+def _append_pruned(plane, through: dict) -> None:
+    """A `retention.pruned` record (M3-06) naming `through` as the last record pruned."""
+    from agentic.auditproof import entry_hash
+
+    last = plane.audit[-1]
+    body = {
+        **{k: v for k, v in last.items() if k != "hash"},
+        "seq": last["seq"] + 1,
+        "actor": "system:retention",
+        "actor_kind": "system",
+        "event": "retention.pruned",
+        "target": "retention",
+        "after": {"audit": {"through_seq": through["seq"], "through_hash": through["hash"]}},
+        "prev": last["hash"],
+    }
+    plane.audit.append({**body, "hash": entry_hash(body)})
+
+
+def test_a_chain_pruned_by_retention_verifies(plane, monkeypatch, capsys, tmp_path):
+    plane.add_audit(6)
+    _append_pruned(plane, plane.audit[2])
+    del plane.audit[:3]
+    monkeypatch.chdir(tmp_path)
+    code, data = verify(capsys, "--control-plane")
+    assert code == ExitCode.OK, data
+    assert data["control_plane"]["records"] == 4 and data["control_plane"]["head"]["seq"] == 7
+
+
+def test_a_pruned_start_without_a_checkpoint_is_located(plane, monkeypatch, capsys, tmp_path):
+    plane.add_audit(6)
+    _append_pruned(plane, plane.audit[1])  # names seq 2, but seq 3 is gone too
+    del plane.audit[:3]
+    monkeypatch.chdir(tmp_path)
+    code, data = verify(capsys, "--control-plane")
+    assert code == ExitCode.INVALID
+    found = [(f["seq"], f["field_class"]) for f in data["control_plane"]["findings"]]
+    assert found == [(4, "sequence")]

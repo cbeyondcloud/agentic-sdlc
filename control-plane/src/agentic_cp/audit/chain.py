@@ -161,15 +161,40 @@ async def read_records(
     return [record_from_row(row) for row in await conn.execute(query)]
 
 
+#: The event the retention job (M3-06) writes before it prunes the chain's oldest records;
+#: `after.audit` is the checkpoint: `through_seq` and `through_hash` of the last one pruned.
+PRUNED = "retention.pruned"
+
+
+async def _checkpointed(conn: AsyncConnection, first: AuditRecord) -> bool:
+    """Whether a `retention.pruned` record names the record just before `first`."""
+    through = audit_log.c.after["audit"]["through_seq"].astext
+    found = await conn.execute(
+        select(audit_log.c.after).where(audit_log.c.event == PRUNED, through == str(first.seq - 1))
+    )
+    return any(row.after["audit"].get("through_hash") == first.prev for row in found)
+
+
 async def verify(conn: AsyncConnection, *, from_seq: int = 1) -> list[str]:
     """Every problem in the transaction's tenant's chain from `from_seq` on, each naming
-    the seq where it shows ([] = intact)."""
+    the seq where it shows ([] = intact). A chain whose oldest records retention pruned
+    starts at its first kept record, anchored by the checkpoint in the chain."""
     if await current_tenant_id(conn) is None:
         raise AuditError("verifying a chain needs a tenant: run inside tenant_tx")
     records = await read_records(conn, after_seq=max(from_seq - 2, 0))
     problems: list[str] = []
     expected_seq, prev = 1, ""
-    if records and from_seq > 1:
+    if records and records[0].seq > max(from_seq - 1, 1):
+        # the chain's start was pruned by retention (M3-06): a `retention.pruned` record
+        # inside the chain names the last record removed and its hash
+        first = records[0]
+        if not await _checkpointed(conn, first):
+            problems.append(
+                f"seq {first.seq}: the records before it are missing and no retention "
+                f"checkpoint names them - records were removed"
+            )
+        expected_seq, prev = first.seq, first.prev
+    elif records and from_seq > 1:
         anchor = records[0]
         if anchor.seq != from_seq - 1:
             problems.append(f"seq {from_seq}: the record before it (seq {from_seq - 1}) is missing")

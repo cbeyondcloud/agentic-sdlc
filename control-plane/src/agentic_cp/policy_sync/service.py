@@ -364,6 +364,7 @@ RUN_SETTINGS_KEYS = (
     "versions",
     "learning",
     "run_health",
+    "retention",
 )
 
 
@@ -406,17 +407,30 @@ def learning_settings(policy: OrgPolicy) -> dict:
     }
 
 
+def retention_settings(policy: OrgPolicy) -> dict:
+    """`retention.yaml` (M3-06, OR-01): the periods in days (None: kept forever), the legal
+    holds and the teams that opted in to trace capture - what the retention job and
+    `retention gateway-config` read."""
+    return {
+        "days": policy.retention_days.model_dump(mode="json"),
+        "legal_holds": [hold.model_dump(mode="json") for hold in policy.legal_holds],
+        "trace_teams": sorted(team for team, own in policy.teams.items() if own.trace_capture),
+    }
+
+
 def run_settings(policy: OrgPolicy, root: Path) -> dict:
     """What run registration (M2-08, M2-21), budget alerts (M2-16) and auto-trip (M2-11)
     read from an accepted version of the policy repo tree at `root`. Team budgets are
     decimal strings, never floats (DF-26). `pipelines` are the approved pipelines' hashes
     (D33), `overlays` the tree's `overlay_index` (M2-23) and `versions` the rollout,
     deprecations, each team's pins and the tree's `version_index` (M2-15), so registration
-    checks them all without the bundle. `run_health` is the zombie window (M3-07)."""
+    checks them all without the bundle. `run_health` is the zombie window (M3-07) and
+    `retention` the periods and legal holds (M3-06)."""
     return {
         "auto_trip": auto_trip_settings(policy),
         "learning": learning_settings(policy),
         "run_health": policy.run_health.model_dump(mode="json"),
+        "retention": retention_settings(policy),
         "min_cli_version": policy.min_cli_version,
         "concurrency": dict(policy.concurrency),
         "allow_repo_pipelines": policy.allow_repo_pipelines,

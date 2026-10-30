@@ -201,20 +201,64 @@ class ChainReport:
         }
 
 
+#: The event the control plane's retention job writes before it prunes the chain's oldest
+#: records (M3-06); `after.audit` names the last record pruned (`through_seq`, `through_hash`).
+PRUNED = "retention.pruned"
+
+
+def _names(record: Mapping, start: tuple[int, str]) -> bool:
+    """Whether `record` is a retention checkpoint naming `start` (seq and hash)."""
+    after = record.get("after")
+    audit = (
+        after.get("audit") if record.get("event") == PRUNED and isinstance(after, Mapping) else None
+    )
+    return (
+        isinstance(audit, Mapping)
+        and (audit.get("through_seq"), audit.get("through_hash")) == start
+    )
+
+
 def verify_control_plane(client, tenant: str) -> ChainReport:
-    """Pull the caller's tenant's audit chain (`audit.read.org`) and check it here."""
+    """Pull the caller's tenant's audit chain (`audit.read.org`) and check it here. A chain
+    whose oldest records retention pruned starts later than seq 1: it is checked from its
+    first record, which must be anchored by a `retention.pruned` checkpoint in the chain
+    naming the record before it and that record's hash."""
     report = ChainReport(tenant)
-    checker = ChainChecker()
+    checker: ChainChecker | None = None
+    start: tuple[int, str] | None = None  # the pruned anchor the chain must name
+    anchored = False
     after = 0
     while True:
         page = client.audit_records(after_seq=after, limit=PAGE)
         for record in page:
-            checker.feed(record.model_dump(mode="json"))
+            entry = record.model_dump(mode="json")
+            if checker is None:
+                seq = entry.get("seq")
+                if isinstance(seq, int) and seq > 1:
+                    start = (seq - 1, entry.get("prev", ""))
+                    checker = ChainChecker(first_seq=seq, prev=start[1])
+                else:
+                    checker = ChainChecker()
+            anchored = anchored or (start is not None and _names(entry, start))
+            checker.feed(entry)
         report.records += len(page)
         if len(page) < PAGE:
             break
         after = page[-1].seq
-    report.findings = [_finding("audit chain", f) for f in checker.finish()]
+    checker = checker or ChainChecker()
+    found = checker.finish()
+    if start is not None and not anchored:
+        found.insert(
+            0,
+            Finding(
+                1,
+                start[0] + 1,
+                "sequence",
+                f"the records before seq {start[0] + 1} are missing and no retention "
+                "checkpoint names them - records were removed",
+            ),
+        )
+    report.findings = [_finding("audit chain", f) for f in found]
     if report.records:
         seq, digest = checker.last
         report.head = (seq or 0, digest)
