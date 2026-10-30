@@ -259,9 +259,13 @@ def test_unclassified_repos_default_to_internal_with_traces_off(policy):
 
 
 def test_every_template_team_has_a_monthly_budget(policy):
-    """§22.3: no team starts uncapped; the README gives the sizing rule."""
+    """§22.3 (owner, 2026-10-30): no team starts uncapped; 20 USD a developer a month,
+    per team, set in this repo; admins change any team's, a lead only lowers their own."""
     assert policy.teams and all(t.monthly_budget_usd for t in policy.teams.values())
-    assert "150 USD" in read_text(TEMPLATE / "README.md")
+    assert policy.teams["payments"].monthly_budget_usd == 200  # 10 developers x 20 USD
+    text = read_text(TEMPLATE / "README.md")
+    for needed in ("20 USD a developer a month", "per team", "only lower", "pull request"):
+        assert needed in text, needed
 
 
 def test_eval_caps_follow_spike_s10(policy):

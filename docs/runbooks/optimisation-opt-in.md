@@ -34,8 +34,8 @@ the agents are no worse with it and the cost really falls.
 
 ## Which groups, in which order
 
-The table is the platform team's starting recommendation for owner review; the group
-names are TokenLean's (LITE profile). Each row still needs its own A/B record.
+The order was approved by the owner on 2026-10-30; the group names are TokenLean's (LITE
+profile). Each row still needs its own A/B record.
 
 | Order | Group | What it does | Why this place |
 |---|---|---|---|
@@ -63,9 +63,10 @@ governs itself:
 
 ### 1. Prepare the corpus
 
-S10 sizes are 30 cases x 3 repeats for rubric agents and 40 x 3 for the Developer. The
-framework's public corpus (`library/eval`) holds 20 BA, 20 Design and 20 dev-task holdout
-cases, so add cases from the pilot's own repositories to the policy repo's `eval/` folder
+S10 sizes are 30 cases x 3 repeats for rubric agents and 40 x 3 for the Developer. **The
+first live A/B waits until the corpus has at least 30 holdout cases per agent (40 for the
+Developer); it is never run with fewer** (owner, 2026-10-30). The framework's public corpus
+(`library/eval`) holds 20 BA, 20 Design and 20 dev-task holdout cases, so add cases from the pilot's own repositories to the policy repo's `eval/` folder
 (the case format of `agentic.eval.cases`, checked by `load_corpus`) until each agent's
 holdout reaches its n. Harvesting them automatically, through Zyroflo's `corpus_harvest`,
 is not built yet (DF-853). A run with
@@ -99,7 +100,8 @@ groups:
 On **both** stacks, also turn the exact-match cache off for the A/B (`groups.G5_cache.enabled:
 false` in a shared overlay), so each repeat is a fresh answer: S10's three repeats measure
 the agents' variation, and a cached repeat would hide it. Use the same provider keys, the
-same models (the org `tiers.yaml`) and the same TokenLean version on both.
+same models (the org `tiers.yaml`) and the same TokenLean version on both. Run the A/B
+under the platform team's gateway key, not a product team's, so no team budget stops it.
 
 ### 3. Write and register the plans
 

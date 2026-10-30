@@ -1,7 +1,9 @@
 # Pilot rollout runbook (M3-20)
 
-> **Status: draft, waiting for owner review.** The targets marked *proposed* are the
-> platform team's starting numbers; the owner confirms or changes them at review.
+> **Status: draft, waiting for owner review.** The owner set the cost and quality targets
+> on 2026-10-30 (team budget 20 USD a developer a month, cost per accepted change under
+> 3 USD, auto-pause at 5 USD an hour, and the quality targets below). Targets still marked
+> *proposed* are the platform team's. **Every target is reviewed at the first go/no-go.**
 
 **For:** the pilot lead (platform team), the team leads of the pilot teams, and the owner,
 who takes the go/no-go. **Adapted from** Zyroflo's pilot plan (`docs/pilot-plan.md` in
@@ -55,7 +57,7 @@ The platform team works through this list. Each item points at the runbook that 
 |---|---|---|---|
 | 1 | Staging and production installed | `docs/runbooks/upgrade.md`, the Helm chart README | `readyz` green on both; staging smoke run passed |
 | 2 | Policy repo set up from `templates/policy-repo` | its README (day 0 steps) | `agentic policy check .` passes; branch protection on |
-| 3 | One `policy/teams/<team>.yaml` per pilot team | copy the example | `monthly_budget_usd` = about 150 USD a developer a month; `auto_trip` set (below) |
+| 3 | One `policy/teams/<team>.yaml` per pilot team | copy the example | `monthly_budget_usd` = 20 USD a developer a month, for the team (an org admin sets it; the lead may lower it); `auto_trip` set (below) |
 | 4 | People invited, roles assigned | bulk import in files of **500 rows or fewer** (each file holds the tenant's role lock for about 9 s; DF-569) | every pilot developer has redeemed an invite |
 | 5 | SMTP relay set | Helm `smtp.*` | a test invite arrives; a budget alert reaches a lead |
 | 6 | CLI on the internal package index | `docs/runbooks/release.md` | `agentic --version` gives the pinned release on a clean Windows and a clean macOS laptop |
@@ -71,7 +73,7 @@ a person clears the switch). A team may only tighten the org's thresholds: once
 ```yaml
 # policy/teams/<team>.yaml
 auto_trip:
-  spend_usd_per_hour: 40        # proposed: 8 Developer runs an hour at their 5 USD cap
+  spend_usd_per_hour: 5         # owner, 2026-10-30: about one Developer run an hour at its cap
   error_rate: 0.5               # half the finished steps in the window ended in error
 ```
 
@@ -128,17 +130,17 @@ The numbers below are read weekly from the Grafana dashboards the control plane 
 **The pilot KPI is completion, the rest is reported**: a miss is a finding, not a verdict
 (see section 10).
 
-| What | Dashboard and panel | Watch for | Target (*proposed*) |
+| What | Dashboard and panel | Watch for | Target |
 |---|---|---|---|
 | **Pilot KPI: person-started runs that reach a merged pull request** | Adoption: *Developers who ran a pipeline*; Run explorer; the git host's PR list | where runs stall (which step, which gate) | 40 in 8 weeks across the cohort (2 a developer) |
-| Developers using it | Adoption: *Developers who ran a pipeline*, *Runs per day by team* | a developer with no run for two weeks | 80 % of the cohort active in weeks 3-8 |
+| Developers using it | Adoption: *Developers who ran a pipeline*, *Runs per day by team* | a developer with no run for two weeks | 80 % of the cohort active in weeks 3-8 (*proposed*) |
 | Gate rejection rate | Agent quality: *Gate rejection rate by agent* | one agent above the others; a rise week on week | under 30 % per agent by week 6 |
 | Correction rate after learning | Agent quality: *Correction rate per agent before and after each learning* | a learning that did not lower it | falls after each applied learning |
 | Human wait at gates | Agent quality: *Human wait at gates* | runs waiting overnight | reported, never graded (a time cap rewards rubber stamps) |
-| Cost | Team view: *Gateway cost*, *Cost by agent*, *Cost by user*; Org overview: *Run budgets* | a user or agent far above the rest; budgets near 80 % | each team within its monthly budget |
+| Cost | Team view: *Gateway cost*, *Cost by agent*, *Cost by user*; Org overview: *Run budgets* | a user or agent far above the rest; budgets near 80 % | each team within its monthly budget (20 USD a developer); cost per accepted change under 3 USD |
 | ROI | Executive ROI: *ROI measures*, *Cost drivers by month*, *Cost per token by model* | rework rate, total cost, cost per run | baseline captured; rework rate falling |
 | Limits and safety | Limits and safety: *Limit hits*, *Switch changes*, *Gateway safety events*, *Rate-limited calls* | any secret-scan block, any safety event, repeated limit hits | every safety event explained in the weekly report |
-| Run health | Run explorer; stale-run mails | runs marked stale (no heartbeat) | under 2 % of runs (*proposed*) |
+| Run health | Run explorer; stale-run mails | runs marked stale (no heartbeat) | under 2 % of runs |
 | Support load | the pilot channel, support bundles | the same question three times | falling after week 2 |
 
 **What the dashboards cannot show yet.** *Cost per accepted change*, *request to merged PR*
@@ -224,15 +226,15 @@ the tracker (M3-26 for the pilot).
 
 ## Exit criteria per wave
 
-| Wave | Criterion | Measured by | Target (*proposed* where marked) |
+| Wave | Criterion | Measured by | Target |
 |---|---|---|---|
 | Pilot | Acceptance scenarios (spec §1.3) pass on the pilot teams' own repos | the scenarios run by each team in week 7-8 | all pass |
 | Pilot | No P1 incident | incident log | none in the last 2 weeks |
 | Pilot | ROI baseline captured | section 7 | before week 0, and again at weeks 4 and 8 |
-| Pilot | Pilot KPI | section 7 | 40 runs to a merged PR (*proposed*) |
+| Pilot | Pilot KPI | section 7 | 40 runs to a merged PR in 8 weeks |
 | Pilot | Both platforms work | onboarding log, support bundles | at least 5 Windows and 5 macOS developers ran a full feature-delivery |
-| Early adopters | Gate rejection rate | Agent quality | under 25 % per agent (*proposed*) |
-| Early adopters | Cost per accepted change | merged agent PRs and gateway cost (DF-785 until ingest) | under 25 USD median (*proposed*), and below the pilot's |
+| Early adopters | Gate rejection rate | Agent quality | under 25 % per agent |
+| Early adopters | Cost per accepted change | merged agent PRs and gateway cost (DF-785 until ingest) | under 3 USD median, and no higher than the pilot's |
 | Early adopters | Onboarding time | timed onboarding | median 15 min or less (M3-23) |
 | Early adopters | Stacks | cohort list | at least 4 stacks (for example Java, Go, .NET besides Python/TypeScript) |
 | General availability | Control-plane load | the M3-22 targets in production: visible ingest lag p95 5 s or less (p99 15 s), errors 0.1 % or less, kill poll p99 under 2 s | for 4 weeks at early-adopter load, on the recommended 3 replicas x 1 vCPU |
@@ -245,7 +247,8 @@ per import file, and its lead watches the Team view for the first two weeks.
 
 ## What this runbook does not claim
 
-- **No pilot has run.** The targets are proposals; the first pilot's evidence resets them.
+- **No pilot has run.** The targets are the owner's starting numbers (2026-10-30); the
+  first go/no-go reviews every one of them against the pilot's evidence.
 - **Completion is not value.** Runs that reach a merged PR show the lifecycle can be
   finished, not that it was worth its cost; the ROI comparison is where that is argued.
 - **Load numbers are indicative.** M3-22 measured one laptop; production sizing is checked
