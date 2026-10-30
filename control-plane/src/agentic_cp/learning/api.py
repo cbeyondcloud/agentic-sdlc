@@ -30,9 +30,15 @@ from agentic.orgapi import (
 from agentic_cp.auth.deps import Caller
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
 from agentic_cp.ingest.api import _checked_run_id
-from agentic_cp.learning.store import ingest_feedback, set_attribution
+from agentic_cp.ingest.register import version_settings
+from agentic_cp.learning.store import (
+    ingest_feedback,
+    learning_settings,
+    recluster,
+    set_attribution,
+)
 from agentic_cp.rbac.authz import Team, authorize, effective_permissions
-from agentic_cp.tables import feedback, learning_proposals, users
+from agentic_cp.tables import feedback, learning_proposals, runs, users
 from agentic_cp.tenancy.context import tenant_tx
 
 router = APIRouter(prefix=API_PREFIX, tags=["learning"], responses=PROBLEM_RESPONSES)
@@ -165,6 +171,12 @@ async def correct_attribution(
         await set_attribution(
             conn, ctx, row, attribution, by=ctx.email, clock=state.clock, reason=body.reason
         )
+        # DF-733: the agents it moved from and to are clustered again at once
+        run = (await conn.execute(select(runs).where(runs.c.run_id == row.run_id))).first()
+        if run is not None:
+            settings = learning_settings(await version_settings(conn, run.policy_version), row.team)
+            touched = set(row.agents) | set(attribution.agents)
+            await recluster(conn, ctx, row.team, touched, settings, state.clock)
         updated = (await conn.execute(_feedback_query().where(feedback.c.id == feedback_id))).one()
         return _info(updated)
 
@@ -174,10 +186,14 @@ async def list_proposals(
     request: Request,
     ctx: Caller,
     team: Annotated[str | None, Query(max_length=64)] = None,
-    status: Annotated[str | None, Query(pattern="^(pending|rejected)$")] = None,
+    status: Annotated[
+        str | None, Query(pattern="^(pending|approved|rejected|deferred|applied|reverted)$")
+    ] = None,
 ) -> list[ProposalInfo]:
-    """The proposals the caller may read, newest first. Proposals are created only: nothing
-    has been applied because one is listed here."""
+    """The proposals the caller may read, newest first, with where each stands. Only an
+    approved proposal is ever applied (M3-15, M3-16)."""
+    from agentic_cp.learning.decisions import owner_emails, proposal_info
+
     state = request.app.state
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         teams = await _viewable_teams(ctx, conn, state.enforcers)
@@ -191,18 +207,6 @@ async def list_proposals(
             query = query.where(learning_proposals.c.team == team)
         if status is not None:
             query = query.where(learning_proposals.c.status == status)
-        rows = await conn.execute(query.order_by(learning_proposals.c.created_at.desc()))
-        return [
-            ProposalInfo(
-                id=row.id,
-                team=row.team,
-                agent=row.agent,
-                scope=row.scope,
-                lesson=row.lesson,
-                evidence=list(row.evidence),
-                status=row.status,
-                created_at=row.created_at,
-                decided_at=row.decided_at,
-            )
-            for row in rows
-        ]
+        rows = (await conn.execute(query.order_by(learning_proposals.c.created_at.desc()))).all()
+        emails = await owner_emails(conn, rows)
+        return [proposal_info(row, emails.get(row.id)) for row in rows]

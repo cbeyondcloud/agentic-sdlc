@@ -7,17 +7,31 @@
     agentic learn proposals [--org]                   proposals made from repeated corrections
     agentic learn sync [<run>]                        send queued feedback to the control plane
 
+and L4-L6 (M3-14..M3-16):
+
+    agentic learn list [--status S]                   proposals, with who would decide them
+    agentic learn show <id>                           the change: diff, evidence, eval case
+    agentic learn approve <id>                        the owner approves; the change is applied
+    agentic learn edit <id> [--kind K] [--lesson T]   retarget or reword it before deciding
+    agentic learn reject <id> [--reason T]            remembered: not proposed again as is
+    agentic learn defer <id>                          decide later (stays in the list)
+    agentic learn endorse <id>                        back it (weight, never a decision)
+    agentic learn propose --from <feedback-id>        teach one correction now
+    agentic learn revert <id>                         undo an applied learning
+
 Gate rejections and edits are recorded by `agentic reject` / `agentic edit` themselves.
 A review comment, a "changes requested" review, and a change asked for on lines the Code
 Review agent passed are read from the run's pull request by `capture-pr`. Each record is
 attributed by the rules, and by the Learning Analyst where they do not decide; a person can
 correct that with `attribute` (in org mode at the control plane, audited). Three similar
 corrections of one agent within 30 days (org policy may tighten that) make a proposal.
-A proposal changes nothing by itself: approving and applying it come later (L4-L6).
+A proposal changes nothing by itself: only its owner's `approve` applies it (D29, D30) -
+a personal skill or note in `~/.agentic`, or a pull request for a shared one.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Annotated
 
 import typer
@@ -25,8 +39,9 @@ import typer
 from agentic.hosting import RepoRef
 from agentic.hosting.base import FeedbackHost
 from agentic.learning.capture import pr_feedback, review_misses
-from agentic.learning.store import LocalLearningStore
-from agentic_cli import learning
+from agentic.learning.changes import CHANGE_KINDS
+from agentic.learning.records import AGENT_NAME
+from agentic_cli import learning, learning_apply
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.hosting import connect, connect_to
@@ -34,12 +49,34 @@ from agentic_cli.output import Output, table
 from agentic_cli.publishing import REMOTE, published
 from agentic_cli.runtime import Runtime
 from agentic_cli.workspace import Workspace
-from sdlc_commons.ledger import run_ids
+from sdlc_commons.ledger import run_id_refusal, run_ids
 
 RunOption = Annotated[str | None, typer.Option("--run", help="Only this run's records.")]
 OrgOption = Annotated[
     bool, typer.Option("--org", help="Read the team's records from the control plane.")
 ]
+IdArgument = Annotated[str, typer.Argument(metavar="PROPOSAL-ID")]
+_AGENT = re.compile(AGENT_NAME)
+
+
+def _run_id(value: str | None) -> str | None:
+    """DF-730: a bad run id is a usage error with a hint, never a traceback."""
+    if value is not None and (why := run_id_refusal(value)):
+        raise CliError(why, ExitCode.USAGE, hint="`agentic status` lists this repository's runs")
+    return value
+
+
+def _agent_names(names: list[str]) -> list[str]:
+    agents = list(dict.fromkeys(a.strip() for a in names if a.strip()))
+    bad = [a for a in agents if not _AGENT.fullmatch(a)] or ([] if agents else [""])
+    if bad:
+        raise CliError(
+            f"{bad[0]!r} is not an agent name",
+            ExitCode.USAGE,
+            hint="an agent name is lowercase letters, digits and hyphens, as its file names it "
+            "(developer, code-review)",
+        )
+    return agents
 
 
 def register(app: typer.Typer) -> None:
@@ -53,6 +90,7 @@ def register(app: typer.Typer) -> None:
     def feedback(ctx: typer.Context, run: RunOption = None, org: OrgOption = False) -> None:
         """The feedback records: each correction, who learns from it, and its lesson."""
         out: Output = ctx.obj
+        run = _run_id(run)
         rt = Runtime(Workspace.load())
         if org:
             with _client(rt) as client:
@@ -69,6 +107,7 @@ def register(app: typer.Typer) -> None:
         """Record the run's pull request review comments, changes requested and review
         misses as feedback (agent-made pull requests opened by `agentic pr open`)."""
         out: Output = ctx.obj
+        _run_id(run_id)
         rt = Runtime(Workspace.load())
         capture = learning.FeedbackCapture(rt, warn=out.warn)
         recorded = capture.capture(run_id, _pr_records(rt, run_id))
@@ -89,6 +128,7 @@ def register(app: typer.Typer) -> None:
         """Run the Learning Analyst on records it has not seen: a one-line lesson for each,
         and who learns where the rules did not decide (one fast-tier call per record)."""
         out: Output = ctx.obj
+        _run_id(run_id)
         rt = Runtime(Workspace.load())
         capture = learning.FeedbackCapture(rt, warn=out.warn)
         done: list[str] = []
@@ -121,8 +161,8 @@ def register(app: typer.Typer) -> None:
         out: Output = ctx.obj
         if not reason.strip():
             raise CliError("--reason must say why", ExitCode.USAGE)
+        agents = _agent_names(agent)
         rt = Runtime(Workspace.load())
-        agents = list(dict.fromkeys(a.strip() for a in agent if a.strip()))
         if rt.ws.settings.get("org"):
             with _client(rt) as client:
                 info = client.correct_attribution(feedback_id, agents, reason.strip())
@@ -143,10 +183,10 @@ def register(app: typer.Typer) -> None:
             with _client(rt) as client:
                 rows = [p.model_dump(mode="json") for p in client.proposals()]
         else:
-            learning.refresh_proposals(rt)
-            store = LocalLearningStore(rt.ws.repo / learning.LEARNING)
-            rows = [_proposal(p) for p in store.proposals()]
+            rows = [_proposal(p) for p in learning_apply.proposals(rt)]
         out.result(rows, lambda console: _show_proposals(console, rows))
+
+    register_decisions(group)
 
     @group.command("sync")
     def sync(
@@ -163,6 +203,173 @@ def register(app: typer.Typer) -> None:
         out.result(
             {"sent": sent}, lambda c: c.print(f"sent {sum(sent.values())} feedback entr(ies)")
         )
+
+
+def register_decisions(group: typer.Typer) -> None:
+    """L4-L6: show a proposal as a change, decide it (its owner only), apply, revert."""
+
+    @group.command("list")
+    def list_cmd(
+        ctx: typer.Context,
+        status: Annotated[
+            str | None, typer.Option("--status", help="Only this status (e.g. pending).")
+        ] = None,
+    ) -> None:
+        """Every proposal, its status and who would decide it (target scope)."""
+        out: Output = ctx.obj
+        rt = Runtime(Workspace.load())
+        if rt.ws.settings.get("org"):
+            rows = learning_apply.org_list(rt, status)
+        else:
+            rows = []
+            for p in learning_apply.proposals(rt):
+                evidence = learning_apply.evidence_of(rt, p)
+                target = learning_apply.target_scope(rt, p, evidence)
+                rows.append({**_proposal(p), "target": target, "evidence": len(p.evidence)})
+            rows = [r for r in rows if status is None or r["status"] == status]
+        out.result(rows, lambda console: _show_list(console, rows))
+
+    @group.command("show")
+    def show(ctx: typer.Context, proposal_id: IdArgument) -> None:
+        """The change a proposal would make: target, diff, the corrections behind it and
+        its regression eval case. Nothing changes until its owner approves it."""
+        out: Output = ctx.obj
+        rt = Runtime(Workspace.load())
+        data = learning_apply.show(rt, proposal_id)
+        out.result(data, lambda console: _show_draft(console, data))
+
+    @group.command("approve")
+    def approve(ctx: typer.Context, proposal_id: IdArgument) -> None:
+        """Approve a proposal you own and apply it: a personal change is written into your
+        ~/.agentic; a shared one is a pull request on a new branch."""
+        out: Output = ctx.obj
+        rt = Runtime(Workspace.load())
+        data = learning_apply.approve_any(rt, proposal_id, out.warn)
+        line = _applied_line(proposal_id, data["applied"])
+        out.result(data, lambda c: c.print(line, markup=False))
+
+    @group.command("edit")
+    def edit(
+        ctx: typer.Context,
+        proposal_id: IdArgument,
+        kind: Annotated[
+            str | None,
+            typer.Option("--kind", help=f"Retarget it: {', '.join(CHANGE_KINDS)}."),
+        ] = None,
+        lesson: Annotated[str | None, typer.Option("--lesson", help="Reword the lesson.")] = None,
+    ) -> None:
+        """Change what a proposal would do before deciding it (its owner only)."""
+        out: Output = ctx.obj
+        if not kind and not (lesson or "").strip():
+            raise CliError("say what to change: --kind and/or --lesson", ExitCode.USAGE)
+        if kind and kind not in CHANGE_KINDS:
+            raise CliError(
+                f"{kind!r} is not a change kind",
+                ExitCode.INVALID,
+                hint=f"one of {', '.join(CHANGE_KINDS)}",
+            )
+        rt = Runtime(Workspace.load())
+        data = learning_apply.edit_any(rt, proposal_id, kind, lesson, out.warn)
+        out.result(data, lambda c: c.print(f"{proposal_id}: {data['kind']} {data['path']}"))
+
+    def decision(action: str, done: str):
+        def command(
+            ctx: typer.Context,
+            proposal_id: IdArgument,
+            reason: Annotated[
+                str, typer.Option("--reason", help="Why (recorded with the decision).")
+            ] = "",
+        ) -> None:
+            out: Output = ctx.obj
+            rt = Runtime(Workspace.load())
+            row = learning_apply.decide_any(rt, proposal_id, action, reason.strip(), out.warn)
+            out.result(row, lambda c: c.print(f"{proposal_id}: {done}"))
+
+        return command
+
+    group.command("reject", help="Say no: the lesson is not proposed again without new evidence.")(
+        decision("reject", "rejected")
+    )
+    group.command("defer", help="Decide later: it stays in the list as deferred.")(
+        decision("defer", "deferred")
+    )
+
+    @group.command("endorse")
+    def endorse(ctx: typer.Context, proposal_id: IdArgument) -> None:
+        """Back a proposal: it adds weight for its owner, and never approves it."""
+        out: Output = ctx.obj
+        rt = Runtime(Workspace.load())
+        row = learning_apply.endorse_any(rt, proposal_id)
+        out.result(row, lambda c: c.print(f"{proposal_id}: endorsed"))
+
+    @group.command("propose")
+    def propose_cmd(
+        ctx: typer.Context,
+        feedback_id: Annotated[
+            str, typer.Option("--from", metavar="FEEDBACK-ID", help="The correction to teach.")
+        ],
+        agent: Annotated[
+            str | None, typer.Option("--agent", help="Which of its learners (default: first).")
+        ] = None,
+    ) -> None:
+        """Teach one correction now, without waiting for it to repeat (an explicit request)."""
+        out: Output = ctx.obj
+        if agent is not None:
+            agent = _agent_names([agent])[0]
+        rt = Runtime(Workspace.load())
+        row = learning_apply.propose_any(rt, feedback_id, agent)
+        out.result(row, lambda c: c.print(f"proposed {row['id']}: {row['lesson']}"))
+
+    @group.command("revert")
+    def revert(ctx: typer.Context, proposal_id: IdArgument) -> None:
+        """Undo an applied learning: your ~/.agentic file as it was, or a revert pull
+        request for a shared one."""
+        out: Output = ctx.obj
+        rt = Runtime(Workspace.load())
+        data = learning_apply.revert_any(rt, proposal_id, out.warn)
+        kind = data["reverted"]["kind"]
+        out.result(data, lambda c: c.print(f"{proposal_id}: reverted ({kind})"))
+
+
+def _applied_line(pid: str, applied: dict) -> str:
+    if applied.get("kind") == "pull-request":
+        return f"{pid}: approved; pull request #{applied['number']} {applied['url']}"
+    return f"{pid}: approved and applied to " + ", ".join(applied.get("paths", []))
+
+
+def _show_list(console, rows: list[dict]) -> None:
+    if not rows:
+        console.print("no proposals yet (a lesson needs repeated similar corrections)")
+        return
+    shown = table("ID", "AGENT", "TARGET", "STATUS", "EVIDENCE", "LESSON")
+    for row in rows:
+        shown.add_row(
+            row["id"],
+            row["agent"],
+            str(row.get("target", "")),
+            row["status"],
+            str(row["evidence"]),
+            row["lesson"],
+        )
+    console.print(shown)
+
+
+def _show_draft(console, data: dict) -> None:
+    made = data["draft"]
+    console.print(
+        f"{data['id']} ({data['status']}): {made['kind']} -> {made['path']} "
+        f"[{made['scope']}, decided by {made['owner']}]",
+        markup=False,
+    )
+    console.print(f"lesson: {made['lesson']}", markup=False)
+    for item in made["evidence"]:
+        console.print(
+            f"  evidence {item['feedback_id']} by {item['actor']}: {item['text']}", markup=False
+        )
+    console.print(made["diff"], markup=False, highlight=False)
+    console.print(f"regression case: {made['eval_path']}", markup=False)
+    for problem in made["problems"]:
+        console.print(f"not instruction-only: {problem}", markup=False)
 
 
 def _client(rt: Runtime):
