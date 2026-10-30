@@ -53,11 +53,15 @@ async def bootstrap_tenant(
     name: str,
     admin_email: str,
     policy_repo: str | None = None,
-    policy_branch: str = "main",
+    policy_branch: str | None = None,
     gateway_tenant: str | None = None,
     clock: Callable[[], datetime],
 ) -> BootstrapResult:
     policy_repo = checked_policy_repo(policy_repo, settings)
+    try:  # the environment's branch (M3-04) unless the tenant names one
+        policy_branch = settings.policy_branch_for(policy_branch)
+    except ValueError as error:
+        raise TenancyError(str(error)) from None
     tenant_id = uuid.uuid4()
     async with tenant_tx(owner_engine, tenant_id) as conn:
         tenant = await create_tenant(

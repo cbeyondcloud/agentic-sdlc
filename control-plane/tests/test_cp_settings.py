@@ -156,3 +156,23 @@ def test_the_pool_keeps_its_connections_open_by_default():
 def test_pool_settings_refuse_bad_values(name, value):
     with pytest.raises(SettingsError):
         Settings.from_env(_env(**{name: value}))
+
+
+def test_the_environment_policy_branch_is_optional_and_checked():
+    # M3-04: dev, staging and prod each track their own policy repo branch
+    assert Settings.from_env(_env()).policy_branch is None
+    pinned = Settings.from_env(_env(AGENTIC_CP_POLICY_BRANCH="staging"))
+    assert pinned.policy_branch == "staging"
+    with pytest.raises(SettingsError, match="policy_branch"):
+        Settings.from_env(_env(AGENTIC_CP_POLICY_BRANCH="main..x"))
+
+
+def test_the_policy_branch_for_a_tenant_follows_the_environment():
+    free = Settings.from_env(_env())
+    assert free.policy_branch_for(None) == "main"
+    assert free.policy_branch_for("feature/x") == "feature/x"
+    pinned = Settings.from_env(_env(AGENTIC_CP_POLICY_BRANCH="staging"))
+    assert pinned.policy_branch_for(None) == "staging"
+    assert pinned.policy_branch_for("staging") == "staging"
+    with pytest.raises(ValueError, match="tracks the policy branch 'staging'"):
+        pinned.policy_branch_for("main")

@@ -111,3 +111,16 @@ async def test_issue_token_is_scoped_to_the_named_tenant(operator_env, capsys, a
     me = (await api_for(db).get("/v1/me", token)).json()
     assert me["tenant"]["slug"] == "beta"
     assert await _run("admin", "issue-token", "--tenant", "beta", "--email", "nobody@x.test") == 3
+
+
+async def test_tenant_create_follows_the_environment_branch(operator_env, monkeypatch, capsys):
+    # M3-04: a new tenant tracks the environment's branch; another branch is refused
+    db = operator_env
+    monkeypatch.setenv("AGENTIC_CP_POLICY_BRANCH", "dev")
+    assert await _create("acme", "one@acme.example.test") == 0
+    async with db.owner.begin() as conn:
+        branch = (await conn.execute(select(tenants.c.policy_branch))).scalar_one()
+    assert branch == "dev"
+    capsys.readouterr()
+    assert await _create("beta", "one@beta.example.test", "--policy-branch", "main") == 3
+    assert "tracks the policy branch 'dev'" in capsys.readouterr().err
