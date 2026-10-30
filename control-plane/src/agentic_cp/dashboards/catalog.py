@@ -291,6 +291,17 @@ AGENT_QUALITY = Dashboard(
             "COUNT(*) FILTER (WHERE forced) AS forced FROM dash_gates "
             "WHERE event = 'gate_decided' AND $__timeFilter(at) GROUP BY approver ORDER BY 2 DESC",
         ),
+        Panel(
+            "Correction rate per agent before and after each learning",
+            "table",
+            "SELECT agent, team, lesson, status, applied_at, corrections_before, runs_before, "
+            "rate_before, corrections_after, runs_after, rate_after "
+            "FROM dash_learning_effect ORDER BY applied_at DESC",
+            description="Each applied learning (M3-16): its agent's corrections per run of its "
+            "team in the 30 days before and after it was applied. A window without a run is "
+            "empty, not zero.",
+            w=24,
+        ),
     ),
 )
 
