@@ -119,3 +119,13 @@ def test_the_readme_covers_init_restricted_repos_windows_and_shell_lists():
     ):
         assert needed in text, needed
     assert "not built yet" not in text
+
+
+def test_same_seed_defaults_as_the_org_template(policy):
+    """M3-19 (§22.2, §22.3): standalone starts from the org template's default class and
+    agent-type caps, so a person trying it alone sees what their org would give them."""
+    org = load_policy(REPO / "templates" / "policy-repo" / "policy")
+    assert policy.default_classification == org.default_classification == "internal"
+    for name, kind in policy.agent_types.items():
+        assert kind.limits == org.agent_types[name].limits, name
+    assert policy.concurrency == org.concurrency

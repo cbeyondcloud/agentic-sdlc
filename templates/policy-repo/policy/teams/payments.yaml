@@ -1,7 +1,10 @@
 # One team's narrowing of org policy (an example team: copy this file per team, and add
 # its lines to CODEOWNERS). A team can only narrow: fewer tiers, lower caps, more denies.
 allowed_tiers: [balanced, fast, local]
-monthly_budget_usd: 500
+# The team's monthly gateway spend cap in USD: every team sets one, so none starts
+# uncapped. Start at about 150 USD a developer a month (here 10 developers) and adjust
+# after the first month from the Team view and Executive ROI dashboards (spec §22.3).
+monthly_budget_usd: 1500
 
 # Lower caps per agent type (D35); a type left out keeps the org's caps.
 limits_max:
