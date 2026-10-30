@@ -91,6 +91,10 @@ def test_the_message_id_carries_the_senders_domain():
     assert message_id_domain("dev-tools@a.example.test") == "a.example.test"
     assert message_id_domain("Tools@Example.ORG") == "example.org"
     assert message_id_domain("root@localhost") == MESSAGE_ID_DOMAIN  # no dot: the fallback
+    assert message_id_domain("tools@example.org.") == "example.org"  # a root dot is dropped
+    assert message_id_domain("tools@münchen.example") == "xn--mnchen-3ya.example"  # ASCII only
+    for odd in ("a@.org", "a@example..org", "a@-x.org", "a@exa_mple.org"):
+        assert message_id_domain(odd) == MESSAGE_ID_DOMAIN, odd
 
 
 def test_unknown_kind_is_refused():

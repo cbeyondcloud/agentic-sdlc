@@ -65,12 +65,13 @@ The platform team works through this list. Each item points at the runbook that 
 | 10 | **ROI baseline** captured | section 7 below | two weeks of pre-pilot numbers written in the tracking issue |
 
 Suggested auto-trip for each pilot team (the control plane pauses the team when it trips;
-a person clears the switch):
+a person clears the switch). A team may only tighten the org's thresholds: once
+`org.yaml` sets a lower `auto_trip`, a higher team value fails `agentic policy check`.
 
 ```yaml
 # policy/teams/<team>.yaml
 auto_trip:
-  spend_usd_per_hour: 40        # proposed: about 20 runs an hour at the Developer's cap
+  spend_usd_per_hour: 40        # proposed: 8 Developer runs an hour at their 5 USD cap
   error_rate: 0.5               # half the finished steps in the window ended in error
 ```
 
@@ -137,7 +138,7 @@ The numbers below are read weekly from the Grafana dashboards the control plane 
 | Cost | Team view: *Gateway cost*, *Cost by agent*, *Cost by user*; Org overview: *Run budgets* | a user or agent far above the rest; budgets near 80 % | each team within its monthly budget |
 | ROI | Executive ROI: *ROI measures*, *Cost drivers by month*, *Cost per token by model* | rework rate, total cost, cost per run | baseline captured; rework rate falling |
 | Limits and safety | Limits and safety: *Limit hits*, *Switch changes*, *Gateway safety events*, *Rate-limited calls* | any secret-scan block, any safety event, repeated limit hits | every safety event explained in the weekly report |
-| Run health | Run explorer; stale-run mails | runs marked stale (no heartbeat) | under 2 % of runs |
+| Run health | Run explorer; stale-run mails | runs marked stale (no heartbeat) | under 2 % of runs (*proposed*) |
 | Support load | the pilot channel, support bundles | the same question three times | falling after week 2 |
 
 **What the dashboards cannot show yet.** *Cost per accepted change*, *request to merged PR*
@@ -168,7 +169,7 @@ anything. Every switch is audited with its reason.
 
 | To stop | Command | Who |
 |---|---|---|
-| one run | `agentic stop <run> --reason "..."` | its starter, the team lead |
+| one run | `agentic stop <run> --reason "..."`, in the repository where it runs | its starter (a lead stops someone else's run with a `user:` or `team:` switch) |
 | a team's runs, now | `agentic killswitch on team:<slug> --reason "..."` | the team lead, an org admin |
 | a team's runs, holding them to resume later | `agentic pause team:<slug> --reason "..."` | the team lead, an org admin |
 | one agent version everywhere | `agentic killswitch on agent:developer@1.3.0 --reason "..."` | an org admin |

@@ -14,7 +14,17 @@ actually falls (docs/runbooks/optimisation-opt-in.md):
 
 from collections.abc import Mapping
 
-from agentic.eval.abtest import ABPlan, ABResult, Guards, VariantSpec
+from agentic.eval.abtest import (
+    JUDGED_METRICS,
+    REVIEW_METRICS,
+    ABPlan,
+    ABResult,
+    Calibration,
+    Guards,
+    VariantSpec,
+)
+from agentic.eval.blind import LeakCheck
+from agentic.eval.runner import RunSet
 
 #: S10's non-inferiority settings per agent: primary metric, margin, n, k, budget cap (USD).
 #: Rubric agents may lose at most half a rubric point, the Developer 15 points of its
@@ -65,13 +75,13 @@ def optimisation_plan(
         primary_metric=metric,
         direction="non_inferiority",
         margin=margin,
-        n=n or default_n,
-        k=k or default_k,
+        n=default_n if n is None else n,
+        k=default_k if k is None else k,
         judge_model=judge_model if judged else None,
         rubric_sha=rubric_sha if judged else None,
         seed=seed,
         guards=Guards(require_cost_decrease=True),
-        budget_usd=budget_usd or cap,
+        budget_usd=cap if budget_usd is None else budget_usd,
         pairwise_required=judged,
     )
 
@@ -84,8 +94,14 @@ def render_ab_record(
     date: str,
     dry_run: bool,
     notes: str = "",
+    runset: RunSet | None = None,
+    calibration: Calibration | None = None,
+    leaks: LeakCheck | None = None,
 ) -> str:
-    """The Markdown record of one opt-in A/B (the procedure's record template)."""
+    """The Markdown record of one opt-in A/B (the procedure's record template). `runset`
+    (what `run_ab` returns beside the result) gives the spend and the resolved models,
+    `calibration` the judge's human calibration, `leaks` the blinding check the judge fed;
+    each one left out is written as not recorded or not run, never guessed."""
     if result.plan_sha != plan.sha:
         raise ValueError("the result is not this plan's: its plan sha differs")
     lines = [f"# Optimisation opt-in record: {group} on {plan.agent}", ""]
@@ -113,6 +129,17 @@ def render_ab_record(
         f"| Judge | {plan.judge_model or 'none (measured, not judged)'} |",
         f"| Rubric sha | {_code(plan.rubric_sha)} |",
         f"| Budget cap | {plan.budget_usd:g} USD |",
+        f"| Guards set | {_guards_set(plan)} |",
+        "",
+        "## How it ran",
+        "",
+        "| Check | Result |",
+        "|---|---|",
+        f"| Spent | {_spent(plan, runset)} |",
+        f"| Models (resolved) | {_models(runset)} |",
+        f"| Judge calibration | {_calibration(plan, calibration)} |",
+        f"| Blinding leak check | {_leaks(leaks)} |",
+        "| Verbosity check | not recorded |",
         "",
         "## Verdict",
         "",
@@ -188,6 +215,49 @@ def _next_step(group: str, plan: ABPlan, result: ABResult, dry_run: bool) -> str
             "this record stays."
         )
     return f"{group} stays off: the A/B measured nothing usable ({result.verdict}). Fix and re-run."
+
+
+def _guards_set(plan: ABPlan) -> str:
+    guards = plan.guards
+    out = [
+        f"invalid runs +{guards.max_invalid_increase} at most",
+        f"median cost +{guards.max_cost_increase:.0%} at most".replace("%", " %"),
+    ]
+    if plan.primary_metric in REVIEW_METRICS:
+        out.append(f"false findings +{guards.max_false_finding_increase:.0%} at most")
+    if guards.require_cost_decrease:
+        out.append("cost must fall")
+    return ", ".join(out)
+
+
+def _spent(plan: ABPlan, runset: RunSet | None) -> str:
+    if runset is None:
+        return "not recorded"
+    stopped = " (the cap stopped the runs)" if runset.budget_hit else ""
+    return f"{runset.spent_usd:.4f} of {plan.budget_usd:g} USD{stopped}"
+
+
+def _models(runset: RunSet | None) -> str:
+    found = sorted({m for run in runset.runs for m in run.record.model_ids}) if runset else []
+    return ", ".join(found) if found else "not recorded"
+
+
+def _calibration(plan: ABPlan, calibration: Calibration | None) -> str:
+    if plan.primary_metric not in JUDGED_METRICS:
+        return "not needed (the primary metric is measured, not judged)"
+    if calibration is None:
+        return "none"
+    if not calibration.matches(plan):
+        return f"{calibration.verdict}, but for another judge model or rubric"
+    return calibration.verdict
+
+
+def _leaks(leaks: LeakCheck | None) -> str:
+    if leaks is None:
+        return "not run"
+    if leaks.leaks:
+        return "LEAK: " + ", ".join(leaks.leaks)
+    return f"no leak found in {leaks.inputs_seen} judge inputs"
 
 
 def _direction(plan: ABPlan) -> str:

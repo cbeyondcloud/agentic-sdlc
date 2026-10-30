@@ -19,6 +19,17 @@
 | Judge | judge-model |
 | Rubric sha | `sha256:8c3ed2830bd8bf0c87bf0686627247c5df836ad0c0ecb87c177e63b6b0d09cf0` |
 | Budget cap | 100 USD |
+| Guards set | invalid runs +1 at most, median cost +25 % at most, cost must fall |
+
+## How it ran
+
+| Check | Result |
+|---|---|
+| Spent | 0.0227 of 100 USD |
+| Models (resolved) | not recorded |
+| Judge calibration | ACCEPTED |
+| Blinding leak check | not run |
+| Verbosity check | not recorded |
 
 ## Verdict
 

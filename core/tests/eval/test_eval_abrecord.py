@@ -54,6 +54,11 @@ def test_plans_follow_s10_per_agent():
     assert dev.judge_model is None and not dev.pairwise_required
 
 
+def test_a_given_size_is_used_as_given():
+    with pytest.raises(ValidationError):  # 0 cases is refused, never the default
+        optimisation_plan(group=GROUP, agent="developer", corpus_manifest_sha=SHA, seed=1, n=0)
+
+
 def test_a_plan_is_refused_without_what_it_needs():
     with pytest.raises(ValueError, match="no S10 non-inferiority margin"):
         optimisation_plan(group=GROUP, agent="qa", corpus_manifest_sha=SHA, seed=1)
@@ -163,7 +168,8 @@ def dry_run():
         k=2,  # the cassettes hold two repeats
     )
     events: list = []
-    result, _ = asyncio.run(
+    calibration = Calibration(verdict="ACCEPTED", judge_models=[judge], rubric_shas=[rubric])
+    result, runset = asyncio.run(
         run_ab(
             plan,
             {"A": cassette_variant(1.0), "B": cassette_variant(DRY_RUN_COST_FACTOR)},
@@ -175,10 +181,10 @@ def dry_run():
             rubric_sha=rubric,
             evaluators=[RecordedRubric()],
             pairwise_judge=IdenticalIsATie(),
-            calibration=Calibration(verdict="ACCEPTED", judge_models=[judge], rubric_shas=[rubric]),
+            calibration=calibration,
         )
     )
-    return plan, result, events
+    return plan, result, events, runset, calibration
 
 
 @pytest.fixture(scope="module")
@@ -186,8 +192,22 @@ def dry():
     return dry_run()
 
 
+def render_dry(dry) -> str:
+    plan, result, _, runset, calibration = dry
+    return render_ab_record(
+        plan,
+        result,
+        group=GROUP,
+        date="2026-10-30",
+        dry_run=True,
+        notes=NOTES,
+        runset=runset,
+        calibration=calibration,
+    )
+
+
 def test_the_dry_run_follows_the_protocol(dry):
-    plan, result, events = dry
+    plan, result, events, _, _ = dry
     assert events == ["eval.plan_registered", "eval.ab_decided"]
     assert result.n_scored == plan.n == 3 and result.unscored == []
     assert set(result.per_case_diffs.values()) == {0.0}  # the same answers on both sides
@@ -198,24 +218,29 @@ def test_the_dry_run_follows_the_protocol(dry):
     assert "sign-flip p = 0.1250" in result.reasons[0]
 
 
+def test_the_record_shows_what_s10_asks_for(dry):
+    record = render_dry(dry)
+    for line in (
+        "| Guards set | invalid runs +1 at most, median cost +25 % at most, cost must fall |",
+        "| Spent | 0.0227 of 100 USD |",
+        "| Judge calibration | ACCEPTED |",
+        "| Blinding leak check | not run |",
+        "| Models (resolved) | not recorded |",
+        "| Verbosity check | not recorded |",
+    ):
+        assert line in record, line
+
+
 def test_the_committed_dry_run_record_matches_the_template(dry):
-    plan, result, _ = dry
-    fresh = render_ab_record(
-        plan, result, group=GROUP, date="2026-10-30", dry_run=True, notes=NOTES
-    )
-    committed = RECORD.read_text(encoding="utf-8")
+    """The committed record is the template's output; only the shas may differ (they
+    change with the corpus; running this file as a script rewrites the record)."""
 
-    def headings(text: str) -> list[str]:
-        return re.findall(r"^#{1,2} .+$", text, flags=re.MULTILINE)
+    def normal(text: str) -> str:
+        return re.sub(r"sha256:[0-9a-f]{64}", "sha256:...", "\n".join(text.splitlines()))
 
-    assert headings(committed) == headings(fresh)
-    for line in ("> **DRY RUN.**", "**NO_BENEFIT**", "| Cases scored on both sides | 3 of 3 |"):
-        assert line in committed and line in fresh, line
-    assert "None: a dry run never turns a group on." in committed
+    assert normal(RECORD.read_text(encoding="utf-8")) == normal(render_dry(dry))
 
 
 if __name__ == "__main__":  # rewrite the committed record after a template change
-    plan, result, _ = dry_run()
-    text = render_ab_record(plan, result, group=GROUP, date="2026-10-30", dry_run=True, notes=NOTES)
     RECORD.parent.mkdir(parents=True, exist_ok=True)
-    RECORD.write_bytes(text.encode("utf-8"))
+    RECORD.write_bytes(render_dry(dry_run()).encode("utf-8"))

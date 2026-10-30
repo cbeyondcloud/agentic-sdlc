@@ -22,8 +22,10 @@ the agents are no worse with it and the cost really falls.
    agent with an S10 margin gets its own plan: the Business Analyst and Design on the
    rubric (margin -0.5 point), the Developer on tests-pass (margin -15 points). QA and Code
    Review are watched on their gate metrics after the switch (no S10 margin yet).
-4. **PROMOTE on every plan, or the group stays off.** NO_BENEFIT, UNMEASURABLE and
-   INCOMPLETE all mean off. An inconclusive result is not "almost promoted".
+4. **PROMOTE on every plan, or the group stays off.** PROMOTE needs the sign-flip test
+   below alpha, every guard holding and, for a judged (rubric) agent, B's pairwise win
+   rate at 0.5 or more. NO_BENEFIT, UNMEASURABLE and INCOMPLETE all mean off. An
+   inconclusive result is not "almost promoted".
 5. **The cost must actually fall:** the bootstrap CI upper bound of the per-case cost
    difference B - A is below zero (`require_cost_decrease`). A group that keeps quality but
    saves nothing is not worth its risk.
@@ -63,8 +65,10 @@ governs itself:
 
 S10 sizes are 30 cases x 3 repeats for rubric agents and 40 x 3 for the Developer. The
 framework's public corpus (`library/eval`) holds 20 BA, 20 Design and 20 dev-task holdout
-cases, so add the pilot's harvested cases (`agentic eval harvest --repo <path> --write`,
-kept in the policy repo's `eval/`) until each agent's holdout reaches its n. A run with
+cases, so add cases from the pilot's own repositories to the policy repo's `eval/` folder
+(the case format of `agentic.eval.cases`, checked by `load_corpus`) until each agent's
+holdout reaches its n. Harvesting them automatically, through Zyroflo's `corpus_harvest`,
+is not built yet (DF-853). A run with
 fewer cases than its plan's n is refused before it starts.
 
 The judge must have an accepted human calibration for the rubric and the judge model
@@ -125,10 +129,16 @@ live record (DF-855). Until then the procedure has been proven on recorded data 
 ```python
 from agentic.eval.abrecord import render_ab_record
 
-text = render_ab_record(plan, result, group="G14_tool_output", date="2026-11-20", dry_run=False)
+result, runset = await run_ab(plan, runners, cases, ...)   # step 4
+text = render_ab_record(
+    plan, result, group="G14_tool_output", date="2026-11-20", dry_run=False,
+    runset=runset, calibration=calibration, leaks=leak_check,
+)
 ```
 
-The record holds the plan and its sha, the verdict and its reasons, the cases scored and
+The record holds the plan and its sha, the guards it set, how it ran (spend against the
+cap, the resolved models, the judge's calibration, the blinding leak check), the verdict
+and its reasons, the cases scored and
 those left unscored, the mean difference with its bootstrap CI, the sign-flip, sign and
 Wilcoxon tests, every guard (including the cost difference's CI), the pairwise judgement,
 the per-case differences, the next step and a sign-off table. Commit it to the policy repo.
