@@ -3,7 +3,7 @@
 # org's own (a values file of your own after this one), and pass the image digest:
 #   helm upgrade --install agentic deploy/helm/agentic-platform -n agentic \
 #     -f deploy/helm/agentic-platform/environments/prod.yaml -f my-prod.yaml \
-#     --set image.digest=sha256:<the release's digest> --wait
+#     --set image.digest=sha256:<the release's digest> --set networkPolicy.cniEnforces=true --wait
 # The chart refuses prod without TLS, without a managed Secret and without a digest.
 # Prerequisites: an ingress controller, cert-manager, the External Secrets Operator with a
 # ClusterSecretStore, and a CNI that enforces NetworkPolicy (Calico, Cilium; not kindnet or
@@ -70,6 +70,8 @@ externalSecrets:
 # cloud metadata; add internal git hosts or TokenLean explicitly if they are private.
 networkPolicy:
   enabled: true
+  # confirm at install that the CNI enforces policies: --set networkPolicy.cniEnforces=true
+  # (or opt out with networkPolicy.enabled=false and networkPolicy.optOutReason)
   ingressFrom:
     - namespaceSelector:
         matchLabels:

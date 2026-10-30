@@ -92,6 +92,20 @@ prod refuses plaintext TLS, a Secret no secret manager writes, and a movable ima
 {{- if not (has $name (list "" "dev" "staging" "prod")) }}
 {{- fail (printf "environment.name %q: use dev, staging or prod (or leave it empty)" $name) }}
 {{- end }}
+{{- if has $name (list "staging" "prod") }}
+{{- $np := $v.networkPolicy }}
+{{- $reason := trim (default "" $np.optOutReason) }}
+{{- if $np.enabled }}
+{{- if not $np.cniEnforces }}
+{{- fail (printf "%s needs networkPolicy.cniEnforces=true with networkPolicy.enabled: confirm that the cluster's CNI enforces NetworkPolicy (Calico, Cilium; not kindnet or plain Flannel), because an unenforced policy is ignored silently and the egress guard for tenant git URLs would not exist" $name) }}
+{{- end }}
+{{- if $reason }}
+{{- fail "networkPolicy.optOutReason is set but networkPolicy.enabled is true: keep one of them" }}
+{{- end }}
+{{- else if not $reason }}
+{{- fail (printf "%s without a NetworkPolicy needs networkPolicy.optOutReason (why the platform team cannot enforce one), or set networkPolicy.enabled=true and networkPolicy.cniEnforces=true: without it tenant-set git URLs can reach internal hosts" $name) }}
+{{- end }}
+{{- end }}
 {{- if eq $name "prod" }}
 {{- if not (and $v.ingress.enabled $v.ingress.host $v.ingress.tlsSecretName) }}
 {{- fail "prod serves TLS only: set ingress.enabled, ingress.host and ingress.tlsSecretName (ingress.certManager makes the certificate)" }}

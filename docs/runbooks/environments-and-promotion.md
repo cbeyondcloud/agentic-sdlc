@@ -18,7 +18,7 @@ it has run in staging. Installing and upgrading one environment is in
 | API | 1 replica | 2-3 (autoscaled) | 3-10 at 60 % CPU, 1 vCPU / 1 GB each |
 | Secret | by hand or External Secrets | made by the kind smoke | External Secrets (or Sealed Secrets / CSI, declared) |
 | TLS | optional | none on kind (port-forward) | required: ingress + cert-manager |
-| Egress | open | open | NetworkPolicy allow-list (DF-805) |
+| Egress | open | opted out on kind (kindnet does not enforce policies) | NetworkPolicy allow-list, CNI confirmed (DF-805) |
 | Backups | none | nightly CronJob, 7 days | nightly CronJob, 35 days, plus PITR |
 | CLI version | pre-release | release candidate | released; `minCliVersion` enforced |
 | TokenLean | its own, cheap tiers | its own, prod model mapping, low caps | the shared org instance |
@@ -30,7 +30,7 @@ committed files never carry an org's details:
 ```bash
 helm upgrade --install agentic deploy/helm/agentic-platform --namespace agentic \
   -f deploy/helm/agentic-platform/environments/prod.yaml -f my-prod.yaml \
-  --set image.digest=sha256:<the release's digest> --wait
+  --set image.digest=sha256:<the release's digest> --set networkPolicy.cniEnforces=true --wait
 ```
 
 ### The policy branch an environment tracks
@@ -123,9 +123,21 @@ The alternative is cert-manager's ingress-shim: leave `certManager` off and put
 public HTTPS and SMTP submission, never internal ranges or cloud metadata. It is the
 network-level guard for tenant-set git URLs (DF-484, DF-503). It needs a CNI that enforces
 policies (Calico, Cilium; kindnet and plain Flannel do not). Replace the Postgres CIDR,
-and add private git hosts or a private TokenLean as their own `to` entries. If the
-cluster's CNI cannot enforce policies, the guard is not there: say so in the
-environment's record and track the application-level allow-list (DF-798).
+and add private git hosts or a private TokenLean as their own `to` entries.
+
+A policy the CNI does not enforce is ignored silently, so staging and prod make the
+platform team say which case it is (owner decision, 2026-10-30). The chart refuses to
+render unless one of these holds:
+
+- `networkPolicy.enabled: true` **and** `networkPolicy.cniEnforces: true`: you checked
+  that the CNI enforces policies (pass it at install, as in the command above);
+- `networkPolicy.enabled: false` with `networkPolicy.optOutReason: "<why>"`: the cluster
+  cannot enforce policies. The reason is printed in the release notes (`helm status`), and
+  tenant-set git URLs are then not limited at the network level: track the
+  application-level allow-list (DF-798).
+
+An empty reason, or a reason together with an enabled policy, is refused. The kind staging
+values opt out with "kind's CNI does not enforce NetworkPolicy".
 
 ## Framework upgrades
 
@@ -296,6 +308,8 @@ externalSecrets:
     ownerDatabaseUrl: {key: agentic/staging/owner-database-url}
 networkPolicy:
   enabled: true
+  cniEnforces: true        # only after checking the cluster's CNI enforces policies
+  optOutReason: ""         # clear kind's opt-out
   ingressFrom:
     - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: ingress-nginx}}
 ```

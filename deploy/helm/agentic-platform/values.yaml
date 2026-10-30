@@ -245,6 +245,13 @@ networkPolicy:
   # -- Who may scrape /metrics (NetworkPolicy `from` peers, for example the monitoring
   # namespace). Required with metrics.serviceMonitor.enabled or metrics.scrapeAnnotations.
   metricsFrom: []
+  # -- Set true once the platform team has checked that the cluster's CNI enforces
+  # NetworkPolicy (Calico, Cilium do; kindnet and plain Flannel do not). staging and prod
+  # refuse an enabled policy without it: an unenforced policy is ignored silently.
+  cniEnforces: false
+  # -- staging and prod without a policy: why (rendered in NOTES). Required when
+  # networkPolicy.enabled is false there, for example "our CNI does not enforce NetworkPolicy".
+  optOutReason: ""
   # -- Egress allow-list (NetworkPolicy `to` rules: Postgres, TokenLean, git hosts, SMTP).
   # DNS is always allowed. Empty: egress is not restricted.
   egress: []

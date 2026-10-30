@@ -22,7 +22,13 @@ SECRET = "agentic-platform"
 ENVIRONMENTS = ("dev", "staging", "prod")
 #: What an operator adds at install time: prod refuses an image without a digest.
 DIGEST = "sha256:" + "1" * 64
-INSTALL = {"dev": [], "staging": [], "prod": ["--set", f"image.digest={DIGEST}"]}
+#: What an operator adds at install time: prod refuses an image without a digest, and a
+#: NetworkPolicy the platform team has not confirmed its CNI enforces.
+INSTALL = {
+    "dev": [],
+    "staging": [],
+    "prod": ["--set", f"image.digest={DIGEST}", "--set", "networkPolicy.cniEnforces=true"],
+}
 BRANCHES = {"dev": "dev", "staging": "staging", "prod": "main"}
 RUNBOOK = ROOT / "docs" / "runbooks" / "environments-and-promotion.md"
 
@@ -385,3 +391,87 @@ def test_prod_needs_the_ingress_host(chart_tools):
     done = _prod_without(chart_tools, "--set", "ingress.host=")
     assert done.returncode != 0
     assert "ingress.host" in done.stderr
+
+
+# ── NetworkPolicy confirmation (owner decision on DF-805) ─────────────────────
+
+
+def test_prod_refuses_a_network_policy_without_cni_confirmation(chart_tools):
+    done = _prod_without(chart_tools, "--set", "networkPolicy.cniEnforces=false")
+    assert done.returncode != 0
+    assert "networkPolicy.cniEnforces" in done.stderr
+    assert "ignored silently" in done.stderr
+
+
+def test_prod_refuses_a_disabled_network_policy_without_a_reason(chart_tools):
+    done = _prod_without(chart_tools, "--set", "networkPolicy.enabled=false")
+    assert done.returncode != 0
+    assert "networkPolicy.optOutReason" in done.stderr
+
+
+@pytest.mark.parametrize("reason", ["", "   "], ids=["empty", "blank"])
+def test_an_empty_opt_out_reason_is_refused(chart_tools, reason):
+    done = _prod_without(
+        chart_tools,
+        "--set",
+        "networkPolicy.enabled=false",
+        "--set-string",
+        f"networkPolicy.optOutReason={reason}",
+    )
+    assert done.returncode != 0
+    assert "networkPolicy.optOutReason" in done.stderr
+
+
+def test_prod_renders_with_the_cni_confirmed(renders):
+    policy = _one(manifests(renders["prod"]), "NetworkPolicy", "api")
+    assert "Egress" in policy["spec"]["policyTypes"]
+
+
+def test_an_opt_out_with_a_reason_renders_and_is_echoed_in_the_notes(chart_tools):
+    reason = "our CNI (flannel) does not enforce NetworkPolicy"
+    done = _prod_without(
+        chart_tools,
+        "--set",
+        "networkPolicy.enabled=false",
+        "--set-string",
+        f"networkPolicy.optOutReason={reason}",
+    )
+    assert done.returncode == 0, done.stderr
+    assert not [o for o in manifests(done.stdout) if o["kind"] == "NetworkPolicy"]
+    notes = chart_tools.helm(
+        [
+            "install",
+            RELEASE,
+            "agentic-platform",
+            "--dry-run=client",
+            "--namespace",
+            NAMESPACE,
+            "-f",
+            _values("prod"),
+            *INSTALL["prod"],
+            "--set",
+            "networkPolicy.enabled=false",
+            "--set-string",
+            f"networkPolicy.optOutReason={reason}",
+        ]
+    )
+    assert notes.returncode == 0, notes.stderr
+    assert reason in notes.stdout
+
+
+def test_kind_staging_opts_out_honestly(renders):
+    # kindnet does not enforce NetworkPolicy: staging says so instead of pretending
+    values = YAML(typ="safe", pure=True).load(
+        (CHART / "environments" / "staging.yaml").read_text("utf-8")
+    )
+    assert values["networkPolicy"]["enabled"] is False
+    assert values["networkPolicy"]["optOutReason"] == "kind's CNI does not enforce NetworkPolicy"
+    assert not [o for o in manifests(renders["staging"]) if o["kind"] == "NetworkPolicy"]
+
+
+def test_staging_also_needs_the_confirmation_or_a_reason(chart_tools):
+    done = _template(
+        chart_tools, "-f", _values("staging"), "--set-string", "networkPolicy.optOutReason="
+    )
+    assert done.returncode != 0
+    assert "networkPolicy.optOutReason" in done.stderr

@@ -59,7 +59,9 @@ no Kubernetes service-link variables.
 environment its shape and the policy repo branch it tracks (`dev`, `staging`, `main`, set
 as `AGENTIC_CP_POLICY_BRANCH`). `environment.name: prod` refuses to render without ingress
 TLS, a managed Secret (`externalSecrets.enabled` or `secrets.externallyManaged`) and
-`image.digest`. Staging is a local kind cluster for now (`ENVIRONMENT=staging
+`image.digest`. staging and prod also refuse to render unless the NetworkPolicy is on with
+`networkPolicy.cniEnforces: true` (the CNI enforces it; an unenforced policy is ignored
+silently) or is off with a `networkPolicy.optOutReason`, which NOTES prints. Staging is a local kind cluster for now (`ENVIRONMENT=staging
 deploy/helm/kind/smoke.sh`). Values, External Secrets, cert-manager and the promotion flows:
 [environments-and-promotion.md](../../../docs/runbooks/environments-and-promotion.md).
 

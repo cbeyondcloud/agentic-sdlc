@@ -32,6 +32,12 @@ worker:
     limits:
       cpu: "1"
       memory: 1Gi
+# kindnet (kind's CNI) does not enforce NetworkPolicy: say so instead of rendering a
+# policy that would be ignored. A cloud staging with Calico or Cilium sets enabled and
+# cniEnforces instead.
+networkPolicy:
+  enabled: false
+  optOutReason: "kind's CNI does not enforce NetworkPolicy"
 backup:
   enabled: true
   # daily, early morning UTC; the drill restores the newest dump
