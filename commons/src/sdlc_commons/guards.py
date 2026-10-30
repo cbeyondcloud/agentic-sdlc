@@ -16,7 +16,9 @@ this module adds the framework's rules on top:
               checks are refused too: git's output options (`git diff --output=f`)
               for every agent, and any redirect into a file (`> f`) for an agent
               with no file-writing tool (`writes_files=False`, e.g. a reviewer);
-  * writes  - confined to the run's trees (`confinement`), never a path only
+  * writes  - confined to the run's trees (`confinement`) - or to the checkout of an
+              in-place component whose commit-command override the run accepted, minus
+              the harness's folders there (M2-61) - never a path only
               Zyroflo's CLIs write (`protected`), never a framework-protected
               file or a path on the deny list - matched relative to the tree
               (component) the path is in;
@@ -44,7 +46,7 @@ from pathlib import Path
 from zyroflo.sdlc import policy
 from zyroflo.sdlc.guard import scrub
 
-from sdlc_commons.worktrees import RunWorktrees, WorktreeError
+from sdlc_commons.worktrees import RunWorktrees, WorktreeError, override_homes
 
 #: Refused for every agent, whatever org, team or agent policy says.
 FRAMEWORK_DENY_SHELL = (
@@ -84,6 +86,11 @@ FRAMEWORK_PROTECTED = (
     "**/.agentic/**",
     "**/.husky/**",
     "**/.pre-commit-config.yaml",
+    "**/.githooks/**",  # git hooks a repository keeps (core.hooksPath), and lefthook's
+    "**/lefthook.yml",
+    "**/.lefthook.yml",
+    "**/lefthook-local.yml",
+    "**/.lefthook/**",
     "**/.gitmodules",
     "**/.vscode/**",
     "**/.devcontainer/**",
@@ -294,10 +301,7 @@ class Guard:
     def writes(self, paths: Sequence[Path | str]) -> list[Block]:
         """Every reason writing these paths is refused."""
         paths = list(paths)
-        blocks = [
-            Block("worktree", r)
-            for r in policy.confinement(self.policy, self.target, self.run_id, paths)
-        ]
+        blocks = [Block("worktree", r) for r in self._confinement(paths)]
         blocks += [Block("protected", r) for r in policy.protected(self.policy, self.target, paths)]
         homes = self._homes()
         for raw in paths:
@@ -332,6 +336,8 @@ class Guard:
         oddly (a trailing dot or space, a `:stream`) - or when it lies outside every tree
         or is reached through a link."""
         homes = self._homes()
+        in_place = override_homes(self.target, self.run_id)  # M2-61
+        harness = self._harness_folders() if in_place else []
         could_match = _any_case(self._path_rules())
         links: dict[Path, bool] = {}
         suspects = []
@@ -339,6 +345,9 @@ class Guard:
             path = Path(raw)
             home = next((h for h in homes if path.is_relative_to(h)), None)
             if home is None or not path.is_relative_to(self.target):
+                suspects.append(raw)
+                continue
+            if home in in_place and any(path.is_relative_to(f) for f in harness):
                 suspects.append(raw)
                 continue
             names = (path.relative_to(home).as_posix(), path.relative_to(self.target).as_posix())
@@ -368,6 +377,10 @@ class Guard:
                 paths[tree / rest] = None
             if rest != pattern.removesuffix("/**") or _GLOB_CHARS & set(rest) or not rest:
                 unenforced[pattern] = None
+        if any(_same_folder(tree, home) for home in override_homes(self.target, self.run_id)):
+            for folder in self._harness_folders():  # an in-place checkout (M2-61)
+                if _inside(folder, tree):
+                    paths[folder] = None
         return WriteDenials(paths=tuple(paths), unenforced=tuple(unenforced))
 
     def claude_permissions(self) -> dict:
@@ -412,13 +425,36 @@ class Guard:
         return list(dict.fromkeys(pattern for source in sources for pattern in source))
 
     def _homes(self) -> list[Path]:
-        """The run's component trees, deepest first (Zyroflo's record)."""
+        """The run's component trees, deepest first (Zyroflo's record), and the checkouts of
+        its in-place components whose commit-command override it accepted (M2-61)."""
         try:
             trees = RunWorktrees(self.target, self.run_id).trees()
         except WorktreeError:
             trees = {}
         homes = [t.path for t in trees.values() if t.mode == "worktree"]
+        homes += override_homes(self.target, self.run_id)
         return sorted(homes, key=lambda p: len(p.parts), reverse=True)
+
+    def _confinement(self, paths: Sequence[Path | str]) -> list[str]:
+        """Zyroflo's confinement to the run's trees; a path in an accepted in-place
+        checkout is inside the run too, unless it is in the harness's own folders there
+        (the profile, every run's trees)."""
+        in_place = override_homes(self.target, self.run_id)
+        harness = self._harness_folders()
+        outside, problems = [], []
+        for raw in paths:
+            path = Path(raw) if Path(raw).is_absolute() else self.target / raw
+            if not any(_inside(path, home) for home in in_place):
+                outside.append(raw)
+            elif any(_inside(path, folder) for folder in harness):
+                problems.append(f"{_shown(path, self.target)}: the harness's own files")
+        found = policy.confinement(self.policy, self.target, self.run_id, outside)
+        return [*found, *problems]
+
+    def _harness_folders(self) -> list[Path]:
+        """What the harness keeps inside the repository: the profile and policy (`.sdlc`)
+        and every run's trees - never an agent's to write, even in an in-place checkout."""
+        return [self.target / ".sdlc", self.target / self.policy["worktrees_root"]]
 
     # ── diff and push ─────────────────────────────────────────────────────────
 
@@ -1085,6 +1121,10 @@ def _inside(path: Path, folder: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _same_folder(a: Path, b: Path) -> bool:
+    return Path(a).resolve() == Path(b).resolve()
 
 
 def _shown(path: Path, root: Path) -> str:

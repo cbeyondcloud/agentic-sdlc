@@ -35,6 +35,7 @@ from typing import Any
 from agentic.definitions import DefinitionError, DefinitionSet
 from agentic.policy import OrgPolicy, ResolveContext, load_policy
 from agentic.policy.repos import normalise_remote
+from agentic.repoconfig import RepoConfig
 from agentic.yamlio import YamlFileError, load_yaml, read_text
 from agentic_cli.config import agentic_home, local_policy_setting, user_config
 from agentic_cli.errors import CliError
@@ -78,6 +79,23 @@ def repo_config(repo: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise CliError(f"{path}: expected a mapping of settings", ExitCode.INVALID)
     return data
+
+
+def rollback_commands(config: Mapping[str, Any]) -> dict[str, str]:
+    """The repo config's `rollback_commands` (M2-61: the rollback half of an in-place
+    component's commit-command override), checked as `agentic.repoconfig` checks it."""
+    section = config.get("rollback_commands") or {}
+    try:
+        checked = RepoConfig.model_validate(
+            {"classification": "any", "rollback_commands": section}
+        ).rollback_commands
+    except ValueError as error:  # pydantic's ValidationError
+        raise CliError(
+            f"{REPO_CONFIG}: rollback_commands: {error}",
+            ExitCode.INVALID,
+            hint="a map of component path ('.' for the repository) to a command with {commit}",
+        ) from error
+    return dict(checked)
 
 
 @dataclass

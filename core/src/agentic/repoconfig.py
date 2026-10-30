@@ -20,9 +20,16 @@ is the whole estate).
 """
 
 from pathlib import Path
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    ValidationError,
+    model_validator,
+)
 
 from agentic.definitions.errors import DefinitionError
 from agentic.yamlio import YamlFileError, dump_yaml, load_yaml
@@ -61,14 +68,28 @@ class RepoConfig(_Strict):
     pipelines: list[str] = []
     components: list[str] = []  # repo-relative submodule paths (POSIX)
     codeintel: CodeIntelConfig = CodeIntelConfig()
+    # M2-61: how an in-place component (Zyroflo `vcs.deny_raw_git`) is put back at a commit,
+    # by component path ("." = the repository): a command with `{commit}`. The other half of
+    # the commit-command override is the profile's `vcs.commit_command`; org policy's
+    # `commit_override.allow` decides whether either may run
+    rollback_commands: dict[str, Annotated[str, StringConstraints(strip_whitespace=True)]] = {}
 
     @model_validator(mode="after")
     def components_stay_inside(self) -> Self:
         for path in self.components:
-            parts = path.replace("\\", "/").split("/")
-            if not path or path.startswith(("/", "\\")) or ":" in path or ".." in parts:
+            if not _inside_repo(path):
                 raise ValueError(f"components entry {path!r} must be a path inside the repo")
+        for path, command in self.rollback_commands.items():
+            if path != "." and not _inside_repo(path):
+                raise ValueError(f"rollback_commands key {path!r} must be a path inside the repo")
+            if not command:
+                raise ValueError(f"rollback_commands entry {path!r} names no command")
         return self
+
+
+def _inside_repo(path: str) -> bool:
+    parts = path.replace("\\", "/").split("/")
+    return bool(path) and not path.startswith(("/", "\\")) and ":" not in path and ".." not in parts
 
 
 def load_repo_config(text: str, path: Path = Path(CONFIG_REL)) -> RepoConfig:
