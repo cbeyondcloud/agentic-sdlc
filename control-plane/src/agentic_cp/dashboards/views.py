@@ -420,10 +420,49 @@ SELECT r.tenant_id, r.repo_key, r.team, r.created_at, r.registered_by
 FROM repos r JOIN dash_scope s ON s.tenant_id = r.tenant_id
 """
 
-#: Every dashboard view, in creation order (each reads only those before it). A Grafana
-#: reader may select exactly these; `test_every_dash_view_is_registered` keeps the list
-#: equal to the schema's `dash_*` views.
-DASH_VIEWS: tuple[str, ...] = (
+#: Each applied learning (M3-16): its agent's corrections and its team's runs in the 30 days
+#: before and after it was applied, and the correction rate (corrections per run) of each
+#: window. A window without a run is NULL (unmeasured), never 0.
+_LEARNING_WINDOW = "INTERVAL '30 days'"
+_LEARNING_EFFECT = f"""
+WITH applied AS (
+  SELECT p.tenant_id, p.id AS proposal_id, p.team, p.agent, p.scope, p.lesson, p.status,
+    p.applied_at, p.reverted_at
+  FROM learning_proposals p JOIN dash_scope s ON s.tenant_id = p.tenant_id
+  WHERE p.applied_at IS NOT NULL
+), corrections AS (
+  SELECT a.tenant_id, a.proposal_id,
+    COUNT(f.id) FILTER (WHERE f.given_at >= a.applied_at - {_LEARNING_WINDOW}
+      AND f.given_at < a.applied_at) AS corrections_before,
+    COUNT(f.id) FILTER (WHERE f.given_at >= a.applied_at
+      AND f.given_at < a.applied_at + {_LEARNING_WINDOW}) AS corrections_after
+  FROM applied a LEFT JOIN feedback f
+    ON f.tenant_id = a.tenant_id AND f.team = a.team AND a.agent = ANY(f.agents)
+  GROUP BY a.tenant_id, a.proposal_id
+), team_runs AS (
+  SELECT a.tenant_id, a.proposal_id,
+    COUNT(r.run_id) FILTER (WHERE r.opened_at >= a.applied_at - {_LEARNING_WINDOW}
+      AND r.opened_at < a.applied_at) AS runs_before,
+    COUNT(r.run_id) FILTER (WHERE r.opened_at >= a.applied_at
+      AND r.opened_at < a.applied_at + {_LEARNING_WINDOW}) AS runs_after
+  FROM applied a LEFT JOIN runs r ON r.tenant_id = a.tenant_id AND r.team = a.team
+  GROUP BY a.tenant_id, a.proposal_id
+)
+SELECT a.tenant_id, a.proposal_id, a.team, a.agent, a.scope, a.lesson, a.status,
+  a.applied_at, a.reverted_at, c.corrections_before, c.corrections_after,
+  t.runs_before, t.runs_after,
+  CASE WHEN t.runs_before > 0
+    THEN ROUND(CAST(c.corrections_before AS numeric) / t.runs_before, 4) END AS rate_before,
+  CASE WHEN t.runs_after > 0
+    THEN ROUND(CAST(c.corrections_after AS numeric) / t.runs_after, 4) END AS rate_after
+FROM applied a
+JOIN corrections c ON c.tenant_id = a.tenant_id AND c.proposal_id = a.proposal_id
+JOIN team_runs t ON t.tenant_id = a.tenant_id AND t.proposal_id = a.proposal_id
+"""
+
+#: The views the M2-37 migration creates. Views over newer tables are created by the
+#: migration that adds those tables (`LEARNING_VIEWS`: `m3_14_learning_apply`).
+M2_VIEWS: tuple[str, ...] = (
     "dash_scope",
     "dash_calls",
     "dash_step_agents",
@@ -440,6 +479,11 @@ DASH_VIEWS: tuple[str, ...] = (
     "dash_audit",
     "dash_repos",
 )
+LEARNING_VIEWS: tuple[str, ...] = ("dash_learning_effect",)
+#: Every dashboard view, in creation order (each reads only those before it). A Grafana
+#: reader may select exactly these; `test_every_dash_view_is_registered` keeps the list
+#: equal to the schema's `dash_*` views.
+DASH_VIEWS: tuple[str, ...] = (*M2_VIEWS, *LEARNING_VIEWS)
 
 
 def _bodies(schema: str) -> dict[str, str]:
@@ -459,6 +503,7 @@ def _bodies(schema: str) -> dict[str, str]:
         "dash_gateway_safety": _GATEWAY_SAFETY,
         "dash_audit": _AUDIT,
         "dash_repos": _REPOS,
+        "dash_learning_effect": _LEARNING_EFFECT,
     }
 
 
@@ -470,8 +515,14 @@ def view_statements(schema: str) -> list[str]:
         for name, (columns, _) in CONTRACTS.items()
     ]
     bodies = _bodies(schema)
-    statements += [f"CREATE VIEW {name} AS {bodies[name].strip()}" for name in DASH_VIEWS]
+    statements += [f"CREATE VIEW {name} AS {bodies[name].strip()}" for name in M2_VIEWS]
     return statements
+
+
+def learning_view_statements(schema: str) -> list[str]:
+    """`CREATE VIEW` for the learning loop's views (M3-16), after `view_statements`."""
+    bodies = _bodies(schema)
+    return [f"CREATE VIEW {name} AS {bodies[name].strip()}" for name in LEARNING_VIEWS]
 
 
 def drop_statements() -> list[str]:

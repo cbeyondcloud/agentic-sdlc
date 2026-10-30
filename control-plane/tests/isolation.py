@@ -619,6 +619,7 @@ async def _feedback_in_b(api) -> dict[str, str]:
         "lesson": row["lesson"],
         "proposal": proposal["id"],
         "proposal_lesson": proposal["lesson"],
+        "pid": proposal["id"],
     }
 
 
@@ -649,6 +650,36 @@ ENDPOINT_CASES += [
     ),
     EndpointCase("learning", "GET", "/v1/learning/feedback", _feedback_in_b, must_not_list=True),
     EndpointCase("learning", "GET", "/v1/learning/proposals", _feedback_in_b, must_not_list=True),
+    EndpointCase("learning", "GET", "/v1/learning/proposals/{pid}", _feedback_in_b),
+    EndpointCase(
+        "learning",
+        "PUT",
+        "/v1/learning/proposals/{pid}/draft",
+        _feedback_in_b,
+        body={"lesson": "Reuse the queue."},
+    ),
+    EndpointCase(
+        "learning",
+        "POST",
+        "/v1/learning/proposals/{pid}/decision",
+        _feedback_in_b,
+        body={"action": "approve"},
+    ),
+    EndpointCase("learning", "POST", "/v1/learning/proposals/{pid}/endorse", _feedback_in_b),
+    EndpointCase(
+        "learning",
+        "POST",
+        "/v1/learning/proposals/{pid}/applied",
+        _feedback_in_b,
+        body={"ref": {"kind": "personal"}},
+    ),
+    EndpointCase(
+        "learning",
+        "POST",
+        "/v1/learning/proposals/{pid}/reverted",
+        _feedback_in_b,
+        body={"ref": {"kind": "personal"}},
+    ),
     EndpointCase(
         "service-accounts",
         "GET",
