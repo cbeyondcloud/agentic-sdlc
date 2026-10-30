@@ -58,3 +58,29 @@ def test_a_damaged_file_is_named_not_ignored(tmp_path: Path):
     (tmp_path / "proposals.json").write_text("{not json", encoding="utf-8")
     with pytest.raises(StoreError, match="proposals.json"):
         LocalLearningStore(tmp_path).proposals()
+
+
+def test_store_records_decisions_endorsements_and_changes(tmp_path: Path):
+    """M3-15/16: a decision moves the status (only along `next_status`), endorsements are
+    kept once each, and the change record of a proposal reads back."""
+    from agentic.learning.approval import DecisionError
+
+    store = LocalLearningStore(tmp_path)
+    store.save([proposal()])
+    pid = "lp-" + "a" * 20
+    endorsed = store.endorse(pid, "bob@acme.example")
+    assert store.endorse(pid, "bob@acme.example").endorsements == endorsed.endorsements
+    assert endorsed.endorsements == ("bob@acme.example",) and endorsed.status == "pending"
+    later = NOW + timedelta(hours=2)
+    with pytest.raises(DecisionError):
+        store.decide(pid, "apply", "alice@acme.example", later)
+    approved = store.decide(pid, "approve", "alice@acme.example", later)
+    assert (approved.status, approved.decided_by, approved.decided_at) == (
+        "approved",
+        "alice@acme.example",
+        later,
+    )
+    assert store.proposals()[0] == approved
+    assert store.change(pid) is None
+    store.save_change(pid, {"draft": {"path": "AGENTS.md"}, "applied": None})
+    assert store.change(pid) == {"draft": {"path": "AGENTS.md"}, "applied": None}

@@ -195,3 +195,17 @@ def test_no_exceptions_means_nothing_to_report():
     from check import stale_exceptions
 
     assert stale_exceptions({"tool": {"uv": {"exclude-newer": "14 days"}}}, date.today()) == []
+
+
+def test_the_linux_stage_retries_a_cut_off_dependency_download():
+    """A download cut off mid-stream fails `uv sync` with "I/O operation failed during
+    extraction" before any check runs. One retry with fewer parallel downloads reuses
+    every wheel already fetched instead of failing the whole run."""
+    from check import container_sync
+
+    command = container_sync()
+    first, _, retry = command.strip("()").partition(" || ")
+    assert first.startswith("UV_CONCURRENT_DOWNLOADS=") and first.endswith("uv sync --locked -q")
+    assert retry.startswith("UV_CONCURRENT_DOWNLOADS=") and retry.endswith("uv sync --locked -q")
+    assert int(retry.split("=")[1].split()[0]) < int(first.split("=")[1].split()[0])
+    assert command.startswith("(") and command.endswith(")")

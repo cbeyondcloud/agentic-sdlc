@@ -102,6 +102,15 @@ LINUX_DOCKERFILE = REPO_ROOT / "scripts" / "linux-check.Dockerfile"
 SANDBOX_OPTS = ["--security-opt", "seccomp=unconfined", "--security-opt", "systempaths=unconfined"]
 
 
+def container_sync() -> str:
+    """The container's `uv sync`: every Linux run downloads its dependencies afresh, and a
+    download cut off mid-stream (a busy network) fails with "I/O operation failed during
+    extraction" before any check runs. One retry with fewer parallel downloads reuses the
+    wheels already fetched."""
+    sync = "uv sync --locked -q"
+    return f"(UV_CONCURRENT_DOWNLOADS=16 {sync} || UV_CONCURRENT_DOWNLOADS=4 {sync})"
+
+
 ENGINES = ("docker", "podman")
 
 # The control plane's database tests (SP15) run against this Postgres, started as a
@@ -299,7 +308,7 @@ def run_linux(run=subprocess.run) -> bool:
     )
     script = (
         f"{github_auth} && mkdir -p /work && cd /work && tar -xf - "
-        f"&& mv {HISTORY_MEMBER} {HISTORY_BUNDLE} && uv sync --locked -q && {inner}"
+        f"&& mv {HISTORY_MEMBER} {HISTORY_BUNDLE} && {container_sync()} && {inner}"
     )
     token = _github_token()
     if not token:
