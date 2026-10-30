@@ -47,9 +47,11 @@ With it set, every tenant of that control plane tracks that branch:
 So a staging control plane can never apply `main`, and prod can never apply `staging`: a
 policy change moves between environments only by a merge in the policy repo. Run operator
 commands with the environment's `AGENTIC_CP_POLICY_BRANCH` too (copy it from the API
-Deployment, as `deploy/helm/kind/promotion.sh` does). A tenant created before the pin keeps
-its old branch until `set-policy-repo` is run for it: check `admin tenant list` (the
-branch is after the `@`) after turning the pin on.
+Deployment, as `deploy/helm/kind/promotion.sh` does). A tenant on another branch (created
+before the pin, or restored from another environment's backup) is not synced at all: the
+worker logs "the tenant tracks the policy branch ..." and keeps its last good version until
+`admin tenant set-policy-repo` is run for it. Check `admin tenant list` (the branch is
+after the `@`) after turning the pin on.
 
 ### What prod refuses
 
@@ -234,7 +236,42 @@ staging is the bootstrap's job (M3-05).
 
 ### Record of the dry run
 
-RECORD_PLACEHOLDER
+2026-10-30, M3-04 (track b16-m3-envs), on Windows 11 with Docker Desktop 29.8.2 (cgroup v1,
+so the kind node is Kubernetes 1.34.11), from bash: `ENVIRONMENT=staging
+deploy/helm/kind/smoke.sh` with `KIND_CLUSTER=b16-m3-envs`. Result: **passed**, cluster
+deleted afterwards. The staging values installed from the chart (two API replicas behind
+the autoscaler and budget, two workers, the backup CronJob), `helm test` passed after the
+install and after both upgrades (`/readyz`: `{"status":"ready","db_enforced":true}`).
+The dry-run part of the output:
+
+```text
+kind-smoke: promotion dry run: the policy branch staging tracks
+kind-smoke: api: AGENTIC_CP_POLICY_BRANCH=staging
+kind-smoke: worker: AGENTIC_CP_POLICY_BRANCH=staging
+kind-smoke: promotion dry run: a new tenant follows the environment's branch
+  | tenant dry-run created (id 690f954a-5919-4d64-ba7a-5a62349766b0)
+  | first org admin: admin@dry-run.example.test
+  | token (shown once - store it now):
+  | <redacted>
+kind-smoke: promotion dry run: pointing it at main from staging is refused
+  | error: this environment tracks the policy branch 'staging' (AGENTIC_CP_POLICY_BRANCH); promote a change by merging it into that branch
+kind-smoke: promotion dry run: the policy repo, on the environment's branch
+  | tenant dry-run: policy repo set (branch staging); the worker syncs it next
+  | dry-run	active	Dry run	https://git.example.test/org/policy.git@staging
+kind-smoke: promotion dry run: one backup with the chart's CronJob
+job.batch/backup-dry-run condition met
+  | -rw-r--r--    1 10001    10001       137376 Oct 30 11:22 /backups/agentic-20261030T112230Z.dump
+kind-smoke: promotion dry run: passed
+```
+
+The first run failed at step 5 and found a real defect: `pg_dump` as the owner role stops
+with "query would be affected by row-level security policy for table assignments", because
+every tenant table forces row-level security on its owner too. The backup now runs as a
+backup role with `BYPASSRLS` and `pg_read_all_data` (`secrets.keys.backupDatabaseUrl`;
+[postgres-backup-restore.md](postgres-backup-restore.md) has the SQL), and the second and
+third runs passed. The PowerShell twin passed the same day on the same machine
+(`$env:ENVIRONMENT = 'staging'; .\deploy\helm\kind\smoke.ps1`, Windows PowerShell 5.1,
+`SKIP_BUILD=1` with the image of the bash run).
 
 ## Staging in the cloud
 
