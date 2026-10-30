@@ -1,0 +1,42 @@
+# staging (M3-04): rehearse framework upgrades, policy changes and new agent or skill
+# versions with real models on test repos, before prod. Tracks the policy repo's
+# `staging` branch. Owner decision 114: staging is a LOCAL kind cluster
+# (`ENVIRONMENT=staging deploy/helm/kind/smoke.sh`), so it needs no ingress controller,
+# cert-manager or secret store; the smoke creates the Secret. It keeps prod's shape at a
+# small scale: two API replicas behind a budget, a standby worker and the nightly backup
+# the restore drill reads (daily in staging).
+# A cloud staging later adds what prod has (ingress + certManager, externalSecrets):
+# docs/runbooks/environments-and-promotion.md, "Staging in the cloud".
+environment:
+  name: staging
+api:
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 60
+  # small requests so two replicas fit on a laptop's kind node
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+worker:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+backup:
+  enabled: true
+  # daily, early morning UTC; the drill restores the newest dump
+  schedule: "17 2 * * *"
+  timeZone: Etc/UTC
+  retentionDays: 7
+  persistence:
+    existingClaim: agentic-backups

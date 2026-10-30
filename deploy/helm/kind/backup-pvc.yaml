@@ -1,0 +1,11 @@
+# The volume the staging values' backup CronJob writes to (backup.persistence.existingClaim),
+# for the kind smoke only: kind's default StorageClass (local-path) on the node's disk.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentic-backups
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi

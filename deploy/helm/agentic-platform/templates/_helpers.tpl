@@ -77,21 +77,62 @@ app.kubernetes.io/managed-by: {{ $root.Release.Service }}
 AGENTIC_CP_DATABASE_URL AGENTIC_CP_OWNER_DATABASE_URL AGENTIC_CP_METRICS_TOKEN AGENTIC_CP_SMTP_PASSWORD AGENTIC_CP_GATEWAY_ADMIN_KEY
 {{- end -}}
 
-{{/* The control plane's environment (API, worker, migration Job). The owner DSN is added by
-the Job alone. Pass (list $ includeOwner). */}}
+{{/* The policy repo branch the environment tracks (M3-04): environment.policyBranch, else
+the environment's own (dev, staging, main for prod), else none. */}}
+{{- define "agentic.policyBranch" -}}
+{{- $e := .Values.environment -}}
+{{- default (get (dict "dev" "dev" "staging" "staging" "prod" "main") (default "" $e.name)) $e.policyBranch -}}
+{{- end -}}
+
+{{/* Install-time guards of the environment (M3-04), rendered once by the API Deployment.
+prod refuses plaintext TLS, a Secret no secret manager writes, and a movable image tag. */}}
+{{- define "agentic.environmentChecks" -}}
+{{- $v := .Values -}}
+{{- $name := default "" $v.environment.name -}}
+{{- if not (has $name (list "" "dev" "staging" "prod")) }}
+{{- fail (printf "environment.name %q: use dev, staging or prod (or leave it empty)" $name) }}
+{{- end }}
+{{- if eq $name "prod" }}
+{{- if not (and $v.ingress.enabled $v.ingress.tlsSecretName) }}
+{{- fail "prod serves TLS only: set ingress.enabled, ingress.host and ingress.tlsSecretName (ingress.certManager makes the certificate)" }}
+{{- end }}
+{{- if not (hasPrefix "https://" (default "" $v.publicUrl)) }}
+{{- fail "prod needs publicUrl to start with https:// (invite links)" }}
+{{- end }}
+{{- if not (or $v.externalSecrets.enabled $v.secrets.externallyManaged) }}
+{{- fail "prod refuses a hand-made Secret: set externalSecrets.enabled (or secrets.externallyManaged=true when Sealed Secrets or a CSI driver writes it)" }}
+{{- end }}
+{{- if not $v.image.digest }}
+{{- fail "prod needs image.digest (sha256:...): a tag can move under a running deployment" }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/* The control plane's environment. Pass (list $ mode), mode "api", "worker" or "job".
+Only the migration Job gets the owner DSN, and it gets none of the optional secrets the
+long-running pods use (DF-807: least privilege on the pod that holds the owner role). */}}
 {{- define "agentic.env" -}}
 {{- $root := index . 0 -}}
+{{- $mode := index . 1 -}}
+{{- if not (has $mode (list "api" "worker" "job")) }}
+{{- fail (printf "agentic.env: unknown mode %q" $mode) }}
+{{- end }}
 {{- $v := $root.Values -}}
 {{- $keys := $v.secrets.keys -}}
 {{ include "agentic.secretEnv" (list $root "AGENTIC_CP_DATABASE_URL" $keys.databaseUrl false) }}
-{{- if index . 1 }}
+{{- if eq $mode "job" }}
 {{ include "agentic.secretEnv" (list $root "AGENTIC_CP_OWNER_DATABASE_URL" $keys.ownerDatabaseUrl false) }}
-{{- end }}
+{{- else }}
 {{ include "agentic.secretEnv" (list $root "AGENTIC_CP_METRICS_TOKEN" $keys.metricsToken true) }}
 {{ include "agentic.secretEnv" (list $root "AGENTIC_CP_SMTP_PASSWORD" $keys.smtpPassword true) }}
 {{ include "agentic.secretEnv" (list $root "AGENTIC_CP_GATEWAY_ADMIN_KEY" $keys.gatewayAdminKey true) }}
+{{- end }}
 - name: AGENTIC_CP_POLICY_WORKDIR
   value: /tmp/agentic-cp/policy
+{{- with include "agentic.policyBranch" $root }}
+- name: AGENTIC_CP_POLICY_BRANCH
+  value: {{ . | quote }}
+{{- end }}
 {{- with $v.publicUrl }}
 - name: AGENTIC_CP_PUBLIC_URL
   value: {{ . | quote }}
@@ -132,7 +173,7 @@ the Job alone. Pass (list $ includeOwner). */}}
 form (review F1); a name the chart sets itself would be a duplicate env entry, which
 server-side apply refuses. */}}
 {{- $secretSettings := splitList " " (include "agentic.secretSettings" $root) }}
-{{- $chartSet := dict "AGENTIC_CP_POLICY_WORKDIR" "the chart's fixed path" "AGENTIC_CP_PUBLIC_URL" "publicUrl" "AGENTIC_CP_MIN_CLI_VERSION" "minCliVersion" "AGENTIC_CP_GATEWAY_URL" "tokenlean.url" "AGENTIC_CP_GATEWAY_ADMIN_URL" "tokenlean.adminUrl" "AGENTIC_CP_SMTP_HOST" "smtp.host" "AGENTIC_CP_SMTP_PORT" "smtp.port" "AGENTIC_CP_SMTP_SECURITY" "smtp.security" "AGENTIC_CP_SMTP_USERNAME" "smtp.username" "AGENTIC_CP_SMTP_FROM" "smtp.from" "AGENTIC_CP_GIT_CONFIG_DIR" "gitConfigSecret" }}
+{{- $chartSet := dict "AGENTIC_CP_POLICY_WORKDIR" "the chart's fixed path" "AGENTIC_CP_PUBLIC_URL" "publicUrl" "AGENTIC_CP_MIN_CLI_VERSION" "minCliVersion" "AGENTIC_CP_GATEWAY_URL" "tokenlean.url" "AGENTIC_CP_GATEWAY_ADMIN_URL" "tokenlean.adminUrl" "AGENTIC_CP_SMTP_HOST" "smtp.host" "AGENTIC_CP_SMTP_PORT" "smtp.port" "AGENTIC_CP_SMTP_SECURITY" "smtp.security" "AGENTIC_CP_SMTP_USERNAME" "smtp.username" "AGENTIC_CP_SMTP_FROM" "smtp.from" "AGENTIC_CP_GIT_CONFIG_DIR" "gitConfigSecret" "AGENTIC_CP_POLICY_BRANCH" "environment.policyBranch" }}
 {{- range $name, $value := $v.config }}
 {{- $upper := upper $name }}
 {{- if has $upper $secretSettings }}

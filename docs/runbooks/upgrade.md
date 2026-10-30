@@ -3,7 +3,8 @@
 How the platform team upgrades the server side installed from the umbrella chart
 `deploy/helm/agentic-platform`, rolls it back, and raises the minimum CLI version.
 Cutting and verifying a release is in [release.md](release.md); backups and restores are in
-[postgres-backup-restore.md](postgres-backup-restore.md).
+[postgres-backup-restore.md](postgres-backup-restore.md). How a change moves from dev to
+staging to prod is in [environments-and-promotion.md](environments-and-promotion.md).
 
 ## How an upgrade works
 

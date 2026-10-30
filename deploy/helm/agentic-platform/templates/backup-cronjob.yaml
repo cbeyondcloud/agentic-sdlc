@@ -1,0 +1,71 @@
+{{- /* The nightly logical backup (DF-799, optional): `pg_dump -Fc --schema=<schema>` as the
+backup role (BYPASSRLS + pg_read_all_data: the owner role cannot dump, every tenant table
+forces row-level security) into backup.persistence.existingClaim, dumps older than backup.retentionDays
+removed. It is the file `scripts/restore_drill.py` restores (docs/runbooks/
+postgres-backup-restore.md). The DSN stays in the environment; libpq reads the
+libpq URL form (a +driver suffix such as +asyncpg is dropped). */ -}}
+{{- if .Values.backup.enabled }}
+{{- $b := .Values.backup }}
+{{- $schema := default "agentic" (get .Values.config "AGENTIC_CP_DB_SCHEMA") }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "agentic.fullname" . }}-backup
+  labels:
+    {{- include "agentic.labels" (list . "backup") | nindent 4 }}
+spec:
+  schedule: {{ $b.schedule | quote }}
+  {{- with $b.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            {{- include "agentic.labels" (list . "backup") | nindent 12 }}
+        spec:
+          {{- include "agentic.podCommon" (list . "") | nindent 10 }}
+          restartPolicy: Never
+          containers:
+            - name: pg-dump
+              image: {{ $b.image }}
+              imagePullPolicy: IfNotPresent
+              command: ["sh", "-c"]
+              args:
+                - >-
+                  set -eu;
+                  dsn=$(printf '%s' "$AGENTIC_BACKUP_DSN" | sed -E 's#^(postgres(ql)?)\+[a-z0-9]+:#\1:#');
+                  file="/backups/agentic-$(date -u +%Y%m%dT%H%M%SZ).dump";
+                  pg_dump -Fc --schema={{ $schema }} -f "$file.partial" -d "$dsn";
+                  mv "$file.partial" "$file";
+                  find /backups -name 'agentic-*.dump' -mtime +{{ int $b.retentionDays }} -delete;
+                  ls -l "$file"
+              env:
+                - name: AGENTIC_BACKUP_DSN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "agentic.secretName" . }}
+                      key: {{ .Values.secrets.keys.backupDatabaseUrl }}
+              resources:
+                {{- toYaml $b.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                - name: backups
+                  mountPath: /backups
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: {{ required "backup.persistence.existingClaim is required with backup.enabled: the volume the dumps go to" $b.persistence.existingClaim }}
+            - name: tmp
+              emptyDir:
+                sizeLimit: 64Mi
+{{- end }}

@@ -400,7 +400,7 @@ def test_every_catalog_dashboard_is_in_a_grafana_configmap(default_render):
         text = path.read_bytes().decode("utf-8")
         assert o["data"][name].replace("\r\n", "\n") == text.replace("\r\n", "\n"), name
         assert o["metadata"]["annotations"]["grafana_folder"] == folder, name
-        assert o["metadata"]["name"] == f"{RELEASE}-agentic-platform-dashboard-{name[:-5]}"
+        assert o["metadata"]["name"] == f"{RELEASE}-agentic-platform-dash-{name[:-5]}"  # DF-808
 
 
 @pytest.mark.parametrize("folder", ["", "Agentic"])
@@ -513,10 +513,11 @@ def test_a_network_policy_without_the_needed_peers_is_refused(chart_tools, switc
     assert needed in done.stderr
 
 
-def test_the_tokenlean_subchart_is_a_placeholder_until_m3_04(chart_tools):
+def test_the_tokenlean_subchart_is_a_placeholder_until_df_797(chart_tools):
+    # the TokenLean LITE chart is not published yet (DF-797): BYO TokenLean until then
     done = _template(chart_tools, "--set", "tokenlean.enabled=true")
     assert done.returncode != 0
-    assert "M3-04" in done.stderr
+    assert "DF-797" in done.stderr and "tokenlean.url" in done.stderr
 
 
 # ── lint and schema validation ────────────────────────────────────────────────
@@ -541,3 +542,43 @@ def test_values_files_reach_the_container(chart_tools):
     done = _template(chart_tools, "-f", "extra.yaml", files=files)
     assert done.returncode == 0, done.stderr
     assert _one(_objects(done.stdout), "Deployment", "worker")["spec"]["replicas"] == 3
+
+
+# ── M3-04 review follow-ups ───────────────────────────────────────────────────
+
+#: Secrets only the API and the worker need (DF-807): never in the owner-DSN Job.
+LONG_RUNNING_SECRETS = {
+    "AGENTIC_CP_METRICS_TOKEN",
+    "AGENTIC_CP_SMTP_PASSWORD",
+    "AGENTIC_CP_GATEWAY_ADMIN_KEY",
+}
+
+
+def test_the_migration_job_gets_only_the_secrets_it_needs(full_render):
+    # DF-807: the one pod holding the owner DSN gets no metrics, SMTP or gateway secret
+    objects = _objects(full_render)
+    job = _env(_one(objects, "Job", "migrate")["spec"]["template"]["spec"]["containers"][0])
+    assert not LONG_RUNNING_SECRETS & job.keys()
+    assert {"AGENTIC_CP_DATABASE_URL", "AGENTIC_CP_OWNER_DATABASE_URL"} <= job.keys()
+    for component in ("api", "worker"):
+        deployment = _one(objects, "Deployment", component)
+        env = _env(deployment["spec"]["template"]["spec"]["containers"][0])
+        assert LONG_RUNNING_SECRETS <= env.keys(), component
+
+
+def test_dashboard_configmap_names_stay_unique_for_a_long_release_name(chart_tools):
+    # DF-808: a fullname of 51+ characters used to truncate every name to the same prefix
+    release = "a" * 53
+    done = chart_tools.helm(["template", release, "agentic-platform", "--namespace", NAMESPACE])
+    assert done.returncode == 0, done.stderr
+    names = [
+        o["metadata"]["name"]
+        for o in _objects(done.stdout)
+        if o["kind"] == "ConfigMap" and "grafana_dashboard" in o["metadata"]["labels"]
+    ]
+    expected = len(list(GRAFANA_DIR.glob("*.json"))) + len(
+        list(GRAFANA_EXECUTIVE_DIR.glob("*.json"))
+    )
+    assert len(names) == expected
+    assert len(set(names)) == len(names), names
+    assert all(len(name) <= 63 for name in names)

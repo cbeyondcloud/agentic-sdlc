@@ -18,7 +18,9 @@ refreshes the chart's copy) is provisioned without a template change. */ -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ printf "%s-dashboard-%s" (include "agentic.fullname" $root) $base | trunc 63 | trimSuffix "-" }}
+  {{- /* DF-808: the fullname is cut to 40 characters so the dashboard's own name always
+  fits in 63, whatever the release is called */}}
+  name: {{ printf "%s-dash-%s" (include "agentic.fullname" $root | trunc 40 | trimSuffix "-") $base | trunc 63 | trimSuffix "-" }}
   namespace: {{ default $root.Release.Namespace $d.namespace }}
   labels:
     {{- include "agentic.labels" (list $root "dashboards") | nindent 4 }}

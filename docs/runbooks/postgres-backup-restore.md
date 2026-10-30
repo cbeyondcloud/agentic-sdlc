@@ -72,16 +72,31 @@ Then run `db verify-restore` against the new cluster as in option 1.
 A nightly `pg_dump` of the `agentic` schema in custom format. It is small, portable
 between Postgres versions and providers, and it is what the restore drill uses.
 
-```bash
-# as the owner role; the pinned image of the local stack and the tests
-docker run --rm -e PGPASSWORD postgres:17.10-alpine \
-  pg_dump -Fc --schema=agentic -h <host> -U <owner role> -d agentic > agentic-$(date +%F).dump
+Take it as a **backup role**, not the owner: every tenant table forces row-level
+security, also on its owner, so `pg_dump` as the owner stops with "query would be affected
+by row-level security policy" (found by the M3-04 kind run). A superuser makes the role
+once (Postgres 14 or later):
+
+```sql
+CREATE ROLE agentic_backup LOGIN BYPASSRLS PASSWORD '<from your secret manager>';
+GRANT pg_read_all_data TO agentic_backup;
 ```
 
-In the cluster, run the same command as a CronJob with the same image, the password from
-the chart's Secret, and the file written to object storage with a retention rule
-(for example 35 days). Keep backups as sensitive as the database: they hold the audit
-trail and people's emails. Encrypt them at rest and limit who can read them.
+```bash
+# the pinned image of the local stack and the tests
+docker run --rm -e PGPASSWORD postgres:17.10-alpine \
+  pg_dump -Fc --schema=agentic -h <host> -U agentic_backup -d agentic > agentic-$(date +%F).dump
+```
+
+In the cluster, the chart runs it for you: `backup.enabled` adds a CronJob (`pg_dump -Fc
+--schema=agentic` as that backup role, its DSN under `backup-database-url` in the chart's
+Secret) that writes one dump a night to the volume `backup.persistence.existingClaim` and
+removes dumps older than `backup.retentionDays` (the staging and prod values turn it on;
+DF-799). Copy that volume to object storage with a retention rule (for example 35 days)
+using your backup tool. Run one by hand with
+`kubectl -n agentic create job backup-now --from=cronjob/agentic-agentic-platform-backup`.
+Keep backups as sensitive as the database: they hold the audit trail and people's emails.
+Encrypt them at rest and limit who can read them.
 
 ## The restore drill
 

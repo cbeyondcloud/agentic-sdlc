@@ -31,7 +31,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["worker"]
           env:
-            {{- include "agentic.env" (list . false) | nindent 12 }}
+            {{- include "agentic.env" (list . "worker") | nindent 12 }}
           resources:
             {{- toYaml .Values.worker.resources | nindent 12 }}
           securityContext:
