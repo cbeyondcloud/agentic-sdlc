@@ -51,7 +51,7 @@ def test_an_invalid_codeintel_section_is_a_preflight_error_among_the_others(work
     found = [p for p in report.problems if p.check == "codeintel"]
     assert [p.severity for p in found] == ["error"] and not report.passed
     assert "codeintel.adapter" in found[0].detail
-    assert "code-review-graph, domain-graph or none" in found[0].detail
+    assert "codebase-memory, domain-graph or none" in found[0].detail
 
 
 def test_the_run_itself_still_refuses_an_invalid_section(workspace):

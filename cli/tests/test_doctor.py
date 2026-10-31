@@ -144,6 +144,7 @@ def test_doctor_reports_every_prerequisite(capsys):
         "clock",
         "disk space",
         "local data",
+        "code intelligence",
         "withheld variables",
         "policy repo protection",
     ):
@@ -476,3 +477,27 @@ def test_policy_repo_protection_from_rulesets(home, monkeypatch, capsys):
 def test_standalone_skips_the_policy_repo_check(capsys):
     _, data = run_doctor(capsys)
     assert check(data, "policy repo protection")["status"] == "skip"
+
+
+# ── code intelligence (M3-27) ─────────────────────────────────────────────────
+
+
+def test_a_maven_repo_shows_the_conventions_while_the_backend_is_not_pinned(repo, capsys):
+    (repo / "pom.xml").write_text("<project/>", encoding="utf-8")
+    _, data = run_doctor(capsys)
+    found = check(data, "code intelligence")
+    assert found["status"] == "info"
+    assert "Maven/Gradle test conventions" in found["detail"]
+    assert "codebase-memory-mcp not pinned" in found["detail"]
+
+
+def test_asking_for_the_backend_without_a_pin_warns_with_a_fix(repo, capsys):
+    (repo / ".agentic").mkdir(exist_ok=True)
+    (repo / ".agentic" / "config.yaml").write_text(
+        "version: 1\nclassification: internal\ncodeintel: {adapter: codebase-memory}\n",
+        encoding="utf-8",
+    )
+    _, data = run_doctor(capsys)
+    found = check(data, "code intelligence")
+    assert found["status"] == "warn" and "codebase-memory-mcp is not available" in found["detail"]
+    assert "tool-pins.yaml" in found["fix"]

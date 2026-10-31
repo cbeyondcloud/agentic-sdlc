@@ -80,3 +80,60 @@ Values are means over 40 commits per repo; "all" is the mean over all 120. The r
 ## Cost if wrong
 
 The adapter sits behind the `codeintel` interface (M1-34). Swapping the default for Graphify or codebase-memory-mcp replaces one module and re-runs this replay harness, which stays in `spikes/s5_code_graph/` as the benchmark for any future candidate.
+
+## Addendum (2026-10-31, M3-27): Java test linking without the binary
+
+A Java Spring Boot team is in the pilot (owner decision 2026-10-31), so Java needed a
+`tests_for` that works on every laptop. `agentic.codeintel.jvm.JvmConventions` is pure
+Python. It reads Maven and Gradle conventions from file names and each file's package
+and imports, in this order:
+
+1. same-package `FooTest`, `FooTests`, `FooIT` and similar names, then the same names in
+   another package;
+2. same-package tests whose name starts with `Foo`;
+3. same-package tests that name `Foo`;
+4. tests that import `Foo`.
+
+A JVM repo gets it first, ahead of the routed symbol adapter.
+
+**Replay:** `spikes/s5_code_graph/score_tests_for.py`, on the same 40 gson commits and
+pinned head as above. There are no new tool builds and no network calls. code-review-graph
+and codebase-memory-mcp are scored from the recorded S5 answers.
+
+- `tests_for`: the 35 commits that change a test; truth is the changed tests.
+- `dependents`: all 40 commits; truth is every other changed file.
+
+| Variant | n | recall@20 | precision@10 | hit |
+|---|---|---|---|---|
+| tests_for: baseline (name-matched) | 35 | 0.44 | 0.51 | 51% |
+| tests_for: code-review-graph, file + symbols (**before**) | 35 | 0.52 | 0.07 | 63% |
+| tests_for: JvmConventions alone | 35 | 0.55 | 0.20 | 63% |
+| tests_for: JvmConventions + code-review-graph (**after**) | 35 | **0.63** | 0.10 | 77% |
+| tests_for: codebase-memory-mcp v0.11.0 | 35 | 0.44 | 0.10 | 49% |
+| dependents: code-review-graph composed (**before**) | 40 | 0.27 | 0.03 | 70% |
+| dependents: JvmConventions + code-review-graph (**after**) | 40 | **0.53** | 0.11 | 82% |
+| dependents: codebase-memory-mcp v0.11.0, 2-hop | 40 | 0.57 | 0.12 | 80% |
+
+**What it shows:**
+- Without any binary, Java recall nearly doubles for dependents (0.27 to 0.53). That is
+  within noise of codebase-memory-mcp (0.57).
+- Without any binary, tests_for gains 11 points (0.52 to 0.63) and beats
+  codebase-memory-mcp's own tests_for (0.44).
+- Precision stays low, as it does for every tool. The answers remain candidates.
+- The numbers come from a single library repo. DF-924 repeats the replay on a Spring
+  Boot sample.
+
+**codebase-memory-mcp today (checked 2026-10-31).** The current release is v0.12.1. It is
+MIT and has builds for Windows x64 and arm64, macOS arm64 and x64, and Linux. Every
+archive has a sigstore bundle, and `checksums.txt` matches the published digests.
+
+Its documents disagree about the network. The README says it makes no request of its
+own accord. SECURITY.md describes a background update check to `api.github.com` after
+MCP `initialize`. v0.12 CLI calls also start or join a shared coordination daemon.
+
+So S5 decision 3 stands, with one change: the backend is routed by language
+(`codeintel.adapter: auto`, the new default). It runs only from a build the org pins in
+`tool-pins.yaml`. It runs in CLI mode, never as an MCP session, with its home and caches
+in the run's data folder. When it is missing, the conventions and code-review-graph
+answer, with a warning. Running it with no network at all is DF-921. Checking the v0.12.1
+CLI contract and replaying it is DF-920.

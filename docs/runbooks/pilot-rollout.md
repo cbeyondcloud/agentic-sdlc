@@ -13,7 +13,7 @@ The rollout goes in three waves (master plan, "Rollout to 1000 developers"):
 
 | Wave | Who | Size | Length | Exit criteria (summary) |
 |---|---|---|---|---|
-| Pilot | 2-3 volunteer teams, Python/TypeScript repos | ~20 devs | 8 weeks | acceptance scenarios pass on their repos; no P1 incident for 2 weeks; ROI baseline captured |
+| Pilot | 2-3 volunteer teams: Python and TypeScript repos, plus one Java Spring Boot team | ~20 devs | 8 weeks | acceptance scenarios pass on their repos; no P1 incident for 2 weeks; ROI baseline captured |
 | Early adopters | 10 teams across stacks | ~100 devs | 6-8 weeks | gate rejection rate and cost per accepted change within targets; onboarding 15 min or less (median) |
 | General availability | the remaining teams, team by team | ~900 devs | team by team | load and support metrics healthy; training material complete |
 
@@ -36,8 +36,10 @@ The detail of each exit is in [Exit criteria per wave](#exit-criteria-per-wave).
 
 Pick **2-3 teams, about 20 developers**, who volunteer. A good pilot team has:
 
-- repos in **Python or TypeScript** with a CI that runs real tests (the agents prove their
-  work through the tests; a repo without them gives the QA agent nothing to measure);
+- repos in **Python or TypeScript**, plus **one Java Spring Boot team** (owner decision
+  2026-10-31; Maven or Gradle), each with a CI that runs real tests (the agents prove
+  their work through the tests; a repo without them gives the QA agent nothing to
+  measure). The Java team has two extra prerequisites, before-the-pilot item 11;
 - a **mix of Windows and macOS laptops** (at least a third of each across the cohort), so
   both platforms are proven before 100 people depend on them;
 - repos that are **`internal`** (the default class). Keep `confidential` and `restricted`
@@ -65,6 +67,7 @@ The platform team works through this list. Each item points at the runbook that 
 | 8 | Dashboards provisioned and shared | the Helm chart provisions the dashboards and the separate executive folder | each lead sees their Team view; the owner sees Executive ROI |
 | 9 | **Kill switch drill** | section 9 below, on staging | a team switch stops a running run within the 30 s kill target, and after a pause, clearing it lets `agentic resume` continue |
 | 10 | **ROI baseline** captured | section 7 below | two weeks of pre-pilot numbers written in the tracking issue |
+| 11 | **Java team ready** (M3-27) | (a) the sandbox reaches Maven Central and the Gradle hosts. The policy template allows `repo.maven.apache.org`, `repo1.maven.org`, `services.gradle.org`, `downloads.gradle.org`, `plugins.gradle.org` and `plugins-artifacts.gradle.org`; replace them with the org's mirrors if it has them. (b) Java code intelligence: the Maven/Gradle test conventions work with no binary. The optional `codebase-memory-mcp` backend is used only after the org's security review approves it and pins it in `tool-pins.yaml` (the exact pin is commented in `org.yaml`), then `agentic init --install-missing` on each laptop. | `mvn test` or `./gradlew test` passes in a sandboxed step on a Windows and a macOS laptop; `agentic doctor` in the Java repo shows `code intelligence` ok or info, never warn |
 
 Suggested auto-trip for each pilot team (the control plane pauses the team when it trips;
 a person clears the switch). A team may only tighten the org's thresholds: once
@@ -233,10 +236,11 @@ the tracker (M3-26 for the pilot).
 | Pilot | ROI baseline captured | section 7 | before week 0, and again at weeks 4 and 8 |
 | Pilot | Pilot KPI | section 7 | 40 runs to a merged PR in 8 weeks |
 | Pilot | Both platforms work | onboarding log, support bundles | at least 5 Windows and 5 macOS developers ran a full feature-delivery |
+| Pilot | Java works | the Java team's runs | at least 5 runs to a merged PR on the Spring Boot repo, with the QA step running the repo's Maven or Gradle tests in the sandbox |
 | Early adopters | Gate rejection rate | Agent quality | under 25 % per agent |
 | Early adopters | Cost per accepted change | merged agent PRs and gateway cost (DF-785 until ingest) | under 3 USD median, and no higher than the pilot's |
 | Early adopters | Onboarding time | timed onboarding | median 15 min or less (M3-23) |
-| Early adopters | Stacks | cohort list | at least 4 stacks (for example Java, Go, .NET besides Python/TypeScript) |
+| Early adopters | Stacks | cohort list | at least 4 stacks (for example Go, .NET and Kotlin besides Python, TypeScript and Java) |
 | General availability | Control-plane load | the M3-22 targets in production: visible ingest lag p95 5 s or less (p99 15 s), errors 0.1 % or less, kill poll p99 under 2 s | for 4 weeks at early-adopter load, on the recommended 3 replicas x 1 vCPU |
 | General availability | Support load | the support queue | falling per active developer for 4 weeks |
 | General availability | Training material complete | docs site, deck, guides (M3-18, M3-23) | reviewed by the owner |

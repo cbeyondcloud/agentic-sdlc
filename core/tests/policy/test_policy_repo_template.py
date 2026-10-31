@@ -288,3 +288,29 @@ def test_readme_says_where_the_mail_relay_is_set():
     text = read_text(TEMPLATE / "README.md")
     for needed in ("SMTP relay", "AGENTIC_CP_SMTP_HOST", "smtp.host"):
         assert needed in text, needed
+
+
+def test_maven_and_gradle_registries_are_reachable_from_the_sandbox(policy):
+    # M3-27: a Java Spring Boot repo is in the pilot, so `mvn test` and `./gradlew test`
+    # must reach Maven Central and the Gradle distribution and plugin hosts by default;
+    # an admin replaces them with the org's mirrors
+    allowed = set(policy.sandbox.allowed_domains)
+    assert {"repo.maven.apache.org", "repo1.maven.org"} <= allowed
+    assert {"services.gradle.org", "downloads.gradle.org"} <= allowed
+    assert {"plugins.gradle.org", "plugins-artifacts.gradle.org"} <= allowed
+
+
+def test_the_jvm_backend_pin_is_shown_but_not_active(policy):
+    # M3-27: codebase-memory-mcp is a native binary the org must approve (S5 decision 3);
+    # the template shows the exact pin, commented, and pins nothing
+    assert "codebase-memory-mcp" not in policy.tool_pins
+    text = read_text(TEMPLATE / "policy" / "org.yaml")
+    assert "#   codebase-memory-mcp:" in text and "version: v0.12.1" in text
+    for digest in (
+        "4e4e0f16b45233af5c757a1fcbe3c3b16e9056375b1fbe2ce020b6de75dedcc0",  # windows-x86_64
+        "9bfcbe38414b47969a3e1d1c1999f5357409387c86fa3d24221b5458267660d2",  # darwin-aarch64
+        "ca6e64397a8ae80cec898a8205a6aa16750ac798acc05a0c3ed983837944a581",  # darwin-x86_64
+        "8c3d0341064301e78ecc84cf7348d4e2c6562a0f57448243ea560aaa34de36c1",  # linux-x86_64
+        "ed0f1f548cd79b121c401c2e9f7841c189a001af26d3768368088c24f6a53533",  # linux-aarch64
+    ):
+        assert digest in text
