@@ -40,7 +40,7 @@ spec:
               imagePullPolicy: {{ .Values.image.pullPolicy }}
               args: ["retention", "run"{{ if .Values.retention.dryRun }}, "--dry-run"{{ end }}]
               env:
-                {{- include "agentic.env" (list . true) | nindent 16 }}
+                {{- include "agentic.env" (list . "job") | nindent 16 }}
               resources:
                 {{- toYaml .Values.retention.resources | nindent 16 }}
               securityContext:
