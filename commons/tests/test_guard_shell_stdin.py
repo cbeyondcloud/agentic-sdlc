@@ -194,14 +194,10 @@ def test_a_program_search_change_on_a_shells_input_is_refused(tmp_path, command)
         "cat <<< 'rm -rf x'",  # a here-string fed to a program that reads data (DF-723)
         "grep -c rm <<< 'rm -rf x'",
         "bash run.sh <<< 'rm -rf x'",  # bash runs run.sh; the here-string is its data
-        "cat <(echo rm -rf x)",
-        'echo "{ rm -rf x; }"',  # quoted text is data
         "echo do rm -rf x",  # a keyword in argument position is a word
         "echo if rm -rf x",
         "echo ! rm -rf x",
         "cat <<< 'rm -rf x' | grep bash",  # the pipe goes to grep, not a shell
-        'sudo "{ rm -rf x; }"',  # a program named "{ rm -rf x; }": nothing runs it
-        'find "{ rm -rf x; }"',
     ],
 )
 def test_data_that_only_looks_like_a_command_is_allowed(guard, command):
@@ -212,3 +208,20 @@ def test_data_that_only_looks_like_a_command_is_allowed(guard, command):
 
 def test_a_one_file_delete_is_allowed(guard):
     assert guard.command("del -Force x.txt") == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <(echo rm -rf x)",  # a process substitution runs its commands: judged whole
+        'echo "{ rm -rf x; }"',  # every spelling is also read without its quotes
+        'sudo "{ rm -rf x; }"',
+        'find "{ rm -rf x; }"',
+        "cat <<< 'rm -rf x' || sh",  # a shell that reads its stdin, with a stdin source
+    ],
+)
+def test_data_kept_refused_for_strictness(guard, command):
+    """Harmless shapes still refused, the price of reading PowerShell's escape and a
+    quote inside a word, and of judging a process substitution whole (DF-931). They
+    go when Zyroflo reads those shapes itself (DF-930)."""
+    assert guard.command(command)
