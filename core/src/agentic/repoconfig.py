@@ -11,12 +11,15 @@ are components of a multi-repo run, and the code-intelligence adapter.
     team: payments
     pipelines: [feature-delivery]
     components: [libs/shared]
-    codeintel: {adapter: code-review-graph}
+    codeintel: {adapter: auto}
 
-`codeintel.adapter: domain-graph` adds the estate's domain graph (built by Zyroflo's
-graph build) alongside code-review-graph: `graph` is its folder (default
-`.agentic/local/graph`) and `component` this repo's component in it (unset: the repo
-is the whole estate).
+`codeintel.adapter` picks the symbol-level adapter (M3-27): `auto` (the default) routes
+by the repo's language - codebase-memory-mcp for a Maven or Gradle repo when the org has
+pinned it, code-review-graph otherwise - and `code-review-graph` or `codebase-memory`
+override that. A JVM repo also gets the Maven/Gradle test conventions, whatever the
+setting. `domain-graph` routes like `auto` and adds the estate's domain graph (built by
+Zyroflo's graph build) alongside: `graph` is its folder (default `.agentic/local/graph`)
+and `component` this repo's component in it (unset: the repo is the whole estate).
 """
 
 from pathlib import Path
@@ -50,8 +53,11 @@ class _Strict(BaseModel):
 
 
 class CodeIntelConfig(_Strict):
-    # domain-graph: a built domain graph of the estate, alongside code-review-graph (M2-43)
-    adapter: Literal["code-review-graph", "domain-graph", "none"] = "code-review-graph"
+    # auto: routed by language (M3-27); domain-graph: a built domain graph of the estate,
+    # alongside the routed symbol adapter (M2-43)
+    adapter: Literal["auto", "code-review-graph", "codebase-memory", "domain-graph", "none"] = (
+        "auto"
+    )
     graph: str | None = Field(default=None, min_length=1)  # repo-relative, absolute or ~
     component: str | None = Field(default=None, min_length=1)  # None: the repo is the estate
 
