@@ -69,6 +69,9 @@ class ResolvedAgent(BaseModel):
     deny_shell: list[str]  # org + team + agent, in that order (D31)
     deny_paths: list[str]
     ask_shell: list[str] = []  # need a person's approval each time; minus what a deny covers
+    # prompts and answers in this agent's spans (M3-06, OR-01): the team opted in and the
+    # repo's classification allows it; off otherwise (D14)
+    trace_capture: bool = False
 
 
 def resolve_agent(
@@ -211,6 +214,7 @@ def resolve_agent(
         deny_shell=deny.shell,
         deny_paths=deny.paths,
         ask_shell=[cmd for cmd in deny.ask if not any(_covers(d, cmd) for d in deny.shell)],
+        trace_capture=bool(team and team.trace_capture and rule.trace_capture),
     )
     return resolved, []
 

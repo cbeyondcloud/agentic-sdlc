@@ -13,6 +13,7 @@ from fake_gateway import FakeGateway
 from sqlalchemy import select, update
 
 from agentic_cp.audit import read_records
+from agentic_cp.notify.delivery import deliver_due, deliver_job
 from agentic_cp.tables import notifications, tenants
 from agentic_cp.tenancy.context import tenant_tx
 
@@ -200,7 +201,8 @@ async def test_without_a_relay_the_invite_is_queued_not_mailed(inviting):
     finally:
         await quiet.http.aclose()
     assert reply.status_code == 201 and reply.json()["mailed"] is False
-    [*_, mail] = await _mails(api, api.a)
+    # the first invite's mail was cancelled by the re-invite (DF-572): the queued one is new
+    (mail,) = [m for m in await _mails(api, api.a) if m.status == "pending"]
     assert "auditor" in mail.body_text  # an org-scope person's own role, not a made-up one
 
 
@@ -213,3 +215,60 @@ async def test_team_leads_reinvite_their_own_members_only(inviting):
     assert (await api.post("/v1/users/other@a.example.test/invite", lead)).status_code == 403
     dev, _ = await member(api, api.a, "dev2@a.example.test", "developer", "payments")
     assert (await api.post("/v1/users/dev@a.example.test/invite", dev)).status_code == 403
+
+
+# ── DF-572: an invite mail dies with its invite ──────────────────────────────
+
+
+class _Recorder:
+    def __init__(self) -> None:
+        self.sent = []
+
+    async def send(self, message) -> None:
+        self.sent.append(message.recipient)
+
+
+async def test_a_revoked_invites_queued_mail_is_cancelled(inviting):
+    api = inviting
+    await assign(api, api.a.admin_token, "dev@a.example.test", "developer", "payments")
+    api.clock.advance(timedelta(seconds=1))
+    reply = await api.post("/v1/users/dev@a.example.test/invite", api.a.admin_token)
+    assert reply.status_code == 201
+    first, second = await _mails(api, api.a)
+    assert (first.status, first.body_text, first.body_html) == ("failed", "", "")
+    assert first.last_error == "the invite was revoked"
+    assert second.status == "pending" and LINK.search(second.body_text)
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        events = [r for r in await read_records(conn) if r.event == "notification.cancelled"]
+    assert [e.target for e in events] == [f"notification:{first.id}"]
+
+
+async def test_an_expired_invites_mail_is_never_sent(inviting):
+    api = inviting
+    await assign(api, api.a.admin_token, "dev@a.example.test", "developer", "payments")
+    api.clock.advance(timedelta(hours=72, seconds=1))
+    recorder = _Recorder()
+    await deliver_due(api.db.app, api.a.id, recorder, api.clock, settings=api.settings)
+    assert recorder.sent == []
+    (mail,) = await _mails(api, api.a)
+    assert (mail.status, mail.body_text) == ("failed", "")
+    assert mail.last_error == "the invite expired"
+
+
+async def test_a_live_invites_mail_still_goes_out(inviting):
+    api = inviting
+    await assign(api, api.a.admin_token, "dev@a.example.test", "developer", "payments")
+    recorder = _Recorder()
+    settings = api.settings.model_copy(update={"smtp_from": "cp@acme.example"})
+    await deliver_due(api.db.app, api.a.id, recorder, api.clock, settings=settings)
+    assert recorder.sent == ["dev@a.example.test"]
+
+
+async def test_without_a_relay_the_worker_still_clears_dead_invite_links(inviting):
+    api = inviting
+    await assign(api, api.a.admin_token, "dev@a.example.test", "developer", "payments")
+    api.clock.advance(timedelta(hours=73))
+    no_relay = api.settings.model_copy(update={"smtp_host": None})
+    await deliver_job(api.db.app, None, api.a.id, no_relay, api.clock)
+    (mail,) = await _mails(api, api.a)
+    assert (mail.status, mail.body_text) == ("failed", "")

@@ -22,8 +22,8 @@ def policy_copy(fixtures: Path, tmp_path: Path, file: str, extra: str) -> Path:
 
 def test_defaults_when_unset(fixtures: Path):
     policy = load_policy(fixtures / "policy" / "policy")
-    assert policy.local_data == LocalDataPolicy()
-    assert policy.local_data.gc_after_days == 14
+    # gc prunes at the retention period (retention.yaml run_folders, 30 by default: M3-06)
+    assert policy.local_data == LocalDataPolicy(gc_after_days=30)
     assert policy.local_data.disk_cap_gb == 20
     assert policy.sandbox.limits == ResourceLimits()
     assert policy.sandbox.limits.given() == {}

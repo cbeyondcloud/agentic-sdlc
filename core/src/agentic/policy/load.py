@@ -8,7 +8,7 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
     agent-types.yaml      types (caps, ceilings and defaults per agent type, D35)
     limits.yaml           concurrency, skills (skill admission limits)
     licences.yaml         blocked, scan, skills (licences a catalogued skill may carry)
-    retention.yaml        days                      (placeholder until OR-01)
+    retention.yaml        days, legal_holds         (M3-06, OR-01: periods and holds)
     tool-pins.yaml        tools (per-platform artefacts `init` fetches from the mirror)
     org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines,
                           required_steps, checkpoint_exclude, commit_override,
@@ -56,7 +56,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "scan": "licence_scan",
         "skills": "skill_licences",
     },
-    "retention.yaml": {"days": "retention_days"},
+    "retention.yaml": {"days": "retention_days", "legal_holds": "legal_holds"},
     "prices.yaml": {"prices": "prices"},
     "tool-pins.yaml": {"tools": "tool_pins"},
     "org.yaml": {

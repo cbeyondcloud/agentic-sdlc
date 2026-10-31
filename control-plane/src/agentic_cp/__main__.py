@@ -29,6 +29,14 @@
                           one tenant's own mail sender
     admin tenant suspend|resume --tenant S --reason R
                           refuse (or again accept) one tenant's tokens and invites
+    admin tenant delete --tenant S --confirm S --reason R
+                          erase a suspended tenant but its audit chain (kept for the audit
+                          period, then removed by `retention run`); refused on legal hold
+    retention run [--dry-run] [--tenant S]
+                          delete what each tenant's retention.yaml says has expired (owner
+                          role; one run at a time); one `retention.pruned` audit event each
+    retention gateway-config --tenant S
+                          the gateway's (TokenLean's) `retention:` config for that tenant
     admin user enable --tenant S --email E --reason R
                           re-enable an offboarded person (then invite them again)
     admin issue-token --tenant S --email E
@@ -421,9 +429,10 @@ def _dashboard_role(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _with_tenant(settings: Settings, slug: str, work):
+async def _with_tenant(settings: Settings, slug: str, work, *, allow_deleted: bool = False):
     """Run `work(conn, tenant)` as the owner role inside `slug`'s tenant context: an
-    operator command never touches a tenant without setting it (Review Focus 6)."""
+    operator command never touches a tenant without setting it (Review Focus 6). A deleted
+    tenant (M3-06) is refused unless `allow_deleted` (reading its kept audit chain)."""
     from agentic_cp.db import make_owner_engine
     from agentic_cp.tenancy.context import tenant_tx
     from agentic_cp.tenancy.tenants import tenant_by_slug
@@ -434,6 +443,8 @@ async def _with_tenant(settings: Settings, slug: str, work):
             tenant = await tenant_by_slug(conn, slug)
         if tenant is None:
             raise CommandError(f"no tenant {slug!r}", 3)
+        if tenant.status == "deleted" and not allow_deleted:
+            raise CommandError(f"tenant {slug} is deleted", 2)
         async with tenant_tx(engine, tenant.id) as conn:
             return await work(conn, tenant)
     finally:
@@ -449,7 +460,7 @@ def _audit_verify(args: argparse.Namespace) -> int:
     async def work(conn, tenant):
         return await verify(conn), len(await read_records(conn))
 
-    problems, total = asyncio.run(_with_tenant(settings, args.tenant, work))
+    problems, total = asyncio.run(_with_tenant(settings, args.tenant, work, allow_deleted=True))
     for problem in problems:
         print(problem)
     if problems:
@@ -634,6 +645,8 @@ def _tenant_status(status: str):
         async def work(conn, tenant):
             if tenant.status == status:
                 raise CommandError(f"tenant {tenant.slug} is already {status}", 2)
+            if tenant.status == "deleted":
+                raise CommandError(f"tenant {tenant.slug} is deleted", 2)
             await conn.execute(
                 update(tenants).where(tenants.c.id == tenant.id).values(status=status)
             )
@@ -656,6 +669,95 @@ def _tenant_status(status: str):
         return 0
 
     return command
+
+
+def _tenant_delete(args: argparse.Namespace) -> int:
+    """`admin tenant delete` (DF-568): irreversible, so the slug is typed twice."""
+    from agentic_cp.app import utc_now
+    from agentic_cp.db import make_owner_engine
+    from agentic_cp.retention import TenantDeleteError, delete_tenant
+
+    settings = _settings()
+    _owner_dsn(settings)
+    if args.confirm != args.tenant:
+        raise CommandError("--confirm must repeat the tenant's slug exactly", 2)
+
+    async def run():
+        engine = make_owner_engine(settings)
+        try:
+            return await delete_tenant(engine, args.tenant, reason=args.reason, clock=utc_now)
+        finally:
+            await engine.dispose()
+
+    try:
+        counts = asyncio.run(run())
+    except TenantDeleteError as error:
+        raise CommandError(str(error), 2) from None
+    shown = ", ".join(f"{table} {count}" for table, count in sorted(counts.items())) or "none"
+    print(f"tenant {args.tenant}: deleted (rows erased: {shown}); its audit chain is kept")
+    return 0
+
+
+def _retention_run(args: argparse.Namespace) -> int:
+    """`retention run` (M3-06): exit 0 when every tenant was handled (or skipped), 1 when
+    one failed, 4 when another run holds the lock."""
+    import logging
+
+    from agentic_cp.app import utc_now
+    from agentic_cp.db import make_owner_engine
+    from agentic_cp.retention import run_retention
+
+    settings = _settings()
+    _owner_dsn(settings)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+
+    async def run():
+        engine = make_owner_engine(settings)
+        try:
+            return await run_retention(engine, utc_now, dry_run=args.dry_run, tenant=args.tenant)
+        finally:
+            await engine.dispose()
+
+    results = asyncio.run(run())
+    if results is None:
+        print("another retention run is in progress; nothing done")
+        return 4
+    if args.tenant is not None and args.tenant not in results:
+        raise CommandError(f"no tenant {args.tenant!r}", 3)
+    failed = False
+    for slug, outcome in results.items():
+        if isinstance(outcome, str):
+            failed = True
+            print(f"tenant {slug}: FAILED ({outcome})")
+            continue
+        print(f"tenant {slug}: {outcome.line()}")
+        for problem in outcome.problems:
+            print(f"tenant {slug}: {problem}")
+    return 1 if failed else 0
+
+
+def _retention_gateway_config(args: argparse.Namespace) -> int:
+    """`retention gateway-config`: the tenant's periods as TokenLean's `retention:` block."""
+    from agentic_cp.ingest.register import version_settings
+    from agentic_cp.policy_sync.service import active_policy
+    from agentic_cp.retention import gateway_config, gateway_yaml
+
+    settings = _settings()
+    _owner_dsn(settings)
+
+    async def work(conn, tenant):
+        active = await active_policy(conn)
+        if active is None:
+            raise CommandError(f"tenant {tenant.slug} has no active policy yet", 2)
+        stored = (await version_settings(conn, active.version) or {}).get("retention")
+        if not stored:
+            raise CommandError(f"tenant {tenant.slug}: its policy's retention cannot be read", 2)
+        return active.version, gateway_config(stored)
+
+    version, config = asyncio.run(_with_tenant(settings, args.tenant, work))
+    print(f"# TokenLean config.yaml for tenant {args.tenant}, policy {version} (M3-06)")
+    print(gateway_yaml(config), end="")
+    return 0
 
 
 def _user_enable(args: argparse.Namespace) -> int:
@@ -851,6 +953,14 @@ def build_parser() -> argparse.ArgumentParser:
         change.add_argument("--reason", required=True, help="why (in the audit chain)")
         change.set_defaults(run=_tenant_status(status))
 
+    remove = tenant.add_parser(
+        "delete", help="erase a suspended tenant but its audit chain (irreversible)"
+    )
+    remove.add_argument("--tenant", required=True, help="the tenant's slug")
+    remove.add_argument("--confirm", required=True, help="the tenant's slug again")
+    remove.add_argument("--reason", required=True, help="why (in the audit chain)")
+    remove.set_defaults(run=_tenant_delete)
+
     user = admin_commands.add_parser("user", help="people").add_subparsers(
         dest="user_command", required=True
     )
@@ -864,6 +974,19 @@ def build_parser() -> argparse.ArgumentParser:
     issue.add_argument("--tenant", required=True, help="the tenant's slug")
     issue.add_argument("--email", required=True)
     issue.set_defaults(run=_issue_token)
+
+    retention = commands.add_parser(
+        "retention", help="delete expired data (owner role)"
+    ).add_subparsers(dest="retention_command", required=True)
+    prune = retention.add_parser("run", help="delete what each tenant's retention.yaml expired")
+    prune.add_argument("--dry-run", action="store_true", help="count only; delete nothing")
+    prune.add_argument("--tenant", default=None, help="only this tenant (its slug)")
+    prune.set_defaults(run=_retention_run)
+    gateway = retention.add_parser(
+        "gateway-config", help="the gateway's retention config for one tenant"
+    )
+    gateway.add_argument("--tenant", required=True, help="the tenant's slug")
+    gateway.set_defaults(run=_retention_gateway_config)
 
     openapi = commands.add_parser("openapi", help="write or check openapi.json")
     mode = openapi.add_mutually_exclusive_group()

@@ -3,8 +3,9 @@ pinned helm and validated with kubeconform (scripts/tests/helm_support.py says w
 run). Default values and the full example (`ci/full-values.yaml`) are both checked.
 
 Review Focus: no secret values (every secret is a reference to `secrets.existingSecret`,
-the owner DSN only in the migration Job), hardened pods, the migration hook, one API
-replica set of two or more, and every catalog dashboard in a Grafana ConfigMap."""
+the owner DSN only in the migration Job and the retention CronJob), hardened pods, the
+migration hook, one API replica set of two or more, and every catalog dashboard in a
+Grafana ConfigMap."""
 
 from __future__ import annotations
 
@@ -96,6 +97,9 @@ def _pod_specs(objects) -> list[tuple[str, dict[str, Any]]]:
     for o in objects:
         if o["kind"] in ("Deployment", "Job"):
             specs.append((o["metadata"]["name"], o["spec"]["template"]["spec"]))
+        elif o["kind"] == "CronJob":
+            job = o["spec"]["jobTemplate"]["spec"]
+            specs.append((o["metadata"]["name"], job["template"]["spec"]))
         elif o["kind"] == "Pod":
             specs.append((o["metadata"]["name"], o["spec"]))
     return specs
@@ -310,7 +314,7 @@ def test_the_migration_job_is_a_pre_install_and_pre_upgrade_hook(default_render)
     }
 
 
-def test_no_secret_value_is_rendered_and_the_owner_dsn_reaches_only_the_job(full_render):
+def test_no_secret_value_is_rendered_and_the_owner_dsn_reaches_only_the_jobs(full_render):
     objects = _objects(full_render)
     assert not [o for o in objects if o["kind"] == "Secret"]
     for name, spec in _pod_specs(objects):
@@ -319,9 +323,34 @@ def test_no_secret_value_is_rendered_and_the_owner_dsn_reaches_only_the_job(full
             for setting in SECRET_SETTINGS & env.keys():
                 assert "value" not in env[setting], f"{name}: {setting} has a literal value"
                 assert env[setting]["valueFrom"]["secretKeyRef"]["name"] == SECRET
-            is_job = name.endswith("-migrate")
+            # the migration Job and the retention CronJob (M3-06) only
+            is_job = name.endswith(("-migrate", "-retention"))
             assert ("AGENTIC_CP_OWNER_DATABASE_URL" in env) == is_job, name
     assert "postgresql://" not in full_render
+
+
+def test_the_retention_cronjob_runs_daily_one_at_a_time(default_render, chart_tools):
+    """M3-06: a daily `retention run` with the owner DSN; runs never overlap."""
+    cron = _one(_objects(default_render), "CronJob", "retention")
+    spec = cron["spec"]
+    assert spec["schedule"] == "17 3 * * *"
+    assert spec["concurrencyPolicy"] == "Forbid"
+    pod = spec["jobTemplate"]["spec"]["template"]["spec"]
+    assert pod["restartPolicy"] == "Never"
+    (container,) = pod["containers"]
+    assert container["args"] == ["retention", "run"]
+    assert _env(container)["AGENTIC_CP_OWNER_DATABASE_URL"]["valueFrom"]["secretKeyRef"] == {
+        "name": SECRET,
+        "key": "owner-database-url",
+    }
+    off = _template(chart_tools, "--set", "retention.enabled=false")
+    assert off.returncode == 0, off.stderr
+    assert not [o for o in _objects(off.stdout) if o["kind"] == "CronJob"]
+    dry = _template(chart_tools, "--set", "retention.dryRun=true")
+    (container,) = _one(_objects(dry.stdout), "CronJob", "retention")["spec"]["jobTemplate"][
+        "spec"
+    ]["template"]["spec"]["containers"]
+    assert container["args"] == ["retention", "run", "--dry-run"]
 
 
 def test_a_secret_setting_in_config_is_refused(chart_tools):

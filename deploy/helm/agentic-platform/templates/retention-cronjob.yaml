@@ -1,0 +1,52 @@
+{{- /* The retention job (M3-06, OR-01): once a day it deletes what each tenant's
+retention.yaml says has expired and writes one `retention.pruned` audit event per tenant.
+It needs the owner role's DSN (the evidence tables are insert-only for the runtime role),
+so this CronJob and the migration Job are the only pods that get it. Two runs never
+overlap: `concurrencyPolicy: Forbid` here, and a Postgres advisory lock in the command
+(a second run exits with status 4 and deletes nothing). */ -}}
+{{- if .Values.retention.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "agentic.fullname" . }}-retention
+  labels:
+    {{- include "agentic.labels" (list . "retention") | nindent 4 }}
+spec:
+  schedule: {{ .Values.retention.schedule | quote }}
+  {{- with .Values.retention.timeZone }}
+  timeZone: {{ . | quote }}
+  {{- end }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    metadata:
+      labels:
+        {{- include "agentic.labels" (list . "retention") | nindent 8 }}
+    spec:
+      backoffLimit: {{ .Values.retention.backoffLimit }}
+      activeDeadlineSeconds: {{ .Values.retention.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "agentic.labels" (list . "retention") | nindent 12 }}
+        spec:
+          {{- include "agentic.podCommon" (list . "") | nindent 10 }}
+          restartPolicy: Never
+          containers:
+            - name: retention
+              image: {{ include "agentic.image" . }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              args: ["retention", "run"{{ if .Values.retention.dryRun }}, "--dry-run"{{ end }}]
+              env:
+                {{- include "agentic.env" (list . "job") | nindent 16 }}
+              resources:
+                {{- toYaml .Values.retention.resources | nindent 16 }}
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              volumeMounts:
+                {{- include "agentic.volumeMounts" . | nindent 16 }}
+          volumes:
+            {{- include "agentic.volumes" . | nindent 12 }}
+{{- end }}

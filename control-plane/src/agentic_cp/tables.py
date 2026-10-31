@@ -84,7 +84,8 @@ tenants = Table(
     # views show this role that tenant's rows only
     Column("dashboard_role", Text, nullable=True, unique=True),
     CheckConstraint(f"slug ~ '{SLUG_PATTERN}'", name="tenants_slug_format"),
-    CheckConstraint("status in ('active', 'suspended')", name="tenants_status_known"),
+    # a deleted tenant keeps its audit chain until retention removes it (M3-06, DF-568)
+    CheckConstraint("status in ('active', 'suspended', 'deleted')", name="tenants_status_known"),
 )
 
 

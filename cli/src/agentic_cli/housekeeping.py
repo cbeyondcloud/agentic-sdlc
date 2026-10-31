@@ -8,8 +8,9 @@ them on its own (spec §14.6, OR-01); `agentic gc` does, when a person runs it:
 
   * only a **finished** run goes (completed, failed, stopped, killed: the engine's
     `TERMINAL`), and only once it is older than the cut-off - `--older-than DAYS`, else
-    the user config's `gc.older_than_days`, else the org policy's `local.gc_after_days`,
-    else 14. A running, paused or gate-waiting run is never touched, nor a `run.json`
+    the user config's `gc.older_than_days`, else the org policy's `local.gc_after_days`
+    (which follows `retention.yaml days.run_folders` when unset: M3-06), else 30. A
+    running, paused or gate-waiting run is never touched, nor a `run.json`
     that cannot be read;
   * in org mode a run whose ledger holds events the control plane has not taken
     (`agentic.telemetry.sinks.queued`) is kept, with `agentic sync` as the remedy - a

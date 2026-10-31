@@ -150,6 +150,16 @@ metadata) and `100.64.0.0/10` (`ci/full-values.yaml` shows it). This is also the
 network-level guard for tenant-set git URLs: a tenant admin cannot make the control plane
 reach an internal host outside the list (DF-484).
 
+## Retention
+
+`retention.enabled` (on by default) runs `python -m agentic_cp retention run` as a daily
+CronJob (`retention.schedule`, `17 3 * * *`; `retention.timeZone`). It deletes what each
+tenant's `retention.yaml` says has expired and writes one `retention.pruned` audit event
+per tenant (M3-06, OR-01). It gets the owner DSN, like the migration Job; runs never overlap
+(`concurrencyPolicy: Forbid` and an advisory lock). `retention.dryRun: true` only logs what
+it would delete. Backups are kept 35 days by default (`retention.yaml` `days.backups`): set
+that in your backup tooling. See [docs/runbooks/retention.md](../../../docs/runbooks/retention.md).
+
 ## Upgrades, rollback, backups
 
 [docs/runbooks/upgrade.md](../../../docs/runbooks/upgrade.md) and

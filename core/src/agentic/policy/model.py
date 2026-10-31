@@ -316,6 +316,9 @@ class TeamPolicy(_Strict):
     backend_plugins: list[str] = []
     auto_trip: TeamAutoTrip | None = None  # M2-11: tighter thresholds only
     learning: TeamLearning | None = None  # M3-13: tighter thresholds only
+    # M3-06 (OR-01): store prompts and answers in this team's traces; only where the repo's
+    # classification allows it too (`classifications.<class>.trace_capture`). Off by default
+    trace_capture: bool = False
     # versions this team keeps whatever the rollout says (M2-15); each must exist in the
     # policy repo and is still refused once deprecated past its date
     pins: Pins = Pins()
@@ -710,8 +713,79 @@ class LocalDataPolicy(_Strict):
     (`.agentic/local` and the run trees) past which `agentic status` warns. Nothing is
     deleted automatically (spec §14.6, OR-01): gc runs only when a person runs it."""
 
-    gc_after_days: int = Field(default=14, ge=1)
+    gc_after_days: int = Field(default=30, ge=1)  # retention.yaml run_folders when unset
     disk_cap_gb: float = Field(default=20, gt=0, allow_inf_nan=False)
+
+
+#: The audit chain's shortest period (OR-01, decision 115): 7 years; it is never deleted
+#: earlier, and it is kept at least as long as any other kind of data.
+AUDIT_FLOOR_DAYS = 2555
+#: The gateway's usage records are its billing source of record: TokenLean refuses to purge
+#: them younger than this (`retention.usage_days`), so the policy may not ask for less.
+GATEWAY_USAGE_FLOOR_DAYS = 400
+#: What a legal hold may name (`retention.yaml legal_holds[].data`); the kinds the control
+#: plane deletes itself are audit, runs, feedback and logs.
+DataKind = Literal[
+    "audit", "runs", "gateway_usage", "traces", "feedback", "run_folders", "logs", "backups"
+]
+_HOLD_ID = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+
+
+class RetentionDays(_Strict):
+    """`retention.yaml days:` (M3-06, OR-01, decision 115): how many days each kind of
+    data is kept; null keeps it forever. `audit` is the per-tenant audit chain; `runs` the
+    control plane's run and run-event rows; `gateway_usage` the gateway's usage records
+    (handed to the gateway's own retention); `traces` prompts and answers in spans, kept
+    only for teams that opt in (`teams/<team>.yaml trace_capture`); `feedback` the learning
+    loop's records; `run_folders` a laptop's finished run folders and worktrees (`agentic
+    gc`, counted from the run's end); `logs` logs, support bundles and the sent-mail log;
+    `backups` the database backups (set in the backup tooling, docs/runbooks)."""
+
+    audit: int | None = AUDIT_FLOOR_DAYS  # never below the floor (the validator)
+    runs: int | None = Field(default=400, ge=1)
+    gateway_usage: int | None = Field(default=400, ge=GATEWAY_USAGE_FLOOR_DAYS)
+    traces: int | None = Field(default=30, ge=1)
+    feedback: int | None = Field(default=365, ge=1)
+    run_folders: int = Field(default=30, ge=1)  # a laptop always cleans up eventually
+    logs: int | None = Field(default=30, ge=1)
+    backups: int | None = Field(default=35, ge=1)
+
+    @model_validator(mode="after")
+    def audit_is_kept_longest(self) -> Self:
+        if self.audit is None:
+            return self
+        if self.audit < AUDIT_FLOOR_DAYS:
+            # the placeholder retention.yaml before OR-01 said `audit: 365`
+            raise ValueError(
+                f"audit {self.audit} is below the audit chain's floor of {AUDIT_FLOOR_DAYS} "
+                f"days (7 years, OR-01) - set audit: {AUDIT_FLOOR_DAYS} or more, or null"
+            )
+        longer = [
+            name
+            for name, days in self.model_dump().items()
+            if name != "audit" and (days is None or days > self.audit)
+        ]
+        if longer:
+            raise ValueError(
+                f"audit is kept longest: {', '.join(longer)} would outlive the audit chain "
+                f"({self.audit} days) - keep audit at least as long, or forever (null)"
+            )
+        return self
+
+
+class LegalHold(_Strict):
+    """One legal hold (`retention.yaml legal_holds:`): nothing in its scope is deleted while
+    it is listed. `data` names the kinds it holds (empty: every kind); `teams` the teams
+    (empty: the whole tenant). An audit hold stops the audit chain's pruning at the first
+    held record, so the chain stays continuous. The control plane enforces holds
+    on what it deletes itself (audit, runs, feedback, its mail log); for the gateway's usage,
+    traces, backups and laptops' run folders a hold is a record that people act on
+    (docs/runbooks/retention.md)."""
+
+    id: Annotated[str, StringConstraints(pattern=_HOLD_ID)]
+    reason: Annotated[str, StringConstraints(min_length=1, strip_whitespace=True)]
+    data: list[DataKind] = []
+    teams: list[str] = []
 
 
 class OrgPolicy(_Strict):
@@ -735,7 +809,8 @@ class OrgPolicy(_Strict):
     # --- licences and retention ---
     blocked_licences: list[str] = []
     licence_scan: bool = False
-    retention_days: dict[str, int] = {}  # placeholder until OR-01
+    retention_days: RetentionDays = RetentionDays()  # M3-06 (OR-01): retention.yaml days
+    legal_holds: list[LegalHold] = []  # M3-06: retention.yaml legal_holds
     # licences a catalogued skill may carry, and the admission size limits: what the
     # policy-repo gate admits skills under; a catalog may only narrow them (DF-143, DF-367).
     # None / unset: the framework's own list and limits
@@ -886,6 +961,14 @@ class OrgPolicy(_Strict):
         for team in self.team_overrides:
             if team not in self.teams:
                 problems.append(f"team_overrides names unknown team '{team}'")
+        seen_holds: set[str] = set()
+        for hold in self.legal_holds:
+            if hold.id in seen_holds:
+                problems.append(f"legal_holds: the id {hold.id!r} is listed twice")
+            seen_holds.add(hold.id)
+            for team in hold.teams:
+                if team not in self.teams:
+                    problems.append(f"legal_holds.{hold.id} names unknown team '{team}'")
         for kind, entries in (
             ("agents", self.rollout.agents),
             ("pipelines", self.rollout.pipelines),
@@ -918,4 +1001,9 @@ class OrgPolicy(_Strict):
 
         if problems:
             raise ValueError("; ".join(problems))
+        if "gc_after_days" not in self.local_data.model_fields_set:
+            # `agentic gc` prunes at the retention period unless limits.yaml says otherwise
+            self.local_data = self.local_data.model_copy(
+                update={"gc_after_days": self.retention_days.run_folders}
+            )
         return self

@@ -25,7 +25,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:64f05f7526854c46759407c27709db194941db74655affeb25a4509330c894f4",
+   "request_sha": "sha256:6fb31a68c6179bfad95f63cd97fa56e7068b3574a985a0d85ab226dbee5bcf27",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -36,7 +36,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:47676fd30b7cd1ca0da9b38d097018a3a48ed2d93f07e6bb46c8eae7c990ea3d",
+   "request_sha": "sha256:a202529bbfbe3e3b4855e08698e1b281bd25c660752cb80530474366eedcfd3e",
    "status": 200,
    "content_type": "application/json",
    "headers": {

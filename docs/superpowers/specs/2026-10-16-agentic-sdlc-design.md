@@ -772,7 +772,7 @@ The PR body links the run and its handoffs (the "why").
 
 ### 14.6 Retention
 
-**OR-01 retention (defined 2026-10-30, owner decision 115):** audit chain 7 years, never deleted early and still verifiable; control-plane runs, events and gateway usage 400 days; prompts and traces off by default, 30 days when a team opts in; learning feedback 1 year; local run folders and worktrees 30 days after the run ends; logs and support bundles 30 days; backups 35 days; a legal hold pauses deletion for its scope. Org admins change periods in the policy repo's `retention.yaml`, and every deletion is audited. The retention jobs are M3-06.
+**OR-01 (defined by owner decision 115; implemented by M3-06):** per data type in `retention.yaml` `days:` - audit chain 7 years (its floor; never shorter than any other kind; still verifiable after pruning through a checkpoint inside the chain), control-plane runs and events 400 days, gateway usage 400 days (handed to TokenLean's own retention configuration), prompts and traces 30 days and captured only for a team that opts in where the repo's class allows it, learning feedback 1 year, local run folders and worktrees 30 days after the run ends (`agentic gc`), logs and support bundles 30 days, backups 35 days. Org admins change the periods through the policy repo; floors are validated. `legal_holds:` stop deletion in the scope they name. The retention job runs daily as the owner role, one run at a time, and writes one `retention.pruned` audit event per tenant with the counts. Tenant deletion erases all but the audit chain, which retention removes after its period. Per-user erasure is a later phase (TokenLean GDPR is tenant-level today). Operator guide: docs/runbooks/retention.md.
 
 ---
 

@@ -174,6 +174,27 @@ migrations:
       cpu: "1"
       memory: 1Gi
 
+retention:
+  # -- Run the retention job (M3-06, OR-01): once a day it deletes what each tenant's
+  # policy repo `retention.yaml` says has expired (runs and events, feedback, the sent-mail
+  # log, the audit chain after 7 years at least) and audits the counts. It gets the owner
+  # DSN. Off: nothing is deleted automatically.
+  enabled: true
+  # -- When it runs (cron, in the cluster's time zone unless `timeZone` is set).
+  schedule: "17 3 * * *"
+  timeZone: ""
+  # -- Count only (`retention run --dry-run`): the job logs what it would delete.
+  dryRun: false
+  backoffLimit: 1
+  activeDeadlineSeconds: 3600
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
 service:
   type: ClusterIP
   port: 80

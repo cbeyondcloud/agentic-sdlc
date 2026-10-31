@@ -181,12 +181,13 @@ def test_policy_default_applies_without_flag_or_config(repo: Path, capsys, monke
     assert [r["run_id"] for r in data["removed"]] == ["r-5"]
 
 
-def test_built_in_default_is_fourteen_days(repo: Path, capsys):
+def test_built_in_default_is_thirty_days(repo: Path, capsys):
+    # OR-01 (decision 115): run folders are kept 30 days after the run ends
+    make_run(repo, "r-40", "completed", days_old=40)
     make_run(repo, "r-20", "completed", days_old=20)
-    make_run(repo, "r-10", "completed", days_old=10)
     _, data = gc(capsys, "--dry-run")
-    assert data["older_than_days"] == 14
-    assert [r["run_id"] for r in data["removed"]] == ["r-20"]
+    assert data["older_than_days"] == 30
+    assert [r["run_id"] for r in data["removed"]] == ["r-40"]
 
 
 @pytest.mark.parametrize("bad", ["0", "-3", "x"])
