@@ -125,3 +125,20 @@ async def test_remote_urls_are_accepted_when_local_repos_are_not(api):
         assert reply.status_code == 200, reply.text
         assert reply.json()["sync"]["kind"] == "failed"  # nothing listens there
     await strict.http.aclose()
+
+
+async def test_policy_source_follows_the_environment_branch(api):
+    # M3-04: an omitted branch is the environment's; another branch is refused
+    pinned = api.with_settings(policy_branch="staging", allow_local_repos=False)
+    pinned.app.state.git = OfflineGit(pinned.settings)
+    repo = "https://git.example.test/org/policy.git"
+    reply = await pinned.put("/v1/tenant/policy-source", api.a.admin_token, {"repo": repo})
+    assert reply.status_code == 200, reply.text
+    assert reply.json()["policy_branch"] == "staging"
+    refused = await pinned.put(
+        "/v1/tenant/policy-source", api.a.admin_token, {"repo": repo, "branch": "main"}
+    )
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["code"] == "policy.branch_pinned"
+    assert "staging" in refused.json()["detail"]
+    await pinned.http.aclose()

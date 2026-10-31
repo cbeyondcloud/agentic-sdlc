@@ -23,6 +23,16 @@ from agentic_cp.tenancy.tenants import current_tenant
 
 #: The most people one alert or gate mail goes to.
 MAX_RECIPIENTS = 20
+#: What happens at 100 % (DF-577): a run's budget is the engine's, which pauses the run;
+#: a team's monthly budget is the gateway's, which refuses further calls.
+RUN_LIMIT = (
+    "At 100 % the run pauses before its next step; it continues with more budget through "
+    "`agentic resume <run> --extra-budget <USD>`."
+)
+TEAM_LIMIT = (
+    "At 100 % the gateway refuses further calls for this budget until the month ends; a "
+    "team lead can raise the team's monthly budget in the policy repo."
+)
 
 
 async def people_holding(
@@ -87,6 +97,7 @@ class MailAlertSink(AlertSink):
                 "spent_usd": f"{alert.spent_usd:.2f}",
                 "budget_usd": f"{alert.budget_usd:.2f}",
                 "period_phrase": f" in {alert.period}" if alert.period else "",
+                "limit_phrase": RUN_LIMIT if alert.scope == "run" else TEAM_LIMIT,
             },
             tenant_name=tenant.name,
         )

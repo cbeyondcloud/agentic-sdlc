@@ -147,3 +147,20 @@ async def test_suspend_refuses_a_tenants_tokens_and_resume_restores_them(operato
         events = [r.event for r in await read_records(conn)]
     assert events[-2:] == ["tenant.suspended", "tenant.resumed"]
     assert await _run("admin", "tenant", "resume", "--tenant", "tenant-a", "--reason", "x") == 2
+
+
+async def test_set_policy_repo_follows_the_environment_branch(operator_env, monkeypatch, capsys):
+    # M3-04: a staging control plane tracks `staging` only
+    api = operator_env
+    monkeypatch.setenv("AGENTIC_CP_POLICY_BRANCH", "staging")
+    repo = "https://git.example.test/acme/policy.git"
+    argv = ("admin", "tenant", "set-policy-repo", "--tenant", "tenant-a", "--repo", repo)
+    assert await _run(*argv) == 0
+    async with api.db.owner.begin() as conn:
+        branch = (
+            await conn.execute(select(tenants.c.policy_branch).where(tenants.c.slug == "tenant-a"))
+        ).scalar_one()
+    assert branch == "staging"
+    capsys.readouterr()
+    assert await _run(*argv, "--branch", "main") == 3
+    assert "tracks the policy branch 'staging'" in capsys.readouterr().err

@@ -12,7 +12,8 @@ Grafana dashboards. Postgres, Grafana and TokenLean are bring-your-own.
 | Dashboards | one ConfigMap per dashboard, label `grafana_dashboard: "1"` | for Grafana's dashboard sidecar |
 | Datasource | ConfigMap, label `grafana_datasource: "1"` (optional) | password from Grafana's environment |
 | Optional | Ingress, ServiceMonitor, NetworkPolicy | off by default |
-| TokenLean | sub-chart `tokenlean-lite` (`tokenlean.enabled`, off) | a placeholder until M3-04: run TokenLean yourself |
+| Optional (M3-04) | ExternalSecret, cert-manager Certificate, backup CronJob | off by default; prod values turn them on |
+| TokenLean | sub-chart `tokenlean-lite` (`tokenlean.enabled`, off) | a placeholder until the TokenLean chart is published (DF-797): run TokenLean yourself |
 
 Every pod runs as user 10001 with a read-only root file system, no privilege escalation,
 no Linux capabilities, the `RuntimeDefault` seccomp profile, no service-account token and
@@ -44,12 +45,25 @@ no Kubernetes service-link variables.
    | `metrics-token` | optional | 16+ characters; Prometheus sends it as a bearer token |
    | `smtp-password` | optional | the SMTP relay's password |
    | `gateway-admin-key` | optional | TokenLean's admin key |
+   | `backup-database-url` | backup CronJob only (`backup.enabled`) | `postgresql://agentic_backup:<password>@<host>:5432/agentic`, a role with `BYPASSRLS` and `pg_read_all_data` |
 
    ```bash
    kubectl -n agentic create secret generic agentic-platform \
      --from-literal=database-url="$CP_DATABASE_URL" \
      --from-literal=owner-database-url="$CP_OWNER_DATABASE_URL"
    ```
+
+## Environments (M3-04)
+
+`environments/dev.yaml`, `environments/staging.yaml` and `environments/prod.yaml` give each
+environment its shape and the policy repo branch it tracks (`dev`, `staging`, `main`, set
+as `AGENTIC_CP_POLICY_BRANCH`). `environment.name: prod` refuses to render without ingress
+TLS, a managed Secret (`externalSecrets.enabled` or `secrets.externallyManaged`) and
+`image.digest`. staging and prod also refuse to render unless the NetworkPolicy is on with
+`networkPolicy.cniEnforces: true` (the CNI enforces it; an unenforced policy is ignored
+silently) or is off with a `networkPolicy.optOutReason`, which NOTES prints. Staging is a local kind cluster for now (`ENVIRONMENT=staging
+deploy/helm/kind/smoke.sh`). Values, External Secrets, cert-manager and the promotion flows:
+[environments-and-promotion.md](../../../docs/runbooks/environments-and-promotion.md).
 
 ## Install
 
@@ -75,7 +89,10 @@ helm test agentic --namespace agentic
 | `api.resources` | 250m-1 CPU, 512Mi-1Gi | the master plan's sizing; revisit after the load test |
 | `worker.replicas` | 2 | one leader, one standby |
 | `migrations.grantRuntime` | true | turn off if you manage the runtime role yourself |
-| `ingress.*` | off | host, class, TLS Secret (cert-manager works through annotations) |
+| `ingress.*` | off | host, class, TLS Secret; `ingress.certManager.*` makes a Certificate |
+| `environment.name`, `environment.policyBranch` | empty | dev, staging or prod and the policy branch it tracks |
+| `externalSecrets.*` | off | an ExternalSecret writing the Secret from your store (BYO) |
+| `backup.*` | off | the nightly `pg_dump` CronJob into an existing volume |
 | `metrics.serviceMonitor.enabled` | false | a prometheus-operator ServiceMonitor with the metrics token |
 | `networkPolicy.*` | off | allowed callers and an egress allow-list (below) |
 | `grafana.dashboards.*`, `grafana.datasource.*` | dashboards on, datasource off | sidecar labels, folders, namespace |
@@ -157,7 +174,8 @@ throw-away kind cluster, starts a Postgres in it, installs the chart, runs `helm
 upgrades it (the migration hook again) and tests again. kind, kubectl and helm run in a
 pinned tool container that drives your Docker through its socket, so nothing native is
 installed. It needs Docker and about 4 GB of free memory, and takes a few minutes.
-`KEEP=1` keeps the cluster; `SKIP_BUILD=1 CP_IMAGE=<image>` reuses an image.
+`KEEP=1` keeps the cluster; `SKIP_BUILD=1 CP_IMAGE=<image>` reuses an image;
+`ENVIRONMENT=staging` installs with the staging values and runs the promotion dry run.
 
 ## Tests
 

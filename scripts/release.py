@@ -31,7 +31,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from agentic_release import build, changelog, publish, sbom, signing, smoke
+from agentic_release import build, changelog, chart, publish, sbom, signing, smoke
 from agentic_release import version as versions
 from agentic_release.envs import scrubbed_env
 
@@ -113,6 +113,10 @@ def cmd_build(args: argparse.Namespace, repo: Path) -> Path:
         with tempfile.TemporaryDirectory(prefix="agentic-release-git-") as work:
             files += build.build_git_sources(repo / "uv.lock", out, Path(work))
     epoch = build.commit_epoch(repo)
+    # the umbrella Helm chart, signed with the rest (DF-801; helm push to an org OCI registry)
+    files.append(
+        chart.package_chart(repo, out, epoch=epoch, expected=versions.chart_version(version))
+    )
     bom = sbom.export_sbom(repo, version, epoch)
     _write(out / f"agentic-sdlc-{version}.cdx.json", sbom.dumps(bom))
     _write(out / f"third-party-notices-{version}.md", sbom.notices(bom, repo))

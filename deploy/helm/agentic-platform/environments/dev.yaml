@@ -1,0 +1,35 @@
+# dev (M3-04): the platform team builds and tests the framework itself. Synthetic data,
+# its own cheap TokenLean, pre-release CLIs. Tracks the policy repo's `dev` branch.
+#   helm upgrade --install agentic deploy/helm/agentic-platform -n agentic-dev \
+#     -f deploy/helm/agentic-platform/environments/dev.yaml -f my-dev.yaml
+# my-dev.yaml holds what is the org's own: image, publicUrl, tokenlean.url, smtp.
+# docs/runbooks/environments-and-promotion.md has the promotion flows.
+environment:
+  name: dev
+# One small replica each: dev needs no availability, and a one-replica budget would block
+# node drains.
+api:
+  autoscaling:
+    enabled: false
+  replicas: 1
+  podDisruptionBudget:
+    enabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+worker:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+config:
+  # policy changes show sooner while the team iterates
+  AGENTIC_CP_POLICY_POLL_SECONDS: "30"

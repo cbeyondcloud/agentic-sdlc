@@ -1,0 +1,104 @@
+# prod (M3-04): all 1000 users. Tracks the policy repo's `main` branch. Released CLIs,
+# min_cli_version enforced. Replace every example.org name and the egress CIDRs with the
+# org's own (a values file of your own after this one), and pass the image digest:
+#   helm upgrade --install agentic deploy/helm/agentic-platform -n agentic \
+#     -f deploy/helm/agentic-platform/environments/prod.yaml -f my-prod.yaml \
+#     --set image.digest=sha256:<the release's digest> --set networkPolicy.cniEnforces=true --wait
+# The chart refuses prod without TLS, without a managed Secret and without a digest.
+# Prerequisites: an ingress controller, cert-manager, the External Secrets Operator with a
+# ClusterSecretStore, and a CNI that enforces NetworkPolicy (Calico, Cilium; not kindnet or
+# plain Flannel). docs/runbooks/environments-and-promotion.md.
+environment:
+  name: prod
+image:
+  repository: registry.example.org/agentic/agentic-control-plane
+  # digest: required, pass it with --set image.digest=sha256:...
+publicUrl: https://agentic.example.org
+# raise after a grace period (docs/runbooks/upgrade.md)
+minCliVersion: "0.1.0"
+tokenlean:
+  url: https://tokenlean.example.org
+  adminUrl: https://tokenlean-admin.example.org
+# master plan sizing (M3-22): 3 x 1 vCPU / 1 GB, scaled out at about 60 % CPU
+api:
+  autoscaling:
+    enabled: true
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 60
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  topologySpreadConstraints:
+    - maxSkew: 1
+      topologyKey: kubernetes.io/hostname
+      whenUnsatisfiable: ScheduleAnyway
+      labelSelector:
+        matchLabels:
+          app.kubernetes.io/name: agentic-platform
+          app.kubernetes.io/component: api
+worker:
+  replicas: 2
+ingress:
+  enabled: true
+  className: nginx
+  host: agentic.example.org
+  tlsSecretName: agentic-tls
+  certManager:
+    enabled: true
+    issuerRef:
+      name: org-issuer
+      kind: ClusterIssuer
+externalSecrets:
+  enabled: true
+  secretStoreRef:
+    name: org-secret-store
+    kind: ClusterSecretStore
+  remoteRefs:
+    databaseUrl: {key: agentic/prod/database-url}
+    ownerDatabaseUrl: {key: agentic/prod/owner-database-url}
+    metricsToken: {key: agentic/prod/metrics-token}
+    smtpPassword: {key: agentic/prod/smtp-password}
+    gatewayAdminKey: {key: agentic/prod/gateway-admin-key}
+    backupDatabaseUrl: {key: agentic/prod/backup-database-url}
+# DF-805: the network-level guard for tenant-set git URLs. Egress goes only to Postgres
+# (replace the CIDR) and to public HTTPS and SMTP submission, never to internal ranges or
+# cloud metadata; add internal git hosts or TokenLean explicitly if they are private.
+networkPolicy:
+  enabled: true
+  # confirm at install that the CNI enforces policies: --set networkPolicy.cniEnforces=true
+  # (or opt out with networkPolicy.enabled=false and networkPolicy.optOutReason)
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.20.0.0/16
+      ports:
+        - port: 5432
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 100.64.0.0/10
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 587
+          protocol: TCP
+backup:
+  enabled: true
+  timeZone: Etc/UTC
+  persistence:
+    existingClaim: agentic-backups

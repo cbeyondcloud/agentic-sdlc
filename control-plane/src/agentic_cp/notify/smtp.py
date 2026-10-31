@@ -10,6 +10,7 @@ relay misconfiguration such as a failed login - is transient and retried."""
 from __future__ import annotations
 
 import asyncio
+import re
 import smtplib
 import ssl
 from dataclasses import dataclass
@@ -20,8 +21,11 @@ from uuid import UUID
 
 from agentic_cp.settings import Settings
 
-#: The Message-ID domain: the id is the outbox row's, so a resend is recognisable (P2).
-MESSAGE_ID_DOMAIN = "agentic-control-plane"
+#: The Message-ID domain when the sender's is not a dotted host name (DF-577); the id's
+#: local part is the outbox row's, so a resend is recognisable (P2).
+MESSAGE_ID_DOMAIN = "agentic-control-plane.invalid"
+#: One label of a host name (letters, digits, inner hyphens), after IDNA encoding.
+_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 
 
 class DeliveryFailure(Exception):
@@ -58,6 +62,20 @@ class Notifier(Protocol):
         ...
 
 
+def message_id_domain(sender: str) -> str:
+    """The sender's domain, lower case (DF-577: some spam filters score down a dotless
+    Message-ID domain), ASCII; MESSAGE_ID_DOMAIN when it is not a dotted host name."""
+    domain = sender.rpartition("@")[2].strip().lower().removesuffix(".")
+    try:
+        domain = domain.encode("idna").decode("ascii")  # an international name as ASCII
+    except UnicodeError:
+        return MESSAGE_ID_DOMAIN
+    labels = domain.split(".")
+    if len(labels) < 2 or not all(_LABEL.fullmatch(label) for label in labels):
+        return MESSAGE_ID_DOMAIN
+    return domain
+
+
 def build_message(message: Outgoing) -> EmailMessage:
     """multipart/alternative: the plain text first, then the HTML part."""
     mail = EmailMessage()
@@ -65,7 +83,7 @@ def build_message(message: Outgoing) -> EmailMessage:
     mail["To"] = message.recipient
     mail["Subject"] = message.subject
     mail["Date"] = formatdate(usegmt=True)
-    mail["Message-ID"] = f"<{message.id}@{MESSAGE_ID_DOMAIN}>"
+    mail["Message-ID"] = f"<{message.id}@{message_id_domain(message.sender)}>"
     mail["Auto-Submitted"] = "auto-generated"  # RFC 3834: no auto-replies to it
     mail.set_content(message.text)
     mail.add_alternative(message.html, subtype="html")

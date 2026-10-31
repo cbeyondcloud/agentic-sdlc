@@ -19,6 +19,7 @@ COPIED = (
     "library/agents",
     "library/pipelines",
     "library/skills",
+    "deploy/helm/agentic-platform",  # the umbrella chart ships with the release (DF-801)
 )
 MEMBER_PARTS = ("pyproject.toml", "src")
 MEMBERS = ("core", "commons", "cli", "control-plane")

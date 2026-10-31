@@ -550,7 +550,8 @@ def _tenant_set_policy_repo(args: argparse.Namespace) -> int:
     _owner_dsn(settings)
     try:
         repo = check_repo_url(args.repo, allow_local=settings.allow_local_repos)
-        branch = checked_branch(args.branch)
+        requested = None if args.branch is None else checked_branch(args.branch)
+        branch = settings.policy_branch_for(requested)  # the environment's (M3-04)
     except (RepoUrlError, ValueError) as error:
         raise CommandError(str(error), 3) from None
 
@@ -927,14 +928,18 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--name", required=True)
     create.add_argument("--admin-email", required=True)
     create.add_argument("--policy-repo", default=None, help="URL without credentials")
-    create.add_argument("--policy-branch", default="main")
+    create.add_argument(
+        "--policy-branch", default=None, help="default: AGENTIC_CP_POLICY_BRANCH, else main"
+    )
     create.add_argument("--gateway-tenant", default=None, help="the TokenLean tenant (ND-16)")
     create.set_defaults(run=_tenant_create)
     tenant.add_parser("list", help="list tenants").set_defaults(run=_tenant_list)
     source = tenant.add_parser("set-policy-repo", help="point one tenant at its policy repo")
     source.add_argument("--tenant", required=True, help="the tenant's slug")
     source.add_argument("--repo", required=True, help="https:// or ssh:// URL, no credentials")
-    source.add_argument("--branch", default="main")
+    source.add_argument(
+        "--branch", default=None, help="default: AGENTIC_CP_POLICY_BRANCH, else main"
+    )
     source.set_defaults(run=_tenant_set_policy_repo)
     mail = tenant.add_parser("set-mail-from", help="one tenant's own mail sender")
     mail.add_argument("--tenant", required=True, help="the tenant's slug")

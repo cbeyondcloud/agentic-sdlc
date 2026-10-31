@@ -90,14 +90,15 @@ class Tools:
         return _result(done, self.engine)
 
     def kubeconform(self, manifests: str, kubernetes_version: str) -> Result:
-        """kubeconform on `manifests` (strict; the prometheus-operator CRDs skipped)."""
+        """kubeconform on `manifests` (strict; the CRD kinds of prometheus-operator, External
+        Secrets and cert-manager skipped)."""
         args = [
             "-strict",
             "-summary",
             "-kubernetes-version",
             kubernetes_version,
             "-skip",
-            "ServiceMonitor",
+            "ServiceMonitor,ExternalSecret,Certificate",
             "-",
         ]
         if self.engine is None:

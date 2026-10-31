@@ -34,6 +34,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import asyncpg
+import sqlalchemy.exc
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -181,13 +182,13 @@ class FreshContainer:
             time.sleep(0.5)
         return ContainerTools(self.engine, self.name, self.password)
 
-    def stop(self, database: str, runtime_role: str) -> None:
+    def stop(self, database: str, runtime_role: str, owner_role: str | None = None) -> None:
         subprocess.run([self.engine, "rm", "-f", self.name], capture_output=True)
 
 
 class ExistingServer:
-    """A scratch server named by a superuser DSN: the drill adds one database and one role,
-    and removes both again."""
+    """A scratch server named by a superuser DSN: the drill adds one database, a runtime
+    role and, when the server lacks it, the dump's owner role, and removes them again."""
 
     def __init__(self, admin_dsn: str) -> None:
         self.admin_dsn = admin_dsn
@@ -196,15 +197,25 @@ class ExistingServer:
         self.tools = LocalTools(self.admin_dsn)
         return self.tools
 
-    def stop(self, database: str, runtime_role: str) -> None:
+    def stop(self, database: str, runtime_role: str, owner_role: str | None = None) -> None:
         self.tools.close()
-        asyncio.run(_drop(self.admin_dsn, database, runtime_role))
+        try:
+            asyncio.run(_drop(self.admin_dsn, database, runtime_role, owner_role))
+        except DRILL_COULD_NOT_RUN as error:
+            # the verdict stands; a leftover on the scratch server is reported, not fatal
+            leftovers = ", ".join(n for n in (database, runtime_role, owner_role) if n)
+            print(f"restore drill could not clean up {leftovers}: {error}", file=sys.stderr)
+
+
+#: Postgres keeps the first 63 bytes of a name (NAMEDATALEN - 1).
+MAX_IDENTIFIER_BYTES = 63
 
 
 def _ident(name: str) -> str:
-    if not name.replace("_", "").isalnum():
-        raise DrillError(f"unsafe identifier {name!r}")
-    return f'"{name}"'
+    """`name` as a quoted identifier (DF-806: roles such as app-owner or ops@db are fine)."""
+    if not name or "\x00" in name or len(name.encode("utf-8")) > MAX_IDENTIFIER_BYTES:
+        raise DrillError(f"not an identifier Postgres can hold: {name!r}")
+    return '"' + name.replace('"', '""') + '"'
 
 
 async def _connect(dsn: str, timeout: float = 60.0) -> asyncpg.Connection:
@@ -218,21 +229,34 @@ async def _connect(dsn: str, timeout: float = 60.0) -> asyncpg.Connection:
             await asyncio.sleep(0.5)
 
 
-async def _prepare(admin_dsn: str, database: str, owner: str) -> None:
+async def _prepare(admin_dsn: str, database: str, owner: str) -> bool:
+    """The drill's database, owned by `owner`; True when the owner role was created here."""
     admin = await _connect(admin_dsn)
     try:
-        if not await admin.fetchval("select 1 from pg_roles where rolname = $1", owner):
+        created = not await admin.fetchval("select 1 from pg_roles where rolname = $1", owner)
+        if created:
             await admin.execute(f"CREATE ROLE {_ident(owner)} NOLOGIN CREATEROLE")
-        await admin.execute(f"CREATE DATABASE {_ident(database)} OWNER {_ident(owner)}")
+        try:
+            await admin.execute(f"CREATE DATABASE {_ident(database)} OWNER {_ident(owner)}")
+        except BaseException:
+            if created:  # never leave the role behind on a shared scratch server
+                await admin.execute(f"DROP ROLE IF EXISTS {_ident(owner)}")
+            raise
+        return created
     finally:
         await admin.close()
 
 
-async def _drop(admin_dsn: str, database: str, runtime_role: str) -> None:
+async def _drop(
+    admin_dsn: str, database: str, runtime_role: str, owner_role: str | None = None
+) -> None:
+    """Drop what the drill added; the owner role last, once its database is gone."""
     admin = await _connect(admin_dsn)
     try:
         await admin.execute(f"DROP DATABASE IF EXISTS {_ident(database)} WITH (FORCE)")
         await admin.execute(f"DROP ROLE IF EXISTS {_ident(runtime_role)}")
+        if owner_role is not None:
+            await admin.execute(f"DROP ROLE IF EXISTS {_ident(owner_role)}")
     finally:
         await admin.close()
 
@@ -281,6 +305,7 @@ def run_drill(
     check_dump(dump)
     suffix = secrets.token_hex(4)
     database, runtime_role = f"agentic_drill_{suffix}", f"agentic_drill_{suffix}_app"
+    created_owner: str | None = None
     tools = target.start()
     try:
         dump_path = tools.put(f"agentic-drill-{suffix}.dump", dump)
@@ -288,7 +313,8 @@ def run_drill(
         owner = owner_role or schema_owner(toc, schema)
         if owner is None:
             raise DrillError(f"the dump has no schema {schema!r} (pass --owner-role)")
-        asyncio.run(_prepare(target.admin_dsn, database, owner))
+        if asyncio.run(_prepare(target.admin_dsn, database, owner)):
+            created_owner = owner
         toc_path = tools.put(f"agentic-drill-{suffix}.toc", filtered_toc(toc).encode("utf-8"))
         restore = ["pg_restore", "--no-privileges", "--exit-on-error", "--single-transaction"]
         tools.run([*restore, "-L", toc_path, "-d", database, dump_path], database=database)
@@ -296,7 +322,19 @@ def run_drill(
             _finish(target.admin_dsn, database, schema, owner, runtime_role, allow_empty)
         )
     finally:
-        target.stop(database, runtime_role)
+        target.stop(database, runtime_role, created_owner)
+
+
+#: Errors that mean the drill itself could not run (exit 2), not that the restore is
+#: unusable (DF-806): the database driver, SQLAlchemy and timeouts as well as our own.
+DRILL_COULD_NOT_RUN = (
+    DrillError,
+    OSError,
+    asyncpg.PostgresError,
+    asyncpg.InterfaceError,
+    sqlalchemy.exc.SQLAlchemyError,
+    subprocess.TimeoutExpired,
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -329,7 +367,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             owner_role=args.owner_role,
             allow_empty=args.allow_empty,
         )
-    except (DrillError, OSError) as error:
+    except DRILL_COULD_NOT_RUN as error:
         print(f"restore drill could not run: {error}", file=sys.stderr)
         return 2
     for line in report.lines():

@@ -137,6 +137,16 @@ async def sync_once(
         tenant = await current_tenant(conn)
         if not tenant.policy_repo_url:
             return SyncOutcome(kind="unconfigured")
+        pinned = settings.policy_branch
+        if pinned is not None and tenant.policy_branch != pinned:
+            # M3-04: a tenant created before the pin, or restored from another environment,
+            # never applies a branch this environment does not track
+            problem = (
+                f"the tenant tracks the policy branch {tenant.policy_branch!r} but this "
+                f"environment tracks {pinned!r}: run `admin tenant set-policy-repo` for it"
+            )
+            log.warning("tenant %s: %s", tenant.slug, problem)
+            return SyncOutcome(kind="failed", problems=[problem])
         key = func.hashtextextended(f"agentic.policy_sync:{tenant_id}", 0)
         if not (await conn.execute(select(func.pg_try_advisory_xact_lock(key)))).scalar():
             return SyncOutcome(kind="busy")

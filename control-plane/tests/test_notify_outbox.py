@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 
 from agentic_cp.audit import read_records
 from agentic_cp.notify.outbox import enqueue
+from agentic_cp.notify.smtp import MESSAGE_ID_DOMAIN, message_id_domain
 from agentic_cp.notify.templates import KINDS, render
 from agentic_cp.tables import notifications
 from agentic_cp.tenancy.context import tenant_tx
@@ -38,6 +39,7 @@ def test_every_kind_renders_text_and_html():
             "spent_usd": "8.00",
             "budget_usd": "10.00",
             "period_phrase": "",
+            "limit_phrase": "At 100 % the run pauses.",
         },
         "auto_trip": {
             "team": "payments",
@@ -81,6 +83,18 @@ def test_html_escapes_values_and_links_only_what_the_mail_is_about():
     assert "Acme &amp; &lt;Co&gt;" in rendered.html
     assert rendered.html.count("http") == rendered.html.count(LINK.split("#")[0])
     assert LINK in rendered.text
+
+
+def test_the_message_id_carries_the_senders_domain():
+    """DF-577: spam filters score down a dotless Message-ID domain, so the id uses the
+    sender's domain; the outbox row's id stays its local part (a resend is recognisable)."""
+    assert message_id_domain("dev-tools@a.example.test") == "a.example.test"
+    assert message_id_domain("Tools@Example.ORG") == "example.org"
+    assert message_id_domain("root@localhost") == MESSAGE_ID_DOMAIN  # no dot: the fallback
+    assert message_id_domain("tools@example.org.") == "example.org"  # a root dot is dropped
+    assert message_id_domain("tools@münchen.example") == "xn--mnchen-3ya.example"  # ASCII only
+    for odd in ("a@.org", "a@example..org", "a@-x.org", "a@exa_mple.org"):
+        assert message_id_domain(odd) == MESSAGE_ID_DOMAIN, odd
 
 
 def test_unknown_kind_is_refused():

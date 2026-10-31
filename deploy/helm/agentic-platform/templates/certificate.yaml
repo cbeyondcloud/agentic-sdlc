@@ -1,0 +1,26 @@
+{{- /* A cert-manager Certificate for the ingress host (M3-04, optional): cert-manager writes
+ingress.tlsSecretName, which the Ingress serves. ECDSA P-256, a new key at each renewal. */ -}}
+{{- if .Values.ingress.certManager.enabled }}
+{{- $ing := .Values.ingress }}
+{{- if not $ing.enabled }}
+{{- fail "ingress.certManager.enabled needs ingress.enabled: the TLS certificate is for the ingress host" }}
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "agentic.fullname" . }}-tls
+  labels:
+    {{- include "agentic.labels" (list . "api") | nindent 4 }}
+spec:
+  secretName: {{ required "ingress.tlsSecretName (the TLS Secret cert-manager writes) is required with ingress.certManager.enabled" $ing.tlsSecretName }}
+  dnsNames:
+    - {{ required "ingress.host is required with ingress.certManager.enabled" $ing.host | quote }}
+  issuerRef:
+    name: {{ required "ingress.certManager.issuerRef.name is required: the Issuer or ClusterIssuer to ask" $ing.certManager.issuerRef.name }}
+    kind: {{ $ing.certManager.issuerRef.kind }}
+    group: cert-manager.io
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+{{- end }}

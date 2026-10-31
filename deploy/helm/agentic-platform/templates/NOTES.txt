@@ -6,6 +6,11 @@ Check it:
 
 Create the first tenant and org admin with the operator commands (the chart's README,
 "First tenant"). Runbooks: docs/runbooks/upgrade.md, docs/runbooks/postgres-backup-restore.md.
+{{- if and (not .Values.networkPolicy.enabled) (trim (default "" .Values.networkPolicy.optOutReason)) }}
+
+NetworkPolicy opted out: {{ trim .Values.networkPolicy.optOutReason }}
+Tenant-set git URLs are not limited at the network level (DF-798).
+{{- end }}
 {{- if not .Values.tokenlean.url }}
 
 Note: tokenlean.url is empty, so the control plane hands out no gateway URL with invites.

@@ -246,3 +246,45 @@ def test_readme_covers_codeowners_branch_protection_and_bootstrap():
         "Resolution order",
     ):
         assert needed in text, needed
+
+
+# --- M3-19: the defaults of the spec's resolved open questions (§22) ---------------------
+
+
+def test_unclassified_repos_default_to_internal_with_traces_off(policy):
+    """§22.2: a repo that declares no class is `internal`, and its full prompts and
+    responses stay off the control plane."""
+    assert policy.default_classification == "internal"
+    assert policy.classifications["internal"].trace_capture is False
+
+
+def test_every_template_team_has_a_monthly_budget(policy):
+    """§22.3 (owner, 2026-10-30): no team starts uncapped; 20 USD a developer a month,
+    per team, set in this repo; admins change any team's, a lead only lowers their own."""
+    assert policy.teams and all(t.monthly_budget_usd for t in policy.teams.values())
+    assert policy.teams["payments"].monthly_budget_usd == 200  # 10 developers x 20 USD
+    text = read_text(TEMPLATE / "README.md")
+    for needed in ("20 USD a developer a month", "per team", "only lower", "pull request"):
+        assert needed in text, needed
+
+
+def test_eval_caps_follow_spike_s10(policy):
+    """§22.3: an A/B stops at 100 USD, 250 for QA and 750 for the Developer (S10)."""
+    assert policy.eval.budget_usd == 100
+    assert policy.eval.budget_for("qa") == 250
+    assert policy.eval.budget_for("developer") == 750
+
+
+def test_index_refresh_is_nightly_and_off_until_turned_on(policy):
+    """§22.4: the nightly index export stays off unless the org turns it on; there is no
+    refresh on every merge by default."""
+    text = read_text(TEMPLATE / "policy" / "org.yaml")
+    assert "\nindex_export_workflow: false" in text and policy.index_export_workflow is False
+    assert "every merge" in text
+
+
+def test_readme_says_where_the_mail_relay_is_set():
+    """§22.1: mail goes through the org's own SMTP relay, set on the control plane."""
+    text = read_text(TEMPLATE / "README.md")
+    for needed in ("SMTP relay", "AGENTIC_CP_SMTP_HOST", "smtp.host"):
+        assert needed in text, needed
