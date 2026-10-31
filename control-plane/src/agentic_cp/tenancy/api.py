@@ -65,11 +65,17 @@ async def put_policy_source(
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         await require(ctx, "policy.edit.org", Org(), conn=conn, cache=state.enforcers)
         repo = checked_url(body.repo, request)
+        # the environment's branch (M3-04) when the body names none; another one is refused
+        requested = body.branch if "branch" in body.model_fields_set else None
+        try:
+            branch = state.settings.policy_branch_for(requested)
+        except ValueError as error:
+            raise ApiProblem(422, "policy.branch_pinned", str(error)) from None
         before = await current_tenant(conn)
         await conn.execute(
             update(tenants)
             .where(tenants.c.id == ctx.tenant_id)
-            .values(policy_repo_url=repo, policy_branch=body.branch)
+            .values(policy_repo_url=repo, policy_branch=branch)
         )
         await append(
             conn,
@@ -79,7 +85,7 @@ async def put_policy_source(
                 actor_kind=ctx.actor_kind,
                 target=f"tenant:{ctx.tenant_slug}",
                 before={"repo": before.policy_repo_url, "branch": before.policy_branch},
-                after={"repo": repo, "branch": body.branch},
+                after={"repo": repo, "branch": branch},
             ),
             clock=state.clock,
         )

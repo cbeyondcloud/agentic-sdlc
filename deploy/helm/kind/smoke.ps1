@@ -7,6 +7,8 @@
   Docker through its socket: nothing native is installed. Docker only.
     $env:SKIP_BUILD = '1'; $env:CP_IMAGE = '...'   use an image already built here
     $env:KEEP = '1'                                 keep the cluster afterwards
+    $env:ENVIRONMENT = 'staging'                    install with environments/staging.yaml
+                                                    and run the promotion dry run (M3-04)
 #>
 $ErrorActionPreference = 'Stop'
 
@@ -34,7 +36,7 @@ Invoke-Engine build -q -t $tools -f (Join-Path $Here 'tools.Dockerfile') $Here |
 
 $name = "$($env:KIND_CLUSTER)-tools-$PID"
 Invoke-Engine create --name $name -v /var/run/docker.sock:/var/run/docker.sock `
-    -e KIND_CLUSTER -e CP_IMAGE -e KEEP -e KIND_NODE_IMAGE $tools sh /w/kind/inside.sh | Out-Null
+    -e KIND_CLUSTER -e CP_IMAGE -e KEEP -e KIND_NODE_IMAGE -e ENVIRONMENT $tools sh /w/kind/inside.sh | Out-Null
 try {
     Invoke-Engine cp (Join-Path $Root 'deploy\helm\.') "${name}:/w/"
     Invoke-Engine cp (Join-Path $Root 'deploy\org-local\cp-postgres\init.sh') "${name}:/w/kind/pg-init.sh"

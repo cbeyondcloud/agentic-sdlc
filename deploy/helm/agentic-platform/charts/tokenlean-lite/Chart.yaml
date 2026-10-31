@@ -1,9 +1,9 @@
 # Placeholder for TokenLean's LITE chart (deploy/lite/cloud/helm/tokenlean-lite in the
-# TokenLean repo). M3-04 replaces this folder with the real chart (or a repository
+# TokenLean repo). DF-797 replaces this folder with the real chart (or a repository
 # reference and `helm dependency build`). Enabling it before then fails with a message.
 apiVersion: v2
 name: tokenlean-lite
-description: Placeholder for the TokenLean LITE chart (wired in M3-04)
+description: Placeholder for the TokenLean LITE chart (the real chart follows with DF-797)
 type: application
 version: 0.0.0-placeholder
 appVersion: "0.0.0"

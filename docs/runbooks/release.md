@@ -14,6 +14,7 @@ same command in CI.
 | `agentic-sdlc-X.Y.Z.cdx.json` | CycloneDX 1.5 SBOM: every shipped package and extra, with licences |
 | `third-party-notices-X.Y.Z.md` | licences and licence texts of every dependency, and the notices of adapted code |
 | `constraints-X.Y.Z.txt` | the exact third-party versions of `uv.lock`, for reproducible installs |
+| `agentic-platform-X.Y.Z.tgz` | the umbrella Helm chart, as `helm package` lays it out (SemVer version: `1.4.0-rc.1` for `1.4.0rc1`); signed like the rest (DF-801) |
 | `release.json` | version, commit, build time (the commit's), uv version, sha256 of every file |
 | `SHA256SUMS` and `*.sig` | the hashes, and an SSH signature of every file and of `SHA256SUMS` |
 
@@ -103,6 +104,21 @@ Get-FileHash -Algorithm SHA256 .\agentic_cli-1.4.0-py3-none-any.whl
 
 Or all at once: `uv run python scripts/release.py verify --dir <folder> --allowed-signers
 release/allowed_signers --identity release@your-org`.
+
+### The Helm chart
+
+Verify the chart's own signature, then install it from the file or push it to the org's
+OCI registry (any OCI registry; `helm registry login` first):
+
+```bash
+ssh-keygen -Y verify -f release/allowed_signers -I release@your-org -n agentic-release \
+  -s agentic-platform-1.4.0.tgz.sig < agentic-platform-1.4.0.tgz
+helm push agentic-platform-1.4.0.tgz oci://registry.example.org/agentic/charts
+helm upgrade --install agentic oci://registry.example.org/agentic/charts/agentic-platform \
+  --version 1.4.0 -f deploy/helm/agentic-platform/environments/prod.yaml -f my-prod.yaml
+```
+
+Push only a chart whose signature verified: the registry does not check our SSH signature.
 
 ## Upgrade the fleet
 

@@ -4,6 +4,16 @@
 # No value in this file takes a secret. Secrets live in one Kubernetes Secret you create
 # (by hand, External Secrets or Sealed Secrets), named by secrets.existingSecret.
 
+environment:
+  # -- dev, staging or prod (M3-04; environments/<name>.yaml sets it); empty: a single
+  # install without promotion. prod refuses to render without ingress TLS, a managed
+  # Secret (externalSecrets or secrets.externallyManaged) and an image digest.
+  name: ""
+  # -- The policy repo branch this environment tracks (AGENTIC_CP_POLICY_BRANCH); every
+  # tenant follows it. Empty: from the name (dev -> dev, staging -> staging, prod -> main);
+  # no name, no pin (each tenant picks its own branch).
+  policyBranch: ""
+
 # -- Override the chart name in object names.
 nameOverride: ""
 # -- Override the full object name prefix (default: <release>-agentic-platform, or the
@@ -26,6 +36,10 @@ secrets:
   # -- The existing Secret holding the control plane's secrets (keys below). Required. The
   # chart only references it: create it before installing (see the README).
   existingSecret: agentic-platform
+  # -- Set when another tool (Sealed Secrets, a CSI secrets driver) writes that Secret
+  # from a secret manager. prod needs this or externalSecrets.enabled: a Secret made by
+  # hand with kubectl is not a prod secret.
+  externallyManaged: false
   # -- Key names inside the existing Secret (the names, never the values).
   keys:
     # -- The runtime role's DSN (postgresql://...): API, worker and migration Job.
@@ -38,6 +52,33 @@ secrets:
     smtpPassword: smtp-password
     # -- Optional: TokenLean's admin API key (proxy keys, routing).
     gatewayAdminKey: gateway-admin-key
+    # -- With backup.enabled: the DSN of a backup role with BYPASSRLS and pg_read_all_data
+    # (the backup CronJob only). The owner role cannot dump: every tenant table forces
+    # row-level security, also on its owner (docs/runbooks/postgres-backup-restore.md).
+    backupDatabaseUrl: backup-database-url
+
+externalSecrets:
+  # -- Write secrets.existingSecret from your secret store with the External Secrets
+  # Operator (it must be installed; BYO store: Vault, AWS, GCP, Azure...). The
+  # ExternalSecret is a pre-install/pre-upgrade hook, so the migration Job finds its
+  # Secret; the Secret is orphaned (it survives the hook's re-creation and an uninstall).
+  enabled: false
+  apiVersion: external-secrets.io/v1
+  # -- The SecretStore or ClusterSecretStore to read from (required when enabled).
+  secretStoreRef:
+    name: ""
+    kind: ClusterSecretStore
+  refreshInterval: 1h
+  # -- Where each secrets.keys entry lives in the store: `key` (and optional `property`).
+  # databaseUrl and ownerDatabaseUrl are required; a ref with an empty key is skipped.
+  remoteRefs:
+    databaseUrl: {key: "", property: ""}
+    ownerDatabaseUrl: {key: "", property: ""}
+    metricsToken: {key: "", property: ""}
+    smtpPassword: {key: "", property: ""}
+    gatewayAdminKey: {key: "", property: ""}
+    # -- Required with backup.enabled.
+    backupDatabaseUrl: {key: "", property: ""}
 
 # -- Where people reach the control plane (invite links). Sets AGENTIC_CP_PUBLIC_URL.
 publicUrl: ""
@@ -58,7 +99,7 @@ smtp:
 
 tokenlean:
   # -- Install TokenLean's LITE sub-chart. Off by default (BYO TokenLean); the sub-chart
-  # is a placeholder until M3-04.
+  # is a placeholder until the TokenLean chart is published (DF-797).
   enabled: false
   # -- The TokenLean URL developers' CLIs use (BYO). Sets AGENTIC_CP_GATEWAY_URL.
   url: ""
@@ -145,6 +186,38 @@ ingress:
   host: ""
   # -- The TLS Secret (for example made by cert-manager); empty: no TLS section.
   tlsSecretName: ""
+  certManager:
+    # -- A cert-manager Certificate for ingress.host into ingress.tlsSecretName (cert-manager
+    # must be installed). Alternative: the `cert-manager.io/cluster-issuer` annotation in
+    # ingress.annotations (ingress-shim).
+    enabled: false
+    issuerRef:
+      name: ""
+      kind: ClusterIssuer
+
+backup:
+  # -- A CronJob that takes the nightly logical backup (`pg_dump -Fc --schema=<schema>` as
+  # the backup role, secrets.keys.backupDatabaseUrl) into a volume, the file the restore
+  # drill restores (docs/runbooks/postgres-backup-restore.md). Copy the volume to object storage with your
+  # backup tool; encrypt and limit it like the database.
+  enabled: false
+  # -- Cron schedule (the cluster's time zone unless timeZone is set).
+  schedule: "17 2 * * *"
+  timeZone: ""
+  # -- Days a dump is kept on the volume.
+  retentionDays: 35
+  # -- The pg_dump image: the same major version as your Postgres or newer, by digest.
+  image: postgres:17.10-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+  persistence:
+    # -- An existing PersistentVolumeClaim for the dumps (required when enabled).
+    existingClaim: ""
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
 
 serviceAccount:
   # -- Create a service account for the pods (none of them calls the Kubernetes API).
@@ -172,6 +245,13 @@ networkPolicy:
   # -- Who may scrape /metrics (NetworkPolicy `from` peers, for example the monitoring
   # namespace). Required with metrics.serviceMonitor.enabled or metrics.scrapeAnnotations.
   metricsFrom: []
+  # -- Set true once the platform team has checked that the cluster's CNI enforces
+  # NetworkPolicy (Calico, Cilium do; kindnet and plain Flannel do not). staging and prod
+  # refuse an enabled policy without it: an unenforced policy is ignored silently.
+  cniEnforces: false
+  # -- staging and prod without a policy: why (rendered in NOTES). Required when
+  # networkPolicy.enabled is false there, for example "our CNI does not enforce NetworkPolicy".
+  optOutReason: ""
   # -- Egress allow-list (NetworkPolicy `to` rules: Postgres, TokenLean, git hosts, SMTP).
   # DNS is always allowed. Empty: egress is not restricted.
   egress: []

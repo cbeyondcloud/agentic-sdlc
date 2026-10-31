@@ -1,1 +1,1 @@
-{{- fail "tokenlean.enabled=true needs the TokenLean LITE sub-chart, which is wired in M3-04; until then run TokenLean yourself, keep tokenlean.enabled=false and set tokenlean.url" -}}
+{{- fail "tokenlean.enabled=true needs the TokenLean LITE sub-chart, which is not published yet (DF-797); until then run TokenLean yourself, keep tokenlean.enabled=false and set tokenlean.url" -}}

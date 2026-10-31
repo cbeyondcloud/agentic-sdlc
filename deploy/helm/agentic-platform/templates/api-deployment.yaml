@@ -1,4 +1,5 @@
 {{- /* The control-plane API: stateless, two or more replicas (the HPA owns the count). */ -}}
+{{- include "agentic.environmentChecks" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -46,7 +47,7 @@ spec:
               containerPort: 8080
               protocol: TCP
           env:
-            {{- include "agentic.env" (list . false) | nindent 12 }}
+            {{- include "agentic.env" (list . "api") | nindent 12 }}
           startupProbe:
             httpGet:
               path: /healthz

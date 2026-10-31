@@ -361,3 +361,20 @@ async def test_only_one_sync_at_a_time_per_tenant(api, settings, tmp_path):
     assert second.kind == "busy"
     assert other.kind == "activated"
     assert (await first).kind == "activated"
+
+
+async def test_a_tenant_on_another_branch_than_the_environment_is_not_synced(
+    api, settings, tmp_path, caplog
+):
+    # M3-04 review: a tenant created before the pin (or restored from another environment)
+    # must not keep applying its old branch
+    repo = make_policy_repo(tmp_path / "policy-a")
+    await _point(api.db, api.a.id, url(repo))
+    pinned = settings.model_copy(update={"policy_branch": "staging"})
+    with caplog.at_level(logging.WARNING):
+        outcome = await _sync(api.db, pinned, api.a.id)
+    assert outcome.kind == "failed"
+    assert "tracks the policy branch 'main'" in outcome.problems[0]
+    assert "'staging'" in outcome.problems[0] and "set-policy-repo" in outcome.problems[0]
+    assert await _active(api.db, api.a.id) is None
+    assert "set-policy-repo" in caplog.text

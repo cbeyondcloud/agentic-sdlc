@@ -3,11 +3,17 @@
 # engine's socket and copy deploy/helm into /w). Steps:
 #   1. a kind cluster on the pinned node image; this container joins its network
 #   2. the control-plane image (built on the host) loaded into the cluster
-#   3. a throw-away Postgres (postgres.yaml) and the chart's Secret, random passwords
+#   3. a throw-away Postgres (postgres.yaml), a backup role and the chart's Secret, random
+#      passwords
 #   4. helm install (the pre-install migration hook), helm test (/readyz)
 #   5. helm upgrade (the pre-upgrade hook on a migrated database), helm test again
 #   6. the restore runbook's stop and start (only the release's Deployments to zero, helm
 #      upgrade, the API scaled back up), helm test again
+# With ENVIRONMENT=dev or staging (M3-04) every install and upgrade adds
+# agentic-platform/environments/$ENVIRONMENT.yaml, and after step 4 the promotion dry run
+# (promotion.sh; docs/runbooks/environments-and-promotion.md) checks the pinned policy
+# branch with the operator commands and takes one backup with the chart's CronJob. prod
+# needs an ingress controller, cert-manager and External Secrets: not on kind.
 # The cluster is deleted at the end unless KEEP=1. Passwords never leave the cluster.
 set -eu
 
@@ -19,6 +25,7 @@ NODE_IMAGE=${KIND_NODE_IMAGE:-kindest/node:v1.34.11@sha256:44e222ee2132dab25ff87
 NS=agentic
 
 say() { echo "kind-smoke: $*"; }
+die() { echo "kind-smoke: FAILED: $*" >&2; exit 1; }
 random() { head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
 cleanup() {
   if [ "${KEEP:-0}" != 1 ]; then
@@ -48,17 +55,33 @@ kubectl -n "$NS" create secret generic pg-passwords --from-env-file=/tmp/pg.env 
 kubectl -n "$NS" create configmap pg-init --from-file=10-agentic.sh=/w/kind/pg-init.sh >/dev/null
 kubectl -n "$NS" apply -f /w/kind/postgres.yaml >/dev/null
 kubectl -n "$NS" rollout status deploy/postgres --timeout=180s
+# the backup role of the chart's backup CronJob: BYPASSRLS + pg_read_all_data (the owner
+# cannot dump, every tenant table forces row-level security); the password goes in on stdin
+backup=$(random)
+printf 'backup-database-url=postgresql://agentic_backup:%s@postgres:5432/agentic\n' "$backup" >> /tmp/cp.env
+printf "CREATE ROLE agentic_backup LOGIN BYPASSRLS PASSWORD '%s';\nGRANT pg_read_all_data TO agentic_backup;\n" "$backup" \
+  | kubectl -n "$NS" exec -i deploy/postgres -- psql -q -v ON_ERROR_STOP=1 -U postgres -d agentic >/dev/null
 kubectl -n "$NS" create secret generic agentic-platform --from-env-file=/tmp/cp.env >/dev/null
 rm -f /tmp/pg.env /tmp/cp.env
 
 repo=${CP_IMAGE%:*}; tag=${CP_IMAGE##*:}
 set -- --namespace "$NS" --set "image.repository=$repo" --set "image.tag=$tag" \
   --set image.pullPolicy=Never --wait --timeout 10m
+if [ -n "${ENVIRONMENT:-}" ]; then
+  case "$ENVIRONMENT" in dev|staging) ;; *) die "ENVIRONMENT=$ENVIRONMENT: dev or staging on kind" ;; esac
+  values=/w/agentic-platform/environments/$ENVIRONMENT.yaml
+  set -- "$@" -f "$values"
+  # the staging values keep the nightly backup on: give it the volume it names
+  kubectl -n "$NS" apply -f /w/kind/backup-pvc.yaml >/dev/null
+fi
 
-say "helm install"
+say "helm install${ENVIRONMENT:+ ($ENVIRONMENT values)}"
 helm install agentic /w/agentic-platform "$@"
 kubectl -n "$NS" get pods
 helm test agentic --namespace "$NS" --logs
+if [ -n "${ENVIRONMENT:-}" ]; then
+  . /w/kind/promotion.sh
+fi
 
 say "helm upgrade (the migration hook again, on a migrated database)"
 helm upgrade agentic /w/agentic-platform "$@" --set worker.replicas=1

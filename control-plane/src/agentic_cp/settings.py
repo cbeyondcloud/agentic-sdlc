@@ -25,6 +25,8 @@ from pydantic import (
 )
 from sqlalchemy.engine import make_url
 
+from agentic.orgapi.models import checked_branch
+
 PREFIX = "AGENTIC_CP_"
 #: Names that share the prefix but are not settings: the test harness reads them.
 NOT_SETTINGS = frozenset({"AGENTIC_CP_TEST_DSN", "AGENTIC_CP_REQUIRE_PG"})
@@ -113,6 +115,11 @@ class Settings(BaseModel):
     allow_local_repos: bool = False
     """Accept `file://` and path repository URLs (R12). Development and tests only: in a
     shared deployment a tenant admin could otherwise read the server's disk."""
+    policy_branch: Annotated[str, AfterValidator(checked_branch)] | None = None
+    """The policy repo branch this environment tracks (M3-04: `dev`, `staging` or `main` for
+    prod). When set it is every tenant's branch: the default of tenant creation and of a
+    policy-source change, and any other branch is refused. None: each tenant picks its own
+    (default `main`)."""
     codeowners_refresh_minutes: Annotated[int, Field(ge=1)] = 60
     require_db_enforcement: bool = True
     """Fail closed (readyz 503, serve refuses) unless the database enforces insert-only
@@ -223,6 +230,18 @@ class Settings(BaseModel):
                 for item in error.errors(include_input=False, include_url=False)
             )
             raise SettingsError(f"invalid settings - {problems}") from None
+
+    def policy_branch_for(self, requested: str | None) -> str:
+        """The branch a tenant tracks when it asks for `requested` (None: not given), or
+        ValueError when this environment tracks another branch."""
+        if self.policy_branch is None:
+            return requested or "main"
+        if requested is not None and requested != self.policy_branch:
+            raise ValueError(
+                f"this environment tracks the policy branch {self.policy_branch!r} "
+                f"(AGENTIC_CP_POLICY_BRANCH); promote a change by merging it into that branch"
+            )
+        return self.policy_branch
 
     @property
     def runtime_role(self) -> str:

@@ -19,8 +19,8 @@ sources:
   - https://github.com/cbeyondcloud/agentic-sdlc
 dependencies:
   # TokenLean LITE (track tokenlean-st8-cloud, TokenLean repo deploy/lite/cloud/helm). Until
-  # M3-04 wires the real chart this is a local placeholder that refuses to render; run
-  # TokenLean yourself and set tokenlean.url (BYO, the default).
+  # that chart is published (DF-797) this is a local placeholder that refuses to render;
+  # run TokenLean yourself and set tokenlean.url (BYO, the default).
   - name: tokenlean-lite
     version: "0.0.0-placeholder"
     repository: file://charts/tokenlean-lite

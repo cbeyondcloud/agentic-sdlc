@@ -11,7 +11,7 @@ from release_support import IDENTITY, allowed, git, leaked, make_release_repo, n
 SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 import release  # noqa: E402
-from agentic_release.version import read_version  # noqa: E402
+from agentic_release.version import chart_version, read_version  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -29,6 +29,7 @@ def test_build_sign_verify_on_a_committed_tree(repo: Path, tmp_path: Path, capsy
         f"third-party-notices-{version}.md",
         f"constraints-{version}.txt",
         "release.json",
+        f"agentic-platform-{chart_version(version)}.tgz",  # DF-801: signed with the rest
     } <= names
     assert len([n for n in names if n.endswith((".whl", ".tar.gz"))]) == 8
     manifest = json.loads((out / "release.json").read_text(encoding="utf-8"))
