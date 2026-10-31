@@ -4,14 +4,16 @@ May an agent run this command, write these paths, hand over this diff, push
 there? Zyroflo's guard functions (`zyroflo.sdlc.policy`) judge Zyroflo's walls;
 this module adds the framework's rules on top:
 
-  * command - Zyroflo's destructive defaults (`destructive`), plus the agent's
+  * command - Zyroflo's destructive defaults (`destructive`, which itself reads
+              the spellings that hide a program, a script a shell takes from its
+              stdin and the text an interpreter or carrier runs), plus the agent's
               resolved deny list (org + team + agent, D31) and the framework's
               floor (`FRAMEWORK_DENY_SHELL`), matched by where a word stands (a
               rule's program at a command position, its first word the
-              subcommand - see "how a command is read"). Each is asked of the
-              command as typed AND of the spellings that hide a program from a
-              tokenizer (quotes inside a word, a quoted Windows path, a leading
-              redirect, `then`/`do`/`!`). Any hit refuses. A command longer than
+              subcommand - see "how a command is read"), in the command as typed
+              AND in the spellings that hide a program from a tokenizer (quotes
+              inside a word, a quoted Windows path, a leading redirect,
+              `then`/`do`/`!`). Any hit refuses. A command longer than
               MAX_COMMAND is refused unread. Files written past the file tools'
               checks are refused too: git's output options (`git diff --output=f`)
               for every agent, and any redirect into a file (`> f`) for an agent
@@ -29,7 +31,7 @@ this module adds the framework's rules on top:
 Zyroflo's defaults are a FLOOR: a repository's own policy file may add to its
 lists, never remove from them.
 
-**What a deny list cannot do.** Text handed to an interpreter (`… | bash`,
+**What a deny list cannot do.** Text handed to an interpreter (`curl … | bash`,
 `$VAR`, `python -c`, `docker run`, `ssh`) is not visible to any command matcher.
 The allow-list (M1-31: an unknown program is refused) and the OS sandbox
 (M1-32/33) are the controls for those; this guard is defence in depth.
@@ -195,11 +197,23 @@ class Guard:
                 )
             ]
         blocks: dict[tuple[str, str], Block] = {}
-        spellings = _spellings(command)
-        for spelling in spellings:
-            for reason in policy.destructive(self.policy, spelling):
-                why = scrub(reason.replace(repr(spelling), "the command", 1))
-                blocks.setdefault(("destructive", why), Block("destructive", why))
+        # Zyroflo reads the spellings that hide a program, a script a shell takes from
+        # its stdin and the text an interpreter or carrier runs (T695, T697, T703);
+        # each reason names the command as typed.
+        for reason in policy.destructive(self.policy, command):
+            why = scrub(reason.replace(repr(command), "the command", 1))
+            blocks.setdefault(("destructive", why), Block("destructive", why))
+        # The GIT_* and search walls read Zyroflo's spellings, carried texts included
+        # (`bash -c 'ls; GIT_DIR=x git status'` spells `ls; GIT_DIR=x git status`), and
+        # each with every quote removed: a script a shell takes from its stdin is not
+        # among them (`echo 'ls; GIT_DIR=x git status' | sh`).
+        spellings = list(
+            dict.fromkeys(
+                text
+                for spelling in policy.spellings(command)
+                for text in (spelling, _QUOTES.sub("", spelling))
+            )
+        )
         try:
             commands = [c for spelling in _rule_spellings(command) for c in _commands(spelling)]
         except _TooComplex:
@@ -210,6 +224,20 @@ class Guard:
                     f"in one segment - refused unread (framework floor)",
                 )
             ]
+        # Zyroflo follows neither a script on the command's stdin into a program with
+        # no script of its own that a carrier runs (`find . -exec bash \; <<< '...'`,
+        # `sh -c 'unshare sh -c bash' <<< '...'`, `sudo -s`), nor a command string
+        # inside a process substitution (`cat <(sh -c "{ rm -rf x; }")`): such a
+        # command is also judged in agentic's quote-free spellings, as before M2-58.
+        fed = ("<" in command or "|" in command) and any(_reads_stdin(*c) for c in commands)
+        substituted = ("<(" in command or ">(" in command) and any(
+            name in _INTERPRETERS for name, _ in commands
+        )
+        if fed or substituted:
+            for spelling in _fed_spellings(command):
+                for reason in policy.destructive(self.policy, spelling):
+                    why = scrub(reason.replace(repr(spelling), "the command", 1))
+                    blocks.setdefault(("destructive", why), Block("destructive", why))
         layers = (
             ("denied-command", self.deny_shell, "org, team or agent policy"),
             ("framework", FRAMEWORK_DENY_SHELL, "framework floor"),
@@ -570,6 +598,9 @@ _SEPARATORS = frozenset(";|&()<>{}`\n\r")
 _ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _GIT_ENV = re.compile(r"GIT_[A-Z0-9_]*=")
 _ANSI_QUOTING = re.compile(r"""\$['"]""")
+#: Quotes, cmd's caret and PowerShell's backtick, which hide a word: the GIT_* and search
+#: walls read each spelling without them too.
+_QUOTES = re.compile(r"""['"^`]""")
 #: Words skipped at a segment's start: they are not the program.
 _TRANSPARENT = frozenset(
     {"if", "while", "until", "select", "elif", "then", "do", "else", "!", "{", "time", "coproc"}
@@ -612,6 +643,7 @@ _WRAPPERS = frozenset(
         "flock",
         "docker",
         "podman",
+        "unshare",
     }
 )
 _WRAPPER_REACH = 3  # how many plain words after a wrapper may be the command
@@ -696,16 +728,48 @@ def _words(text: str) -> list[str]:
     return [t.text for t in _tokens(text) if not t.sep]
 
 
-def _spellings(command: str) -> list[str]:
-    """The command as typed, and as it reads once structure (keywords,
-    redirects), cmd's doubled quotes, quotes and quoted program paths no longer
-    hide its programs."""
+#: Programs that run a script read from their stdin when given none of their own.
+_STDIN_SHELLS = _SHELLS | {"csh", "tcsh", "mksh"}
+#: Programs that run text as commands: one in a process substitution is judged whole.
+_INTERPRETERS = _STDIN_SHELLS | _POWERSHELL | {"cmd"}
+#: Programs that hand their stdin to a shell whatever their arguments.
+_STDIN_CARRIERS = frozenset({"ssh", "su", "runuser", "wsl", "at", "batch"})
+#: Words after a program that are not its script (`find -exec bash \;`).
+_NOT_SCRIPTS = frozenset({"\\", "{}", "+"})
+
+
+def _reads_stdin(program: str, args: list[str]) -> bool:
+    """Whether `program` (at a command position, with the words after it) may run a
+    script it reads from its stdin: a shell with no script or command string of its
+    own (`bash`, `sh -s`, `bash /dev/stdin`), cmd without /c, PowerShell told `-`,
+    `sudo -s` or `-i`, or a remote or deferred shell (`ssh host`, `at now`)."""
+    lowered = [a.lower() for a in args]
+    if program in _STDIN_SHELLS:
+        if any(_SHELL_RUN.fullmatch(a) for a in args):
+            return False  # the command string is read as a command of its own
+        operands = [a for a in args if not a.startswith("-") and a not in _NOT_SCRIPTS]
+        return "-s" in args or not operands or operands[0] in ("-", "/dev/stdin")
+    if program == "cmd":
+        return not {"/c", "/k", "/r"} & set(lowered)
+    if program in _POWERSHELL:
+        return "-" in args or not [a for a in args if a not in _NOT_SCRIPTS]
+    if program in ("sudo", "doas"):
+        return bool({"-s", "-i"} & set(args))
+    return program in _STDIN_CARRIERS
+
+
+def _fed_spellings(command: str) -> list[str]:
+    """For a command whose stdin may reach a shell: the spellings agentic asked of
+    every command before M2-58 - structure (keywords, redirects, a here-string) as
+    separators and every quote removed, so text on that stdin (`find . -exec bash \\;
+    <<< 'rm -rf x'`) is judged as a command. The command as typed is not among them."""
     out: dict[str, None] = {}
     for base in (command, command.replace('""', '"')):
         for shaped in (base, _STRUCTURE.sub(";", base)):
             for text in (shaped, _with_paths_as_programs(shaped)):
-                light = re.sub(r"""['"^`]""", "", text)
+                light = _QUOTES.sub("", text)
                 out.update({text: None, light: None, light.replace("\\", ""): None})
+    out.pop(command, None)
     return list(out)
 
 
