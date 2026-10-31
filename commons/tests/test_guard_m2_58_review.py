@@ -4,6 +4,7 @@ a real shell (I1-I3, M1-M3). DF-723's harmless shapes stay allowed
 (test_guard_shell_stdin.py)."""
 
 import subprocess
+import sys
 
 import pytest
 
@@ -220,9 +221,26 @@ def test_a_quoted_argument_behind_a_wrapper_stays_data(guard, command):
     assert guard.command(command) == []
 
 
-def test_a_command_too_deep_to_read_is_refused_unread(guard):
+@pytest.fixture
+def recursion_limit():
+    """Set the recursion limit for one test. Other packages raise it on import (celpy
+    sets 2500), so a test that relies on hitting it must pin it."""
+    before = sys.getrecursionlimit()
+    yield sys.setrecursionlimit
+    sys.setrecursionlimit(before)
+
+
+def test_a_command_too_deep_to_read_is_refused_unread(guard, recursion_limit):
     """Zyroflo's reader recurses once per nested command string; a command deeper
     than Python's stack is refused unread instead of raising (DF-932)."""
+    recursion_limit(1000)
     blocks = guard.command(("bash -c '" * 2000)[:16384])
     assert [block.wall for block in blocks] == ["framework"]
     assert "refused unread" in blocks[0].why
+
+
+def test_a_destroyer_nested_deep_is_still_refused_under_a_high_limit(guard, recursion_limit):
+    """With the limit raised, the reader gets to the bottom and finds the destroyer."""
+    recursion_limit(2500)
+    command = "bash -c '" * 300 + "rm -rf x"
+    assert guard.command(command) != []
