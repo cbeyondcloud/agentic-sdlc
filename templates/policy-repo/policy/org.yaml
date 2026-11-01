@@ -20,6 +20,37 @@ required_steps:
 
 # Where `agentic init` fetches pinned tools from (tool-pins.yaml); an internal mirror.
 # tool_mirror_url: https://artifacts.example.com/agentic-tools/
+#
+# Optional JVM code intelligence (M3-27, spike S5 decision 3). Java and Kotlin repos get
+# the Maven/Gradle test conventions with no binary. codebase-memory-mcp (MIT) answers
+# better, but it is a native binary: pin it only after your security review approves it.
+# Its SECURITY.md describes an update check on MCP start; agentic runs it only in CLI
+# mode. Windows refuses the build until you mark it `signed`. To approve it, put these
+# files on the mirror and add this entry to tool-pins.yaml. The hashes are the
+# publisher's checksums.txt for release v0.12.1:
+#
+# tools:
+#   codebase-memory-mcp:
+#     version: v0.12.1
+#     binary: codebase-memory-mcp
+#     when: on_request
+#     assets:
+#       windows-x86_64:
+#         file: codebase-memory-mcp/v0.12.1/codebase-memory-mcp-windows-amd64.zip
+#         sha256: 4e4e0f16b45233af5c757a1fcbe3c3b16e9056375b1fbe2ce020b6de75dedcc0
+#         signed: false                 # true only after you check its code signature
+#       darwin-aarch64:
+#         file: codebase-memory-mcp/v0.12.1/codebase-memory-mcp-darwin-arm64.tar.gz
+#         sha256: 9bfcbe38414b47969a3e1d1c1999f5357409387c86fa3d24221b5458267660d2
+#       darwin-x86_64:
+#         file: codebase-memory-mcp/v0.12.1/codebase-memory-mcp-darwin-amd64.tar.gz
+#         sha256: ca6e64397a8ae80cec898a8205a6aa16750ac798acc05a0c3ed983837944a581
+#       linux-x86_64:
+#         file: codebase-memory-mcp/v0.12.1/codebase-memory-mcp-linux-amd64-portable.tar.gz
+#         sha256: 8c3d0341064301e78ecc84cf7348d4e2c6562a0f57448243ea560aaa34de36c1
+#       linux-aarch64:
+#         file: codebase-memory-mcp/v0.12.1/codebase-memory-mcp-linux-arm64-portable.tar.gz
+#         sha256: ed0f1f548cd79b121c401c2e9f7841c189a001af26d3768368088c24f6a53533
 
 # The lowest CLI version that may register runs with the control plane.
 # min_cli_version: "1.0.0"
@@ -40,7 +71,12 @@ sandbox:
     - pypi.org                          # EDIT: your internal mirrors instead, if any
     - files.pythonhosted.org
     - registry.npmjs.org
-    - repo.maven.apache.org
+    - repo.maven.apache.org             # Maven Central (mvn test, Gradle mavenCentral())
+    - repo1.maven.org
+    - services.gradle.org               # the Gradle wrapper's distribution...
+    - downloads.gradle.org              # ...which redirects here
+    - plugins.gradle.org                # the Gradle plugin portal...
+    - plugins-artifacts.gradle.org      # ...and its artefacts
   allow_write: []                       # writable besides the run's tree, e.g. "~/.cache/uv"
   # environment variables agent commands keep although their name looks secret, e.g. an
   # authenticated proxy or the SSH agent socket (never AGENTIC_*)

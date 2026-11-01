@@ -9,7 +9,20 @@ def test_a_minimal_config_needs_only_a_classification():
     config = load_repo_config("version: 1\nclassification: internal\n")
     assert config.classification == "internal"
     assert config.team is None and config.pipelines == [] and config.components == []
-    assert config.codeintel.adapter == "code-review-graph"
+    assert config.codeintel.adapter == "auto"  # M3-27: routed by the repo's language
+
+
+@pytest.mark.parametrize("adapter", ["auto", "code-review-graph", "codebase-memory"])
+def test_the_symbol_adapter_can_be_chosen(adapter):
+    config = load_repo_config(
+        f"version: 1\nclassification: internal\ncodeintel: {{adapter: {adapter}}}\n"
+    )
+    assert config.codeintel.adapter == adapter
+
+
+def test_an_unknown_adapter_is_refused():
+    with pytest.raises(RepoConfigError):
+        load_repo_config("version: 1\nclassification: internal\ncodeintel: {adapter: graphify}\n")
 
 
 def test_the_domain_graph_adapter_takes_a_graph_folder_and_a_component():
