@@ -6,8 +6,13 @@
 own files live in its `.agentic/` folder instead.
 """
 
+import contextlib
+import json
 import os
+import shutil
+import tempfile
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -58,3 +63,105 @@ def user_config(home: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise CliError(f"{path}: expected a mapping of settings", ExitCode.INVALID)
     return data
+
+
+@dataclass(frozen=True)
+class ConfigChange:
+    """What `set_user_config` did: the keys it set (each with the value it replaced, None
+    when it was added), or why it wrote nothing (`reason`)."""
+
+    path: Path
+    written: bool
+    changed: dict[str, str | None] = field(default_factory=dict)
+    reason: str | None = None
+
+
+def set_user_config(home: Path, values: Mapping[str, str]) -> ConfigChange:
+    """Set top-level string settings in the user config (DF-952), editing the file as text
+    so every other line - comments, order, quoting, line endings, a byte-order mark - stays
+    as written. A key already set to another value is replaced in place, the old line kept
+    above it as a comment. The new text must parse back to the old settings plus these, and
+    replaces the file in one step (a temporary file, then a rename), keeping its mode. A
+    file that is not a YAML mapping, or whose value spans several lines, is left alone:
+    `reason` says why, and the caller shows the lines instead."""
+    path = home / CONFIG_FILE
+    try:
+        raw = path.read_bytes() if path.is_file() else b""
+        text = raw.decode("utf-8-sig")
+    except (OSError, UnicodeDecodeError) as error:
+        return ConfigChange(path, False, reason=f"it cannot be read ({error})")
+    bom = raw.startswith(b"\xef\xbb\xbf")
+    newline = "\r\n" if "\r\n" in text else "\n"
+    try:
+        data, lines = load_yaml(text)
+    except YamlFileError as error:
+        return ConfigChange(path, False, reason=f"it is not valid YAML ({error})")
+    data = {} if data is None else data
+    if not isinstance(data, dict):
+        return ConfigChange(path, False, reason="it is not a mapping of settings")
+    rows = text.splitlines()
+    changed: dict[str, str | None] = {}
+    added: list[str] = []
+    for key, value in values.items():
+        if key not in data:
+            added.append(f"{key}: {_scalar(value)}")
+            changed[key] = None
+            continue
+        if data[key] == value:
+            continue
+        at = (lines.get((key,)) or 0) - 1
+        if not isinstance(data[key], str | None) or not _one_line(rows, at):
+            return ConfigChange(path, False, reason=f"its {key} is not a one-line value")
+        rows[at : at + 1] = [
+            f"# {rows[at].rstrip()}  (replaced by agentic)",
+            f"{key}: {_scalar(value)}",
+        ]
+        changed[key] = data[key]
+    if not changed:
+        return ConfigChange(path, False)
+    new = newline.join(rows + added) + newline
+    if load_yaml(new)[0] != {**data, **values}:  # never write what reads back otherwise
+        return ConfigChange(path, False, reason="the edited file would not read back the same")
+    try:
+        _replace(path, ("\ufeff" if bom else "") + new)
+    except OSError as error:
+        return ConfigChange(path, False, reason=f"it cannot be written ({error})")
+    return ConfigChange(path, True, changed)
+
+
+def _one_line(rows: list[str], at: int) -> bool:
+    """Whether the top-level key on row `at` has its whole value on that row: no indented
+    continuation follows before the next key."""
+    if not 0 <= at < len(rows) or rows[at][:1].isspace():
+        return False
+    for row in rows[at + 1 :]:
+        if not row.strip() or row.lstrip().startswith("#"):
+            continue
+        return not row[:1].isspace()
+    return True
+
+
+def _scalar(value: str) -> str:
+    """`value` as a YAML scalar: plain when it reads back unchanged, else double-quoted."""
+    try:
+        plain = load_yaml(f"k: {value}\n")[0] == {"k": value}
+    except YamlFileError:
+        plain = False
+    return value if plain else json.dumps(value)
+
+
+def _replace(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(handle, "wb") as out:
+            out.write(text.encode("utf-8"))
+            out.flush()
+            os.fsync(out.fileno())
+        if path.exists():
+            shutil.copymode(path, temporary)
+        os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise

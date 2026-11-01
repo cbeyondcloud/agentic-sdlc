@@ -55,12 +55,56 @@ def test_an_invite_link_stores_both_secrets_and_records_the_login(plane, capsys)
     assert (record["url"], record["tenant"], record["user"]) == (CP_URL, "acme", "dev@acme.example")
 
 
-def test_the_person_is_told_what_to_put_in_their_config(plane, capsys):
+def test_the_settings_are_written_to_the_user_config(plane, capsys):  # DF-952
     plane.add_invite(INVITE, gateway_key=GATEWAY_KEY)
+    config = agentic_home() / "config.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("# mine\norg: acme\n", encoding="utf-8")
     assert main(["login", "--invite", LINK]) == ExitCode.OK
     shown = capsys.readouterr().out
-    assert f"control_plane_url: {CP_URL}" in shown
-    assert "gateway_url: https://gateway.acme.example" in shown
+    assert f"control_plane_url: {CP_URL}" in shown and "added" in shown
+    assert str(config) in shown
+    assert config.read_text(encoding="utf-8") == (
+        f"# mine\norg: acme\ncontrol_plane_url: {CP_URL}\n"
+        "gateway_url: https://gateway.acme.example\n"
+    )
+
+
+def test_with_json_the_result_says_what_was_written(plane, capsys):
+    plane.add_invite(INVITE, gateway_key=GATEWAY_KEY)
+    code, data, _ = _run(capsys, "--invite", LINK)
+    assert code == ExitCode.OK
+    assert data["config_written"] is True
+    assert data["config_file"] == str(agentic_home() / "config.yaml")
+    assert data["config"] == {
+        "control_plane_url": CP_URL,
+        "gateway_url": "https://gateway.acme.example",
+    }
+
+
+def test_print_config_only_shows_the_lines(plane, capsys):
+    plane.add_invite(INVITE, gateway_key=GATEWAY_KEY)
+    assert main(["login", "--invite", LINK, "--print-config"]) == ExitCode.OK
+    shown = capsys.readouterr().out
+    assert "Add to" in shown and f"control_plane_url: {CP_URL}" in shown
+    assert not (agentic_home() / "config.yaml").exists()
+
+
+def test_a_config_that_cannot_be_edited_is_left_alone_and_the_lines_shown(plane, capsys):
+    plane.add_invite(INVITE, gateway_key=GATEWAY_KEY)
+    config = agentic_home() / "config.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("org: [unclosed\n", encoding="utf-8")
+    assert main(["login", "--invite", LINK]) == ExitCode.OK  # the keys are stored
+    captured = capsys.readouterr()
+    assert f"control_plane_url: {CP_URL}" in captured.out
+    assert "not valid YAML" in captured.err
+    assert config.read_text(encoding="utf-8") == "org: [unclosed\n"
+    assert _stored(control_plane.CONTROL_PLANE_TOKEN) == TOKEN
+
+
+def test_print_config_is_only_for_invite(plane, capsys):
+    assert main(["login", "--print-config"]) == ExitCode.USAGE
 
 
 def test_without_a_gateway_key_the_notice_is_passed_on(plane, capsys):

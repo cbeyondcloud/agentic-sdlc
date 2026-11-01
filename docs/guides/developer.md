@@ -57,8 +57,12 @@ the link has a `#` in it.
 agentic login --invite "https://agentic.your-org.internal/invite#..."
 ```
 
-This stores your control-plane token and gateway key in the OS keyring. If it prints
-`Add to ~/.agentic/config.yaml:` lines, add them to that file.
+This stores your control-plane token and gateway key in the OS keyring, and writes the
+control plane and gateway addresses the invite names into `~/.agentic/config.yaml`. It
+prints what it changed; your other lines and comments stay as they were, and a value it
+replaces stays in the file as a comment. To only print the lines and edit the file
+yourself, add `--print-config`. If the file cannot be edited safely (it is not valid
+YAML, say), it is left alone and the lines are printed for you to add.
 
 **4. Sign in to your git host**, so agentic can open pull requests (a token with
 repository write access):

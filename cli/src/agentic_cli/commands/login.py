@@ -38,7 +38,7 @@ from agentic.hosting.base import scrub_url_credentials
 from agentic.orgapi import Me, parse_invite
 from agentic.transport import verify_gateway_key
 from agentic_cli import control_plane
-from agentic_cli.config import agentic_home, user_config
+from agentic_cli.config import CONFIG_FILE, agentic_home, set_user_config, user_config
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.hosting import login_names
@@ -76,6 +76,12 @@ def register(app: typer.Typer) -> None:
             help="The link from your invite mail: stores your control-plane token and gateway "
             "key (the link works once).",
         ),
+        print_config: bool = typer.Option(
+            False,
+            "--print-config",
+            help="With --invite: print the settings the invite names instead of writing them "
+            "to ~/.agentic/config.yaml.",
+        ),
     ) -> None:
         """Store your gateway key (or a control-plane or git host token) in the OS keyring."""
         out: Output = ctx.obj
@@ -84,8 +90,10 @@ def register(app: typer.Typer) -> None:
         if invite is not None:
             if rotate or key_stdin or wanted != GATEWAY:
                 raise CliError("--invite takes no other key option (only --url)", ExitCode.USAGE)
-            _redeem(out, home, invite, url)
+            _redeem(out, home, invite, url, write_config=not print_config)
             return
+        if print_config:
+            raise CliError("--print-config is for --invite", ExitCode.USAGE)
         if url is not None and wanted != CONTROL_PLANE:
             raise CliError("--url is for --for control-plane", ExitCode.USAGE)
         if rotate:
@@ -232,9 +240,13 @@ def _rotate(out: Output, home) -> None:
     out.result(data, lambda c: c.print(shown, markup=False))
 
 
-def _redeem(out: Output, home, link: str, url: str | None) -> None:
+def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool = True) -> None:
     """`agentic login --invite <link>` (M2-18): redeem the invite once and keep what it
-    gives in the OS keyring. The keyring is checked before the link is used up."""
+    gives in the OS keyring. The keyring is checked before the link is used up. The
+    settings the invite names (control_plane_url, gateway_url) are written to the user
+    config (DF-952) unless `write_config` is off; a config that cannot be edited safely is
+    left alone and the lines are shown instead - the link is used by then, so nothing
+    after the redemption fails the command."""
     base, token = parse_invite(link)
     base = base or url or control_plane.control_plane_url(os.environ, user_config(home))
     if not base or not token:
@@ -275,12 +287,19 @@ def _redeem(out: Output, home, link: str, url: str | None) -> None:
             hint="ask your team lead or org admin for a new invite",
         ) from error
     control_plane.record_login(home, base, got.tenant.slug, got.email)
-    settings = user_config(home)
+    try:
+        settings = user_config(home)
+    except CliError:  # a broken file: the writer below refuses it and says why
+        settings = {}
     config = {}
     if control_plane.control_plane_url(os.environ, settings) != base:
         config["control_plane_url"] = base
     if got.gateway_url and (settings.get("gateway_url") or "").rstrip("/") != got.gateway_url:
         config["gateway_url"] = got.gateway_url
+    change = set_user_config(home, config) if config and write_config else None
+    if change is not None and change.reason:
+        out.warn(f"{change.path} was not changed: {change.reason}")
+    written = change is not None and change.written
     data = {
         "stored": stored,
         "where": "keyring",
@@ -290,6 +309,8 @@ def _redeem(out: Output, home, link: str, url: str | None) -> None:
         "gateway_key_id": got.gateway_key_id,
         "token_expires_at": got.token_expires_at.isoformat(),
         "config": config,
+        "config_written": written,
+        "config_file": str(home / CONFIG_FILE),
         "notice": got.notice,
     }
 
@@ -301,8 +322,13 @@ def _redeem(out: Output, home, link: str, url: str | None) -> None:
         )
         if got.notice:
             console.print(got.notice, markup=False)
-        if config:
-            console.print("Add to ~/.agentic/config.yaml:", markup=False)
+        if written:
+            console.print(f"Updated {change.path}:", markup=False)
+            for key, old in change.changed.items():
+                was = f"(was {old})" if old is not None else "(added)"
+                console.print(f"  {key}: {config[key]}  {was}", markup=False)
+        elif config:
+            console.print(f"Add to {home / CONFIG_FILE}:", markup=False)
             for key, value in config.items():
                 console.print(f"  {key}: {value}", markup=False)
         console.print("Next: cd <repo> and run `agentic init`.", markup=False)
