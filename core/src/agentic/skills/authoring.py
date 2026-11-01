@@ -355,6 +355,44 @@ def add_catalog_entry(text: str | None, key: str, entry: Mapping[str, str]) -> s
     return result.replace("\n", "\r\n") if crlf else result
 
 
+def pin_catalog_entry(text: str | None, key: str, entry: Mapping[str, str]) -> str:
+    """`text` with `key` pinned to `entry["sha256"]`: the entry added when it is not there
+    (`add_catalog_entry`), else only its `sha256:` line rewritten, everything else kept as
+    written (a learned team skill re-pinned after each learning, M3-16). SkillsError when
+    the entry cannot be found and changed safely."""
+    original = text or ""
+    lf = original.replace("\r\n", "\n")
+    try:
+        before = load_yaml(lf)[0] if lf.strip() else {}
+    except YamlFileError as error:
+        raise SkillsError(f"the catalog cannot be read: {error}") from error
+    skills = (before if isinstance(before, dict) else {}).get("skills") or {}
+    if key not in skills:
+        return add_catalog_entry(text, key, entry)
+    lines = lf.split("\n")
+    names = (f"{key}:", f"'{key}':", f'"{key}":')
+    start = next((i for i, line in enumerate(lines) if line.strip() in names), None)
+    pinned = False
+    if start is not None:
+        own = len(lines[start]) - len(lines[start].lstrip())
+        for i in range(start + 1, len(lines)):
+            stripped = lines[i].strip()
+            if stripped and len(lines[i]) - len(lines[i].lstrip()) <= own:
+                break
+            if stripped.startswith("sha256:"):
+                indent = lines[i][: len(lines[i]) - len(lines[i].lstrip())]
+                lines[i] = f"{indent}sha256: {entry['sha256']}"
+                pinned = True
+                break
+    result = "\n".join(lines)
+    after = (load_yaml(result)[0] or {}).get("skills") or {} if pinned else {}
+    wanted = {**skills[key], "sha256": entry["sha256"]}
+    kept = {k: v for k, v in skills.items() if k != key}
+    if after.get(key) != wanted or {k: v for k, v in after.items() if k != key} != kept:
+        raise SkillsError(f"{key} could not be re-pinned safely; change its sha256 by hand")
+    return result.replace("\n", "\r\n") if "\r\n" in original else result
+
+
 def _entry_indent(rest: list[str]) -> str:
     """The indentation of the existing entries under `skills:` (two spaces if none)."""
     for line in rest:
@@ -375,6 +413,7 @@ __all__ = [
     "catalog_entry",
     "check_name",
     "check_skill",
+    "pin_catalog_entry",
     "promotion_paths",
     "scaffold",
     "skill_files_for_commit",

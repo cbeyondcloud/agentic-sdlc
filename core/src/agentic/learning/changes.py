@@ -192,6 +192,12 @@ def _new_file(kind: str, agent: str) -> list[str]:
     raise DraftError(f"there is no definition of agent {agent!r} to add an instruction to")
 
 
+def learned_skeleton(kind: str, agent: str) -> str:
+    """What a file a learning created holds once every learned block is out of it (its
+    front matter and title): nothing anyone wrote, so a revert may remove it (DF-768)."""
+    return _text(_new_file(kind, agent), crlf=False)
+
+
 def render_change(kind: str, before: str | None, lesson: str, agent: str, proposal_id: str) -> str:
     """`before` with the lesson's marked block added under `HEADING` (a new file of `kind`
     when `before` is None), in `before`'s own line endings."""
@@ -327,6 +333,8 @@ def draft(
             f"{kind} is not a {narrowest} change: the corrections come from more than one "
             f"person, so the change is {narrowest}-wide or wider ({', '.join(KINDS[narrowest])})"
         )
+    if scope == "team" and proposal.scope.startswith("team:"):
+        team = proposal.scope.removeprefix("team:")  # the proposal's team, not the approver's
     root, path = target(kind, proposal.agent, team)
     before = read(root, path)
     if kind == "agent-instruction" and before is None:
@@ -351,7 +359,7 @@ def draft(
         diff=_diff(path, before, after),
         evidence=tuple(evidence),
         eval_case=case.model_dump(mode="json", exclude_defaults=True),
-        eval_path=case_path(root, proposal.id),
+        eval_path=case_path(root, proposal.id, team if root == "policy" else None),
         problems=tuple(instruction_only_problems(kind, before, after)),
         drafted_at=at or datetime.now(UTC),
     )
@@ -370,6 +378,7 @@ __all__ = [
     "Scope",
     "draft",
     "instruction_only_problems",
+    "learned_skeleton",
     "narrowest_scope",
     "render_change",
     "strip_change",

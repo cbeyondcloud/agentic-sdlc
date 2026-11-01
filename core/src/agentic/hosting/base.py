@@ -135,6 +135,15 @@ class CheckLogHost(Protocol):
 
 
 @runtime_checkable
+class ClosingHost(Protocol):
+    """Closing a pull request without merging it (DF-764: a learning reverted before its
+    pull request was merged). Optional: on a host without it the person is told to close
+    the pull request themselves."""
+
+    def close_pull_request(self, repo: RepoRef, number: int) -> PullRequest: ...
+
+
+@runtime_checkable
 class ReviewHost(Protocol):
     """Reading and reviewing pull requests (M2-46: skill submissions). Separate from
     `HostingProvider`, so publishing a run needs none of it. Still no merge: a person

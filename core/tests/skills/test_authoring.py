@@ -12,6 +12,7 @@ from agentic.skills.authoring import (
     add_catalog_entry,
     catalog_entry,
     check_skill,
+    pin_catalog_entry,
     promotion_paths,
     scaffold,
     skill_files_for_commit,
@@ -263,3 +264,23 @@ def test_add_catalog_entry_refuses_a_key_already_there():
     entry = catalog_entry("careful-change", "sha256:" + "1" * 64, owner="x")
     with pytest.raises(SkillsError, match="already"):
         add_catalog_entry(CATALOG, "acme/careful-change", entry)
+
+
+def test_pin_catalog_entry_adds_then_repins_only_the_sha(tmp_path: Path):
+    """A learned team skill (M3-16) is catalogued on its first learning and re-pinned on
+    the next: only its `sha256` line changes, every other line is kept as written."""
+    first = catalog_entry("learned-ba", "sha256:" + "1" * 64, owner="lead@acme.example")
+    added = pin_catalog_entry(CATALOG, "internal/learned-ba", first)
+    assert load_yaml(added)[0]["skills"]["internal/learned-ba"]["sha256"] == first["sha256"]
+    again = {**first, "sha256": "sha256:" + "2" * 64, "owner": "someone-else"}
+    repinned = pin_catalog_entry(added, "internal/learned-ba", again)
+    data = load_yaml(repinned)[0]["skills"]
+    assert data["internal/learned-ba"]["sha256"] == again["sha256"]
+    assert data["internal/learned-ba"]["owner"] == "lead@acme.example"  # kept as written
+    assert data["acme/careful-change"]["sha256"] == "sha256:" + "0" * 64
+    changed = [
+        (a, b) for a, b in zip(added.split("\n"), repinned.split("\n"), strict=True) if a != b
+    ]
+    assert len(changed) == 1 and "sha256" in changed[0][1]
+    crlf = pin_catalog_entry(added.replace("\n", "\r\n"), "internal/learned-ba", again)
+    assert "\r\n" in crlf and load_yaml(crlf.replace("\r\n", "\n"))[0] == load_yaml(repinned)[0]

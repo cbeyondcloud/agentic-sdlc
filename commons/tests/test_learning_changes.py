@@ -140,3 +140,41 @@ def test_rows_are_zyroflos_learning_log(tmp_path: Path):
         PID,
     ]
     assert changes.history() == rows
+
+
+def _skeleton(text: str, path: str) -> bool:
+    """The caller's 'nothing anyone wrote is left' test (the CLI asks
+    `agentic.learning.changes.learned_skeleton`)."""
+    return text.replace("\r\n", "\n") == "# Learned\n"
+
+
+def test_a_skeleton_left_by_out_of_order_reverts_is_removed(tmp_path: Path):
+    """DF-768: the older learning created the file; reverting it first leaves the newer
+    block, and reverting the newer then leaves only the skeleton the older one wrote: the
+    file is removed, with the folders the older learning created."""
+    changes = _two_learnings(tmp_path)
+    changes.revert(OLD, by="alice", strip=_strip, leftover=_skeleton)
+    assert (tmp_path / NOTE).is_file()  # the newer block is still in it
+    (row,) = changes.revert(NEW, by="alice", strip=_strip, leftover=_skeleton)
+    assert row["only_block"] and row["removed"]
+    assert not (tmp_path / NOTE).exists() and not (tmp_path / "memory").exists()
+
+
+def test_a_skeleton_in_a_file_no_learning_created_is_kept(tmp_path: Path):
+    note = tmp_path / NOTE
+    note.parent.mkdir(parents=True)
+    note.write_bytes(b"# Learned\n")
+    changes = PersonalChanges(tmp_path)
+    first = "# Learned\n" + _block(OLD, "use tabs")
+    changes.apply(OLD, NOTE, first, by="alice", why="w")
+    changes.apply(NEW, NOTE, first + _block(NEW, "no globals"), by="alice", why="w")
+    changes.revert(OLD, by="alice", strip=_strip, leftover=_skeleton)
+    changes.revert(NEW, by="alice", strip=_strip, leftover=_skeleton)
+    assert note.read_text("utf-8") == "# Learned\n"  # the person's file: never removed
+
+
+@pytest.mark.parametrize("rel", ["C:x/note.md", "c:note.md", "//server/share/x.md", "a/../b"])
+def test_drive_relative_and_unc_paths_are_refused(tmp_path: Path, rel: str):
+    """DF-766: a Windows drive-relative ('C:x') or UNC path never leaves the home."""
+    with pytest.raises(LearningApplyError, match="relative path inside"):
+        PersonalChanges(tmp_path).apply(PID, rel, "x\n", by="alice", why="w")

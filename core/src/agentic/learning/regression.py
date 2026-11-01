@@ -6,8 +6,8 @@
 prompt's context and the lesson as the key point the agent's answer must now cover, tagged
 `learning` and `regression`. It lands next to the change, in the target's eval corpus
 (`case_path`): `~/.agentic/eval/` for a personal learning, the repo's `.agentic/eval/`, the
-policy repo's `eval/`. Its source is the adopter's (`synthetic: false`), so it never belongs
-in `library/eval/` (decision 17).
+policy repo's `teams/<team>/eval/` for a team learning. Its source is the adopter's
+(`synthetic: false`), so it never belongs in `library/eval/` (decision 17).
 
 `measure` runs the case through the eval harness (`run_eval`, pydantic-evals) under two
 labels, `before` (the agent's instructions as they are) and `after` (with the change), and
@@ -42,10 +42,16 @@ class _Correction(Protocol):
     text: str
 
 
-def case_path(root: str, proposal_id: str) -> str:
-    """Where the regression case of a learning lands, under its target's root."""
+def case_path(root: str, proposal_id: str, team: str | None = None) -> str:
+    """Where the regression case of a learning lands, under its target's root: a team
+    learning's case stays in the team's own folder of the policy repo (`teams/<team>/`),
+    which that team's leads own (D30), beside the skill it tests."""
     name = f"eval/cases/scoping/learned-{proposal_id}.yaml"
-    return f".agentic/{name}" if root == "repo" else name
+    if root == "repo":
+        return f".agentic/{name}"
+    if root == "policy" and team:
+        return f"teams/{team}/{name}"
+    return name
 
 
 def regression_case(

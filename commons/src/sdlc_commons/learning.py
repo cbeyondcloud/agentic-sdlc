@@ -28,7 +28,7 @@ processes never interleave an apply and an undo (Windows and macOS alike).
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from filelock import FileLock
 from zyroflo.sdlc import learning as zyroflo_learning
@@ -67,7 +67,15 @@ class PersonalChanges:
 
     def _path(self, rel: str) -> Path:
         pure = PurePosixPath(rel)
-        if pure.is_absolute() or ".." in pure.parts or not pure.parts or "\\" in rel:
+        windows = PureWindowsPath(rel)  # 'C:x' is relative to a drive's current folder (DF-766)
+        if (
+            pure.is_absolute()
+            or windows.drive
+            or windows.root
+            or ".." in pure.parts
+            or not pure.parts
+            or "\\" in rel
+        ):
             raise LearningApplyError(f"{rel!r} must be a relative path inside {self.home}")
         return self.home.joinpath(*pure.parts)
 
@@ -120,6 +128,7 @@ class PersonalChanges:
         *,
         by: str,
         strip: Callable[[str, str], str] | None = None,
+        leftover: Callable[[str, str], bool] | None = None,
     ) -> list[dict]:
         """Undo every standing part of a learning (newest first); the reversal rows.
 
@@ -127,7 +136,12 @@ class PersonalChanges:
         file changed since the learning was applied (a later learning on the same file, a
         hand edit), only that block is taken out (review F2): Zyroflo's undo would write the
         whole prior file back, losing the later change - or bringing back a learning that
-        was already reverted. The reversal row then says `drifted`."""
+        was already reverted. The reversal row then says `drifted`.
+
+        `leftover(text, path)` says a text holds nothing anyone wrote (a learned file's
+        skeleton). When taking a block out leaves such a text in a file a learning created,
+        the file is removed too, with the folders that learning created (DF-768: the older
+        of two learnings on one file reverted first); the row then says `removed`."""
         with self._lock():
             rows = self.history()
             parts = list(
@@ -147,7 +161,11 @@ class PersonalChanges:
             undone = []
             for part, applied in standing:
                 if strip is not None and PART not in part and self._drifted(applied):
-                    undone.append(self._take_out(part, applied, by, strip))
+                    creator = self._creator(rows, applied["path"]) if leftover else None
+                    gone = leftover if creator is not None else None
+                    undone.append(self._take_out(part, applied, by, strip, gone))
+                    if undone[-1].get("removed") and creator is not None:
+                        self._remove_created(creator)
                 else:
                     undone.append(zyroflo_learning.undo(self.home, part, by))
                 if applied.get("created"):
@@ -164,15 +182,36 @@ class PersonalChanges:
             return False  # not text any more: Zyroflo's undo restores it, said drifted
         return zyroflo_learning.digest(_lf(found)) != applied.get("after_sha")
 
+    @staticmethod
+    def _creator(rows: list[dict], rel: str) -> dict | None:
+        """The applied row of the learning that created `rel`, when one did."""
+        return next(
+            (
+                r
+                for r in rows
+                if r.get("action") == "applied" and r.get("path") == rel and r.get("created")
+            ),
+            None,
+        )
+
     def _take_out(
-        self, part: str, applied: dict, by: str, strip: Callable[[str, str], str]
+        self,
+        part: str,
+        applied: dict,
+        by: str,
+        strip: Callable[[str, str], str],
+        leftover: Callable[[str, str], bool] | None = None,
     ) -> dict:
         """Remove only `part`'s block from a file that changed since; the reversal row in
-        Zyroflo's format, file first and row second, as Zyroflo's `undo` does."""
+        Zyroflo's format, file first and row second, as Zyroflo's `undo` does. A created
+        file left holding only `leftover` text is emptied, for `_remove_created`."""
         path = self._path(applied["path"])
         found = path.read_bytes().decode("utf-8")
         restored = strip(found, part)
-        if restored != found:
+        removed = leftover is not None and leftover(restored, applied["path"])
+        if removed:
+            path.write_bytes(b"")
+        elif restored != found:
             path.write_bytes(restored.encode("utf-8"))
         row = {
             "schema_version": zyroflo_learning.SCHEMA_VERSION,
@@ -188,6 +227,8 @@ class PersonalChanges:
             "found_sha": zyroflo_learning.digest(_lf(found)),
             "only_block": True,
         }
+        if removed:
+            row["removed"] = True
         zyroflo_learning.append_log(self.home, row)
         return row
 

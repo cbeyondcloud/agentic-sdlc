@@ -8,7 +8,7 @@ import httpx2
 import pytest
 
 from agentic.hosting import CheckRun, HostingError, PullRequest, RepoRef
-from agentic.hosting.base import PR_BODY_END, PR_BODY_START
+from agentic.hosting.base import PR_BODY_END, PR_BODY_START, ClosingHost
 from agentic.hosting.github import GITHUB_COM_API, GitHubHost, api_url_for
 
 TOKEN = "gho_" + "Fake" + "Token" + "0123456789"  # gitleaks:allow - built from pieces
@@ -315,3 +315,19 @@ def test_a_nested_owner_is_not_a_github_repository():
 
 def test_no_merge_operation_exists():
     assert not [name for name in dir(GitHubHost) if "merge" in name.lower()]
+
+
+def test_close_pull_request_closes_it_without_merging():
+    """DF-764: reverting a learning before its pull request is merged closes that pull
+    request (a `ClosingHost`), so a later merge cannot land a reverted learning."""
+    calls = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        calls.append((request.method, request.url.path, json.loads(request.content or b"null")))
+        return httpx2.Response(200, json={**pr_json(), "state": "closed"})
+
+    github = host(handler)
+    assert isinstance(github, ClosingHost)
+    closed = github.close_pull_request(REPO, 7)
+    assert closed.state == "closed" and not closed.merged
+    assert calls == [("PATCH", "/repos/acme/app/pulls/7", {"state": "closed"})]

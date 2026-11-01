@@ -13,6 +13,7 @@ from agentic.learning.changes import (
     Evidence,
     draft,
     instruction_only_problems,
+    learned_skeleton,
     narrowest_scope,
     render_change,
     strip_change,
@@ -178,3 +179,23 @@ def test_a_removed_line_is_not_instruction_only():
     truncated = after.replace("Never force push.\n", "")
     problems = instruction_only_problems("repo-memory", before, truncated)
     assert any("removes" in p for p in problems)
+
+
+def test_team_change_follows_the_proposals_team_and_keeps_its_case_there():
+    """D30: a team learning lands in the proposal's own team folder of the policy repo -
+    the skill and its regression case - whatever team the approver's workspace names, so
+    the pull request touches only what that team's leads own (`teams/<team>/`)."""
+    team = draft(proposal("team:payments"), evidence("a", "b"), no_files, team="search")
+    assert team.path == "teams/payments/skills/internal/learned-developer/SKILL.md"
+    assert team.eval_path == f"teams/payments/eval/cases/scoping/learned-{PID}.yaml"
+    edited = draft(proposal(), evidence("a", "b"), no_files, kind="team-skill", team="search")
+    assert (edited.owner, edited.path.split("/")[1]) == ("team:search", "search")
+    assert edited.eval_path.startswith("teams/search/eval/")
+
+
+def test_learned_skeleton_is_what_a_new_file_holds_without_any_block():
+    """DF-768: what is left of a file a learning created once every block is out."""
+    for kind in ("personal-skill", "personal-note", "repo-memory"):
+        created = render_change(kind, None, LESSON, "developer", PID)
+        assert strip_change(created, PID) == learned_skeleton(kind, "developer")
+    assert learned_skeleton("personal-note", "developer") == "# Learned: developer\n"

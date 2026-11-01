@@ -51,6 +51,8 @@ def test_regression_case_is_a_valid_eval_case():
     assert case_path("repo", PID) == f".agentic/eval/cases/scoping/learned-{PID}.yaml"
     assert case_path("home", PID) == f"eval/cases/scoping/learned-{PID}.yaml"
     assert case_path("policy", PID) == f"eval/cases/scoping/learned-{PID}.yaml"
+    team = case_path("policy", PID, team="payments")
+    assert team == f"teams/payments/eval/cases/scoping/learned-{PID}.yaml"
 
 
 def test_measure_runs_the_case_before_and_after():
