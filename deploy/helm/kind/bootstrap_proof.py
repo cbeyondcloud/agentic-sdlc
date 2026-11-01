@@ -30,6 +30,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -478,10 +479,11 @@ def main() -> int:
         from local_index import LocalIndex
         from release_support import IDENTITY, allowed, new_key
 
-        index = LocalIndex(work / "index", password=secrets.token_hex(8)).start()
         release = work / "dist"
-        if not release.exists():
-            build.build_packages(ROOT, release, allow_dirty=True)  # a proof, not a release
+        for stale in (work / "index", release, work / "venv"):  # nothing from an earlier run
+            shutil.rmtree(stale, ignore_errors=True)
+        index = LocalIndex(work / "index", password=secrets.token_hex(8)).start()
+        build.build_packages(ROOT, release, allow_dirty=True)  # a proof, not a release
         key, public = new_key(work)
         signing.sign_dir(release, signing.load_private_key(key))
         creds = {"UV_PUBLISH_USERNAME": index.username, "UV_PUBLISH_PASSWORD": index.password}

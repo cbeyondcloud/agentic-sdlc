@@ -432,3 +432,18 @@ def test_the_template_team_may_use_every_agent_types_tier():
     team = load_yaml((policy / "teams" / "payments.yaml").read_text(encoding="utf-8"))[0]
     used = {spec["tier"] for spec in types.values() if spec.get("tier")}
     assert used <= set(team["allowed_tiers"]), used - set(team["allowed_tiers"])
+
+
+def test_byte_code_in_the_template_never_reaches_a_policy_repo(tmp_path, monkeypatch):
+    """Found by the kind proof: a test that imported the budget guard left __pycache__ in
+    the template, and the copy carried it into the policy repo's first commit."""
+    import shutil
+
+    template = tmp_path / "template"
+    shutil.copytree(bootstrap.TEMPLATE, template)
+    (template / ".github" / "__pycache__").mkdir()
+    (template / ".github" / "__pycache__" / "budget_guard.cpython-312.pyc").write_bytes(b"\xcb")
+    monkeypatch.setattr(bootstrap, "TEMPLATE", template)
+    out = tmp_path / "policy"
+    bootstrap.build_policy_repo(_args(step="policy-repo", out=str(out), admins=["@acme/a"]))
+    assert not list(out.rglob("__pycache__")) and not list(out.rglob("*.pyc"))

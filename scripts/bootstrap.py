@@ -252,7 +252,10 @@ def _build_policy_repo(args: argparse.Namespace, out: Path, runner: Runner) -> P
     teams = _pairs(args.team, "--team")
     models = _pairs(args.model, "--model")
     families = _pairs(args.family, "--family")
-    shutil.copytree(TEMPLATE, out, dirs_exist_ok=True)
+    # never a checkout's byte-code (tests import the budget guard from the template)
+    shutil.copytree(
+        TEMPLATE, out, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc")
+    )
     # the framework's library, which the template does not duplicate (its README, step 1)
     for agent in sorted((LIBRARY / "agents").glob("*.md")):
         shutil.copy2(agent, out / "agents" / agent.name)

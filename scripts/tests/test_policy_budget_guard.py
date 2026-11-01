@@ -23,7 +23,11 @@ def _load():
     spec = importlib.util.spec_from_file_location("budget_guard", GUARD)
     module = importlib.util.module_from_spec(spec)
     sys.modules["budget_guard"] = module
-    spec.loader.exec_module(module)
+    written, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:  # no __pycache__ in the template: the bootstrap copies it into policy repos
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = written
     return module
 
 
