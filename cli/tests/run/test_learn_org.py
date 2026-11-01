@@ -184,6 +184,9 @@ def test_org_approve_applies_a_personal_learning_and_revert_restores(org, cli, t
     assert decision["draft"]["path"] == "skills/learned-ba/SKILL.md"
     assert (reported, report["ref"]["kind"]) == ("applied", "personal")
     assert done.json()["status"] == "applied"
+    # the regression case ran before and after (M3-16), and the control plane is told
+    assert report["measurement"]["case"] == f"learned-{PID}"
+    assert report["measurement"]["status"] == "measured", report["measurement"]
 
     reverted = cli("--json", "learn", "revert", PID)
     assert reverted.code == ExitCode.OK, reverted.err

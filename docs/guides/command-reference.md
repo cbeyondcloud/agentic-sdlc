@@ -112,10 +112,10 @@ Nothing changes until the owner of what changes approves a proposal.
 | `agentic learn propose` | Teach one correction now, without waiting for it to repeat. | Dev |
 | `agentic learn edit` | Change a proposal before deciding it (its owner only). | Maint, Lead |
 | `agentic learn endorse` | Back a proposal. It adds weight and never approves. | Dev |
-| `agentic learn approve` | Approve a proposal you own and apply it (personal: written; shared: a pull request). | Dev, Maint, Lead |
+| `agentic learn approve` | Approve a proposal you own and apply it (personal: written; repo: a pull request; team: a policy-repo pull request). It runs the regression case without and with the change first; `--no-eval` skips that. | Dev, Maint, Lead |
 | `agentic learn reject` | Say no. The lesson is not proposed again without new evidence. | Dev, Maint, Lead |
 | `agentic learn defer` | Decide later. | Dev, Maint, Lead |
-| `agentic learn revert` | Undo an applied learning. | Dev, Maint, Lead |
+| `agentic learn revert` | Undo an applied learning: your file as it was, a revert pull request, or the unmerged pull request closed. | Dev, Maint, Lead |
 
 ## Code index
 

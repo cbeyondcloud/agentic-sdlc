@@ -91,14 +91,17 @@ class Measurement:
     case: str
     before: float
     after: float
+    #: "<label>: <why>" for a side whose run could not be scored (an infrastructure failure,
+    #: the budget cap): its 0.0 is no score, so the measurement is not one.
+    unscored: tuple[str, ...] = ()
 
     @property
     def regressed(self) -> bool:
         """The per-case regression rule: the change makes the lesson's coverage worse."""
-        return self.after < self.before
+        return not self.unscored and self.after < self.before
 
     def as_dict(self) -> dict:
-        return {**asdict(self), "regressed": self.regressed}
+        return {**asdict(self), "unscored": list(self.unscored), "regressed": self.regressed}
 
 
 async def measure(case: EvalCase, *, before: "RunCase", after: "RunCase", kind: str) -> Measurement:
@@ -116,7 +119,12 @@ async def measure(case: EvalCase, *, before: "RunCase", after: "RunCase", kind: 
         name=f"learning-{case.id}",
     )
     score = {r.request.label: r.metrics.get("lesson_covered", 0.0) for r in found.runs}
-    return Measurement(case=case.id, before=score["before"], after=score["after"])
+    unscored = tuple(
+        f"{r.request.label}: {r.record.error or r.record.status}"
+        for r in sorted(found.runs, key=lambda r: r.request.label != "before")
+        if r.record.error is not None or r.record.status == "skipped"
+    )
+    return Measurement(case.id, score["before"], score["after"], unscored)
 
 
 __all__ = [

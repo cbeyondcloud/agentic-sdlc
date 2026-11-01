@@ -85,3 +85,20 @@ def test_lower_after_score_is_a_regression():
         measure(case, before=scripted("x"), after=scripted("x"), kind="requirements")
     )
     assert failed.before == failed.after == 0.0 and not failed.regressed
+
+
+def test_a_run_that_could_not_be_scored_is_not_a_measurement():
+    """A side whose run failed (the gateway down, the budget cap) scores nothing: the
+    measurement says which side and why, and is never read as a regression."""
+    case = regression_case(PID, "business-analyst", LESSON, EVIDENCE)
+
+    async def broken(request: RunRequest) -> RunRecord:
+        return RunRecord(status="error", error="ConnectError: the gateway is down")
+
+    found = asyncio.run(measure(case, before=broken, after=scripted(LESSON), kind="requirements"))
+    assert found.unscored == ("before: ConnectError: the gateway is down",)
+    assert not found.regressed and found.as_dict()["unscored"] == list(found.unscored)
+    fine = asyncio.run(
+        measure(case, before=scripted("x"), after=scripted(LESSON), kind="requirements")
+    )
+    assert fine.unscored == ()

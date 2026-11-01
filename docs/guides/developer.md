@@ -210,7 +210,15 @@ agentic learn list
 agentic learn show <proposal>
 agentic learn approve <proposal>     # a personal change; a shared one goes to its owner
 agentic learn endorse <proposal>     # back a shared proposal you cannot approve
+agentic learn revert <proposal>      # undo an applied learning
 ```
+
+`approve` first runs the proposal's regression case twice: without the change and with it.
+The model calls go through your gateway, like a run, within the policy's eval budget for
+that agent. You see both scores. A lower score with the change is a warning, not a refusal:
+you decide. If the case cannot run (no gateway, or the agent's definition is not available here),
+the approval still goes ahead and says why. `--no-eval` skips the run. The result is kept
+with the change (`agentic learn show`) and in the run ledger.
 
 ## Scripts and CI
 

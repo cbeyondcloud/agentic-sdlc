@@ -8,10 +8,12 @@ import json
 import subprocess
 from pathlib import Path
 
+import httpx2
 import pytest
 from _cli_support import FakeGateway, answer, git, write
 from fake_github import FakeGitHub
 
+from agentic.yamlio import load_yaml
 from agentic_cli import runtime
 from agentic_cli.exit_codes import ExitCode
 
@@ -329,3 +331,210 @@ def test_a_target_missing_on_the_default_branch_is_refused_with_a_hint(
     assert refused.code == ExitCode.INVALID, refused.err
     assert "learn edit" in error(refused)["hint"]
     assert only_proposal(cli)["status"] == "pending" and fake.pulls == []
+
+
+# ── the regression case before and after, on approve (M3-16, DF-756) ──
+
+
+def measuring(gateway: FakeGateway, monkeypatch, learned: str) -> list[str]:
+    """The gateway as the eval sees it: an agent whose instructions hold the learned block
+    answers with the lesson's words, one without it does not (no model is called). Returns
+    the learning-eval requests' sides, in order."""
+    sides: list[str] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.headers.get("x-agentic-step") != "learning-eval":
+            return gateway.handler(request)
+        side = "after" if "Learned from corrections" in request.content.decode() else "before"
+        sides.append(side)
+        summary = learned if side == "after" else "Export the invoices."
+        gateway.answers["ba"].insert(0, answer("requirements", summary=summary))
+        return gateway.handler(request)
+
+    monkeypatch.setattr(runtime, "network_transport", lambda: httpx2.MockTransport(handler))
+    return sides
+
+
+def test_approve_measures_the_case_before_and_after(workspace, gateway, cli, monkeypatch, tmp_path):
+    corrections(cli, monkeypatch, PEOPLE[:1])
+    row = only_proposal(cli)
+    sides = measuring(gateway, monkeypatch, "Acceptance criteria name every CSV column.")
+    done = cli("--json", "learn", "approve", row["id"])
+    assert done.code == ExitCode.OK, done.err
+    measured = done.json()["measurement"]
+    assert sorted(sides) == ["after", "before"]
+    assert measured["status"] == "measured" and measured["case"] == f"learned-{row['id']}"
+    assert measured["before"] < measured["after"] and not measured["regressed"]
+    assert cli("--json", "learn", "show", row["id"]).json()["measurement"] == measured
+    ledger = workspace / ".agentic" / "local" / "runs" / measured["ledger"]
+    assert ledger.is_dir()  # the eval's run ledger (Zyroflo's hash chain)
+    assert cli("--json", "audit", "verify", measured["ledger"]).code == ExitCode.OK
+
+
+def test_a_regression_is_said_and_the_approval_stands(workspace, gateway, cli, monkeypatch):
+    corrections(cli, monkeypatch, PEOPLE[:1])
+    row = only_proposal(cli)
+    sides: list[str] = []
+
+    def worse(request: httpx2.Request) -> httpx2.Response:
+        if request.headers.get("x-agentic-step") == "learning-eval":
+            sides.append("x")
+            text = request.content.decode()
+            summary = "Export." if "Learned from corrections" in text else CRITERIA[0]
+            gateway.answers["ba"].insert(0, answer("requirements", summary=summary))
+        return gateway.handler(request)
+
+    monkeypatch.setattr(runtime, "network_transport", lambda: httpx2.MockTransport(worse))
+    done = cli("learn", "approve", row["id"])
+    assert done.code == ExitCode.OK, done.err
+    assert "scored lower with the change" in " ".join(done.err.split())
+    shown = cli("--json", "learn", "show", row["id"]).json()
+    assert shown["status"] == "applied" and shown["measurement"]["regressed"]
+
+
+def test_approve_no_eval_skips_the_measurement(workspace, gateway, cli, monkeypatch):
+    corrections(cli, monkeypatch, PEOPLE[:1])
+    row = only_proposal(cli)
+    sides = measuring(gateway, monkeypatch, "x")
+    done = cli("--json", "learn", "approve", row["id"], "--no-eval")
+    assert done.code == ExitCode.OK, done.err
+    assert sides == [] and done.json()["measurement"]["status"] == "skipped"
+
+
+def test_an_unmeasurable_case_never_blocks_the_approval(workspace, gateway, cli, monkeypatch):
+    corrections(cli, monkeypatch, PEOPLE[:1])
+    row = only_proposal(cli)
+    monkeypatch.delenv("AGENTIC_GATEWAY_URL")
+    done = cli("learn", "approve", row["id"])
+    assert done.code == ExitCode.OK, done.err
+    assert "not run before and after" in " ".join(done.err.split())
+    shown = cli("--json", "learn", "show", row["id"]).json()
+    assert shown["status"] == "applied" and shown["measurement"]["status"] == "unmeasured"
+    assert "gateway" in shown["measurement"]["reason"]
+
+
+# ── a team learning is a policy-repo pull request for that team's leads (D30, DF-757) ──
+
+POLICY_HOST = "policy.example.test"
+TEAM_CATALOG = "# The payments team's own skills.\nskills: {}\n"
+SKILL = "teams/payments/skills/internal/learned-ba/SKILL.md"
+CATALOG = "teams/payments/skills/catalog.yaml"
+
+
+@pytest.fixture
+def policy_host(tmp_path, workspace, monkeypatch):
+    """The policy repo on a (fake) host: a bare remote, the fake GitHub and the approver's
+    checkout of it (`policy_checkout`), its catalog committed on main."""
+    bare = tmp_path / "policy.git"
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(bare)], check=True)
+    checkout = tmp_path / "policy-checkout"
+    subprocess.run(["git", "init", "-q", "-b", "main", str(checkout)], check=True)
+    git(checkout, "config", "user.email", "lead@acme.example")
+    git(checkout, "config", "user.name", "Lead")
+    write(checkout / CATALOG, TEAM_CATALOG)
+    git(checkout, "add", ".")
+    git(checkout, "commit", "-qm", "policy")
+    git(checkout, "remote", "add", "origin", f"https://{POLICY_HOST}/acme/policy.git")
+    git(checkout, "remote", "set-url", "--push", "origin", str(bare))
+    git(checkout, "push", "-q", "origin", "main")
+    git(checkout, "update-ref", "refs/remotes/origin/main", "main")
+    fake = FakeGitHub(TOKEN, bare).start()
+    write(
+        tmp_path / "home" / "config.yaml",
+        f"policy_checkout: {checkout.as_posix()}\n"
+        f"git_hosts:\n  {POLICY_HOST}:\n    kind: github\n    api_url: {fake.url}\n",
+    )
+    monkeypatch.setenv("AGENTIC_GITHUB_TOKEN", TOKEN)
+    yield fake, bare, checkout
+    fake.stop()
+
+
+def yaml_load(text: str) -> dict:
+    return load_yaml(text)[0]
+
+
+def folder_sha(bare: Path, ref: str, tmp_path: Path) -> str:
+    from agentic.skills.authoring import skill_sha
+
+    folder = tmp_path / "sha" / ref.replace("/", "-") / "learned-ba"
+    write(folder / "SKILL.md", at(bare, ref, SKILL))
+    return skill_sha(folder)
+
+
+def test_team_learning_opens_a_policy_repo_pull_request_and_reverts(
+    workspace, gateway, policy_host, cli, monkeypatch, tmp_path
+):
+    fake, bare, checkout = policy_host
+    main_before = git(bare, "rev-parse", "main").strip()
+    corrections(cli, monkeypatch, PEOPLE)
+    row = only_proposal(cli)
+    edited = cli("--json", "learn", "edit", row["id"], "--kind", "team-skill")
+    assert edited.code == ExitCode.OK, edited.err
+    assert (
+        edited.json()["eval_path"] == f"teams/payments/eval/cases/scoping/learned-{row['id']}.yaml"
+    )
+
+    done = cli("learn", "approve", row["id"], "--no-eval")
+    assert done.code == ExitCode.OK, done.err
+    assert "team's leads" in " ".join(done.err.split())  # standalone: they decide in review
+    applied = cli("--json", "learn", "show", row["id"]).json()["applied"]
+    assert applied["kind"] == "pull-request" and applied["repo"].endswith("acme/policy")
+    branch = applied["branch"]
+    assert branch == f"agentic/learning/{row['id']}"
+    assert git(bare, "rev-parse", "main").strip() == main_before  # never the default branch
+    assert "CSV column" in at(bare, branch, SKILL)
+    assert "key_points" in at(bare, branch, edited.json()["eval_path"])
+    catalog = at(bare, branch, CATALOG)
+    assert catalog.startswith("# The payments team's own skills.")
+    pinned = yaml_load(catalog)["skills"]["internal/learned-ba"]
+    assert pinned["sha256"] == folder_sha(bare, branch, tmp_path)
+    assert pinned["path"] == "teams/payments/skills/internal/learned-ba"
+    changed = git(bare, "diff", "--name-only", main_before, branch).split()
+    assert changed and all(p.startswith("teams/payments/") for p in changed)
+    assert "payments" in fake.pulls[0]["body"] and "team's leads" in fake.pulls[0]["body"]
+
+    # a team lead merges it on the host; the approver's checkout fetched it
+    git(bare, "update-ref", "refs/heads/main", applied["commit"])
+    fake.merge(1)
+    git(checkout, "fetch", "-q", str(bare), "main:refs/remotes/origin/main")
+
+    reverted = cli("--json", "learn", "revert", row["id"])
+    assert reverted.code == ExitCode.OK, reverted.err
+    back = reverted.json()["reverted"]
+    assert back["kind"] == "pull-request" and back["branch"] == f"{branch}-revert"
+    assert "CSV column" not in at(bare, back["branch"], SKILL)
+    repinned = yaml_load(at(bare, back["branch"], CATALOG))["skills"]["internal/learned-ba"]
+    assert repinned["sha256"] == folder_sha(bare, back["branch"], tmp_path)
+    assert repinned["sha256"] != pinned["sha256"]
+
+
+def test_reverting_an_unmerged_learning_closes_its_pull_request(
+    workspace, gateway, github, cli, monkeypatch
+):
+    """DF-764: a learning reverted before its pull request is merged closes that pull
+    request, so a later merge cannot land a learning that reads as reverted."""
+    fake, remote = github
+    corrections(cli, monkeypatch, PEOPLE)
+    row = only_proposal(cli)
+    assert cli("--json", "learn", "approve", row["id"], "--no-eval").code == ExitCode.OK
+    reverted = cli("--json", "learn", "revert", row["id"])
+    assert reverted.code == ExitCode.OK, reverted.err
+    assert reverted.json()["reverted"]["kind"] == "closed"
+    assert fake.pulls[0]["state"] == "closed" and not fake.pulls[0].get("merged")
+    assert len(fake.pulls) == 1  # no revert pull request: nothing was merged
+    assert only_proposal(cli)["status"] == "reverted"
+
+
+def test_a_team_learning_without_a_policy_repo_is_refused_first(
+    workspace, gateway, cli, monkeypatch
+):
+    """Nothing is measured (no model spend) or decided when the policy repo to open the
+    pull request in is not configured."""
+    corrections(cli, monkeypatch, PEOPLE)
+    row = only_proposal(cli)
+    assert cli("--json", "learn", "edit", row["id"], "--kind", "team-skill").code == 0
+    sides = measuring(gateway, monkeypatch, "x")
+    refused = cli("--json", "learn", "approve", row["id"])
+    assert refused.code == ExitCode.REFUSED, refused.err
+    assert "policy_checkout" in error(refused)["hint"]
+    assert sides == [] and only_proposal(cli)["status"] == "pending"

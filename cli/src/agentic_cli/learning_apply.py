@@ -7,18 +7,22 @@
     the person whose corrections it holds; a shared one, standalone, by whoever runs the
     command (there is no RBAC to ask: said so, and the repository's maintainers decide in
     the pull request review);
-  * `apply` - only an approved proposal (D29): a personal change is written into
-    `~/.agentic` through Zyroflo's learning log (`sdlc_commons.learning`), with its
-    regression case; a repo change is a pull request on a new branch
+  * `apply` - only an approved proposal (D29), after its regression case ran before and
+    after the change (`learning_eval`; recorded, never blocking): a personal change is
+    written into `~/.agentic` through Zyroflo's learning log (`sdlc_commons.learning`), with
+    its regression case; a repo change is a pull request on a new branch
     (`agentic/learning/<id>`) built on the remote default branch with git plumbing - the
     checkout, its index and its current branch never change, and nothing is ever
-    committed to the default branch. The approval is recorded once the remote is reached
+    committed to the default branch; a team change is the same in a checkout of the policy
+    repo, touching only `teams/<team>/` (the skill, its catalog pin, its case) for that
+    team's leads (D30). The approval is recorded once the remote is reached
     and the change rendered on its base; a change that still fails stays approved, and
     `approve` again makes it (`reject` drops it);
   * `revert` - Zyroflo's undo for a personal change (only the learning's block when the
     file changed since, so a later learning or a hand edit stays); for a shared one a revert pull
     request that takes the learned block out of the default branch's file (the content
-    before the learning). The regression case stays: it records the correction;
+    before the learning), or - not merged yet - its pull request closed (DF-764). The
+    regression case stays: it records the correction;
   * `pending_notice` - the end of a run says how many proposals wait for a decision.
 
 Each step is recorded in the proposal's change record (`.agentic/local/learning/changes/`).
@@ -32,11 +36,16 @@ made only from a checkout of its own repository.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+import subprocess
+import tempfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from agentic.hosting import HostingError
+from agentic.hosting.base import ClosingHost
 from agentic.hosting.git import fetch_branch, push_branch, rev_parse
 from agentic.learning.approval import DecisionError, may_decide, next_status
 from agentic.learning.changes import (
@@ -50,13 +59,15 @@ from agentic.learning.changes import (
 )
 from agentic.learning.clustering import Proposal, proposal_id
 from agentic.learning.store import LocalLearningStore, StoreError
+from agentic.skills import SkillsError
+from agentic.skills.authoring import INTERNAL, catalog_entry, pin_catalog_entry, skill_sha
 from agentic.yamlio import dump_yaml
-from agentic_cli import learning, repo_setup
+from agentic_cli import learning, learning_eval, repo_setup
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.hosting import connect
 from agentic_cli.publishing import REMOTE
-from agentic_cli.skill_promotion import head_text
+from agentic_cli.skill_promotion import head_text, policy_checkout
 from sdlc_commons.learning import LearningApplyError, PersonalChanges
 
 if TYPE_CHECKING:
@@ -72,9 +83,15 @@ STORE_HINT = (
     "rebuilds the proposals from the runs' feedback journals (decisions in it are lost)"
 )
 NO_RBAC = (
-    "standalone: there is no RBAC to ask, so this shared decision proceeds; the "
-    "repository's maintainers decide in the pull request review"
+    "standalone: there is no RBAC to ask, so this shared decision proceeds; {who} decide "
+    "in the pull request review"
 )
+REVIEWERS = {
+    "repo": "the repository's maintainers",
+    "team": "the team's leads (the policy repo's code owners of teams/<team>/)",
+}
+LEARNED_NOTE = "learned from corrections (agentic learn approve)"
+_GIT = ["git", "-c", "core.fsmonitor=false", "-c", "core.autocrlf=false"]
 
 
 def _now() -> datetime:
@@ -202,7 +219,7 @@ def check_owner(rt: Runtime, made: Draft, what: str, warn: Callable[[str], None]
             hint=f"`agentic learn endorse {made.proposal_id}` backs it instead",
         )
     if made.scope != "personal":
-        warn(NO_RBAC)
+        warn(NO_RBAC.format(who=REVIEWERS.get(made.scope, REVIEWERS["repo"])))
     return user
 
 
@@ -301,13 +318,19 @@ def propose_from(rt: Runtime, feedback_id: str, agent: str | None) -> Proposal:
 # ── apply and revert ────────────────────────────────────────────────────────
 
 
-def approve(rt: Runtime, pid: str, warn: Callable[[str], None]) -> tuple[Proposal, dict]:
-    """Approve (owner only), then apply: the only path to a changed skill, note or file.
+def approve(
+    rt: Runtime, pid: str, warn: Callable[[str], None], skip_eval: str | None = None
+) -> tuple[Proposal, dict, dict]:
+    """Approve (owner only), measure, then apply: the only path to a changed skill, note or
+    file. Returns the proposal, how the change was made and the measurement.
 
-    The approval is recorded once everything that can be checked first was (review F3): the
+    The regression case runs before and after the change first (`learning_eval`; skipped
+    with `skip_eval`); its result is recorded with the change and never blocks it. The
+    approval is recorded once everything that can be checked first was (review F3): the
     hosting remote is reached and the change rendered on the default branch's file. A change
     that still fails after that (a push, a write) leaves the proposal approved, and running
-    `approve` again makes it without a second decision (or `reject` drops it)."""
+    `approve` again makes it without a second decision (or `reject` drops it) - and without
+    a second measurement."""
     proposal = get(rt, pid)
     resuming = proposal.status == "approved"
     if not resuming:
@@ -320,13 +343,10 @@ def approve(rt: Runtime, pid: str, warn: Callable[[str], None]) -> tuple[Proposa
             ExitCode.INVALID,
             hint=f"`agentic learn edit {pid} --lesson ...` rewrites it",
         )
-    if made.root == "policy":
-        raise CliError(
-            "team learnings land as policy-repo pull requests, which this version does not "
-            "open yet",
-            ExitCode.REFUSED,
-            hint=f"`agentic learn edit {pid} --kind repo-memory` makes it a repo change",
-        )
+    _policy_repo_known(rt, made)
+    record = record_of(rt, pid)
+    measured = _measurement(rt, made, record if resuming else {}, skip_eval, warn)
+    store(rt).save_change(pid, {**record, "measurement": measured})
 
     def decided() -> None:
         if not resuming:
@@ -337,7 +357,32 @@ def approve(rt: Runtime, pid: str, warn: Callable[[str], None]) -> tuple[Proposa
     store(rt).save_change(
         pid, {**record, "draft": made.model_dump(mode="json"), "applied": applied}
     )
-    return store(rt).decide(pid, "apply", user, _now()), applied
+    return store(rt).decide(pid, "apply", user, _now()), applied, measured
+
+
+def _policy_repo_known(rt: Runtime, made: Draft) -> None:
+    """A team learning is a policy-repo pull request: refused before anything is measured
+    or decided when no policy repo is configured to build it in."""
+    settings = rt.ws.settings
+    if made.root == "policy" and not (
+        settings.get("policy_checkout") or settings.get("policy_repo")
+    ):
+        raise CliError(
+            "a team learning is a pull request in the policy repo, and none is configured",
+            ExitCode.REFUSED,
+            hint="set policy_checkout (a clone) or policy_repo in ~/.agentic/config.yaml",
+        )
+
+
+def _measurement(
+    rt: Runtime, made: Draft, record: dict, skip: str | None, warn: Callable[[str], None]
+) -> dict:
+    """The regression case before and after; one an earlier attempt of this approval
+    measured is kept (an approved change is never edited, so it is the same case)."""
+    held = record.get("measurement") or {}
+    if held.get("status") == "measured" and held.get("case") == made.eval_case.get("id"):
+        return held
+    return learning_eval.measure_change(rt, made, skip=skip, warn=warn)
 
 
 def _apply(
@@ -387,7 +432,18 @@ def _body(made: Draft, user: str) -> str:
         f"**Evidence** (the corrections that triggered it):\n{evidence or '- (none recorded)'}\n\n"
         f"**Change:**\n\n```diff\n{made.diff[:20000]}```\n\n"
         f"**Regression case:** `{made.eval_path}` (the corrected example, M1-63 format).\n\n"
+        f"{_reviewed_by(made)}"
         f"Undo it with `agentic learn revert {made.proposal_id}` (a revert pull request)."
+    )
+
+
+def _reviewed_by(made: Draft) -> str:
+    if made.root != "policy":
+        return ""
+    team = made.owner.removeprefix("team:")
+    return (
+        f"**Review:** the `{team}` team's leads (code owners of `teams/{team}/`, D30). The "
+        f"learned skill is pinned in `teams/{team}/skills/catalog.yaml` by its content hash.\n\n"
     )
 
 
@@ -399,22 +455,26 @@ def _branch_off_default(
     body: str,
     warn: Callable[[str], None] | None = None,
     ready: Callable[[], None] = lambda: None,
+    where: Path | None = None,
+    nothing: Callable[[object], dict] | None = None,
 ) -> dict | None:
-    """A pull request of `files_for(base commit)` on `branch`; `ready()` runs once the
-    files are known, before anything is pushed."""
-    with connect(rt.ws.repo, rt.ws.settings, remote=REMOTE) as conn, conn.errors():
+    """A pull request of `files_for(base commit)` on `branch` in the checkout `where` (this
+    repository by default); `ready()` runs once the files are known, before anything is
+    pushed. When there is nothing to change, `nothing(connection)` says what was done."""
+    where = where or rt.ws.repo
+    with connect(where, rt.ws.settings, remote=REMOTE) as conn, conn.errors():
         provider = conn.provider
         base = provider.default_branch(conn.repo)
-        base_rev = _base(rt.ws.repo, conn, base, warn or (lambda m: _LOG.warning("%s", m)))
+        base_rev = _base(where, conn, base, warn or (lambda m: _LOG.warning("%s", m)))
         files = files_for(base_rev)
         if files is None:
-            return None
+            return nothing(conn) if nothing is not None else None
         ready()
         message = f"{title}\n\nOpened with agentic learn (the learning loop, M3-16)."
         name, commit = repo_setup.commit_on_branch(
-            rt.ws.repo, dict(files), message, branch=branch, base=base_rev
+            where, dict(files), message, branch=branch, base=base_rev
         )
-        push_branch(rt.ws.repo, conn.remote, name, secrets=[conn.token])
+        push_branch(where, conn.remote, name, secrets=[conn.token])
         pull = provider.open_pull_request(conn.repo, head=name, base=base, title=title, body=body)
     return {
         "kind": "pull-request",
@@ -452,11 +512,24 @@ def apply_shared(
     ready: Callable[[], None] = lambda: None,
 ) -> dict:
     """A pull request with the change re-rendered on the default branch's file (so it
-    changes only the learned block, whatever the local checkout holds)."""
+    changes only the learned block, whatever the local checkout holds): in this repository,
+    or - a team learning (D30) - in the policy repo, where it changes only `teams/<team>/`
+    (the skill, its catalog pin and its regression case) for that team's leads to review."""
     user = rt.known_user()
+    with _checkout(rt, made) as where:
+        return _apply_shared_in(rt, made, where, user, warn, ready)
 
+
+def _apply_shared_in(
+    rt: Runtime,
+    made: Draft,
+    where: Path,
+    user: str,
+    warn: Callable[[str], None] | None,
+    ready: Callable[[], None],
+) -> dict:
     def files(base_rev: str) -> dict[str, str]:
-        current = head_text(rt.ws.repo, made.path, base_rev)
+        current = head_text(where, made.path, base_rev)
         try:
             after = render_change(made.kind, current, made.lesson, made.agent, made.proposal_id)
         except DraftError as error:  # e.g. the agent is defined in this checkout only
@@ -471,11 +544,14 @@ def apply_shared(
                 ExitCode.INVALID,
                 hint=f"`agentic learn edit {made.proposal_id} --lesson ...` rewrites it",
             )
-        return {made.path: after, made.eval_path: dump_yaml(made.eval_case)}
+        out = {made.path: after, made.eval_path: dump_yaml(made.eval_case)}
+        if made.root == "policy":
+            out.update(_team_catalog(where, made, after, base_rev, user))
+        return out
 
     branch = BRANCH.format(id=made.proposal_id)
     title, body = _title(made), _body(made, user)
-    opened = _branch_off_default(rt, files, branch, title, body, warn, ready)
+    opened = _branch_off_default(rt, files, branch, title, body, warn, ready, where)
     if opened is None:  # files() always has the change; kept for the type
         raise CliError("there was nothing to propose", ExitCode.ERROR)
     return {**opened, "path": made.path}
@@ -514,15 +590,49 @@ def revert_personal(
 
 
 def revert_shared(rt: Runtime, made: Draft, applied: dict, warn) -> dict:
-    """A revert pull request: the default branch's file without the learned block."""
+    """A revert pull request: the default branch's file without the learned block (a team
+    skill re-pinned in its catalog). When the learning is not on the default branch, its
+    pull request was not merged: it is closed, so a later merge cannot land a learning that
+    reads as reverted (DF-764), on a host that can close one (`ClosingHost`)."""
+    with _checkout(rt, made) as where:
+        return _revert_shared_in(rt, made, applied, where, warn)
+
+
+def _revert_shared_in(rt: Runtime, made: Draft, applied: dict, where: Path, warn) -> dict:
     path = applied.get("path") or made.path
 
     def files(base_rev: str) -> dict[str, str] | None:
-        current = head_text(rt.ws.repo, path, base_rev)
+        current = head_text(where, path, base_rev)
         if current is None:
             return None
         restored = strip_change(current, made.proposal_id)
-        return None if restored == current else {path: restored}
+        if restored == current:
+            return None
+        out = {path: restored}
+        if made.root == "policy":
+            out.update(_team_catalog(where, made, restored, base_rev, rt.known_user()))
+        return out
+
+    def unmerged(conn) -> dict:
+        number = applied.get("number")
+        provider = conn.provider
+        branch = applied.get("branch") or BRANCH.format(id=made.proposal_id)
+        pull = provider.find_pull_request(conn.repo, branch)
+        if pull is not None and isinstance(provider, ClosingHost):
+            provider.close_pull_request(conn.repo, pull.number)
+            warn(f"the learning was not merged: pull request #{pull.number} was closed")
+            return {"kind": "closed", "number": pull.number, "url": pull.url}
+        if pull is not None:
+            warn(
+                f"the learning is not on the default branch (pull request #{pull.number} was "
+                "not merged): close that pull request on the host"
+            )
+        else:
+            warn(
+                "the learning is not on the default branch and its pull request is not open: "
+                "there is nothing to revert there"
+            )
+        return {"kind": "not-merged", "number": number}
 
     title = _title(made, "Revert learning")
     body = (
@@ -530,16 +640,80 @@ def revert_shared(rt: Runtime, made: Draft, applied: dict, warn) -> dict:
         f"**{made.agent}** agent: its block is taken out of `{path}`, which then holds what it "
         "held before. The regression case stays: it records the correction."
     )
+    branch = BRANCH.format(id=f"{made.proposal_id}-revert")
     opened = _branch_off_default(
-        rt, files, BRANCH.format(id=f"{made.proposal_id}-revert"), title, body, warn
+        rt, files, branch, title, body, warn, where=where, nothing=unmerged
     )
-    if opened is None:
-        warn(
-            f"the learning is not on the default branch (pull request #{applied.get('number')} "
-            "was not merged): close that pull request on the host"
-        )
-        return {"kind": "not-merged", "number": applied.get("number")}
+    if opened is None or opened["kind"] != "pull-request":
+        return opened or {"kind": "not-merged", "number": applied.get("number")}
     return {**opened, "path": path}
+
+
+# ── team learnings: the policy repo (D30) ──
+
+
+@contextmanager
+def _checkout(rt: Runtime, made: Draft) -> Iterator[Path]:
+    """Where a shared change is built: this repository, or for a team learning a checkout of
+    the policy repo (`policy_checkout`, else a scratch clone of `policy_repo`, as `agentic
+    skills submit --to team` does)."""
+    if made.root != "policy":
+        yield rt.ws.repo
+        return
+    with policy_checkout(rt.ws.settings, None) as target:
+        yield target
+
+
+def _team_catalog(where: Path, made: Draft, skill: str, base_rev: str, by: str) -> dict[str, str]:
+    """The team catalog with the learned skill pinned to its new content hash (added on its
+    first learning, re-pinned after), refused unless every file stays in `teams/<team>/`."""
+    team = made.owner.removeprefix("team:")
+    folder = PurePosixPath(made.path).parent.as_posix()
+    name = PurePosixPath(folder).name
+    catalog = f"teams/{team}/skills/catalog.yaml"
+    for path in (made.path, made.eval_path, catalog):
+        if not path.startswith(f"teams/{team}/"):
+            raise CliError(
+                f"a {team} team learning must change only teams/{team}/, not {path}",
+                ExitCode.REFUSED,
+            )
+    sha = _folder_sha(where, folder, base_rev, {made.path: skill})
+    entry = {**catalog_entry(name, sha, owner=by, path=folder), "notes": LEARNED_NOTE}
+    try:
+        text = pin_catalog_entry(head_text(where, catalog, base_rev), f"{INTERNAL}/{name}", entry)
+    except SkillsError as error:
+        raise CliError(f"{catalog}: {error}", ExitCode.REFUSED) from None
+    return {catalog: text}
+
+
+def _folder_sha(where: Path, folder: str, rev: str, changed: dict[str, str]) -> str:
+    """The skill folder's content hash as it will be on the branch: its files at `rev`,
+    with `changed` (POSIX path -> text) written over them."""
+    listed = subprocess.run(
+        [*_GIT, "-C", str(where), "ls-tree", "-r", "-z", "--name-only", rev, "--", folder],
+        capture_output=True,
+        check=False,
+    )
+    names = [n.decode("utf-8") for n in listed.stdout.split(b"\0") if n]
+    with tempfile.TemporaryDirectory(prefix="agentic-learning-") as scratch:
+        root = Path(scratch) / PurePosixPath(folder).name
+        root.mkdir()
+        for name in names:
+            shown = subprocess.run(
+                [*_GIT, "-C", str(where), "cat-file", "-p", f"{rev}:{name}"],
+                capture_output=True,
+                check=True,
+            )
+            _write_under(root, PurePosixPath(name).relative_to(folder), shown.stdout)
+        for name, text in changed.items():
+            _write_under(root, PurePosixPath(name).relative_to(folder), text.encode("utf-8"))
+        return skill_sha(root)
+
+
+def _write_under(root: Path, relative: PurePosixPath, data: bytes) -> None:
+    target = root.joinpath(*relative.parts)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
 
 
 # ── the commands' entry points (standalone here, the control plane in org mode) ──
@@ -579,14 +753,17 @@ def show(rt: Runtime, pid: str) -> dict:
         "draft": made.model_dump(mode="json"),
         "applied": record.get("applied"),
         "reverted": record.get("reverted"),
+        "measurement": record.get("measurement"),
     }
 
 
-def approve_any(rt: Runtime, pid: str, warn: Callable[[str], None]) -> dict:
+def approve_any(
+    rt: Runtime, pid: str, warn: Callable[[str], None], skip_eval: str | None = None
+) -> dict:
     if _org(rt):
-        return org_approve(rt, pid, warn)
-    proposal, applied = approve(rt, pid, warn)
-    return {**proposal_row(proposal), "applied": applied}
+        return org_approve(rt, pid, warn, skip_eval)
+    proposal, applied, measured = approve(rt, pid, warn, skip_eval)
+    return {**proposal_row(proposal), "applied": applied, "measurement": measured}
 
 
 def revert_any(rt: Runtime, pid: str, warn: Callable[[str], None]) -> dict:
@@ -752,7 +929,9 @@ def org_edit(rt: Runtime, pid: str, kind: str | None, lesson: str | None) -> Dra
     return made
 
 
-def org_approve(rt: Runtime, pid: str, warn: Callable[[str], None]) -> dict:
+def org_approve(
+    rt: Runtime, pid: str, warn: Callable[[str], None], skip_eval: str | None = None
+) -> dict:
     """The control plane approves (owner only, audited); the change is then made from this
     machine and reported back (`applied`, audited). An approval whose change was never
     made resumes, by its owner only."""
@@ -764,12 +943,6 @@ def org_approve(rt: Runtime, pid: str, warn: Callable[[str], None]) -> dict:
         raise CliError(
             "this change is not instruction-only: " + "; ".join(made.problems), ExitCode.INVALID
         )
-    if made.root == "policy":
-        raise CliError(
-            "team learnings land as policy-repo pull requests, which this version does not "
-            "open yet",
-            ExitCode.REFUSED,
-        )
     draft_json = made.model_dump(mode="json")
 
     def decided() -> None:
@@ -777,10 +950,16 @@ def org_approve(rt: Runtime, pid: str, warn: Callable[[str], None]) -> dict:
             _client(rt, lambda c: c.decide_proposal(pid, "approve", "", draft_json))
 
     user = rt.known_user()
+    _policy_repo_known(rt, made)
+    held = record_of(rt, pid) if detail.status == "approved" else {}
+    measured = _measurement(rt, made, held, skip_eval, warn)
+    store(rt).save_change(pid, {"measurement": measured})
     applied = _apply(rt, made, user, warn, decided)
-    store(rt).save_change(pid, {"draft": made.model_dump(mode="json"), "applied": applied})
-    info = _client(rt, lambda c: c.report_applied(pid, applied))
-    return {**info.model_dump(mode="json"), "applied": applied}
+    store(rt).save_change(
+        pid, {"draft": made.model_dump(mode="json"), "applied": applied, "measurement": measured}
+    )
+    info = _client(rt, lambda c: c.report_applied(pid, applied, measured))
+    return {**info.model_dump(mode="json"), "applied": applied, "measurement": measured}
 
 
 def org_revert(rt: Runtime, pid: str, warn: Callable[[str], None]) -> dict:
