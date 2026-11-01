@@ -660,12 +660,16 @@ LEFT JOIN (
 
 #: Each applied learning (M3-16): its agent's corrections and its team's runs in the 30 days
 #: before and after it was applied, and the correction rate (corrections per run) of each
-#: window. A window without a run is NULL (unmeasured), never 0.
+#: window. A window without a run is NULL (unmeasured), never 0. A personal learning changed
+#: one person's runs only, so it counts that person's corrections over that person's runs,
+#: and its lesson (their own note) is not shown (DF-763, review F9). Migration
+#: `m3_16_learning_effect` replaced the M3-14 body (kept there for its downgrade).
 _LEARNING_WINDOW = "INTERVAL '30 days'"
 _LEARNING_EFFECT = f"""
 WITH applied AS (
   SELECT p.tenant_id, p.id AS proposal_id, p.team, p.agent, p.scope, p.lesson, p.status,
-    p.applied_at, p.reverted_at
+    p.applied_at, p.reverted_at, p.authors,
+    COALESCE(p.draft->>'scope', '') = 'personal' AS personal
   FROM learning_proposals p JOIN dash_scope s ON s.tenant_id = p.tenant_id
   WHERE p.applied_at IS NOT NULL
 ), corrections AS (
@@ -676,6 +680,7 @@ WITH applied AS (
       AND f.given_at < a.applied_at + {_LEARNING_WINDOW}) AS corrections_after
   FROM applied a LEFT JOIN feedback f
     ON f.tenant_id = a.tenant_id AND f.team = a.team AND a.agent = ANY(f.agents)
+    AND (NOT a.personal OR f.author_id = ANY(a.authors))
   GROUP BY a.tenant_id, a.proposal_id
 ), team_runs AS (
   SELECT a.tenant_id, a.proposal_id,
@@ -684,9 +689,11 @@ WITH applied AS (
     COUNT(r.run_id) FILTER (WHERE r.opened_at >= a.applied_at
       AND r.opened_at < a.applied_at + {_LEARNING_WINDOW}) AS runs_after
   FROM applied a LEFT JOIN runs r ON r.tenant_id = a.tenant_id AND r.team = a.team
+    AND (NOT a.personal OR r.started_by = ANY(a.authors))
   GROUP BY a.tenant_id, a.proposal_id
 )
-SELECT a.tenant_id, a.proposal_id, a.team, a.agent, a.scope, a.lesson, a.status,
+SELECT a.tenant_id, a.proposal_id, a.team, a.agent, a.scope,
+  CASE WHEN a.personal THEN NULL ELSE a.lesson END AS lesson, a.status,
   a.applied_at, a.reverted_at, c.corrections_before, c.corrections_after,
   t.runs_before, t.runs_after,
   CASE WHEN t.runs_before > 0
@@ -787,6 +794,11 @@ def drop_statements(views: tuple[str, ...] = M2_37_VIEWS) -> list[str]:
     first."""
     contracts = CONTRACT_VIEWS if views == M2_37_VIEWS else ()
     return [f"DROP VIEW IF EXISTS {name}" for name in (*reversed(views), *contracts)]
+
+
+def learning_effect_sql() -> str:
+    """The body of `dash_learning_effect` as it is now (migration `m3_16_learning_effect`)."""
+    return _LEARNING_EFFECT.strip()
 
 
 def learning_view_statements(schema: str) -> list[str]:
