@@ -9,7 +9,13 @@ v1's credential is the user's TokenLean proxy key (D12). Lookup order:
      a CI runner has no keychain, and a keychain prompt would hang the job;
   3. the OS keyring (Windows Credential Manager, macOS Keychain, Secret
      Service) through `keyring` (MIT), service `agentic-sdlc` - where
-     `agentic login` stores it (`store`).
+     `agentic login` stores it (`store`);
+  4. only when the caller gives a `file_store` (DF-955): the credential file
+     (`agentic.auth.filestore`). It is read after the keyring, and written only when
+     `keyring` has no backend at all (`NoKeyringError`: a WSL2 or headless Linux
+     without a Secret Service) - a keyring that exists but fails (locked, D-Bus
+     errors) stays an error, never a silent downgrade. With `prefer_file` the
+     keyring is skipped (the person chose the file).
 
 A missing key, or a keyring that cannot be used, is a `CredentialError` that
 says how to fix it. A credential's value never appears in a repr or an error.
@@ -23,6 +29,9 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
 import keyring
+from keyring.errors import NoKeyringError
+
+from agentic.auth.filestore import CredentialFileError, FileStore
 
 SERVICE = "agentic-sdlc"
 #: A backend can fail below keyring's own errors (D-Bus, a locked store, the OS API -
@@ -55,7 +64,7 @@ class CredentialError(Exception):
 @dataclass(frozen=True)
 class Credential:
     value: str = field(repr=False)
-    source: Literal["env", "keyring"]
+    source: Literal["env", "keyring", "file"]
 
 
 class Keyring(Protocol):
@@ -84,9 +93,13 @@ class Credentials:
         environ: Mapping[str, str] | None = None,
         keyring: Keyring | None = None,
         service: str = SERVICE,
+        file_store: FileStore | None = None,
+        prefer_file: bool = False,
     ) -> None:
         self.environ = os.environ if environ is None else environ
         self._keyring, self.service = keyring, service
+        self.file_store = file_store
+        self.prefer_file = prefer_file and file_store is not None
 
     @property
     def in_ci(self) -> bool:
@@ -109,15 +122,31 @@ class Credentials:
             return Credential(value, "env")
         if self.in_ci:
             return None
-        try:
-            stored = self._ring().get_password(self.service, name)
-        except _KEYRING_ERRORS as error:
-            raise CredentialError(
-                f"the OS keyring could not be read ({type(error).__name__}). Set "
-                f"{env_var(name)} instead, or fix the keyring and run `{login}`."
-            ) from error
+        stored = None
+        if not self.prefer_file:
+            try:
+                stored = self._ring().get_password(self.service, name)
+            except NoKeyringError as error:
+                if self.file_store is None:
+                    raise self._unreadable(name, login, error) from error
+            except _KEYRING_ERRORS as error:
+                raise self._unreadable(name, login, error) from error
         stored = (stored or "").strip()
-        return Credential(stored, "keyring") if stored else None
+        if stored:
+            return Credential(stored, "keyring")
+        if self.file_store is None:
+            return None
+        try:
+            stored = (self.file_store.get_password(self.service, name) or "").strip()
+        except CredentialFileError as error:
+            raise CredentialError(f"{error} (it holds keys `{login}` stored)") from None
+        return Credential(stored, "file") if stored else None
+
+    def _unreadable(self, name: str, login: str, error: Exception) -> CredentialError:
+        return CredentialError(
+            f"the OS keyring could not be read ({type(error).__name__}). Set "
+            f"{env_var(name)} instead, or fix the keyring and run `{login}`."
+        )
 
     def get(self, name: str, *, login: str = "agentic login") -> Credential:
         """The credential; a CredentialError saying how to provide it when absent (with
@@ -136,18 +165,38 @@ class Credentials:
             f"`{login}` to store it in the OS keyring."
         )
 
-    def store(self, name: str, value: str) -> None:
-        """Save a credential in the OS keyring (what `agentic login` does)."""
+    def store(self, name: str, value: str) -> Literal["keyring", "file"]:
+        """Save a credential (what `agentic login` does): in the OS keyring, or in the
+        credential file when there is no keyring backend (or `prefer_file`) and a file
+        store was given. Returns where it went."""
         env_var(name)  # the name check
         if not value or not value.strip():
             raise CredentialError(f"refusing to store an empty {name}")
+        if not self.prefer_file:
+            try:
+                self._ring().set_password(self.service, name, value.strip())
+                return "keyring"
+            except NoKeyringError as error:
+                if self.file_store is None:
+                    raise self._unstorable(name, error) from error
+            except _KEYRING_ERRORS as error:
+                raise self._unstorable(name, error) from error
+        assert self.file_store is not None
         try:
-            self._ring().set_password(self.service, name, value.strip())
-        except _KEYRING_ERRORS as error:
+            self.file_store.set_password(self.service, name, value.strip())
+        except (CredentialFileError, OSError) as error:
             raise CredentialError(
-                f"the OS keyring could not store {name} ({type(error).__name__}); set "
-                f"{env_var(name)} in the environment instead."
-            ) from error
+                f"the credential file could not store {name} ({type(error).__name__}: "
+                f"{error if isinstance(error, CredentialFileError) else error.strerror}); "
+                f"set {env_var(name)} in the environment instead."
+            ) from None
+        return "file"
+
+    def _unstorable(self, name: str, error: Exception) -> CredentialError:
+        return CredentialError(
+            f"the OS keyring could not store {name} ({type(error).__name__}); set "
+            f"{env_var(name)} in the environment instead."
+        )
 
     def _ring(self) -> Keyring:
         # the module: it picks the OS backend on first use, so CI never initialises one

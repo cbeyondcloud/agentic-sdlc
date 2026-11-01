@@ -32,6 +32,7 @@ from agentic.definitions.pipeline import PipelineDefinition
 from agentic.engine.state import RunState
 from agentic.integrations.jira import API_VERSIONS, JiraClient, JiraError, is_cloud, issue_key
 from agentic.security.untrusted import untrusted
+from agentic_cli.credential_store import cli_credentials
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from sdlc_commons.connectors import ConnectorError, ExternalItem, item_for, mapping_for
@@ -111,7 +112,7 @@ def jira_settings(settings: Mapping[str, Any], env: Mapping[str, str]) -> JiraSe
 
 def default_credentials() -> Credentials:
     """Where the token is looked up (tests replace it)."""
-    return Credentials()
+    return cli_credentials()
 
 
 def connect_jira(ws, credentials: Credentials | None = None) -> JiraClient:

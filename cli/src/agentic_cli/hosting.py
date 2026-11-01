@@ -31,6 +31,7 @@ from agentic.auth import CredentialError, Credentials, env_var
 from agentic.hosting import HostingError, HostingProvider, RepoRef, parse_remote
 from agentic.hosting.git import remote_url
 from agentic.hosting.github import GITHUB_COM, GitHubHost, api_url_for
+from agentic_cli.credential_store import cli_credentials
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 
@@ -106,7 +107,7 @@ class Connection:
 
 def default_credentials() -> Credentials:
     """Where tokens are looked up (tests replace it)."""
-    return Credentials()
+    return cli_credentials()
 
 
 def host_configs(settings: Mapping[str, Any]) -> dict[str, HostConfig]:

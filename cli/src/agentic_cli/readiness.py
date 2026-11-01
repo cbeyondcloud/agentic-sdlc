@@ -29,6 +29,7 @@ from rich.console import Console
 from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials, env_var
 from agentic.policy import OrgPolicy
 from agentic.sandbox.readiness import readiness
+from agentic_cli.credential_store import cli_credentials
 
 Status = Literal["ok", "missing", "warn", "info"]
 GIT_MIN = (2, 40)
@@ -101,7 +102,7 @@ def prerequisites(
     items.append(_container_engine(which, run))
     if system == "Windows":
         items.append(_git_bash(which))
-    items.append(_credential(credentials or Credentials()))
+    items.append(_credential(credentials or cli_credentials()))
     return items
 
 

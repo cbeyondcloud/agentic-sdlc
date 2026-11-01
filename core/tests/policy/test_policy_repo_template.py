@@ -326,3 +326,11 @@ def test_the_jvm_backend_pin_is_shown_but_not_active(policy):
         "ed0f1f548cd79b121c401c2e9f7841c189a001af26d3768368088c24f6a53533",  # linux-aarch64
     ):
         assert digest in text
+
+
+def test_the_credential_file_fallback_is_allowed_and_documented(policy):
+    """DF-955: the template allows the credential file on machines with no OS keyring
+    (WSL2), and says how an org forbids it."""
+    text = read_text(TEMPLATE / "policy" / "org.yaml")
+    assert "\ncredential_file_fallback: true" in text and policy.credential_file_fallback
+    assert "AGENTIC_CREDENTIAL_STORE" in text

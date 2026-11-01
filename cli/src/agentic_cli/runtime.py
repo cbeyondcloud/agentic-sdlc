@@ -36,7 +36,7 @@ from pathlib import Path
 import httpx2
 
 from agentic.agents.models import GatewaySettings
-from agentic.auth.credentials import TOKENLEAN_KEY, CredentialError, Credentials
+from agentic.auth.credentials import TOKENLEAN_KEY, CredentialError
 from agentic.codeintel import index as codeintel_index
 from agentic.definitions import PipelineDefinition, UnknownDefinitionError
 from agentic.definitions.pipeline import ActionStep, AgentStep, GateStep, LoopStep
@@ -68,6 +68,7 @@ from agentic_cli.codeintel import (
     locate_backend,
 )
 from agentic_cli.codeintel import codeintel_for as codeintel_factory
+from agentic_cli.credential_store import cli_credentials
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.heartbeat import Heartbeat
@@ -580,7 +581,7 @@ class Runtime:
                 hint="set gateway_url in ~/.agentic/config.yaml (or AGENTIC_GATEWAY_URL)",
             )
         try:
-            key = Credentials().get(TOKENLEAN_KEY).value
+            key = cli_credentials().get(TOKENLEAN_KEY).value
         except CredentialError as error:
             raise CliError(str(error), ExitCode.REFUSED, hint="run `agentic login`") from error
         return GatewaySettings(base_url=url, api_key=key)

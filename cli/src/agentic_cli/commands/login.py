@@ -9,7 +9,10 @@ Manager, the macOS Keychain or the Secret Service; every later command finds it 
 (the `AGENTIC_TOKENLEAN_API_KEY` / `AGENTIC_GITHUB_TOKEN` / `AGENTIC_CONTROL_PLANE_TOKEN`
 environment variable still wins). The key is read with no echo, or from standard input
 with `--key-stdin` for scripts, and never printed. In CI there is no keyring to use, so
-login is refused with what to do instead.
+login is refused with what to do instead. On a machine with no keyring backend at all
+(WSL2 without a Secret Service) the key goes to the user-only credential file instead,
+with a warning, unless the person or the org policy forbids it
+(`agentic_cli.credential_store`, DF-955).
 
 A control-plane token is verified first (`GET /v1/me`) and stored only when the control
 plane accepts it; the URL, tenant and user it was verified for are recorded in
@@ -33,12 +36,13 @@ import sys
 import httpx2
 import typer
 
-from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials, env_var
+from agentic.auth import TOKENLEAN_KEY, CredentialError, env_var
 from agentic.hosting.base import scrub_url_credentials
 from agentic.orgapi import Me, parse_invite
 from agentic.transport import verify_gateway_key
 from agentic_cli import control_plane
 from agentic_cli.config import CONFIG_FILE, agentic_home, set_user_config, user_config
+from agentic_cli.credential_store import cli_credentials, store_choice
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.hosting import login_names
@@ -116,7 +120,7 @@ def register(app: typer.Typer) -> None:
             base = control_plane.checked_base(base)  # before the token is asked for (DF-498)
         else:
             name, label = _credential(target)
-        credentials = Credentials()
+        credentials = cli_credentials()
         if credentials.in_ci:
             raise CliError(
                 f"login stores keys in the OS keyring, which is not used in CI "
@@ -146,27 +150,28 @@ def register(app: typer.Typer) -> None:
                     ) from None
                 base = client.base_url
         try:
-            credentials.store(name, value)
+            where = credentials.store(name, value)
         except CredentialError as error:
-            raise CliError(str(error), ExitCode.ERROR, hint=f"or set {env_var(name)}") from error
+            raise CliError(
+                str(error), ExitCode.ERROR, hint=_store_hint(f"or set {env_var(name)}")
+            ) from error
+        place = _warn_where(out, where)
         if wanted == CONTROL_PLANE:
             control_plane.record_login(home, base, me.tenant.slug, me.user.email)
-            _signed_in(out, base, me)
+            _signed_in(out, base, me, where)
             return
-        data = {"stored": name, "where": "keyring", "verified": verified}
+        data = {"stored": name, "where": where, "verified": verified, **_file(where, place)}
         if name == TOKENLEAN_KEY:
             checked = "verified with the gateway" if verified else "not verified with the gateway"
-            shown = (
-                f"Key stored in the OS keyring ({checked}). Next: cd <repo> and run `agentic init`."
-            )
+            shown = f"Key stored in {place} ({checked}). Next: cd <repo> and run `agentic init`."
         elif wanted == JIRA:
             shown = (
-                f"Token stored in the OS keyring as {name} (not yet verified). "
+                f"Token stored in {place} as {name} (not yet verified). "
                 "`agentic run --from-jira` uses it."
             )
         else:
             shown = (
-                f"Token stored in the OS keyring as {name} (not yet verified). "
+                f"Token stored in {place} as {name} (not yet verified). "
                 "`agentic pr open` and `agentic init --repo` use it."
             )
         out.result(data, lambda c: c.print(shown, markup=False))
@@ -210,7 +215,7 @@ def _verify_gateway_key(out: Output, home, value: str) -> bool:
 def _rotate(out: Output, home) -> None:
     """`agentic login --rotate`: a new gateway key from the control plane (M2-17), stored
     in the keyring in place of the old one, which stops working."""
-    credentials = Credentials()
+    credentials = cli_credentials()
     if credentials.in_ci:
         raise CliError(
             f"rotation stores the new key in the OS keyring, which is not used in CI "
@@ -228,15 +233,24 @@ def _rotate(out: Output, home) -> None:
     with client:
         issued = client.rotate_proxy_key()
     try:
-        credentials.store(TOKENLEAN_KEY, issued.key)
+        where = credentials.store(TOKENLEAN_KEY, issued.key)
     except CredentialError as error:
         raise CliError(
             f"the key was rotated but could not be stored: {error}",
             ExitCode.ERROR,
-            hint="run `agentic login --rotate` again (the new key is not shown anywhere else)",
+            hint=_store_hint(
+                "run `agentic login --rotate` again (the new key is not shown anywhere else)"
+            ),
         ) from error
-    data = {"stored": TOKENLEAN_KEY, "where": "keyring", "rotated": True, "key_id": issued.key_id}
-    shown = f"Gateway key rotated (new key {issued.key_id}) and stored in the OS keyring."
+    place = _warn_where(out, where)
+    data = {
+        "stored": TOKENLEAN_KEY,
+        "where": where,
+        "rotated": True,
+        "key_id": issued.key_id,
+        **_file(where, place),
+    }
+    shown = f"Gateway key rotated (new key {issued.key_id}) and stored in {place}."
     out.result(data, lambda c: c.print(shown, markup=False))
 
 
@@ -256,7 +270,7 @@ def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool
             hint="paste the whole link from the invite mail, or give --url with a bare token",
         )
     base = control_plane.checked_base(base)
-    credentials = Credentials()
+    credentials = cli_credentials()
     if credentials.in_ci:
         raise CliError(
             f"an invite stores keys in the OS keyring, which is not used in CI "
@@ -268,7 +282,9 @@ def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool
         credentials.find(control_plane.CONTROL_PLANE_TOKEN)  # can the keyring be used at all?
     except CredentialError as error:
         raise CliError(
-            str(error), ExitCode.ERROR, hint="fix the keyring first: the link works once"
+            str(error),
+            ExitCode.ERROR,
+            hint=_store_hint("fix the keyring first: the link works once"),
         ) from error
     with control_plane.ControlPlaneClient(
         base, None, transport=control_plane.make_transport()
@@ -276,7 +292,7 @@ def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool
         got = client.redeem_invite(token)
     stored = [control_plane.CONTROL_PLANE_TOKEN]
     try:
-        credentials.store(control_plane.CONTROL_PLANE_TOKEN, got.control_plane_token)
+        where = credentials.store(control_plane.CONTROL_PLANE_TOKEN, got.control_plane_token)
         if got.gateway_key:
             credentials.store(TOKENLEAN_KEY, got.gateway_key)
             stored.append(TOKENLEAN_KEY)
@@ -287,6 +303,7 @@ def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool
             hint="ask your team lead or org admin for a new invite",
         ) from error
     control_plane.record_login(home, base, got.tenant.slug, got.email)
+    place = _warn_where(out, where)
     try:
         settings = user_config(home)
     except CliError:  # a broken file: the writer below refuses it and says why
@@ -302,7 +319,8 @@ def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool
     written = change is not None and change.written
     data = {
         "stored": stored,
-        "where": "keyring",
+        "where": where,
+        **_file(where, place),
         "tenant": got.tenant.slug,
         "user": got.email,
         "url": base,
@@ -317,7 +335,7 @@ def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool
     def show(console) -> None:
         console.print(
             f"Signed in to {base} ({got.tenant.name}) as {got.email}; "
-            f"{' and '.join(stored)} stored in the OS keyring.",
+            f"{' and '.join(stored)} stored in {place}.",
             markup=False,
         )
         if got.notice:
@@ -336,6 +354,35 @@ def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool
     out.result(data, show)
 
 
+def _warn_where(out: Output, where: str) -> str:
+    """Where a key went, for the message; a key in the credential file is warned about
+    (DF-955): it is readable only by this user but not encrypted."""
+    if where != "file":
+        return "the OS keyring"
+    path = store_choice().path
+    out.warn(
+        f"no OS keyring on this machine: keys are kept in {path}, readable only by you but "
+        "not encrypted. `agentic doctor` shows it; the developer guide says how to use a "
+        "keyring instead"
+    )
+    return str(path)
+
+
+def _file(where: str, place: str) -> dict:
+    """The credential file's path for a JSON result, when the key went there."""
+    return {"credential_file": place} if where == "file" else {}
+
+
+def _store_hint(then: str) -> str:
+    """`then`, after why the credential file could not help, when it could not."""
+    choice = store_choice()
+    if choice.forbidden:
+        return f"the credential file is not allowed here: {choice.forbidden}; {then}"
+    if choice.mode == "keyring":
+        return f"the credential file is off (credential_store: keyring); {then}"
+    return then
+
+
 def _read(key_stdin: bool, label: str) -> str:
     if key_stdin:
         value = sys.stdin.readline().strip()
@@ -346,7 +393,7 @@ def _read(key_stdin: bool, label: str) -> str:
     return value
 
 
-def _signed_in(out: Output, url: str, me: Me) -> None:
+def _signed_in(out: Output, url: str, me: Me, where: str = "keyring") -> None:
     org_roles = sorted(a.role for a in me.assignments if a.scope == "org")
     teams: dict[str, list[str]] = {}
     for held in me.assignments:
@@ -355,7 +402,8 @@ def _signed_in(out: Output, url: str, me: Me) -> None:
     teams = {team: sorted(roles) for team, roles in sorted(teams.items())}
     data = {
         "stored": control_plane.CONTROL_PLANE_TOKEN,
-        "where": "keyring",
+        "where": where,
+        **_file(where, str(store_choice().path)),
         "verified": True,
         "url": url,
         "tenant": me.tenant.slug,

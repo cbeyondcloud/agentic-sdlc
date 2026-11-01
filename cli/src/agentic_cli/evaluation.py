@@ -39,7 +39,7 @@ from statistics import fmean
 from agentic.agents.metering import CostLog, MeteringTransport
 from agentic.agents.models import GatewaySettings, build_model_for, metered_model
 from agentic.agents.tools import LocalProcessSandbox, ToolContext, build_tools
-from agentic.auth.credentials import TOKENLEAN_KEY, CredentialError, Credentials
+from agentic.auth.credentials import TOKENLEAN_KEY, CredentialError
 from agentic.definitions import DefinitionError, load_agent
 from agentic.eval import stats
 from agentic.eval.blind import LeakCheck, Scrubber, assign_labels
@@ -81,6 +81,7 @@ from agentic.sandbox.readiness import decide_sandbox
 from agentic.transport import BudgetLedger, CallIdentity, NetworkSettings, make_network_transport
 from agentic.yamlio import YamlFileError, dump_yaml, load_yaml, read_text
 from agentic_cli.config import agentic_home, user_config
+from agentic_cli.credential_store import cli_credentials
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.runtime import machine_readiness
@@ -973,7 +974,7 @@ def _api_key(options: RunOptions, upstream: Upstream | None) -> str:
     if options.mode == "replay" or upstream is not None:
         return "not-used-in-replay"
     try:
-        return Credentials().get(TOKENLEAN_KEY).value
+        return cli_credentials().get(TOKENLEAN_KEY).value
     except CredentialError as error:
         raise CliError(str(error), ExitCode.REFUSED) from error
 

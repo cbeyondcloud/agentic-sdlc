@@ -37,7 +37,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials
+from agentic.auth import TOKENLEAN_KEY, CredentialError
 from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.sandbox.process import SECRET_NAME
 from agentic.security.pii import PiiDetector
@@ -46,6 +46,7 @@ from agentic.security.secret_scan import SecretScanner
 from agentic.telemetry.logs import redact_record
 from agentic.yamlio import YamlFileError, dump_yaml, load_yaml, read_text
 from agentic_cli import control_plane
+from agentic_cli.credential_store import cli_credentials
 from agentic_cli.doctor import DoctorReport, versions
 from agentic_cli.driving import summary
 from agentic_cli.errors import CliError
@@ -185,7 +186,7 @@ def _cleaner(env: Mapping[str, str]) -> _Cleaner:
     known = []
     for name in CREDENTIALS:
         try:
-            found = Credentials(environ=env).find(name)
+            found = cli_credentials(env).find(name)
         except CredentialError:
             found = None
         if found is not None:
