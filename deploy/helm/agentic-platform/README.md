@@ -31,6 +31,13 @@ no Kubernetes service-link variables.
 2. **Postgres** (17 recommended): a database `agentic`, an owner role with `CREATEROLE`
    (it owns the schema and runs migrations), and a runtime role name for the API (the
    migration Job creates it). HA and backups: [postgres-backup-restore.md](../../../docs/runbooks/postgres-backup-restore.md).
+   The backup CronJob's role: `python -m agentic_cp db backup-role --role agentic_backup`
+   with a superuser DSN in `PG_ADMIN_DSN` (only a superuser may grant `BYPASSRLS`).
+   **Connection poolers:** every DSN must reach Postgres directly or through a pooler in
+   *session* mode. The worker's leader lock, the migration lock and the retention lock are
+   session advisory locks; PgBouncer in *transaction* mode hands each statement to another
+   server connection, so two workers could both lead and two migrations could run at once
+   (DF-810).
    For the dashboards' TokenLean link, a superuser runs once:
    `CREATE EXTENSION postgres_fdw; GRANT USAGE ON FOREIGN DATA WRAPPER postgres_fdw TO <owner>;`
 
@@ -69,9 +76,13 @@ deploy/helm/kind/smoke.sh`). Values, External Secrets, cert-manager and the prom
 
 ```bash
 helm upgrade --install agentic deploy/helm/agentic-platform \
-  --namespace agentic --create-namespace --values my-values.yaml --wait
+  --namespace agentic --create-namespace --values my-values.yaml --wait --timeout 15m
 helm test agentic --namespace agentic
 ```
+
+`--timeout 15m` matches the migration Job's deadline (`migrations.activeDeadlineSeconds`):
+Helm's default of 5 minutes can give up on a slow migration that would have finished
+(DF-810).
 
 `ci/full-values.yaml` shows every option switched on. The main values:
 
@@ -88,6 +99,7 @@ helm test agentic --namespace agentic
 | `api.autoscaling.*` | 2-6 replicas at 70% CPU | `minReplicas` must be 2 or more |
 | `api.resources` | 250m-1 CPU, 512Mi-1Gi | the master plan's sizing; revisit after the load test |
 | `worker.replicas` | 2 | one leader, one standby |
+| `operator.enabled`, `operator.replicas` | on, 0 | the pod operator commands run in (below) |
 | `migrations.grantRuntime` | true | turn off if you manage the runtime role yourself |
 | `ingress.*` | off | host, class, TLS Secret; `ingress.certManager.*` makes a Certificate |
 | `environment.name`, `environment.policyBranch` | empty | dev, staging or prod and the policy branch it tracks |
@@ -97,18 +109,28 @@ helm test agentic --namespace agentic
 | `networkPolicy.*` | off | allowed callers and an egress allow-list (below) |
 | `grafana.dashboards.*`, `grafana.datasource.*` | dashboards on, datasource off | sidecar labels, folders, namespace |
 
-## First tenant
+## Operator commands and the first tenant
 
-The operator commands need the owner role, which the long-running pods do not have. Run
-them in a one-off pod with the same image and both DSNs (for example a copy of the
-migration Job, or `kubectl run` with `envFrom` the Secret mapped to
-`AGENTIC_CP_DATABASE_URL` and `AGENTIC_CP_OWNER_DATABASE_URL`):
+The operator commands (`python -m agentic_cp admin ...`, `db ...`, `retention ...`) need
+the owner role, which the long-running pods do not have. The chart's operator Deployment
+(`operator.enabled`, DF-892) has the same image, settings, policy branch and git config as
+the API, plus the owner DSN. It holds that DSN, so it runs no replica until you scale it up
+for a task:
 
 ```bash
-python -m agentic_cp admin tenant create --slug acme --name "Acme" --admin-email admin@acme.example
+kubectl -n agentic scale deploy/agentic-agentic-platform-operator --replicas=1
+kubectl -n agentic rollout status deploy/agentic-agentic-platform-operator
+kubectl -n agentic exec deploy/agentic-agentic-platform-operator -- python -m agentic_cp admin tenant list
+kubectl -n agentic scale deploy/agentic-agentic-platform-operator --replicas=0
 ```
 
-The first admin's token is printed once. M3-05 turns this into a bootstrap runbook.
+It passes PodSecurity `restricted` like every pod of the chart. A pod you start yourself
+with `kubectl run` does not: give it the pod and container security context of
+`values.yaml` (`podSecurityContext`, `securityContext`) or the namespace refuses it
+(DF-810).
+
+The first tenant, its first org admin and the rest of day 0 are in
+[day-0-bootstrap.md](../../../docs/runbooks/day-0-bootstrap.md) (`scripts/bootstrap.py`).
 
 ## Grafana (bring your own)
 
