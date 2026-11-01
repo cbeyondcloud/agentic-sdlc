@@ -324,6 +324,7 @@ is not checked on the laptop.
 | `people`: "no invite: ... no public URL" | set `publicUrl`, `helm upgrade`, then `agentic rbac invite <email>` |
 | `verify`: invite `pending` | the relay: the worker's `warning:` lines and `agentic rbac mail` (last error) |
 | `smoke`: the dry run reports a sandbox problem | the machine has no sandbox the policy requires (`policy/org.yaml` `sandbox.required_for`); run the smoke where developers run agents |
+| `helm upgrade`: `conflict with "kubectl" with subresource "scale" ... .spec.replicas` on the operator Deployment | the operator pod was left scaled up by `kubectl scale`, and Helm's server-side apply will not take the field back: `kubectl -n agentic scale deploy/agentic-agentic-platform-operator --replicas=0`, then upgrade again |
 | a budget pull request fails `budget` | a raise needs an org admin as author or approver of the latest commit; see the check's log |
 
 ## Record of the local proof

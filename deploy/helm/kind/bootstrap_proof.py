@@ -49,7 +49,8 @@ SERVICE = "agentic-agentic-platform-api"
 OPERATOR = "deploy/agentic-agentic-platform-operator"
 ORG, TEAM = "acme", "checkout"
 ADMIN, LEAD, DEV = "admin@acme.example.test", "lead@acme.example.test", "dev@acme.example.test"
-SMOKE = "agentic-smoke@acme.example.test"  # its invite is the smoke run's (redeemed there)
+#: The smoke account: its invite is redeemed by the smoke run, so each run invites a new one.
+SMOKE = f"agentic-smoke-{secrets.token_hex(3)}@acme.example.test"
 REPO_PATTERN = "git.staging.example.test/acme/*"
 MODELS = {
     "deep-reasoning": "staging-gw/deep",
@@ -344,6 +345,10 @@ def main() -> int:
             "config.AGENTIC_CP_POLICY_POLL_SECONDS": "10",
             "worker.replicas": "1",
         }
+        # an operator pod left scaled up by kubectl owns .spec.replicas: Helm's server-side
+        # apply refuses to set it back (the runbook's troubleshooting table)
+        kube = ["docker", "exec", tools, "kubectl", "-n", NAMESPACE]
+        sh([*kube, "scale", OPERATOR, "--replicas=0"], quiet=True)
         upgrade = [
             "docker",
             "exec",
@@ -458,10 +463,13 @@ def main() -> int:
             quiet=True,
         )
         admin = admin_token.read_text(encoding="utf-8").strip()
-        active = wait_for(
-            "the policy repo synced (GET /v1/policy/active)",
-            lambda: get_json(f"{api}/v1/policy/active", admin),
-        )
+        commit = "git:" + sh(["git", "-C", str(policy), "rev-parse", "staging"], quiet=True).strip()
+
+        def synced():
+            active = get_json(f"{api}/v1/policy/active", admin)
+            return active if active and active.get("version") == commit else None
+
+        active = wait_for(f"the policy repo's {commit} active (GET /v1/policy/active)", synced)
         say(f"3. policy active: {active['version']} on {active['branch']}")
 
         # ── 4. the CLI on an index ────────────────────────────────────────────────
@@ -473,7 +481,7 @@ def main() -> int:
         index = LocalIndex(work / "index", password=secrets.token_hex(8)).start()
         release = work / "dist"
         if not release.exists():
-            build.build_packages(ROOT, release)
+            build.build_packages(ROOT, release, allow_dirty=True)  # a proof, not a release
         key, public = new_key(work)
         signing.sign_dir(release, signing.load_private_key(key))
         creds = {"UV_PUBLISH_USERNAME": index.username, "UV_PUBLISH_PASSWORD": index.password}
