@@ -280,9 +280,11 @@ def test_e2e_three_corrections_to_pr_and_revert(workspace, gateway, github, cli,
 def test_no_remote_leaves_the_proposal_pending(workspace, gateway, cli, monkeypatch):
     corrections(cli, monkeypatch, PEOPLE)
     row = only_proposal(cli)
+    sides = measuring(gateway, monkeypatch, "x")
     refused = cli("--json", "learn", "approve", row["id"])
     assert refused.code == ExitCode.REFUSED and "remote" in error(refused)["hint"]
     assert only_proposal(cli)["status"] == "pending"  # nothing decided: nothing was made
+    assert sides == []  # review I1: nothing measured (no model spend) before a refusal
     assert cli("--json", "learn", "reject", row["id"]).code == ExitCode.OK
 
 
@@ -296,13 +298,18 @@ def test_a_failed_apply_is_made_by_approving_again(
     failed = cli("--json", "learn", "approve", row["id"])
     assert failed.code == ExitCode.ERROR, failed.err
     assert only_proposal(cli)["status"] == "approved"
+    failed_measurement = cli("--json", "learn", "show", row["id"]).json()["measurement"]
+    assert failed_measurement["status"] == "measured"
     stuck = cli("--json", "learn", "revert", row["id"])
     assert stuck.code == ExitCode.REFUSED and "learn approve" in error(stuck)["hint"]
 
     git(workspace, "remote", "set-url", "--push", "origin", str(remote))
+    sides = measuring(gateway, monkeypatch, "x")
     again = cli("--json", "learn", "approve", row["id"])
     assert again.code == ExitCode.OK, again.err
     assert again.json()["status"] == "applied" and len(fake.pulls) == 1
+    assert sides == []  # the first attempt's measurement is kept: no second spend
+    assert again.json()["measurement"] == failed_measurement
 
 
 def test_an_approved_change_that_is_not_made_can_be_rejected(
@@ -327,10 +334,12 @@ def test_a_target_missing_on_the_default_branch_is_refused_with_a_hint(
     write(workspace / ".agentic" / "agents" / "ba.md", "---\nname: ba\n---\n\nYou analyse.\n")
     edited = cli("--json", "learn", "edit", row["id"], "--kind", "agent-instruction")
     assert edited.code == ExitCode.OK, edited.err
+    sides = measuring(gateway, monkeypatch, "x")
     refused = cli("--json", "learn", "approve", row["id"])
     assert refused.code == ExitCode.INVALID, refused.err
     assert "learn edit" in error(refused)["hint"]
     assert only_proposal(cli)["status"] == "pending" and fake.pulls == []
+    assert sides == []  # review I1: refused on the default branch before any model call
 
 
 # ── the regression case before and after, on approve (M3-16, DF-756) ──
@@ -570,3 +579,26 @@ def test_a_learned_files_skeleton_is_recognised_for_its_own_file_only(tmp_path):
     assert left(skeleton, made.path) and left(skeleton.replace("\n", "\r\n"), made.path)
     assert not left(skeleton + "My own line.\n", made.path)
     assert not left(skeleton, "memory/other.md")
+
+
+def test_an_unmeasured_reason_is_redacted_and_short(workspace, gateway, monkeypatch):
+    """Review I2: why a case could not run is kept with the change and sent to the control
+    plane, so a secret in it is masked and it is cut short."""
+    from agentic.learning.changes import Draft
+    from agentic_cli import learning_eval
+    from agentic_cli.runtime import Runtime
+    from agentic_cli.workspace import Workspace
+
+    def broken(rt, made):
+        raise RuntimeError(f"the gateway said no to {KEY} " + "x" * 1000)
+
+    monkeypatch.setattr(learning_eval, "_measure", broken)
+    made = Draft.model_construct(
+        proposal_id="lp-1", agent="ba", lesson="Name it.", eval_case={"id": "learned-1"}
+    )
+    warned: list[str] = []
+    found = learning_eval.measure_change(
+        Runtime(Workspace.load()), made, skip=None, warn=warned.append
+    )
+    assert found["status"] == "unmeasured" and KEY not in found["reason"]
+    assert len(found["reason"]) <= learning_eval.MAX_REASON and KEY not in warned[0]

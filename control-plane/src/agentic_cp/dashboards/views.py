@@ -662,14 +662,15 @@ LEFT JOIN (
 #: before and after it was applied, and the correction rate (corrections per run) of each
 #: window. A window without a run is NULL (unmeasured), never 0. A personal learning changed
 #: one person's runs only, so it counts that person's corrections over that person's runs,
-#: and its lesson (their own note) is not shown (DF-763, review F9). Migration
+#: and its lesson (their own note) is not shown (DF-763, review F9). Personal: the control
+#: plane set its `owner` (personal targets only), or the approved draft says so. Migration
 #: `m3_16_learning_effect` replaced the M3-14 body (kept there for its downgrade).
 _LEARNING_WINDOW = "INTERVAL '30 days'"
 _LEARNING_EFFECT = f"""
 WITH applied AS (
   SELECT p.tenant_id, p.id AS proposal_id, p.team, p.agent, p.scope, p.lesson, p.status,
     p.applied_at, p.reverted_at, p.authors,
-    COALESCE(p.draft->>'scope', '') = 'personal' AS personal
+    p.owner IS NOT NULL OR COALESCE(p.draft->>'scope', '') = 'personal' AS personal
   FROM learning_proposals p JOIN dash_scope s ON s.tenant_id = p.tenant_id
   WHERE p.applied_at IS NOT NULL
 ), corrections AS (
@@ -794,11 +795,6 @@ def drop_statements(views: tuple[str, ...] = M2_37_VIEWS) -> list[str]:
     first."""
     contracts = CONTRACT_VIEWS if views == M2_37_VIEWS else ()
     return [f"DROP VIEW IF EXISTS {name}" for name in (*reversed(views), *contracts)]
-
-
-def learning_effect_sql() -> str:
-    """The body of `dash_learning_effect` as it is now (migration `m3_16_learning_effect`)."""
-    return _LEARNING_EFFECT.strip()
 
 
 def learning_view_statements(schema: str) -> list[str]:

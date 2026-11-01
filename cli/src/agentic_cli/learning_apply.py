@@ -265,7 +265,8 @@ def edit(rt: Runtime, pid: str, kind: str | None, lesson: str | None, warn) -> D
     change = {**(record.get("edit") or {})}
     change.update({k: v for k, v in (("kind", kind), ("lesson", lesson)) if v})
     made = draft_for(rt, proposal, edit=change)
-    store(rt).save_change(pid, {**record, "edit": change})
+    kept = {k: v for k, v in record.items() if k != "measurement"}  # it measured the old lesson
+    store(rt).save_change(pid, {**kept, "edit": change})
     return made
 
 
@@ -345,11 +346,14 @@ def approve(
             hint=f"`agentic learn edit {pid} --lesson ...` rewrites it",
         )
     _policy_repo_known(rt, made)
-    record = record_of(rt, pid)
-    measured = _measurement(rt, made, record if resuming else {}, skip_eval, warn)
-    store(rt).save_change(pid, {**record, "measurement": measured})
+    measured: dict = {}
 
     def decided() -> None:
+        """Nothing that can be checked first stands in the way: measure (review I1: never
+        spent on a change that is then refused), then record the approval."""
+        held = record_of(rt, pid)
+        measured.update(_measurement(rt, made, held, skip_eval, warn))
+        store(rt).save_change(pid, {**held, "measurement": measured})
         if not resuming:
             store(rt).decide(pid, "approve", user, _now())
 
@@ -379,9 +383,9 @@ def _measurement(
     rt: Runtime, made: Draft, record: dict, skip: str | None, warn: Callable[[str], None]
 ) -> dict:
     """The regression case before and after; one an earlier attempt of this approval
-    measured is kept (an approved change is never edited, so it is the same case)."""
+    measured (the same case and lesson) is kept, so a retry spends nothing again."""
     held = record.get("measurement") or {}
-    if held.get("status") == "measured" and held.get("case") == made.eval_case.get("id"):
+    if held.get("status") == "measured" and held.get("overlay") == learning_eval.overlay_sha(made):
         return held
     return learning_eval.measure_change(rt, made, skip=skip, warn=warn)
 
@@ -705,6 +709,8 @@ def _folder_sha(where: Path, folder: str, rev: str, changed: dict[str, str]) -> 
         capture_output=True,
         check=False,
     )
+    if listed.returncode != 0:  # never a pin over part of the folder
+        raise CliError(f"could not list {folder} at {rev[:12]} in {where}", ExitCode.ERROR)
     names = [n.decode("utf-8") for n in listed.stdout.split(b"\0") if n]
     with tempfile.TemporaryDirectory(prefix="agentic-learning-") as scratch:
         root = Path(scratch) / PurePosixPath(folder).name
@@ -947,6 +953,8 @@ def org_approve(
     machine and reported back (`applied`, audited). An approval whose change was never
     made resumes, by its owner only."""
     detail = _client(rt, lambda c: c.proposal(pid))
+    if detail.status not in ("pending", "deferred", "approved"):  # before anything is spent
+        raise CliError(f"a {detail.status} proposal cannot be approved", ExitCode.REFUSED)
     made = _org_draft(rt, detail)
     _this_repo(rt, detail.scope, made.root)
     _owner_only(detail, made, "approve")
@@ -956,15 +964,17 @@ def org_approve(
         )
     draft_json = made.model_dump(mode="json")
 
+    _policy_repo_known(rt, made)
+    measured: dict = {}
+
     def decided() -> None:
+        held = record_of(rt, pid) if detail.status == "approved" else {}
+        measured.update(_measurement(rt, made, held, skip_eval, warn))
+        store(rt).save_change(pid, {"measurement": measured})
         if detail.status != "approved":  # an approval whose change was never made resumes
             _client(rt, lambda c: c.decide_proposal(pid, "approve", "", draft_json))
 
     user = rt.known_user()
-    _policy_repo_known(rt, made)
-    held = record_of(rt, pid) if detail.status == "approved" else {}
-    measured = _measurement(rt, made, held, skip_eval, warn)
-    store(rt).save_change(pid, {"measurement": measured})
     applied = _apply(rt, made, user, warn, decided)
     store(rt).save_change(
         pid, {"draft": made.model_dump(mode="json"), "applied": applied, "measurement": measured}

@@ -44,7 +44,9 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, StringConstraints
 from agentic.learning.clustering import Proposal
 from agentic.learning.records import AGENT_NAME
 from agentic.learning.regression import case_path, regression_case
+from agentic.skills import SkillsError
 from agentic.skills.admission import scan_text
+from agentic.skills.authoring import check_name
 from agentic.skills.personal import ALLOWED_FRONT_MATTER, load_personal
 from agentic.yamlio import YamlFileError, load_yaml, split_front_matter
 
@@ -139,6 +141,10 @@ def target(kind: str, agent: str, team: str | None) -> tuple[Root, str]:
     if kind == "team-skill":
         if not team:
             raise DraftError("a team skill needs the team")
+        try:  # one folder, `teams/<team>/`: a slash or dots would reach another team's files
+            check_name(team, "a team name")
+        except SkillsError as error:
+            raise DraftError(str(error)) from None
         return "policy", f"teams/{team}/skills/internal/{learned}/SKILL.md"
     raise DraftError(f"unknown change kind {kind!r} (one of {', '.join(CHANGE_KINDS)})")
 

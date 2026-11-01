@@ -41,7 +41,9 @@ if TYPE_CHECKING:
 
 #: The identity step of the eval's model calls (the gateway attributes their spend to it).
 STEP = "learning-eval"
-FALLBACK_ESTIMATE_USD = Decimal("0.05")  # an unpriced call's hold, as `agentic eval run`
+#: Why a case could not run is kept with the change and sent to the control plane: masked
+#: (`Runtime.redact`) and cut to this length.
+MAX_REASON = 300
 
 
 def overlay_block(made: Draft) -> str:
@@ -50,23 +52,28 @@ def overlay_block(made: Draft) -> str:
     return f"{HEADING}\n\n- {made.lesson}\n"
 
 
+def overlay_sha(made: Draft) -> str:
+    """Names what was measured: the same case and lesson give the same digest."""
+    return "sha256:" + hashlib.sha256(overlay_block(made).encode("utf-8")).hexdigest()
+
+
 def measure_change(
     rt: Runtime, made: Draft, *, skip: str | None, warn: Callable[[str], None]
 ) -> dict:
     """The regression case before and after the change, as recorded with the change:
-    `status` measured, unmeasured (with `reason`) or skipped."""
-    case = str(made.eval_case.get("id") or "")
+    `status` measured, unmeasured (with `reason`) or skipped; `overlay` names the lesson."""
+    head = {"case": str(made.eval_case.get("id") or ""), "overlay": overlay_sha(made)}
     if skip:
-        return {"status": "skipped", "case": case, "reason": skip}
+        return {"status": "skipped", **head, "reason": skip}
     try:
         found = _measure(rt, made)
     except CliError as error:
-        return _unmeasured(case, str(error), warn)
+        return _unmeasured(rt, head, str(error), warn)
     except Exception as error:  # noqa: BLE001 - a measurement never blocks an approval
-        return _unmeasured(case, f"{type(error).__name__}: {error}", warn)
+        return _unmeasured(rt, head, f"{type(error).__name__}: {error}", warn)
     if found.unscored:
-        return _unmeasured(case, "; ".join(found.unscored), warn)
-    result = {"status": "measured", **found.as_dict(), "agent": made.agent}
+        return _unmeasured(rt, head, "; ".join(found.unscored), warn)
+    result = {"status": "measured", **found.as_dict(), **head, "agent": made.agent}
     try:
         result["ledger"] = _ledgered(rt, made, result)
     except CliError as error:
@@ -81,9 +88,10 @@ def measure_change(
     return result
 
 
-def _unmeasured(case: str, reason: str, warn: Callable[[str], None]) -> dict:
-    warn(f"the regression case was not run before and after: {reason}")
-    return {"status": "unmeasured", "case": case, "reason": reason}
+def _unmeasured(rt: Runtime, head: dict, reason: str, warn: Callable[[str], None]) -> dict:
+    shown = rt.redact()(reason)[:MAX_REASON]
+    warn(f"the regression case was not run before and after: {shown}")
+    return {"status": "unmeasured", **head, "reason": shown}
 
 
 def _measure(rt: Runtime, made: Draft) -> Measurement:
@@ -94,7 +102,8 @@ def _measure(rt: Runtime, made: Draft) -> Measurement:
     from agentic.handoffs import BUILTIN_CATALOG
     from agentic.learning.regression import measure
     from agentic.transport import BudgetLedger, CallIdentity
-    from agentic_cli.evaluation import SkillVariant, with_skill
+    from agentic_cli import evaluation
+    from agentic_cli.evaluation import SkillVariant
 
     policy = rt.ws.policy()
     definition = rt.ws.definitions().agent(made.agent)
@@ -129,7 +138,7 @@ def _measure(rt: Runtime, made: Draft) -> Measurement:
             gateway,
             budget=slice_,
             price_for=policy.price_for,
-            fallback_estimate_usd=FALLBACK_ESTIMATE_USD,
+            fallback_estimate_usd=evaluation.FALLBACK_ESTIMATE_USD,
             log=costs,
             _inner=runtime.network_transport(),
         )
@@ -147,9 +156,8 @@ def _measure(rt: Runtime, made: Draft) -> Measurement:
             step=STEP,
         )
 
-    block = overlay_block(made)
-    sha = "sha256:" + hashlib.sha256(block.encode("utf-8")).hexdigest()
-    learned = with_skill(resolved, SkillVariant(f"learned-{made.agent}", sha, block))
+    block = SkillVariant(f"learned-{made.agent}", overlay_sha(made), overlay_block(made))
+    learned = evaluation.with_skill(resolved, block)
     case = EvalCase.model_validate(made.eval_case)
     return asyncio.run(measure(case, before=runner(resolved), after=runner(learned), kind=kind))
 
@@ -169,4 +177,4 @@ def _ledgered(rt: Runtime, made: Draft, result: dict) -> str:
     return run_id
 
 
-__all__ = ["STEP", "measure_change", "overlay_block"]
+__all__ = ["MAX_REASON", "STEP", "measure_change", "overlay_block", "overlay_sha"]

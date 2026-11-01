@@ -327,8 +327,8 @@ AGENT_QUALITY = Dashboard(
             "rate_before, corrections_after, runs_after, rate_after "
             "FROM dash_learning_effect ORDER BY applied_at DESC",
             description="Each applied learning (M3-16): its agent's corrections per run of its "
-            "team in the 30 days before and after it was applied. A window without a run is "
-            "empty, not zero.",
+            "team (a personal learning: of its owner, lesson hidden) in the 30 days before and "
+            "after it was applied. A window without a run is empty, not zero.",
             w=24,
         ),
     ),

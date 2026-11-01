@@ -216,9 +216,11 @@ agentic learn revert <proposal>      # undo an applied learning
 `approve` first runs the proposal's regression case twice: without the change and with it.
 The model calls go through your gateway, like a run, within the policy's eval budget for
 that agent. You see both scores. A lower score with the change is a warning, not a refusal:
-you decide. If the case cannot run (no gateway, or the agent's definition is not available here),
-the approval still goes ahead and says why. `--no-eval` skips the run. The result is kept
-with the change (`agentic learn show`) and in the run ledger.
+the change is still applied, and `agentic learn revert` undoes it. If the case cannot run
+(no gateway, or the agent's definition is not available here), the approval still goes
+ahead and says why. `--no-eval` skips the run. The scores are kept with the change
+(`agentic learn show`); the run ledger records that the case was measured, and whether the
+change scored lower.
 
 ## Scripts and CI
 

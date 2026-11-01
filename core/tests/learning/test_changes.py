@@ -199,3 +199,13 @@ def test_learned_skeleton_is_what_a_new_file_holds_without_any_block():
         created = render_change(kind, None, LESSON, "developer", PID)
         assert strip_change(created, PID) == learned_skeleton(kind, "developer")
     assert learned_skeleton("personal-note", "developer") == "# Learned: developer\n"
+
+
+@pytest.mark.parametrize("team", ["a/b", "..", "Payments", "a\b"])
+def test_a_team_name_that_is_not_one_folder_is_refused(team):
+    """Review I3: the team names the one folder a team learning may change
+    (`teams/<team>/`); a value with a slash or dots would reach another team's files."""
+    with pytest.raises(DraftError, match="team name"):
+        draft(proposal(f"team:{team}"), evidence("a", "b"), no_files)
+    with pytest.raises(DraftError, match="team name"):
+        draft(proposal(), evidence("a", "b"), no_files, kind="team-skill", team=team)
