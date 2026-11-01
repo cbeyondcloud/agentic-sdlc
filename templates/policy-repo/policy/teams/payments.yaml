@@ -1,6 +1,9 @@
 # One team's narrowing of org policy (an example team: copy this file per team, and add
 # its lines to CODEOWNERS). A team can only narrow: fewer tiers, lower caps, more denies.
-allowed_tiers: [balanced, fast, local]
+# Every agent tier but the evaluation judge. Keep each tier policy/agent-types.yaml gives
+# a type (deep-reasoning: the architect, feature-delivery's design step), or that step is
+# refused for the team.
+allowed_tiers: [deep-reasoning, balanced, fast, local]
 # The team's monthly gateway spend cap in USD, for the whole team (spec §22.3): every
 # team sets one, so none starts uncapped. Start at 20 USD a developer a month (here 10
 # developers). Org admins change any team's value; a team lead may only lower their own.

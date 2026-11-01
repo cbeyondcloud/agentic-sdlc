@@ -419,3 +419,16 @@ def test_token_from_hides_the_token_line():
     token, shown = bootstrap.token_from(f"created\ntoken (shown once - store it now):\n{TOKEN}\n")
     assert token == TOKEN and TOKEN not in shown
     assert bootstrap.token_from("no token here") == (None, "no token here")
+
+
+def test_the_template_team_may_use_every_agent_types_tier():
+    """Found by the kind proof's smoke run: the example team (copied for every team the
+    bootstrap adds) left out `deep-reasoning`, the architect's tier, so feature-delivery's
+    design step was refused for every team. Each type's default tier must stay allowed."""
+    from agentic.yamlio import load_yaml
+
+    policy = bootstrap.TEMPLATE / "policy"
+    types = load_yaml((policy / "agent-types.yaml").read_text(encoding="utf-8"))[0]["types"]
+    team = load_yaml((policy / "teams" / "payments.yaml").read_text(encoding="utf-8"))[0]
+    used = {spec["tier"] for spec in types.values() if spec.get("tier")}
+    assert used <= set(team["allowed_tiers"]), used - set(team["allowed_tiers"])
