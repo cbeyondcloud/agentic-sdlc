@@ -88,7 +88,7 @@ Roles are simple RBAC (spec §12.3): a role is a named permission set; admins as
 | **Org admin** (AI governance owner) | Org admin | 2–3 | Owns the policy repo: tier→model mapping, allowed providers, classifications, org limits and budgets, tool and skill catalog; assigns team leads; flips the global kill switch | Policy repo PRs, `agentic rbac`, `agentic killswitch`, org dashboards |
 | **Security / compliance** | Auditor (+ reviewer on policy repo PRs) | 2–5 | Reviews policy changes, approves skills with scripts, reads audit trails, runs `audit verify` / exports for auditors, sets retention and trace-capture policy | Audit explorer, `agentic audit export`, policy repo reviews |
 | **Executive / finance** | Executive viewer *(default role: `dashboard.view.org`, ROI and chargeback only)* | 5–20 | Reviews ROI, adoption and cost per team monthly | Executive ROI dashboard, chargeback CSV |
-| **Team lead** | Team lead (team-scoped) | ~80–100 | Onboards their team, narrows team policy (tiers, budgets), publishes team agents/pipelines, approves team-level gates, raises team budget, pauses their team | `agentic rbac` (team scope), team dashboard, team policy file PRs |
+| **Team lead** | Team lead (team-scoped) | ~80–100 | Onboards their team, narrows team policy (tiers, budgets), publishes team agents/pipelines, approves team-level gates, lowers team budget (raises need an org admin), pauses their team | `agentic rbac` (team scope), team dashboard, team policy file PRs |
 | **Developer** | Developer | ~800–900 | Initialises repos, runs pipelines, approves own-run gates where the regime allows, writes repo-level agents in plain English, writes personal skills | `agentic` CLI, editor, GitHub PRs |
 | **Repo maintainer** | Repo maintainer *(derived from the repo's CODEOWNERS for `.agentic/` and `AGENTS.md`; no manual assignment)* | 1–3 per repo | Owns the repo's **shared** agents, skills and memory (not pipelines — D33): approves PRs that change them, approves repo-scope learning proposals, reviews personal-skill promotion requests for the repo | GitHub PR review, `agentic learn approve`, `agentic skills review` |
 | **Approver / reviewer** | Approver (team-scoped) | as needed | Approves gates that require a named role (e.g. architecture review, four-eyes merges) | `agentic approve`, PR review |
@@ -124,7 +124,7 @@ Roles are simple RBAC (spec §12.3): a role is a named permission set; admins as
 | Publish / approve **team** agents, pipelines (incl. per-repo overlays), skills and team-scope learning proposals | ✅ | ✅ team | — | — | — | — | — | — |
 | Change pipelines (any scope, D33) | ✅ | ✅ team | — | — (request only) | — | — | — | — |
 | Approve **org** skills (catalog), org agents/pipelines, guardrail proposals; edit org policy | ✅ | — | — | — | — | — | — | — |
-| Narrow team policy / raise team budget | ✅ | ✅ team | — | — | — | — | — | — |
+| Narrow team policy / lower team budget (raise: org admin only) | ✅ | ✅ team | — | — | — | — | — | — |
 | Kill switch / pause | ✅ global | ✅ team | — | — | — | — | — | — |
 | Assign roles | ✅ | ✅ team (Developer/Approver only) | — | — | — | — | — | — |
 | Dashboards | org | team | repo | own | team | org | org (exec views) | — |
