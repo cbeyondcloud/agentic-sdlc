@@ -207,7 +207,12 @@ def test_json_stderr_is_json_lines_with_the_error_last(workspace, gateway, cli, 
     lines = [json.loads(line) for line in result.err.splitlines() if line.strip()]
     assert lines[0] == {"started": "named-3"}
     assert lines[-1]["error"] == "the gateway went away" and lines[-1]["exit_code"] == 1
-    help_text = " ".join(cli("run", "--help").out.replace("│", " ").split())
+    import typer
+
+    from agentic_cli.main import build_app
+
+    # the command's own help, not Rich's rendering (colour and width vary by terminal)
+    help_text = " ".join(typer.main.get_command(build_app()).commands["run"].help.split())
     assert "JSON Lines" in help_text and "last line" in help_text
 
 

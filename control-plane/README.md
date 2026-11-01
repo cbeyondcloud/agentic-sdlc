@@ -67,12 +67,16 @@ token and, when the gateway admin API is set, a new gateway key, in the OS keyri
 | `AGENTIC_CP_INVITE_HOURS` (`config`) | 72 (1 to 336) | - |
 | `AGENTIC_CP_SMTP_HOST` (`smtp.host`) | none | mail stays queued and nothing is sent (`agentic rbac mail` shows it) |
 | `AGENTIC_CP_SMTP_PORT` (`smtp.port`) | 587 | - |
-| `AGENTIC_CP_SMTP_SECURITY` (`smtp.security`) | `starttls` | `tls` is implicit TLS (port 465); `none` only for a relay in the same host or cluster. A relay that does not offer STARTTLS is never used in clear: the mail retries, then fails |
+| `AGENTIC_CP_SMTP_SECURITY` (`smtp.security`) | `starttls` | `tls`: implicit TLS (port 465). `none`: only for a relay in the same host or cluster |
 | `AGENTIC_CP_SMTP_USERNAME` (`smtp.username`), `AGENTIC_CP_SMTP_PASSWORD` (secret `smtpPassword`) | none | the relay is used without authentication |
 | `AGENTIC_CP_SMTP_FROM` (`smtp.from`), `AGENTIC_CP_SMTP_FROM_NAME` (`config`) | none, `agentic` | the deployment's sender; a tenant's own sender replaces it |
 | `AGENTIC_CP_NOTIFY_MAX_ATTEMPTS` (`config`) | 8 | sends of one mail before it is marked failed |
 | `AGENTIC_CP_GATEWAY_ADMIN_URL` (`tokenlean.adminUrl`), `AGENTIC_CP_GATEWAY_ADMIN_KEY` (secret `gatewayAdminKey`) | none | no gateway keys: an invite gives only the control-plane token, `agentic login --rotate` and `rbac revoke-keys` cannot work, and no routing is applied |
 | `AGENTIC_CP_GATEWAY_URL` (`tokenlean.url`) | none | the redeemed invite does not tell the CLI where the gateway is |
+
+A relay that does not offer STARTTLS is never used in clear. While the relay cannot be used
+at all, mail stays queued and is retried without using up its attempts, so it does not show
+as failed: check the worker's log and `agentic rbac mail --status pending`.
 
 The invite link is `<public url>/invite#<token>`. The token is in the fragment, so it never
 reaches a server log, and a mail scanner that opens the link cannot use it up. The gateway
@@ -97,7 +101,8 @@ Operator commands for mail and people:
    first org admin's `agentic login --for control-plane`.
 3. `admin tenant set-policy-repo`, and optionally `admin tenant set-mail-from`.
 4. The org admin assigns team leads (`agentic rbac assign` or `agentic rbac import`); each
-   gets an invite mail. Check `agentic rbac mail --status failed` after the first ones.
+   gets an invite mail. Check `agentic rbac mail --status pending` and `--status failed`
+   after the first ones.
 
 ### Database connections and sizing
 

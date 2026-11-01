@@ -135,8 +135,8 @@ error rate passes the auto-trip threshold; you get a mail.
 
 You get a mail when your team reaches 80 % and 100 % of its monthly budget. Open the
 team dashboard in Grafana: cost, limit hits and gate rejection rates. Adjust
-team policy by pull request. Ask your org admin for the monthly chargeback file
-(`agentic report chargeback --team <team>`).
+team policy by pull request. Your team's monthly cost file:
+`agentic report chargeback --team <team>`.
 
 See also: [pilot rollout runbook](../runbooks/pilot-rollout.md) and the
 [runbooks index](../runbooks/README.md).

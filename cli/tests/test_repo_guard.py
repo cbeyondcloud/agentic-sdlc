@@ -271,7 +271,7 @@ def test_3_the_nested_worktree_hint_says_to_run_init_in_the_main_checkout(repo: 
     nested = repo / ".tool" / "worktrees" / "wt"
     git(repo, "worktree", "add", "-q", "-b", "side", str(nested))
     hint = refused(3, nested).hint or ""
-    assert hint.startswith("cd ") and repo.name in hint
+    assert hint.startswith('cd "') and repo.name in hint  # quoted: a path may hold spaces
     assert "init there" in hint and "same repository" in hint
     assert "outside the main checkout" in hint
 

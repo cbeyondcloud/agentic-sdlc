@@ -169,7 +169,7 @@ A scope is `global`, `team:<slug>`, `user:<email>`, `repo:<host/owner/name>`,
 |---|---|---|
 | `agentic audit verify` | Verify run ledgers, the org chain (`--control-plane`) or an export file (`--export`), and say where a change was made. | Audit, Dev |
 | `agentic audit export` | Export audit records with their chain proof, and verify the file. Org mode. | Audit |
-| `agentic report chargeback` | The month's cost per team as CSV, for finance. Org mode. | Exec, Admin |
+| `agentic report chargeback` | The month's cost per team as CSV, for finance. Org mode. | Exec, Audit, Admin, Lead (own team) |
 
 ## Control-plane operator commands
 

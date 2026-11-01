@@ -103,7 +103,7 @@ def register(app: typer.Typer) -> None:
 
         With --json, stdout holds one result and stderr is JSON Lines: a live run first
         writes {"started": "<run>"}, and an error object, when there is one, is the last
-        line (DF-380).
+        line.
         """
         out: Output = ctx.obj
         given = _inputs(inputs or [])

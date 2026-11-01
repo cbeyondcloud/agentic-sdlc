@@ -29,6 +29,11 @@ wsl --install -d Ubuntu-24.04
 Then open Ubuntu and do everything below in its bash shell. `agentic doctor` prints the
 remaining sandbox steps, with the exact versions your org pins.
 
+WSL2 often has no OS keyring, where agentic keeps your keys. Run `agentic doctor` after
+step 2: if it shows `keyring` as `FAIL`, ask your platform team for the org's WSL2 keyring
+setup before step 3. Your invite link is safe meanwhile: `agentic login --invite` checks
+the keyring before it uses the link up.
+
 ## First run (about 15 minutes)
 
 **1. Install uv** (skip if `uv --version` works). macOS, Linux or WSL2:
@@ -122,16 +127,22 @@ agentic reject <run> --feedback "Use the existing export service"
 agentic edit <run>                # fix the handoff yourself, then approve it
 ```
 
-`agentic edit` opens `$VISUAL` or `$EDITOR` (Notepad on Windows). Your edit is checked
-as a handoff before it is approved. If it is refused, run `agentic edit` again: your draft
-is kept.
+`agentic edit` opens `$VISUAL` or `$EDITOR` (`vi` if neither is set; Notepad on native
+Windows). Your edit is checked as a handoff before it is approved. If it is refused, run
+`agentic edit` again: your draft is kept.
 
 Some gates the run adds itself:
 
 | Gate | Why the run waits | What to do |
 |---|---|---|
-| `<loop>-exhausted` (for example `build-review-exhausted`) | review or QA still fails after the loop's last round | `agentic edit` the handoff (accept a finding, or name an accepted failing test), `agentic reject --feedback` for another round, or `agentic stop`. A plain approve is refused until the loop's exit condition holds |
-| `diff-budget` | a step changed more than one review batch, twice | `agentic approve` accepts it as one batch. `agentic reject --feedback` has it split. `agentic edit` changes the step's pinned handoff only, not the code. Or `agentic stop` |
+| `<loop>-exhausted`, for example `build-review-exhausted` | review or QA still fails after the loop's last round | `agentic edit`, `agentic reject --feedback`, or `agentic stop` (1) |
+| `diff-budget` | a step changed more than one review batch, twice | `agentic approve`, `agentic reject --feedback`, or `agentic stop` (2) |
+
+(1) A plain approve is refused until the loop's exit condition holds. With `agentic edit`,
+mark a review finding accepted, or name a failing test as accepted in the test report.
+
+(2) Approve accepts the change as one batch. Reject with feedback has it split.
+`agentic edit` changes only the step's pinned handoff, not the code.
 
 Each paused run tells you its next commands in `agentic status <run>`.
 
@@ -145,7 +156,10 @@ Each paused run tells you its next commands in `agentic status <run>`.
 | An agent asks to run a tool that needs approval | `agentic resume <run> --allow <call>` or `--deny <call>` |
 | A step condition could not be evaluated | `agentic resume <run> --skip` |
 | Ctrl-C, a closed terminal or a crash | `agentic resume <run>` |
-| Your team or org paused runs | wait; the run continues on `agentic resume <run>` once the pause is cleared |
+| Your team or org paused runs | `agentic resume <run>` once the pause is cleared |
+| The control plane could not be reached | `agentic resume <run>` once it is reachable again |
+| The gateway refused your key | `agentic login` (a new key) or `agentic login --invite <link>` (a new invite), then `agentic resume <run>` |
+| Resuming would only pause again | `agentic show <run>`, then fix the cause or `agentic stop <run>` |
 
 ## The pull request
 
