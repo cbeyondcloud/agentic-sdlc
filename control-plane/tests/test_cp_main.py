@@ -34,8 +34,12 @@ def operator_env(api, monkeypatch):
 async def test_serve_refuses_unenforced_database(operator_env, capsys):
     async with operator_env.db.owner.begin() as conn:
         await conn.exec_driver_sql("CREATE TABLE stray (id int primary key)")
-    assert await _run("serve", "--port", "1") == 2
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("AGENTIC_CP_SMTP_HOST", "relay.example.test")
+        assert await _run("serve", "--port", "1") == 2
     err = capsys.readouterr().err
+    # DF-575: the startup warnings are printed before the refusal
+    assert "warning: AGENTIC_CP_SMTP_HOST is set but AGENTIC_CP_SMTP_FROM is not" in err
     assert "AGENTIC_CP_REQUIRE_DB_ENFORCEMENT" in err
     assert "table stray is neither tenants nor a registered tenant table" in err
 
@@ -85,6 +89,7 @@ def test_help_lists_commands():
         "admin tenant set-policy-repo",
         "admin issue-token",
         "admin audit verify",
+        "db backup-role",
     ):
         assert line in text
 

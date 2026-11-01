@@ -70,9 +70,10 @@ def _free_port() -> int:
 
 
 @contextmanager
-def capture_relay(*, starttls: bool = True) -> Iterator[Relay]:
+def capture_relay(*, starttls: bool = True, smtputf8: bool = True) -> Iterator[Relay]:
     """A relay on 127.0.0.1 that offers STARTTLS (and requires it) unless `starttls` is
-    False, in which case it speaks only in clear."""
+    False, in which case it speaks only in clear; `smtputf8=False` drops the SMTPUTF8
+    extension (non-ASCII addresses)."""
     ca = trustme.CA()
     server_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     ca.issue_cert("127.0.0.1").configure_cert(server_context)
@@ -80,6 +81,7 @@ def capture_relay(*, starttls: bool = True) -> Iterator[Relay]:
     ca.configure_trust(client_context)
     capture = Capture()
     options = {"tls_context": server_context, "require_starttls": True} if starttls else {}
+    options["enable_SMTPUTF8"] = smtputf8
     port = _free_port()
     controller = Controller(capture, hostname="127.0.0.1", port=port, **options)
     controller.start()

@@ -12,6 +12,7 @@ import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 from packaging.version import InvalidVersion, Version
 from pydantic import (
@@ -247,3 +248,37 @@ class Settings(BaseModel):
     def runtime_role(self) -> str:
         """The runtime role's name: the user in `database_url`."""
         return make_url(self.database_url.get_secret_value()).username or ""
+
+
+#: Hosts where plain http stays on the machine (a sidecar or a local test gateway).
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def settings_warnings(settings: Settings) -> list[str]:
+    """Settings that start but silently send nothing, or send a secret in clear (DF-575,
+    DF-578). `serve` and the worker log each one at startup; none refuses startup, since a
+    tenant's own sender or an in-cluster relay can make them right."""
+    warnings: list[str] = []
+    if settings.smtp_host and not settings.smtp_from:
+        warnings.append(
+            f"{PREFIX}SMTP_HOST is set but {PREFIX}SMTP_FROM is not: mail of a tenant without "
+            "its own sender (`admin tenant set-mail-from`) stays queued"
+        )
+    if settings.smtp_host and not settings.public_url:
+        warnings.append(
+            f"{PREFIX}SMTP_HOST is set but {PREFIX}PUBLIC_URL is not: no invite is made for a "
+            "new person (an invite needs a link to this control plane)"
+        )
+    if settings.smtp_security == "none" and settings.smtp_username:
+        warnings.append(
+            f"{PREFIX}SMTP_SECURITY=none with {PREFIX}SMTP_USERNAME: the SMTP login is sent in "
+            "clear; use starttls or tls unless the relay is on this host or cluster"
+        )
+    admin = settings.gateway_admin_url
+    if admin and admin.startswith("http://"):
+        if urlsplit(admin).hostname not in _LOOPBACK_HOSTS:
+            warnings.append(
+                f"{PREFIX}GATEWAY_ADMIN_URL is plain http:// ({admin}): the gateway admin key "
+                "is sent in clear; use https"
+            )
+    return warnings

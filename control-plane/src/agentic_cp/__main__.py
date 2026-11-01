@@ -172,6 +172,15 @@ def _settings() -> Settings:
     return Settings.from_env(os.environ)
 
 
+def _warn(settings: Settings) -> None:
+    """Startup warnings (DF-575, DF-578): settings that work but send nothing, or a secret
+    in clear."""
+    from agentic_cp.settings import settings_warnings
+
+    for warning in settings_warnings(settings):
+        print(f"warning: {warning}", file=sys.stderr)
+
+
 _PREFLIGHT_HINT = (
     "hint: fix the database (python -m agentic_cp migrate re-applies the grants); "
     "AGENTIC_CP_REQUIRE_DB_ENFORCEMENT=false is for local development only"
@@ -184,6 +193,7 @@ def _serve(args: argparse.Namespace) -> int:
     from agentic_cp.app import create_app, serve_preflight
 
     settings = _settings()
+    _warn(settings)
     refusal = asyncio.run(serve_preflight(settings))
     if refusal:
         print(f"error: refusing to serve - {refusal}", file=sys.stderr)
@@ -203,6 +213,7 @@ def _worker(args: argparse.Namespace) -> int:
     from agentic_cp.policy_sync.worker import run_forever
 
     settings = _settings()
+    _warn(settings)
     refusal = asyncio.run(serve_preflight(settings))  # what serve refuses, the worker does too
     if refusal:
         print(f"error: refusing to run the worker - {refusal}", file=sys.stderr)
@@ -659,6 +670,9 @@ def _tenant_set_mail_from(args: argparse.Namespace) -> int:
         except ValueError as error:
             raise CommandError(f"--address: {error}", 3) from None
         name = (args.name or "").strip() or None
+        if name and any(ord(char) < 32 or ord(char) == 127 for char in name):
+            # DF-578: the name goes into every mail's From header, one line
+            raise CommandError("--name: one line of text, no newline or control character", 3)
 
     async def work(conn, tenant):
         await conn.execute(

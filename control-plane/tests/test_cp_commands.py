@@ -105,6 +105,9 @@ async def test_set_mail_from_sets_one_tenants_sender_and_audits_it(operator_env)
     assert record.event == "tenant.mail_from_changed"
     assert record.after == {"address": "tools@a.example.test", "name": "A tools"}
     assert await _run(*argv, "--address", "not-an-address") == 3
+    # DF-578: a display name is one header line; a newline would add headers to every mail
+    named = ("--address", "tools@a.example.test", "--name", "A\nBcc: x@y.z")
+    assert await _run(*argv, *named) == 3
     assert await _run(*argv, "--clear") == 0
     async with api.db.owner.begin() as conn:
         found = select(tenants.c.mail_from).where(tenants.c.slug == "tenant-a")

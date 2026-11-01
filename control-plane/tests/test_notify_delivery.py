@@ -5,6 +5,7 @@ with two workers at once."""
 
 import asyncio
 import logging
+import uuid
 from datetime import timedelta
 
 import pytest
@@ -14,7 +15,7 @@ from sqlalchemy import select, update
 from agentic_cp.audit import read_records
 from agentic_cp.notify.delivery import backoff, deliver_due
 from agentic_cp.notify.outbox import enqueue
-from agentic_cp.notify.smtp import RelayUnusable, SmtpNotifier
+from agentic_cp.notify.smtp import Outgoing, PermanentFailure, RelayUnusable, SmtpNotifier
 from agentic_cp.notify.templates import render
 from agentic_cp.tables import notifications, tenants
 from agentic_cp.tenancy.context import tenant_tx
@@ -170,6 +171,38 @@ async def test_permanent_failure_fails_at_once(api):
     assert "550" in row.last_error
     [failed] = await _events(api, api.a, "notification.failed")
     assert "550" in failed.reason
+
+
+def _outgoing(**values) -> Outgoing:
+    fields = {
+        "id": uuid.uuid4(),
+        "sender": "agentic@cp.example.test",
+        "sender_name": "agentic",
+        "recipient": "dev@a.example.test",
+        "subject": "Hello",
+        "text": "text",
+        "html": "<p>html</p>",
+    }
+    return Outgoing(**{**fields, **values})
+
+
+async def test_a_mail_the_relay_cannot_carry_fails_for_good():
+    """DF-578: a non-ASCII recipient on a relay without SMTPUTF8 would fail the same way on
+    every try; it is permanent, not eight retries that delay the pass."""
+    with capture_relay(starttls=False, smtputf8=False) as relay:
+        notifier = _notifier(relay, security="none")
+        with pytest.raises(PermanentFailure, match="SMTPUTF8"):
+            await notifier.send(_outgoing(recipient="dév@a.example.test"))
+        assert relay.capture.received == []
+
+
+async def test_a_mail_that_cannot_be_built_fails_for_good():
+    """DF-578: a header that cannot be written (a newline in the subject) is permanent."""
+    with capture_relay(starttls=False) as relay:
+        notifier = _notifier(relay, security="none")
+        with pytest.raises(PermanentFailure, match="could not be built"):
+            await notifier.send(_outgoing(subject="Hello\nBcc: x@evil.example.test"))
+        assert relay.capture.received == []
 
 
 async def test_last_attempt_fails(api):

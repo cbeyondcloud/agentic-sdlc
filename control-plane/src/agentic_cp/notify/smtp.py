@@ -124,7 +124,13 @@ class SmtpNotifier:
         )
 
     async def send(self, message: Outgoing) -> None:
-        await asyncio.to_thread(self._send, build_message(message))
+        try:
+            mail = build_message(message)
+        except (ValueError, TypeError, LookupError) as error:  # DF-578: the same on every try
+            raise PermanentFailure(
+                f"the mail could not be built ({type(error).__name__}: {str(error)[:120]})"
+            ) from None
+        await asyncio.to_thread(self._send, mail)
 
     def _context(self) -> ssl.SSLContext:
         return self.ssl_context or ssl.create_default_context()
@@ -162,6 +168,9 @@ class SmtpNotifier:
         except smtplib.SMTPDataError as error:
             kind = PermanentFailure if error.smtp_code >= 500 else TransientFailure
             raise kind(f"mail refused: {error.smtp_code} {_text(error.smtp_error)}") from None
+        except smtplib.SMTPNotSupportedError as error:
+            # DF-578: e.g. a non-ASCII address on a relay without SMTPUTF8; never better later
+            raise PermanentFailure(f"the relay cannot carry this mail: {error}"[:300]) from None
         except smtplib.SMTPResponseException as error:
             raise RelayUnusable(  # a failed login or a refused sender: the relay's set-up
                 f"the relay answered {error.smtp_code} {_text(error.smtp_error)}"
