@@ -339,4 +339,57 @@ publish), then `bootstrap.py` steps 1, 2, 4, 6, 8 and 9:
 uv run python deploy/helm/kind/bootstrap_proof.py --name b17-m3-05 --work <a scratch folder>
 ```
 
-RECORD-PLACEHOLDER
+Everything it starts carries `--name` (the cluster `b17-m3-05`, the containers
+`b17-m3-05-tools`, `b17-m3-05-git`, `b17-m3-05-mailpit`) and is removed at the end unless
+`--keep`. No cloud, no model.
+
+### Record of the run
+
+2026-11-01, M3-05 (track b17-m3-05), on Windows 11 with Docker Desktop 29.8.2 (cgroup v1,
+Kubernetes 1.34.11 on the kind node), step 0 through `smoke.ps1` (Windows PowerShell).
+Result: **passed** from an empty cluster, then everything removed. The bootstrap part of
+the output (tokens never appear; the first admin's went to an owner-only file):
+
+```text
+bootstrap: policy repo made in ...\proof\policy (branches main, staging, dev)
+bootstrap: scaling up the operator pod agentic-agentic-platform-operator
+  | tenant acme created (id 965c9aef-9a07-445b-8c69-02b51cd02a19)
+  | first org admin: admin@acme.example.test
+  | token: written to the token file
+  | tenant acme: policy repo set (branch staging); the worker syncs it next
+  | acme	active	Acme	https://b17-m3-05-git:8443/policy.git@staging
+  | backup role agentic_backup is ready for the backup CronJob: ...
+  | 6015fc629e2e69be1c2d447ecf32718cc9579595	refs/heads/staging        (git ls-remote, the tenant's credentials)
+bootstrap-proof: 3. policy active: git:6015fc629e2e69be1c2d447ecf32718cc9579595 on staging
+bootstrap-proof: 4. agentic 0.1.0 installed from http://127.0.0.1:51670/simple/
+bootstrap: lead@acme.example.test holds team-lead in team checkout: invited
+bootstrap: dev@acme.example.test holds developer in team checkout: invited
+bootstrap: agentic-smoke-3d7c8a@acme.example.test holds developer in team checkout: invited
+  PASS   control plane ready             /readyz: ready, database guarantees enforced
+  PASS   first org admin                 admin@acme.example.test is org-admin of acme
+  PASS   policy repo synced              git:6015fc62... on staging
+  PASS   roles assigned                  4 assignments
+  PASS   invite mailed to ... (3 people) sent through the SMTP relay
+  PASS   agentic-cli 0.1.0 on the index  agentic_cli-0.1.0-py3-none-any.whl
+  PASS   agentic-core 0.1.0 on the index agentic_core-0.1.0-py3-none-any.whl
+  MANUAL branch protection, git host access, Jira
+bootstrap: 0 failed, 9 passed, 3 to confirm by hand
+bootstrap: smoke: init passed
+bootstrap: smoke: dry run passed
+bootstrap: smoke run passed: the CLI, the org policy and the control plane agree (no model called)
+```
+
+What was not proven locally, and why: the GitHub App itself and branch protection (step 1
+and 2's manual parts: no GitHub on a laptop; the local git host takes the same gitconfig, a
+token file and a private CA, and `git ls-remote` with them passed), a real SMTP relay
+(Mailpit stands in, `security: none` inside the network), and a real internal index (the
+release tests' loopback index with `scripts/release.py`'s build, sign and publish). The
+policy repo was built with `--sandbox-required-for none`, because the agent sandbox does
+not exist on native Windows (DF-944).
+
+The runs before this one found three defects, fixed in this track: the template's example
+team (copied for every team) left out the architect's `deep-reasoning` tier, so
+feature-delivery's design step was refused for every team; a test that imported the budget
+guard left `__pycache__` in the template, which went into the policy repo's first commit;
+and an operator pod left scaled up by `kubectl` makes `helm upgrade` fail on Helm's
+server-side apply (the troubleshooting table says what to do).
