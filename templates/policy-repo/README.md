@@ -52,7 +52,7 @@ policy-repo/
    copy `teams/payments/` to `teams/<team>/`, and add the team's two lines to CODEOWNERS.
    Delete the `payments` example if you have no such team.
 5. In CODEOWNERS, replace the example handles (`@your-org/agentic-org-admins`,
-   `@your-org/payments-leads`) with your org's teams.
+   `@your-org/agentic-security`, `@your-org/payments-leads`) with your org's teams.
 6. Turn on branch protection for `main`, `staging` and `dev`: require pull requests, turn
    on **Require review from Code Owners**, and require both status checks of the
    `policy-check` workflow, `check` and `budget`. Without branch protection, CODEOWNERS only
@@ -87,7 +87,8 @@ policy-repo/
 
 | Path | Owner (CODEOWNERS) | Notes |
 |---|---|---|
-| `policy/`, `agents/`, `pipelines/`, `skills/` | org admins | org-wide; pipelines are admin-controlled (D33) |
+| `agents/`, `pipelines/` | org admins | org-wide; pipelines are admin-controlled (D33) |
+| `policy/`, `skills/`, `CODEOWNERS` | org admins, with security / compliance as reviewers | GitHub needs one code owner's approval; to require security's too, add a branch ruleset requiring a review from the security team on these paths |
 | `policy/teams/<team>.yaml` | that team's leads, or org admins | can only narrow org policy |
 | `teams/<team>/` | that team's leads | the team's agents, pipelines, per-repo overlays (`pipelines/overlays/<repo>.yaml`) and skills |
 

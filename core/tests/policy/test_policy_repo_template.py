@@ -96,6 +96,18 @@ def test_every_team_has_its_layer_and_a_codeowners_line(policy):
         assert f"/policy/teams/{team}.yaml " in owners, team
 
 
+def test_security_reviews_the_org_policy_skills_and_codeowners():
+    """DF-954 (spec §23): security is a reviewer of policy repo PRs. The last matching
+    CODEOWNERS line wins, so the group sits on the lines for these paths themselves."""
+    owners = {}
+    for line in read_text(TEMPLATE / "CODEOWNERS").splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            path, *handles = line.split()
+            owners[path] = handles
+    for path in ("/policy/", "/skills/", "/CODEOWNERS"):
+        assert owners[path] == ["@your-org/agentic-org-admins", "@your-org/agentic-security"]
+
+
 def test_template_definitions_discover(policy):
     found = DefinitionSet.discover(org=TEMPLATE, team=TEMPLATE / "teams" / "payments", repo=None)
     assert found.pipelines == {} and found.agents == {}  # the library is copied in later

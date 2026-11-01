@@ -5,12 +5,17 @@
 # Everything not named below - the org policy, agents, pipelines and skills catalog -
 # belongs to the org admins.
 *                                @your-org/agentic-org-admins
-/policy/                         @your-org/agentic-org-admins
 /agents/                         @your-org/agentic-org-admins
 /pipelines/                      @your-org/agentic-org-admins
-/skills/                         @your-org/agentic-org-admins
-/CODEOWNERS                      @your-org/agentic-org-admins
 /.github/                        @your-org/agentic-org-admins
+
+# Security / compliance reviews the org policy, the skills catalog (skills with scripts)
+# and this file (spec §23). GitHub asks every owner on a line for a review but needs only
+# one approval, so to make security's approval required as well, add a branch ruleset
+# that requires a review from the security team on these paths.
+/policy/                         @your-org/agentic-org-admins @your-org/agentic-security
+/skills/                         @your-org/agentic-org-admins @your-org/agentic-security
+/CODEOWNERS                      @your-org/agentic-org-admins @your-org/agentic-security
 
 # One block per team: its layer (agents, pipelines with per-repo overlays, skills) is the
 # team leads'. Overlays (teams/<team>/pipelines/overlays/) can never remove an org-required
