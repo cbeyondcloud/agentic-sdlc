@@ -15,7 +15,10 @@
     db dashboard-role --tenant S --role R [--password-env VAR]
                           bind one Grafana reader role to one tenant: the dash_* views,
                           that tenant's rows only
-    db verify-restore     check a restored database (owner role): migration revision, the
+    db backup-role --role R [--password-env VAR] [--admin-dsn-env VAR] [--check]
+                          create (superuser DSN from the variable) or check the backup
+                          CronJob's role: BYPASSRLS + pg_read_all_data
+    db verify-restore    check a restored database (owner role): migration revision, the
                           runtime role's guarantees, every tenant's audit chain
     admin audit verify --tenant S
                           verify one tenant's audit chain
@@ -426,6 +429,61 @@ def _dashboard_role(args: argparse.Namespace) -> int:
     except ReaderError as error:
         raise CommandError(str(error), 2) from None
     print(f"tenant {args.tenant}: dashboard reader role {role} bound (the dash_* views only)")
+    return 0
+
+
+def _backup_role(args: argparse.Namespace) -> int:
+    """Create or check the backup CronJob's role (M3-05, DF-891): BYPASSRLS and
+    pg_read_all_data. Creating needs a superuser DSN (from `--admin-dsn-env`); `--check`
+    reads pg_roles with it, or with the owner DSN when that variable is unset."""
+    from sqlalchemy.engine import make_url
+
+    from agentic_cp.backup_role import BackupRoleError, backup_role_problems, create_backup_role
+    from agentic_cp.db import engine_for
+
+    settings = _settings()
+    owner = _owner_dsn(settings)
+    admin = os.environ.get(args.admin_dsn_env, "").strip()
+    if not admin and not args.check:
+        raise CommandError(
+            f"set {args.admin_dsn_env} to a superuser DSN (only a superuser may give a role "
+            "BYPASSRLS; it is never read from the command line)",
+            3,
+        )
+    protected = {settings.runtime_role, make_url(owner).username or ""}
+    password = os.environ.get(args.password_env) or None
+
+    async def run():
+        engine = engine_for(admin or owner, settings.db_schema, pool_size=1, max_overflow=0)
+        try:
+            created = None
+            if not args.check:
+                async with engine.begin() as conn:
+                    created = await create_backup_role(
+                        conn, args.role, password, protected=protected
+                    )
+            async with engine.connect() as conn:
+                return created, await backup_role_problems(conn, args.role)
+        finally:
+            await engine.dispose()
+
+    try:
+        created, problems = asyncio.run(run())
+    except BackupRoleError as error:
+        message = str(error)
+        if "new role" in message:
+            message += f": set {args.password_env} (or name another variable with --password-env)"
+        raise CommandError(message, error.code) from None
+    if created is not None:
+        print(f"backup role {args.role} {'created' if created else 're-aligned'}")
+    for problem in problems:
+        print(problem)
+    if problems:
+        return 1
+    print(
+        f"backup role {args.role} is ready for the backup CronJob: put its DSN in the chart's "
+        "Secret under backup-database-url"
+    )
     return 0
 
 
@@ -910,6 +968,23 @@ def build_parser() -> argparse.ArgumentParser:
         "an existing role's password)",
     )
     reader.set_defaults(run=_dashboard_role)
+    backup = db.add_parser(
+        "backup-role", help="create or check the backup CronJob's role (BYPASSRLS, read-only)"
+    )
+    backup.add_argument("--role", required=True, help="the login role the backup runs as")
+    backup.add_argument(
+        "--password-env",
+        default="BACKUP_DB_PASSWORD",
+        help="the variable holding its password (default BACKUP_DB_PASSWORD; unset keeps an "
+        "existing role's password)",
+    )
+    backup.add_argument(
+        "--admin-dsn-env",
+        default="PG_ADMIN_DSN",
+        help="the variable holding a superuser DSN (default PG_ADMIN_DSN)",
+    )
+    backup.add_argument("--check", action="store_true", help="only check an existing role")
+    backup.set_defaults(run=_backup_role)
 
     admin = commands.add_parser("admin", help="operator commands (owner role)")
     admin_commands = admin.add_subparsers(dest="admin_command", required=True)
