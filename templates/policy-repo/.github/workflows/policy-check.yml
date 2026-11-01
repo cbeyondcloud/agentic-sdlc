@@ -1,19 +1,56 @@
 # The policy-repo gate: every pull request must load, and every catalogued skill must be
-# admitted, under the org's own licences and limits (agentic policy check). Make this
-# check required in the branch protection of the default branch.
+# admitted, under the org's own licences and limits (agentic policy check); and a team's
+# budget may rise only with an org admin (the budget guard, DF-857). Make both jobs
+# (`check` and `budget`) required in the branch protection of main, staging and dev.
 name: policy-check
 on:
   pull_request: {}
+  # an approval can be what lets a budget raise through: judge again on each review
+  pull_request_review:
+    types: [submitted, dismissed]
   push:
-    branches: [main]
+    branches: [main, staging, dev]
 permissions:
   contents: read
+  pull-requests: read
+env:
+  # EDIT: the agentic release your org runs (the same version as the control plane), and
+  # set the repository or organisation variable AGENTIC_INDEX_URL to your internal
+  # package index's simple URL (https://pypi.your-org.internal/simple/).
+  AGENTIC_VERSION: "0.1.0"
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      # EDIT: install from your internal package index, at the org's pinned version
-      - run: uv tool install "agentic[skills]"
+      # the CLI and the core's skills extra (skills-ref, for skill admission), both
+      # published by scripts/release.py to the internal index at one version (DF-598)
+      - run: uv tool install "agentic-cli==${AGENTIC_VERSION}" --with "agentic-core[skills]==${AGENTIC_VERSION}"
+        env:
+          UV_DEFAULT_INDEX: ${{ vars.AGENTIC_INDEX_URL }}
       - run: agentic policy check .
+  budget:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      # The base branch's guard, never the pull request's own copy: a pull request cannot
+      # weaken the check that judges it. ORG_READ_TOKEN (optional) can read the org's team
+      # members, so an org-admin team in CODEOWNERS counts; without it only @logins do.
+      - name: budget guard
+        env:
+          GH_TOKEN: ${{ secrets.ORG_READ_TOKEN || github.token }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          PULL: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          git show "origin/${BASE}:.github/budget_guard.py" > "${RUNNER_TEMP}/budget_guard.py"
+          uv run --script "${RUNNER_TEMP}/budget_guard.py" --base "origin/${BASE}" \
+            --author "${AUTHOR}" --repo "${REPO}" --pull "${PULL}" --head-sha "${HEAD_SHA}" \
+            --expand-teams

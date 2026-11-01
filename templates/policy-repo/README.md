@@ -26,7 +26,8 @@ policy-repo/
 ├── skills/catalog.yaml       approved skills, pinned by hash (copy library/skills here)
 ├── teams/<team>/             a team's layer: agents/, pipelines/ (+ overlays/), skills/
 ├── CODEOWNERS                pipelines/ -> org admins, teams/<team>/ -> that team's leads
-└── .github/workflows/policy-check.yml   the pull request gate
+├── .github/workflows/policy-check.yml   the pull request gate (policy check, budget guard)
+└── .github/budget_guard.py   a team budget rises only with an org admin (DF-857)
 ```
 
 ## Setting it up (day 0)
@@ -52,10 +53,16 @@ policy-repo/
    Delete the `payments` example if you have no such team.
 5. In CODEOWNERS, replace the example handles (`@your-org/agentic-org-admins`,
    `@your-org/payments-leads`) with your org's teams.
-6. Turn on branch protection for the default branch: require pull requests, turn on
-   **Require review from Code Owners**, and require the `policy-check` status check.
-   Without branch protection, CODEOWNERS only suggests reviewers and anyone with write
-   access could change a pipeline (D33).
+6. Turn on branch protection for `main`, `staging` and `dev`: require pull requests, turn
+   on **Require review from Code Owners**, and require both status checks of the
+   `policy-check` workflow, `check` and `budget`. Without branch protection, CODEOWNERS only
+   suggests reviewers and anyone with write access could change a pipeline (D33). In
+   `.github/workflows/policy-check.yml` set `AGENTIC_VERSION` to the release your org runs,
+   and set the repository (or organisation) variable `AGENTIC_INDEX_URL` to your internal
+   index's simple URL. If your org admins are a team in CODEOWNERS (as in this template),
+   add a secret `ORG_READ_TOKEN` that may read the organisation's team members (a
+   fine-grained token or GitHub App token with *Members: read*): without it the budget guard
+   cannot tell who the org admins are and refuses every budget raise.
 7. Run the gate locally once - it is what the workflow runs on every pull request:
 
    ```
@@ -165,7 +172,7 @@ The template answers the spec's open questions with defaults an org can change l
 | Repo class when a repo declares none | `internal`; its full prompts and responses stay off the control plane | `policy/classifications.yaml` `default_classification` |
 | Caps per agent | each agent type's `limits` (for example the Developer: 5 USD, 80 turns, 60 minutes a run) | `policy/agent-types.yaml`; a team lowers them in `limits_max` |
 | Runs at once | 3 a person, 20 a team | `policy/limits.yaml` `concurrency` |
-| Team monthly budget | every team sets `monthly_budget_usd`, one cap per team for the whole team's gateway spend: start at 20 USD a developer a month (a 10-person team: 200), then adjust after the first month from the Team view and Executive ROI dashboards. Org admins change any team's value; a team lead may only lower their own. Both by pull request to this repo | `policy/teams/<team>.yaml` |
+| Team monthly budget | every team sets `monthly_budget_usd`, one cap per team for the whole team's gateway spend: start at 20 USD a developer a month (a 10-person team: 200), then adjust after the first month from the Team view and Executive ROI dashboards. Org admins change any team's value; a team lead may only lower their own. Both by pull request to this repo: the `budget` check (`.github/budget_guard.py`, run from the base branch) refuses a raise, a new team file or a removed budget unless an org admin (an owner of `policy/org.yaml` in CODEOWNERS) wrote the pull request or approved its latest commit | `policy/teams/<team>.yaml` |
 | Evaluation spend cap | 100 USD an evaluation; 250 for QA, 750 for the Developer. These are org budgets for an evaluation the platform team runs (a quality gate or an A/B), not part of any team's monthly budget: run them with the platform team's own gateway key, since under a product team's key its monthly cap (200 USD for 10 people) would stop a 750 USD Developer evaluation early | `policy/eval.yaml` |
 | Code-intelligence index | each laptop builds its own; `index_export_workflow: true` adds a nightly CI export. No refresh on every merge by default: a busy repo adds the commented `push` trigger to its workflow | `policy/org.yaml` |
 
