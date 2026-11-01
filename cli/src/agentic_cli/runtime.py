@@ -60,15 +60,21 @@ from agentic.telemetry.sinks import EventSink, ForwardingRecorder
 from agentic.transport import CallIdentity
 from agentic_cli import agent_backends, control_plane
 from agentic_cli import killswitch as killswitch_port
+from agentic_cli.codeintel import (
+    Backend,
+    backend_for,
+    codeintel_settings,
+    codeintel_warning,
+    locate_backend,
+)
 from agentic_cli.codeintel import codeintel_for as codeintel_factory
-from agentic_cli.codeintel import codeintel_settings, codeintel_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.heartbeat import Heartbeat
 from agentic_cli.learning import FeedbackCapture
 from agentic_cli.skill_activity import SkillActivity, StampingRecorder
 from agentic_cli.standalone import PLACEHOLDER
-from agentic_cli.step_extras import StepExtras
+from agentic_cli.step_extras import StepExtras, tool_locator
 from agentic_cli.wiring import StepWiring, production_scanner
 from agentic_cli.workspace import RUNS, Workspace, rollback_commands
 from sdlc_commons.gates import ZyrofloGates, regime_block_on
@@ -173,6 +179,7 @@ class Runtime:
         self._gates: dict[str, ZyrofloGates] = {}
         self._pipelines: dict[str, str] = {}
         self._library: InstalledSkills | None | bool = False  # False: not looked up yet
+        self._backend: Backend | None = None  # the JVM codeintel backend, once looked up
         self._gateway_key: str | None = None  # the key `redact` masks once it is known
         self._restored: list[str] = []  # skills the last sync restored (a local edit)
         self._recorders: dict[str, ForwardingRecorder] = {}
@@ -390,7 +397,20 @@ class Runtime:
         domain graph), or None (`codeintel.adapter: none` lacks nothing)."""
         settings = codeintel_settings(self.ws.config)
         available = codeintel_index.available()
-        return codeintel_warning(self.ws.repo, settings, crg_available=available)
+        return codeintel_warning(
+            self.ws.repo, settings, crg_available=available, backend=self._codeintel_backend()
+        )
+
+    def _codeintel_backend(self) -> Backend:
+        """The optional JVM backend from the verified tool cache (M3-27); never fetched,
+        looked up once and only for a repo routed to it."""
+        if self._backend is None:
+            self._backend = backend_for(
+                self.ws.repo,
+                codeintel_settings(self.ws.config),
+                lambda: locate_backend(tool_locator(self.ws.home, self.ws.policy())),
+            )
+        return self._backend
 
     def _publish_problems(self, pipeline: PipelineDefinition) -> list[Problem]:
         """A publishing step whose host or token is missing fails here, before any spend
@@ -744,12 +764,13 @@ class Runtime:
     # ── helpers ──────────────────────────────────────────────────────────────
 
     def _wiring(self, decision: SandboxDecision) -> StepWiring:
-        # code-review-graph and/or the domain graph, as the repo chose (M2-43); None: agents
-        # get no codeintel tools (wiring.NO_CODEINTEL)
+        # the routed symbol adapter and/or the domain graph, as the repo chose (M2-43,
+        # M3-27); None: agents get no codeintel tools (wiring.NO_CODEINTEL)
         codeintel_for = codeintel_factory(
             self.ws.repo,
             codeintel_settings(self.ws.config),
             crg_available=codeintel_index.available(),
+            backend=self._codeintel_backend(),  # M3-27: JVM repos, when the org pins it
         )
         library = self._installed()
         return StepWiring(

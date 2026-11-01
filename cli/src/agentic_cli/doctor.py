@@ -19,6 +19,8 @@ repository and its init, the policy (loads, no placeholder models, an org cache 
 expired), the OS keyring, the gateway (reachable, key accepted, every tier model served -
 DF-654), the control plane (reachable, signed in), the clock (against the control plane's
 or gateway's time), free disk space, this repository's local data against its cap (M3-08),
+which code intelligence answers here (M3-27: the routed adapter, and why the optional
+JVM backend is not used),
 the environment variables agent commands do not get (names only, DF-366) and the org
 policy repo's protection (D33: review by code owners required on its default branch).
 """
@@ -41,13 +43,14 @@ import httpx2
 from rich.console import Console
 
 from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials
+from agentic.codeintel import index as codeintel_index
 from agentic.hosting import HostingError, ProtectionHost, RepoRef, parse_remote
 from agentic.hosting.git import remote_url
 from agentic.policy import OrgPolicy, SandboxPolicy
 from agentic.policy.model import gateway_model
 from agentic.sandbox.process import withheld_names
 from agentic.transport import probe_gateway
-from agentic_cli import __version__, control_plane, hosting, housekeeping, readiness
+from agentic_cli import __version__, codeintel, control_plane, hosting, housekeeping, readiness
 from agentic_cli.config import user_config
 from agentic_cli.errors import CliError
 from agentic_cli.standalone import PLACEHOLDER
@@ -167,6 +170,8 @@ def run_doctor(cwd: Path, home: Path, env: Mapping[str, str], deps: DoctorDeps) 
     add(_disk(ws.repo if ws else home, deps))
     if ws is not None:
         add(_local_data(ws))
+    if ws is not None and policy is not None:
+        add(_codeintel(ws, policy))
     add(_withheld(env, policy))
     add(_policy_repo_protection(settings, credentials))
     return report
@@ -424,6 +429,26 @@ def _local_data(ws: Workspace) -> Check:
     if warning:
         return Check("local data", "warn", warning, "run `agentic gc --dry-run`, then `agentic gc`")
     return Check("local data", "ok", "under its cap")
+
+
+def _codeintel(ws: Workspace, policy: OrgPolicy) -> Check:
+    """M3-27: which code intelligence answers in this repository, from the verified tool
+    cache only (doctor fetches nothing)."""
+    from agentic_cli.step_extras import tool_locator  # it imports the runtime's peers
+
+    try:
+        settings = codeintel.codeintel_settings(ws.config)
+    except CliError as error:
+        return Check("code intelligence", "fail", str(error), error.hint or "")
+    status, detail, fix = codeintel.codeintel_status(
+        ws.repo,
+        settings,
+        crg_available=codeintel_index.available(),
+        backend=codeintel.backend_for(
+            ws.repo, settings, lambda: codeintel.locate_backend(tool_locator(ws.home, policy))
+        ),
+    )
+    return Check("code intelligence", status, detail, fix)
 
 
 def _withheld(env: Mapping[str, str], policy: OrgPolicy | None) -> Check:
