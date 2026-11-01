@@ -4,7 +4,10 @@ failures become exit codes (see `agentic exit-codes`).
     agentic [--json] [--no-color] <command> ...
 
 Every command reports a failure by raising `CliError(message, code, hint)`; `main`
-turns it into a message on stderr (or a JSON object with `--json`) and the code.
+turns it into a message on stderr (or a JSON object with `--json`) and the code. With
+`--json`, stderr is JSON Lines: a notice a script needs early (`run`'s `{"started": id}`)
+comes first, one compact object per line, and the error object is the last line, so a
+script reads stderr line by line, never as one document (DF-380).
 Anything else that escapes is exit 1 with its message and no traceback (set
 `AGENTIC_DEBUG=1` to see the traceback); Ctrl-C is 130, and so are `kill <pid>`, a
 closed terminal and Ctrl-Break, which stop a run the same way (its agent processes are

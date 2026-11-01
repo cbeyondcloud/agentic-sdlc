@@ -394,3 +394,10 @@ def test_local_usage_stops_at_the_cap(repo: Path):
     assert not usage.complete
     whole = housekeeping.local_usage(repo, stop_at=None, deadline_s=10)
     assert whole.complete and whole.bytes >= 50_000
+
+
+def test_the_help_names_the_default_cut_off_the_code_uses(capsys):
+    """M3-18 docs check: `gc --help` said 14 days while the default is 30 (OR-01)."""
+    assert main(["gc", "--help"]) == ExitCode.OK
+    help_text = " ".join(capsys.readouterr().out.replace("│", " ").split())  # box sides
+    assert f"else {housekeeping.DEFAULT.gc_after_days})" in help_text

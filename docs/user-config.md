@@ -44,7 +44,7 @@ git_hosts:
 
 `agentic gc` removes finished runs and their trees once they are older than a number of
 days. `agentic status` warns when this repository's local data passes a cap. Both
-defaults come from the org policy (`limits.yaml` `local:`), else 14 days and 20 GB. Your
+defaults come from the org policy (`limits.yaml` `local:`), else 30 days and 20 GB. Your
 own setting wins over the org's:
 
 ```yaml
