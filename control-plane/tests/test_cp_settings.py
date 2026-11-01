@@ -201,5 +201,9 @@ def test_settings_warnings_name_what_works_but_is_unsafe_or_silent():
         Settings.from_env(_env(AGENTIC_CP_GATEWAY_ADMIN_URL="http://gw.example:8080"))
     )
     assert any("AGENTIC_CP_GATEWAY_ADMIN_URL" in w and "http://" in w for w in gateway), gateway
+    # review: the URL may carry credentials; only its host is shown
+    leaky = _env(AGENTIC_CP_GATEWAY_ADMIN_URL="http://ops:sekrit-value@gw.example:8080")
+    shown = " ".join(settings_warnings(Settings.from_env(leaky)))
+    assert "gw.example" in shown and "sekrit-value" not in shown
     loopback = _env(AGENTIC_CP_GATEWAY_ADMIN_URL="http://127.0.0.1:8080")
     assert settings_warnings(Settings.from_env(loopback)) == []

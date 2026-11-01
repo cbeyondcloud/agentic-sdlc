@@ -63,7 +63,17 @@ async def create_backup_role(
     role = checked_role(role)
     if role in protected:
         raise BackupRoleError(f"{role} is the control plane's own role, never the backup role", 3)
-    exists = await _one(conn, "select 1 from pg_roles where rolname = $1", role) is not None
+    row = await _one(
+        conn, f"select {', '.join(_PRIVILEGED)} from pg_roles where rolname = $1", role
+    )
+    exists = row is not None
+    if exists and (held := [n for n, on in zip(_PRIVILEGED, row, strict=True) if on]):
+        # re-aligning would strip them (a DBA's SUPERUSER): never repurpose such a role
+        shown = ", ".join(name.removeprefix("rol").upper() for name in held)
+        raise BackupRoleError(f"{role} holds {shown}: name a new role for the backup", 2)
+    reader = await _one(conn, "select slug from tenants where dashboard_role = $1", role)
+    if reader is not None:  # BYPASSRLS would let it read every tenant's rows
+        raise BackupRoleError(f"{role} is the dashboard reader of tenant {reader[0]}", 2)
     if not exists and not password:
         raise BackupRoleError(f"{role} is a new role: give it a password", 3)
     verb = "ALTER" if exists else "CREATE"

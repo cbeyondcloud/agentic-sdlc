@@ -163,8 +163,14 @@ def test_the_runbooks_exist_and_link_each_other():
     assert "(release.md)" in upgrade and "(postgres-backup-restore.md)" in upgrade
     assert "(upgrade.md)" in restore and "scripts/restore_drill.py" in restore
     assert "min_cli_version" in upgrade and "helm rollback" in upgrade
-    for name in ("upgrade.md", "postgres-backup-restore.md"):
+    for name in ("upgrade.md", "postgres-backup-restore.md", "day-0-bootstrap.md"):
         assert f"(../../../docs/runbooks/{name})" in readme
+    bootstrap = (runbooks / "day-0-bootstrap.md").read_text(encoding="utf-8")
+    for link in ("(environments-and-promotion.md)", "(release.md)", "(postgres-backup-restore.md)"):
+        assert link in bootstrap
+    assert "(day-0-bootstrap.md)" in (runbooks / "environments-and-promotion.md").read_text(
+        encoding="utf-8"
+    )
     assert "(upgrade.md)" in (runbooks / "release.md").read_text(encoding="utf-8")
 
 

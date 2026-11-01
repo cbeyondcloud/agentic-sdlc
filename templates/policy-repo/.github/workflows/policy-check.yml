@@ -4,7 +4,9 @@
 # (`check` and `budget`) required in the branch protection of main, staging and dev.
 name: policy-check
 on:
-  pull_request: {}
+  pull_request:
+    # edited: a pull request moved to another base branch is judged against that base
+    types: [opened, synchronize, reopened, edited]
   # an approval can be what lets a budget raise through: judge again on each review
   pull_request_review:
     types: [submitted, dismissed]
@@ -20,6 +22,7 @@ env:
   AGENTIC_VERSION: "0.1.0"
 jobs:
   check:
+    # runs on reviews too: a skipped job would report a required check as passed
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,12 +41,15 @@ jobs:
         with:
           fetch-depth: 0
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      # The base branch's guard, never the pull request's own copy: a pull request cannot
-      # weaken the check that judges it. ORG_READ_TOKEN (optional) can read the org's team
-      # members, so an org-admin team in CODEOWNERS counts; without it only @logins do.
+      # The base branch's guard, never the pull request's own copy, run outside the
+      # checkout with --no-config: a pull request can neither weaken the check that judges
+      # it nor point uv at its own package index (uv.toml, pyproject.toml). The reviews are
+      # read with the workflow's token; ORG_READ_TOKEN (optional) only reads the org admin
+      # team's members, so a team in CODEOWNERS counts; without it only @logins do.
       - name: budget guard
         env:
-          GH_TOKEN: ${{ secrets.ORG_READ_TOKEN || github.token }}
+          GH_TOKEN: ${{ github.token }}
+          ORG_READ_TOKEN: ${{ secrets.ORG_READ_TOKEN }}
           BASE: ${{ github.event.pull_request.base.ref }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
           PULL: ${{ github.event.pull_request.number }}
@@ -51,6 +57,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           git show "origin/${BASE}:.github/budget_guard.py" > "${RUNNER_TEMP}/budget_guard.py"
-          uv run --script "${RUNNER_TEMP}/budget_guard.py" --base "origin/${BASE}" \
-            --author "${AUTHOR}" --repo "${REPO}" --pull "${PULL}" --head-sha "${HEAD_SHA}" \
-            --expand-teams
+          cd "${RUNNER_TEMP}"
+          uv run --no-config --script budget_guard.py --repo-root "${GITHUB_WORKSPACE}" \
+            --base "origin/${BASE}" --author "${AUTHOR}" --repo "${REPO}" --pull "${PULL}" \
+            --head-sha "${HEAD_SHA}" --expand-teams

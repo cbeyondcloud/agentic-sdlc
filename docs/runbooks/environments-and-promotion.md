@@ -5,7 +5,8 @@ The org deployment runs as three environments, each installed from the same umbr
 it has run in staging. Installing and upgrading one environment is in
 [upgrade.md](upgrade.md); backups and the restore drill are in
 [postgres-backup-restore.md](postgres-backup-restore.md); cutting a release is in
-[release.md](release.md).
+[release.md](release.md); the first tenant and the rest of day 0 are in
+[day-0-bootstrap.md](day-0-bootstrap.md).
 
 ## The three environments
 
@@ -244,7 +245,7 @@ What it does (`deploy/helm/kind/inside.sh` and `promotion.sh`):
 
 The first admin's token is redacted from the output. The policy repo URL in step 4 does
 not resolve, so the worker logs a failed fetch: fetching and applying a real policy repo on
-staging is the bootstrap's job (M3-05).
+staging is the bootstrap's job ([day-0-bootstrap.md](day-0-bootstrap.md), M3-05).
 
 ### Record of the dry run
 
@@ -315,7 +316,7 @@ networkPolicy:
 ```
 
 Then create the backup volume (`agentic-backups`), install, run `helm test`, bootstrap the
-first tenant (M3-05), and repeat the promotion dry run's checks by hand:
+first tenant ([day-0-bootstrap.md](day-0-bootstrap.md)), and repeat the promotion dry run's checks by hand:
 
 ```bash
 kubectl -n agentic get deploy -l app.kubernetes.io/instance=agentic,app.kubernetes.io/component=api \

@@ -61,8 +61,12 @@ policy-repo/
    and set the repository (or organisation) variable `AGENTIC_INDEX_URL` to your internal
    index's simple URL. If your org admins are a team in CODEOWNERS (as in this template),
    add a secret `ORG_READ_TOKEN` that may read the organisation's team members (a
-   fine-grained token or GitHub App token with *Members: read*): without it the budget guard
-   cannot tell who the org admins are and refuses every budget raise.
+   fine-grained token or GitHub App token with *Members: read*, nothing else; the reviews
+   are read with the workflow's own token): without it the budget guard cannot tell who the
+   org admins are and refuses every budget raise. The workflow file itself is in `.github/`,
+   which only org admins may change (CODEOWNERS); where your git host offers org-level
+   required workflows or rulesets, require `policy-check` there too, so not even a reviewed
+   pull request can turn the checks off.
 7. Run the gate locally once - it is what the workflow runs on every pull request:
 
    ```

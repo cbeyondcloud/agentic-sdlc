@@ -56,6 +56,12 @@ def test_lowering_or_keeping_a_budget_is_not_a_raise():
         (None, TEAM.format(50), "a new team"),
         (TEAM.format(200), "allowed_tiers: [fast]\n", "no cap"),
         (TEAM.format(200), TEAM.format("lots"), "not a number"),
+        # review: the gateway reads a cap of 0 or less as no cap at all
+        (TEAM.format(200), TEAM.format(0), "no cap"),
+        (TEAM.format(200), TEAM.format(-1), "no cap"),
+        (TEAM.format(200), TEAM.format("'0'"), "no cap"),
+        # review: a removed team file leaves the team without its budget
+        (TEAM.format(200), None, "team file removed"),
     ],
 )
 def test_a_raise_needs_an_org_admin(before, after, why):
@@ -73,8 +79,20 @@ def test_an_org_admin_author_or_approver_lets_a_raise_through():
     assert guard.decide(changes, author="lead", approvers={"root-admin"}, admins=admins) == []
 
 
-def test_removing_a_team_is_not_a_raise():
-    assert _changes({"payments": TEAM.format(200)}, {"payments": None}) == []
+def test_the_guard_reads_budgets_as_the_policy_loader_does():
+    """The YAML reading of agentic.yamlio and the coercion of TeamPolicy: the guard and
+    the control plane never disagree on a team's budget."""
+    from agentic.policy.model import TeamPolicy
+    from agentic.yamlio import load_yaml
+
+    for value in ("1_000", "0x10", "1e3", "'200'", "200.50", "'0'", "0.0"):
+        text = f"{guard.FIELD}: {value}\n"
+        loaded = TeamPolicy(**load_yaml(text)[0]).monthly_budget_usd
+        if loaded > 0:
+            expected = format(guard.Decimal(str(loaded)).normalize(), "f")
+        else:
+            expected = "no cap"  # the gateway reads 0 or less as no cap
+        assert guard._budget(text)[1] == expected, value
 
 
 def test_org_admins_are_the_base_codeowners_of_org_policy():
@@ -124,8 +142,9 @@ class FakeGh:
     def __init__(self, reviews: list[dict], members: list[str] | None) -> None:
         self.reviews, self.members, self.calls = reviews, members, []
 
-    def __call__(self, path: str) -> list:
+    def __call__(self, path: str, *, org: bool = False) -> list:
         self.calls.append(path)
+        assert org == ("/teams/" in path)  # review: the members token only for members
         if path.endswith("/reviews"):
             return self.reviews
         if "/teams/" in path:
@@ -174,7 +193,12 @@ def test_the_workflow_runs_the_base_branchs_guard_on_reviews_too():
     assert "pull_request_review:" in text
     assert "git show" in text and ".github/budget_guard.py" in text  # the base's copy
     assert "pull-requests: read" in text
-    assert "ORG_READ_TOKEN" in text
+    # review: outside the checkout, no project config (no index of the pull request's)
+    assert 'cd "${RUNNER_TEMP}"' in text and "uv run --no-config --script" in text
+    # review: the members token only reads members; reviews use the workflow's token
+    assert "GH_TOKEN: ${{ github.token }}" in text
+    assert "ORG_READ_TOKEN: ${{ secrets.ORG_READ_TOKEN }}" in text
+    assert "edited" in text  # a retargeted pull request is judged against its new base
 
 
 def test_the_install_line_names_published_packages_at_one_version():

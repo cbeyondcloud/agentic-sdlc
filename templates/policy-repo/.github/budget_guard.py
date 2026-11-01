@@ -7,18 +7,20 @@
 Org admins change any team's `monthly_budget_usd`; a team lead may only lower their own.
 CODEOWNERS lets either approve `policy/teams/<team>.yaml`, so this check adds the rule
 CODEOWNERS cannot express: a pull request that raises a budget (a higher number, a new team
-file, or a removed budget, which means no cap) passes only when an org admin is its author
-or approved its head commit. Lowering, or not touching a budget, always passes.
+file, a removed team file, or a budget removed or set to 0 or less, which the gateway reads
+as no cap) passes only when an org admin is its author or approved its head commit.
+Lowering, or not touching a budget, always passes.
 
 Org admins are the owners of `policy/org.yaml` in the BASE branch's CODEOWNERS (the pull
 request cannot add itself). An `@login` owner counts as is. An `@org/team` owner counts
 through its members, which the git host only shows to a token with read access to the
-organisation's members (`ORG_READ_TOKEN`); without it the team stays unresolved and a raise
-fails closed. The workflow runs this file from the base branch too (`git show`), so a pull
-request cannot weaken the check that judges it.
+organisation's members (`ORG_READ_TOKEN`, used for that call only); without it the team
+stays unresolved and a raise fails closed. The workflow runs this file from the base branch
+(`git show`), outside the checkout and with `--no-config`, so a pull request can neither
+weaken the check that judges it nor point uv at another package index.
 
-    uv run --script budget_guard.py --base origin/main --author LOGIN \\
-        --repo OWNER/NAME --pull N --head-sha SHA [--expand-teams]
+    uv run --no-config --script budget_guard.py --repo-root CHECKOUT --base origin/main \\
+        --author LOGIN --repo OWNER/NAME --pull N --head-sha SHA [--expand-teams]
 
 Exit codes: 0 passes, 1 a raise without an org admin, 2 the check could not run."""
 
@@ -26,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -67,7 +70,7 @@ def _budget(text: str | None) -> tuple[Decimal | None, str]:
     if text is None:
         return NO_CAP, "a new team"
     try:
-        data = YAML(typ="safe").load(text) or {}
+        data = YAML(typ="safe", pure=True).load(text) or {}  # as agentic.yamlio reads
     except YAMLError:
         return NO_CAP, "not readable"
     value = data.get(FIELD) if isinstance(data, dict) else None
@@ -81,18 +84,24 @@ def _budget(text: str | None) -> tuple[Decimal | None, str]:
         return NO_CAP, "not a number"
     if not number.is_finite():
         return NO_CAP, "not a number"
+    if number <= 0:  # the gateway reads 0 or less as no cap (agentic_cp.routing.generate)
+        return NO_CAP, "no cap"
     return number, format(number.normalize(), "f")
 
 
 def budget_changes(base: dict[str, str | None], head: dict[str, str | None]) -> list[BudgetChange]:
     """Each team whose budget differs between the base and the head (team -> file text;
-    a missing team is None). A team the head removes is not a raise and not listed."""
+    a missing team is None). A team file the head removes is a raise: the team loses its
+    budget."""
     changes = []
     for team in sorted(set(base) | set(head)):
         after_text = head.get(team)
-        if after_text is None:
-            continue
         before_text = base.get(team)
+        if after_text is None:
+            if before_text is not None:
+                shown = _budget(before_text)[1]
+                changes.append(BudgetChange(team, shown, "team file removed", True))
+            continue
         before, before_shown = _budget(before_text)
         after, after_shown = _budget(after_text)
         if before_text is not None and before == after and before is not None:
@@ -166,14 +175,14 @@ def _git(root: Path, *args: str) -> str | None:
 
 
 def _base_teams(root: Path, base: str) -> dict[str, str | None]:
-    listing = _git(root, "ls-tree", "--name-only", f"{base}:{TEAMS_DIR}")
+    listing = _git(root, "ls-tree", "-z", "--name-only", f"{base}:{TEAMS_DIR}")
     if listing is None:
         if _git(root, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}") is None:
             raise GuardError(f"the base {base} is not a commit here (fetch it first)")
         return {}
     return {
         name.removesuffix(".yaml"): _git(root, "show", f"{base}:{TEAMS_DIR}/{name}")
-        for name in listing.split()
+        for name in listing.split("\0")
         if name.endswith(".yaml")
     }
 
@@ -193,13 +202,21 @@ def _base_codeowners(root: Path, base: str) -> str:
     return ""
 
 
-def gh_api(path: str) -> list:
-    """`gh api --paginate <path>` as one JSON list (the GitHub CLI on the runner)."""
+def gh_api(path: str, *, org: bool = False) -> list:
+    """`gh api --paginate <path>` as one JSON list (the GitHub CLI on the runner). `org`
+    calls (team members) use ORG_READ_TOKEN, the rest the workflow's own GH_TOKEN."""
+    env = dict(os.environ)
+    if org:
+        env["GH_TOKEN"] = os.environ.get("ORG_READ_TOKEN", "")
+        if not env["GH_TOKEN"]:
+            raise GuardError("ORG_READ_TOKEN is not set: team members cannot be read")
     done = subprocess.run(
         ["gh", "api", "--paginate", "--slurp", path],
         capture_output=True,
         text=True,
         encoding="utf-8",
+        env=env,
+        timeout=120,
     )
     if done.returncode != 0:
         reason = (done.stderr.strip().splitlines() or ["failed"])[-1]
@@ -227,9 +244,10 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     root: Path | None = None,
-    gh: Callable[[str], list] = gh_api,
+    gh: Callable[..., list] = gh_api,
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--repo-root", default=".", help="the pull request's checkout")
     parser.add_argument("--base", required=True, help="the base branch's ref (origin/main)")
     parser.add_argument("--author", required=True, help="the pull request author's login")
     parser.add_argument("--repo", required=True, help="OWNER/NAME on the git host")
@@ -239,7 +257,7 @@ def main(
         "--expand-teams", action="store_true", help="ask the host for admin teams' members"
     )
     args = parser.parse_args(argv)
-    root = root or Path.cwd()
+    root = root or Path(args.repo_root).resolve()
     try:
         changes = budget_changes(_base_teams(root, args.base), _head_teams(root))
         if not any(change.raised for change in changes):
@@ -253,7 +271,8 @@ def main(
                 unresolved.add(team)
                 continue
             try:
-                admins |= {m["login"].lower() for m in gh(f"orgs/{org}/teams/{slug}/members")}
+                members = gh(f"orgs/{org}/teams/{slug}/members", org=True)
+                admins |= {member["login"].lower() for member in members}
             except GuardError as error:
                 print(f"budget guard: {error}")
                 unresolved.add(team)

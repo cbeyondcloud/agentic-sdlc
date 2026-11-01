@@ -89,17 +89,21 @@ def test_the_policy_repo_step_refuses_a_used_folder_and_an_unknown_tier(tmp_path
     used = tmp_path / "used"
     used.mkdir()
     (used / "keep.txt").write_text("x", encoding="utf-8")
+    admins = ["@acme/admins"]
     with pytest.raises(bootstrap.BootstrapError, match="not empty"):
-        bootstrap.build_policy_repo(_args(step="policy-repo", out=str(used)))
+        bootstrap.build_policy_repo(_args(step="policy-repo", out=str(used), admins=admins))
     with pytest.raises(bootstrap.BootstrapError, match="no tier huge"):
         bootstrap.build_policy_repo(
-            _args(step="policy-repo", out=str(tmp_path / "p"), model=["huge=x/y"])
+            _args(step="policy-repo", out=str(tmp_path / "p"), model=["huge=x/y"], admins=admins)
         )
+    # review: a failed build leaves nothing behind, so the step can be run again
+    assert not (tmp_path / "p").exists()
 
 
 def test_the_policy_repo_command_runs_the_cli_gate_and_skips_a_second_build(tmp_path, capsys):
     out = tmp_path / "policy"
     argv = ["policy-repo", "--out", str(out), "--model", "balanced=acme-gw/b"]
+    argv += ["--admins", "@acme/agentic-org-admins"]
     assert bootstrap.main(argv) == 0
     printed = capsys.readouterr().out
     assert "passes the policy-repo gate" in printed and "next: push" in printed
@@ -123,6 +127,8 @@ def test_git_credentials_name_the_token_file_never_the_token(tmp_path, capsys):
     printed = capsys.readouterr().out
     assert "--from-file=acme.token=<the token file>" in printed
     assert bootstrap.main(["git-credentials", "--tenant", "Bad Slug", "--out", "x"]) == 3
+    shell = ["--username", "x; rm -rf /"]  # review: the user name goes into a shell snippet
+    assert bootstrap.main([*argv, *shell]) == 3
 
 
 # ── 3. the tenant ─────────────────────────────────────────────────────────────
@@ -131,9 +137,9 @@ def test_git_credentials_name_the_token_file_never_the_token(tmp_path, capsys):
 class FakeKubectl:
     """kubectl with an operator pod whose `python -m agentic_cp` answers like the real one."""
 
-    def __init__(self, tenants=(), create_fails=False):
+    def __init__(self, tenants=(), create_fails=False, rollout_fails=False):
         self.tenants, self.create_fails, self.calls = list(tenants), create_fails, []
-        self.replicas = 0
+        self.rollout_fails, self.replicas = rollout_fails, 0
 
     def __call__(self, cmd, **_):
         self.calls.append(cmd)
@@ -141,6 +147,8 @@ class FakeKubectl:
         out, code = "", 0
         if args[0] == "scale":
             self.replicas = int(args[2].split("=")[1])
+        elif args[0] == "rollout" and self.rollout_fails:
+            return subprocess.CompletedProcess(cmd, 1, "", "error: timed out waiting")
         elif args[0] == "exec":
             assert self.replicas == 1, "exec into a scaled-down operator"
             argv = args[args.index("agentic_cp") + 1 :]
@@ -148,13 +156,17 @@ class FakeKubectl:
                 out = "".join(f"{t}\tactive\t{t}\t-@staging\n" for t in self.tenants)
             elif argv[:3] == ["admin", "tenant", "create"]:
                 if self.create_fails:
-                    return subprocess.CompletedProcess(cmd, 3, "", "error: bad email")
+                    # stdout as the real command prints it, the token included
+                    printed = f"token (shown once - store it now):\n{TOKEN}\n"
+                    return subprocess.CompletedProcess(cmd, 3, printed, "error: bad email")
                 slug = argv[argv.index("--slug") + 1]
                 self.tenants.append(slug)
                 out = (
                     f"tenant {slug} created (id 1)\nfirst org admin: a@acme.example\n"
                     f"token (shown once - store it now):\n{TOKEN}\n"
                 )
+            elif argv[:2] == ["admin", "issue-token"]:
+                out = f"token issued\ntoken (shown once - store it now):\n{TOKEN}-2\n"
             elif argv[:3] == ["admin", "tenant", "set-policy-repo"]:
                 out = "tenant acme: policy repo set (branch staging); the worker syncs it next\n"
         return subprocess.CompletedProcess(cmd, code, out, "")
@@ -185,13 +197,25 @@ def test_the_tenant_step_keeps_the_token_off_the_terminal(tmp_path, capsys):
     assert bootstrap.cmd_tenant(_tenant_args(tmp_path), runner=kube) == 0
     assert "exists: not created again" in capsys.readouterr().out
     assert sum("create" in c for c in kube.calls) == 1
+    # a lost token: a recovery token for the same admin, into a new file
+    recovered = tmp_path / "recovered.token"
+    args = _tenant_args(tmp_path, token_file=str(recovered), recover_token=True)
+    assert bootstrap.cmd_tenant(args, runner=kube) == 0
+    assert recovered.read_text(encoding="utf-8").strip() == f"{TOKEN}-2"
+    assert f"{TOKEN}-2" not in capsys.readouterr().out
 
 
-def test_the_operator_is_scaled_down_even_when_a_step_fails(tmp_path):
+def test_the_operator_is_scaled_down_even_when_a_step_fails(tmp_path, capsys):
     kube = FakeKubectl(create_fails=True)
-    with pytest.raises(bootstrap.BootstrapError, match="bad email"):
+    with pytest.raises(bootstrap.BootstrapError, match="bad email") as failed:
         bootstrap.cmd_tenant(_tenant_args(tmp_path), runner=kube)
     assert kube.replicas == 0 and not (tmp_path / "admin.token").exists()
+    assert TOKEN not in str(failed.value)  # review: an error never quotes stdout
+    # review: a rollout that times out still ends scaled down
+    kube = FakeKubectl(rollout_fails=True)
+    with pytest.raises(bootstrap.BootstrapError, match="timed out"):
+        bootstrap.cmd_tenant(_tenant_args(tmp_path), runner=kube)
+    assert kube.replicas == 0
 
 
 def test_an_existing_token_file_is_never_overwritten(tmp_path):
@@ -220,7 +244,10 @@ def test_people_assigns_through_the_cli_with_the_token_in_a_variable(tmp_path, c
         home = Path(env["AGENTIC_HOME"])
         assert "org: acme" in (home / "config.yaml").read_text(encoding="utf-8")
         if email.startswith("known"):
-            return subprocess.CompletedProcess(cmd, 2, "", "error: known@x already holds it")
+            reason = "error: that assignment already exists"
+            return subprocess.CompletedProcess(cmd, 2, "", reason)
+        if email.startswith("expired"):  # review: other text with "already" is a failure
+            return subprocess.CompletedProcess(cmd, 2, "", "error: session already expired")
         if email.startswith("bad"):
             return subprocess.CompletedProcess(cmd, 2, "", "error: a team lead may not assign")
         note = "invite queued, not mailed: no mail relay" if email.startswith("q") else None
@@ -246,6 +273,8 @@ def test_people_assigns_through_the_cli_with_the_token_in_a_variable(tmp_path, c
     assert bootstrap.cmd_people(args, runner=agentic) == 1
     printed = capsys.readouterr().out
     assert "already holds" in printed and "refused" in printed
+    args.assign = ["expired@acme.example=developer"]
+    assert bootstrap.cmd_people(args, runner=agentic) == 1
 
 
 # ── 5. verify, against a fake control plane and index ────────────────────────
@@ -382,7 +411,7 @@ def test_the_smoke_run_redeems_the_invite_and_dry_runs_in_org_mode(plane, tmp_pa
     assert "smoke run passed" in printed and "acp_dev" not in printed
     assert [c[0][2] for c in calls] == ["init", "run"]
     args.invite_link = f"{plane.url}/invite#aci_used"
-    with pytest.raises(bootstrap.BootstrapError, match="used or expired"):
+    with pytest.raises(bootstrap.BootstrapError, match="used, expired or unknown"):
         bootstrap.cmd_smoke(args, runner=runner)
 
 

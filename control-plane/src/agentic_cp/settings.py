@@ -278,7 +278,7 @@ def settings_warnings(settings: Settings) -> list[str]:
     if admin and admin.startswith("http://"):
         if urlsplit(admin).hostname not in _LOOPBACK_HOSTS:
             warnings.append(
-                f"{PREFIX}GATEWAY_ADMIN_URL is plain http:// ({admin}): the gateway admin key "
-                "is sent in clear; use https"
+                f"{PREFIX}GATEWAY_ADMIN_URL is plain http:// (host {urlsplit(admin).hostname}): "
+                "the gateway admin key is sent in clear; use https"
             )
     return warnings

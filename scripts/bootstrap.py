@@ -67,8 +67,10 @@ def say(message: str) -> None:
 # ── secrets on disk ───────────────────────────────────────────────────────────
 
 
-def write_secret(path: Path, value: str) -> None:
-    """Write `value` to a new file only this user may read (never overwrite one)."""
+def write_secret(path: Path, value: str, *, runner: Runner | None = None) -> None:
+    """Write `value` to a new file only this user may read (never overwrite one). POSIX:
+    mode 0600. Windows ignores the mode, so the file's inherited ACL is replaced by one
+    granting only its owner (icacls); if that fails the step says so."""
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -78,6 +80,11 @@ def write_secret(path: Path, value: str) -> None:
         ) from None
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(value.strip() + "\n")
+    if os.name == "nt":
+        # *S-1-3-4 is OWNER RIGHTS: the file's owner (who just made it) and nobody else
+        grant = ["icacls", str(path), "/inheritance:r", "/grant:r", "*S-1-3-4:F"]
+        if (runner or run)(grant).returncode != 0:
+            say(f"warning: could not limit {path} to its owner (icacls): limit it by hand")
 
 
 def read_secret(path: Path) -> str:
@@ -139,7 +146,10 @@ def run(
             text=True,
             encoding="utf-8",
             errors="replace",
+            timeout=900,
         )
+    except subprocess.TimeoutExpired:
+        raise BootstrapError(f"{cmd[0]} did not finish within 15 minutes") from None
     except OSError as error:
         raise BootstrapError(f"{cmd[0]} could not be started ({error.strerror})") from None
 
@@ -221,10 +231,24 @@ def _git(repo: Path, *args: str, runner: Runner = run) -> None:
 
 def build_policy_repo(args: argparse.Namespace, *, runner: Runner = run) -> Path:
     """The template plus the framework library, the org's names filled in, committed on
-    `main` with `staging` and `dev` branches. Returns the repository folder."""
+    `main` with `staging` and `dev` branches. Returns the repository folder. A failure
+    leaves no half-made folder behind, so the step can simply be run again."""
     out = Path(args.out)
     if out.exists() and any(out.iterdir()):
         raise BootstrapError(f"{out} is not empty: the policy repo is made in a new folder", 3)
+    try:
+        return _build_policy_repo(args, out, runner)
+    except BaseException:
+        shutil.rmtree(out, onexc=_writable_and_retry)
+        raise
+
+
+def _writable_and_retry(func, path, _error) -> None:
+    os.chmod(path, 0o700)  # git makes object files read-only (Windows needs them writable)
+    func(path)
+
+
+def _build_policy_repo(args: argparse.Namespace, out: Path, runner: Runner) -> Path:
     teams = _pairs(args.team, "--team")
     models = _pairs(args.model, "--model")
     families = _pairs(args.family, "--family")
@@ -319,6 +343,8 @@ def cmd_git_credentials(args: argparse.Namespace) -> int:
         raise BootstrapError(f"--tenant: {slug!r} is not a tenant slug", 3)
     if not re.fullmatch(r"[A-Za-z0-9.-]+(:[0-9]+)?", args.host):
         raise BootstrapError(f"--host: {args.host!r} is not a host name", 3)
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", args.username):  # it goes into a shell snippet
+        raise BootstrapError(f"--username: {args.username!r} is not a user name", 3)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     config = out / f"{slug}.gitconfig"
@@ -390,14 +416,21 @@ def cmd_tenant(args: argparse.Namespace, *, runner: Runner = run) -> int:
     kube = Kube(kubectl, args.namespace, args.operator or operator_name(args.release), runner)
     token_file = Path(args.token_file)
     say(f"scaling up the operator pod {kube.deployment}")
-    kube.scale(1)
     try:
+        kube.scale(1)  # inside: a rollout that times out still ends scaled down
         listing = kube.operator("admin", "tenant", "list")
         if listing.returncode != 0:
             raise BootstrapError(f"admin tenant list: {_last_line(listing)}")
         if args.slug in _tenant_slugs(listing.stdout):
-            say(f"tenant {args.slug} exists: not created again, no new token")
-            say("a lost first-admin token: `admin issue-token --tenant <slug> --email <admin>`")
+            say(f"tenant {args.slug} exists: not created again")
+            if args.recover_token:
+                if token_file.exists():
+                    raise BootstrapError(f"{token_file} exists: move it away first", 3)
+                argv = ["admin", "issue-token", "--tenant", args.slug, "--email", args.admin_email]
+                _keep_token(kube.operator(*argv), token_file, "admin issue-token")
+                say(f"a recovery token for {args.admin_email} is in {token_file}")
+            else:
+                say("a lost first-admin token: run again with --recover-token")
         else:
             if token_file.exists():
                 raise BootstrapError(f"{token_file} exists: move it away first", 3)
@@ -405,13 +438,7 @@ def cmd_tenant(args: argparse.Namespace, *, runner: Runner = run) -> int:
             argv += ["--admin-email", args.admin_email]
             if args.gateway_tenant:
                 argv += ["--gateway-tenant", args.gateway_tenant]
-            created = kube.operator(*argv)
-            token, shown = token_from(created.stdout)
-            if created.returncode != 0 or token is None:
-                raise BootstrapError(f"admin tenant create: {_last_line(created)}")
-            write_secret(token_file, token)
-            for line in shown.splitlines():
-                print(f"  | {line}")
+            _keep_token(kube.operator(*argv), token_file, "admin tenant create")
             say(f"the first org admin's token is in {token_file} (only you can read it)")
         if args.policy_repo:
             argv = ["admin", "tenant", "set-policy-repo", "--tenant", args.slug]
@@ -422,9 +449,32 @@ def cmd_tenant(args: argparse.Namespace, *, runner: Runner = run) -> int:
         print(f"  | {kube.operator('admin', 'tenant', 'list').stdout.strip()}")
     finally:
         if not args.keep_operator:
-            kube.scale(0)
-            say("operator pod scaled back to zero")
+            try:
+                kube.scale(0)
+                say("operator pod scaled back to zero")
+            except BootstrapError as error:  # never hide the step's own error
+                say(f"warning: the operator pod may still run ({error}): scale it to zero")
     return 0
+
+
+def _keep_token(done: subprocess.CompletedProcess, token_file: Path, what: str) -> None:
+    """The token an operator command printed, into an owner-only file; its other output
+    is shown. An error names the exit status and stderr only: stdout may hold the token."""
+    token, shown = token_from(done.stdout)
+    if done.returncode != 0 or token is None:
+        reason = _last_line(
+            subprocess.CompletedProcess(done.args, done.returncode, "", done.stderr)
+        )
+        raise BootstrapError(f"{what}: {reason}")
+    try:
+        write_secret(token_file, token)
+    except OSError as error:
+        raise BootstrapError(
+            f"{token_file} could not be written ({error.strerror}); the token is lost: run "
+            "again with --recover-token and a writable --token-file"
+        ) from None
+    for line in shown.splitlines():
+        print(f"  | {line}")
 
 
 # ── 4. people and roles ───────────────────────────────────────────────────────
@@ -468,13 +518,16 @@ def cmd_people(args: argparse.Namespace, *, runner: Runner = run) -> int:
             where = f"team {team}" if team else "the org"
             if done.returncode != 0:
                 reason = _last_line(done)
-                if "already" in reason:
+                if "assignment already exists" in reason:  # the API's 409
                     say(f"{email} already holds {role} in {where}")
                     continue
                 say(f"{email}: {role} in {where} refused: {reason}")
                 failed += 1
                 continue
-            made = json.loads(done.stdout or "{}")
+            try:
+                made = json.loads(done.stdout or "{}")
+            except ValueError:
+                made = {}
             note = made.get("invite_note")
             invited = "invited" if made.get("invited") and not note else note or "known already"
             say(f"{email} holds {role} in {where}: {invited}")
@@ -495,8 +548,8 @@ class Http:
         url = path if path.startswith(("http://", "https://")) else self.base.rstrip("/") + path
         self.calls.append(url)
         request = urllib.request.Request(url, headers={"Accept": "application/json, text/html"})
-        if auth and self.token:
-            request.add_header("Authorization", f"Bearer {self.token}")
+        if auth and self.token:  # never forwarded to a redirect's host
+            request.add_unredirected_header("Authorization", f"Bearer {self.token}")
         try:
             with urllib.request.urlopen(request, timeout=30, context=self.context) as reply:
                 return reply.status, reply.read().decode("utf-8", "replace")
@@ -642,7 +695,8 @@ def redeem_invite(http: Http, link: str) -> str:
         with urllib.request.urlopen(request, timeout=30, context=http.context) as reply:
             return json.loads(reply.read())["control_plane_token"]
     except urllib.error.HTTPError as error:
-        raise BootstrapError(f"the invite was refused ({error.code}): used or expired", 1) from None
+        why = "used, expired or unknown" if error.code in (404, 410) else "see the API's log"
+        raise BootstrapError(f"the invite was refused ({error.code}): {why}", 1) from None
     except (urllib.error.URLError, OSError) as error:
         raise BootstrapError(f"{http.base} cannot be reached ({error})") from None
 
@@ -709,7 +763,12 @@ def build_parser() -> argparse.ArgumentParser:
     repo = steps.add_parser("policy-repo", help="1. the policy repo from the template")
     repo.add_argument("--out", required=True, help="a new folder for the repository")
     repo.add_argument("--repo-pattern", action="append", default=[], help="host/owner/* (repeat)")
-    repo.add_argument("--admins", action="append", default=[], help="org admins' CODEOWNERS handle")
+    repo.add_argument(
+        "--admins",
+        action="append",
+        required=True,
+        help="the org admins' CODEOWNERS handle (@org/team or @login; the budget guard's admins)",
+    )
     repo.add_argument("--team", action="append", default=[], help="TEAM=@org/leads (repeat)")
     repo.add_argument("--model", action="append", default=[], help="TIER=provider/model")
     repo.add_argument("--family", action="append", default=[], help="TIER=model-family")
@@ -745,6 +804,11 @@ def build_parser() -> argparse.ArgumentParser:
     tenant.add_argument("--kubectl", default="kubectl")
     tenant.add_argument("--kubeconfig")
     tenant.add_argument("--keep-operator", action="store_true", help="leave it scaled up")
+    tenant.add_argument(
+        "--recover-token",
+        action="store_true",
+        help="the tenant exists: write a recovery token for --admin-email (admin issue-token)",
+    )
     tenant.set_defaults(run=cmd_tenant)
 
     people = steps.add_parser("people", help="4. roles for the first people (invites)")
@@ -768,7 +832,10 @@ def build_parser() -> argparse.ArgumentParser:
     smoke.add_argument("--api", required=True)
     smoke.add_argument("--org", required=True)
     smoke.add_argument("--team", required=True)
-    smoke.add_argument("--invite-link", help="the link from an invite mail (redeemed once)")
+    smoke.add_argument(
+        "--invite-link",
+        help="an invite link (redeemed here, so it no longer works: invite a smoke account)",
+    )
     smoke.add_argument("--token-file", help="or a developer's token file")
     smoke.add_argument(
         "--repo-remote",

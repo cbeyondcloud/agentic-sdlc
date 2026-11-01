@@ -448,6 +448,7 @@ def _backup_role(args: argparse.Namespace) -> int:
     pg_read_all_data. Creating needs a superuser DSN (from `--admin-dsn-env`); `--check`
     reads pg_roles with it, or with the owner DSN when that variable is unset."""
     from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import SQLAlchemyError
 
     from agentic_cp.backup_role import BackupRoleError, backup_role_problems, create_backup_role
     from agentic_cp.db import engine_for
@@ -462,6 +463,8 @@ def _backup_role(args: argparse.Namespace) -> int:
             3,
         )
     protected = {settings.runtime_role, make_url(owner).username or ""}
+    if admin:  # never the DBA's own role (re-aligning would take its SUPERUSER away)
+        protected.add(make_url(admin).username or "")
     password = os.environ.get(args.password_env) or None
 
     async def run():
@@ -485,6 +488,12 @@ def _backup_role(args: argparse.Namespace) -> int:
         if "new role" in message:
             message += f": set {args.password_env} (or name another variable with --password-env)"
         raise CommandError(message, error.code) from None
+    except (OSError, SQLAlchemyError) as error:  # one line, never the DSN
+        cause = getattr(error, "orig", None) or error
+        reason = str(cause).strip().splitlines()[0][:200] if str(cause).strip() else ""
+        raise CommandError(
+            f"the database could not be used ({type(cause).__name__}: {reason})", 2
+        ) from None
     if created is not None:
         print(f"backup role {args.role} {'created' if created else 're-aligned'}")
     for problem in problems:

@@ -124,3 +124,47 @@ async def test_a_non_superuser_dsn_says_what_the_dba_runs(db, monkeypatch, capsy
         assert "SCRAM-SHA-256$" not in err and password not in err
     finally:
         await _drop(db, role)
+
+
+async def test_a_role_with_other_powers_is_never_turned_into_the_backup_role(
+    two_tenants, monkeypatch, capsys
+):
+    """Review: re-aligning would strip a DBA's SUPERUSER, or give a tenant's dashboard
+    reader BYPASSRLS (every tenant's rows). Both are refused, and nothing changes."""
+    db, _, _ = two_tenants
+    _env(monkeypatch, db, "bk-" + secrets.token_hex(12))
+    admin_user = make_url(db.admin_dsn).username
+    assert await anyio.to_thread.run_sync(main, _argv(admin_user)) == 3
+    assert "control plane's own role" in capsys.readouterr().err
+    dba, reader = _role(), _role()
+    admin = await asyncpg.connect(db.admin_dsn)
+    try:
+        await admin.execute(f"CREATE ROLE {dba} LOGIN CREATEDB")
+        await admin.execute(f"CREATE ROLE {reader} LOGIN")
+        await admin.execute(
+            "UPDATE agentic.tenants SET dashboard_role = $1 WHERE slug = 'tenant-a'", reader
+        )
+        assert await anyio.to_thread.run_sync(main, _argv(dba)) == 2
+        assert "CREATEDB" in capsys.readouterr().err
+        assert await anyio.to_thread.run_sync(main, _argv(reader)) == 2
+        assert "dashboard reader of tenant tenant-a" in capsys.readouterr().err
+        row = await admin.fetchrow(
+            "select rolcreatedb, rolbypassrls from pg_roles where rolname = $1", dba
+        )
+        assert tuple(row) == (True, False)  # untouched
+        assert not await admin.fetchval(
+            "select rolbypassrls from pg_roles where rolname = $1", reader
+        )
+    finally:
+        await admin.execute("UPDATE agentic.tenants SET dashboard_role = NULL")
+        await admin.close()
+        await _drop(db, dba)
+        await _drop(db, reader)
+
+
+async def test_an_unreachable_server_is_one_line_not_a_traceback(db, monkeypatch, capsys):
+    _env(monkeypatch, db, "bk-" + secrets.token_hex(12))
+    monkeypatch.setenv("TEST_PG_ADMIN_DSN", "postgresql://nobody:pw@127.0.0.1:9/none")
+    assert await anyio.to_thread.run_sync(main, _argv(_role())) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: ") and "Traceback" not in err and ":pw@" not in err
