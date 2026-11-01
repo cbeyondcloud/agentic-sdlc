@@ -349,8 +349,9 @@ async def apply_assignment(
         ),
         clock=state.clock,
     )
-    invite = None
+    invite, note = None, None
     if plan.user is None:
+        note = _invite_note(state.settings, user.kind, plan.email)
         invite = await create_invite(
             conn,
             user,
@@ -368,7 +369,25 @@ async def apply_assignment(
         scope=kind,
         team=plan.team,
         invited=invite is not None,
+        invite_note=note,
     )
+
+
+def _invite_note(settings, kind: str, email: str) -> str | None:
+    """Why a new person's invite is not made or not mailed yet (DF-575), or None."""
+    if kind != "human":
+        return None
+    if not settings.public_url:
+        return (
+            "no invite: this control plane has no public URL (AGENTIC_CP_PUBLIC_URL); set it, "
+            f"then `agentic rbac invite {email}`"
+        )
+    if not settings.smtp_host:
+        return (
+            "invite queued, not mailed: no mail relay is set up (AGENTIC_CP_SMTP_HOST); it is "
+            "sent once one is"
+        )
+    return None
 
 
 @router.delete("/assignments/{id}", status_code=204, response_class=Response)

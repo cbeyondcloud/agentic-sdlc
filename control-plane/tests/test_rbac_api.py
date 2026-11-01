@@ -95,7 +95,9 @@ async def test_team_lead_assigns_only_developer_or_approver_in_own_team(api):
         "scope": "team",
         "team": "payments",
         "invited": False,  # no AGENTIC_CP_PUBLIC_URL here: no invite (ruling P8)
+        "invite_note": ok.json()["invite_note"],
     }
+    assert "AGENTIC_CP_PUBLIC_URL" in ok.json()["invite_note"]  # DF-575
     higher = await assign(api, lead, "new@a.example.test", "team-lead", "payments")
     assert higher.status_code == 403
     assert higher.json()["code"] == "rbac.not_assignable"
