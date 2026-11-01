@@ -450,8 +450,8 @@ def _backup_role(args: argparse.Namespace) -> int:
     from sqlalchemy.engine import make_url
     from sqlalchemy.exc import SQLAlchemyError
 
-    from agentic_cp.backup_role import BackupRoleError, backup_role_problems, create_backup_role
     from agentic_cp.db import engine_for
+    from agentic_cp.db_roles import BackupRoleError, backup_role_problems, create_backup_role
 
     settings = _settings()
     owner = _owner_dsn(settings)
