@@ -394,3 +394,14 @@ def test_local_usage_stops_at_the_cap(repo: Path):
     assert not usage.complete
     whole = housekeeping.local_usage(repo, stop_at=None, deadline_s=10)
     assert whole.complete and whole.bytes >= 50_000
+
+
+def test_the_help_names_the_default_cut_off_the_code_uses():
+    """M3-18 docs check: `gc --help` said 14 days while the default is 30 (OR-01)."""
+    import typer
+
+    from agentic_cli.main import build_app
+
+    gc = typer.main.get_command(build_app()).commands["gc"]
+    option = next(p for p in gc.params if p.name == "older_than")
+    assert f"else {housekeeping.DEFAULT.gc_after_days})" in " ".join(option.help.split())

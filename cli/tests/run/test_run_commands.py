@@ -192,6 +192,30 @@ def test_a_json_run_names_its_run_on_stderr_when_it_starts(workspace, gateway, c
     assert json.loads(result.out)["run_id"] == "named-2"
 
 
+def test_json_stderr_is_json_lines_with_the_error_last(workspace, gateway, cli, monkeypatch):
+    """DF-380: a run that fails after it started writes two JSON documents on stderr, one
+    per line ({"started"} first, the error object last), and `run --help` says so."""
+    from agentic_cli.commands import runs
+    from agentic_cli.errors import CliError
+
+    def failing_drive(*_args, **_kwargs):
+        raise CliError("the gateway went away", ExitCode.ERROR, hint="try again")
+
+    monkeypatch.setattr(runs, "drive", failing_drive)
+    result = cli("--json", "run", "deliver", "--input", "request=x", "--run-id", "named-3")
+    assert result.code == ExitCode.ERROR
+    lines = [json.loads(line) for line in result.err.splitlines() if line.strip()]
+    assert lines[0] == {"started": "named-3"}
+    assert lines[-1]["error"] == "the gateway went away" and lines[-1]["exit_code"] == 1
+    import typer
+
+    from agentic_cli.main import build_app
+
+    # the command's own help, not Rich's rendering (colour and width vary by terminal)
+    help_text = " ".join(typer.main.get_command(build_app()).commands["run"].help.split())
+    assert "JSON Lines" in help_text and "last line" in help_text
+
+
 def test_stop_ends_the_run_and_runs_hides_it(workspace, gateway, cli):
     _, run_id = start(cli)
     stopped = cli("--json", "stop", run_id, "--reason", "not needed")

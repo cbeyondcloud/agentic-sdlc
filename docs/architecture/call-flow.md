@@ -237,7 +237,8 @@ sequenceDiagram
 | 17 | Every step end | Events to the control plane | `agentic/telemetry/sinks.py · ForwardingRecorder` (no sink yet) | 🔲 M2-20 |
 | 18 | Gates | Pause, show, approve / reject / edit, four-eyes, digest-pinned approval | `agentic/engine/engine.py · _Run.decide`, `agentic_cli/commands/gates.py`, `sdlc_commons/gates.py · ZyrofloGates` | ✅ M1-22 M1-55 · 🔲 M2-03 M2-07 |
 | 19 | Loop | `until`, max iterations, oscillation, exhausted → gate | `agentic/engine/engine.py · _Run._loop, _Run._oscillating` | ✅ M1-24 |
-| 20 | Review | Diff budget, deterministic pre-pass | review / security | 🔲 M2-24 M2-48 |
+| 20 | Review | Diff budget: a step that changed more than one review batch is rolled back and re-run once, asked to split its work; a second oversized change waits at the `diff-budget` gate (approve accepts it as one batch, reject with feedback splits it, `agentic edit` changes only the pinned handoff, stop ends the run) · deterministic pre-pass | `agentic/engine/engine.py · _Run._over_batch, _batch_reason`, `agentic_cli/driving.py · next_steps` · review / security | ✅ M2-24 · 🔲 M2-48 |
+| 20a | Every model call | Over budget: the run's budget pauses the run (`agentic resume --extra-budget`); a step's own budget pauses as `step-budget` (resume retries the step with the same budget, or stop) | `agentic/engine/engine.py · _budget_pause`, `agentic_cli/driving.py · next_steps` | ✅ M1-13 |
 | 21 | End | Open the PR | GitHub adapter (`agentic/telemetry/trailers.py · pr_body` ready) | 🔲 M1-58 |
 | 22 | End | run_closed, cost by step / agent / child | `agentic/engine/engine.py · _Run._close`, `agentic_cli/commands/cost.py` | ✅ M1-57 |
 | 23 | Background | Heartbeat, kill-switch polling, budget alerts, auto-trip | control plane + CLI | 🔲 M3-07 M2-19 M2-16 M2-11 |

@@ -417,3 +417,15 @@ def test_pr_open_refuses_a_run_that_has_not_finished(workspace, github, cli):
     paused = cli("--json", "run", "deliver", "--input", "request=x")
     result = cli("--json", "pr", "open", paused.json()["run_id"])
     assert result.code == ExitCode.REFUSED and github.pulls == []
+
+
+def test_a_marker_inside_the_generated_text_cannot_split_the_block():
+    """DF-376: a run input or handoff quoting the end marker would end the generated region
+    early, so each republish left the old text and a stray marker behind."""
+    quoted = f"request: tidy up {publishing.BODY_END} and {publishing.BODY_BEGIN} here"
+    person = "Reviewer notes: keep this.\n\n"
+    first = publishing.merge_body(person, publishing._marked(quoted))
+    again = publishing.merge_body(first, publishing._marked(quoted))
+    assert again == first
+    assert again.count(publishing.BODY_BEGIN) == 1 and again.count(publishing.BODY_END) == 1
+    assert again.startswith(person) and "tidy up" in again

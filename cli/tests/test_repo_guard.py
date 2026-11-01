@@ -265,6 +265,17 @@ def test_3_a_linked_worktree_nested_in_its_main_tree_is_refused(repo: Path):
     assert "inside" in str(refused(3, nested))
 
 
+def test_3_the_nested_worktree_hint_says_to_run_init_in_the_main_checkout(repo: Path):
+    """DF-382: a worktree a coding tool made under the repo is the same repository, so the
+    hint says to cd to the main checkout and run init there, and names no tool."""
+    nested = repo / ".tool" / "worktrees" / "wt"
+    git(repo, "worktree", "add", "-q", "-b", "side", str(nested))
+    hint = refused(3, nested).hint or ""
+    assert hint.startswith('cd "') and repo.name in hint  # quoted: a path may hold spaces
+    assert "init there" in hint and "same repository" in hint
+    assert "outside the main checkout" in hint
+
+
 def test_3_a_linked_worktree_beside_the_main_tree_is_accepted(repo: Path, tmp_path: Path):
     """Developers keep worktrees next to the main checkout: that stays allowed."""
     beside = tmp_path / "work" / "app-side"

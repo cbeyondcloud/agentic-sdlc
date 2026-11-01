@@ -55,6 +55,55 @@ also accepts `file://` and paths, for development only (in a shared deployment a
 could read the server's disk). Request bodies over `AGENTIC_CP_MAX_BODY_BYTES` get 413; a
 limit at the ingress in front of the service is still recommended.
 
+### Mail, invites and gateway keys
+
+People join by invite. `agentic rbac assign` queues an invite mail for a person new to the
+org; `agentic login --invite <link>` redeems it once and stores the person's control-plane
+token and, when the gateway admin API is set, a new gateway key, in the OS keyring.
+
+| Setting (Helm value) | Default | Without it |
+|---|---|---|
+| `AGENTIC_CP_PUBLIC_URL` (`publicUrl`) | none | **no invite mail is queued**: the role is still assigned, and no one can sign in by invite |
+| `AGENTIC_CP_INVITE_HOURS` (`config`) | 72 (1 to 336) | - |
+| `AGENTIC_CP_SMTP_HOST` (`smtp.host`) | none | mail stays queued and nothing is sent (`agentic rbac mail` shows it) |
+| `AGENTIC_CP_SMTP_PORT` (`smtp.port`) | 587 | - |
+| `AGENTIC_CP_SMTP_SECURITY` (`smtp.security`) | `starttls` | `tls`: implicit TLS (port 465). `none`: only for a relay in the same host or cluster |
+| `AGENTIC_CP_SMTP_USERNAME` (`smtp.username`), `AGENTIC_CP_SMTP_PASSWORD` (secret `smtpPassword`) | none | the relay is used without authentication |
+| `AGENTIC_CP_SMTP_FROM` (`smtp.from`), `AGENTIC_CP_SMTP_FROM_NAME` (`config`) | none, `agentic` | the deployment's sender; a tenant's own sender replaces it |
+| `AGENTIC_CP_NOTIFY_MAX_ATTEMPTS` (`config`) | 8 | sends of one mail before it is marked failed |
+| `AGENTIC_CP_GATEWAY_ADMIN_URL` (`tokenlean.adminUrl`), `AGENTIC_CP_GATEWAY_ADMIN_KEY` (secret `gatewayAdminKey`) | none | no gateway keys: an invite gives only the control-plane token, `agentic login --rotate` and `rbac revoke-keys` cannot work, and no routing is applied |
+| `AGENTIC_CP_GATEWAY_URL` (`tokenlean.url`) | none | the redeemed invite does not tell the CLI where the gateway is |
+
+A relay that does not offer STARTTLS is never used in clear. While the relay cannot be used
+at all, mail stays queued and is retried without using up its attempts, so it does not show
+as failed: check the worker's log and `agentic rbac mail --status pending`.
+
+The invite link is `<public url>/invite#<token>`. The token is in the fragment, so it never
+reaches a server log, and a mail scanner that opens the link cannot use it up. The gateway
+admin key must have no team binding.
+
+Operator commands for mail and people:
+
+    python -m agentic_cp admin tenant set-mail-from --tenant acme --address agentic@acme.example --name "Acme agentic"
+    python -m agentic_cp admin tenant set-mail-from --tenant acme --clear
+    python -m agentic_cp admin tenant suspend --tenant acme --reason "contract ended"   # tokens and invites refused
+    python -m agentic_cp admin tenant resume --tenant acme --reason "renewed"
+    python -m agentic_cp admin user enable --tenant acme --email a@acme.example --reason "rehired"
+
+`admin user enable` undoes `agentic rbac offboard`; the person then needs a new invite
+(`agentic rbac invite`). Every one of these is audited.
+
+**First-day order** for a new tenant:
+
+1. Set `publicUrl`, `smtp.*`, the SMTP password and `tokenlean.url`, `tokenlean.adminUrl`
+   and the gateway admin key, then deploy (or upgrade) so `serve` and `worker` read them.
+2. `admin tenant create --slug S --name N --admin-email E`: keep the printed token for the
+   first org admin's `agentic login --for control-plane`.
+3. `admin tenant set-policy-repo`, and optionally `admin tenant set-mail-from`.
+4. The org admin assigns team leads (`agentic rbac assign` or `agentic rbac import`); each
+   gets an invite mail. Check `agentic rbac mail --status pending` and `--status failed`
+   after the first ones.
+
 ### Database connections and sizing
 
 Each process keeps `AGENTIC_CP_DB_POOL_SIZE` connections open (default 15) and may open
