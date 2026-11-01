@@ -188,6 +188,7 @@ one-off pod (see "First tenant" in `deploy/helm/agentic-platform/README.md`). Se
 | `python -m agentic_cp db verify-restore` | Check a restored database: revision, guarantees, every audit chain. | Platform |
 | `python -m agentic_cp db link-usage` | Point the dashboards' usage views at the gateway's tables. | Platform |
 | `python -m agentic_cp db dashboard-role` | Bind one Grafana reader role to one tenant. | Platform |
+| `python -m agentic_cp db backup-role` | Create or check the backup role (needs a superuser DSN in `PG_ADMIN_DSN`; `--check` only reads). | Platform |
 | `python -m agentic_cp admin tenant create` | Create a tenant and its first org admin. Prints the token once. | Platform |
 | `python -m agentic_cp admin tenant list` | List tenants. | Platform |
 | `python -m agentic_cp admin tenant set-policy-repo` | Point a tenant at its policy repo. | Platform |

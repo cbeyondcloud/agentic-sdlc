@@ -4,7 +4,7 @@ refused, and secrets never show in a repr (Review Focus 5)."""
 import pytest
 
 from agentic_cp.db import make_engine
-from agentic_cp.settings import Settings, SettingsError
+from agentic_cp.settings import Settings, SettingsError, settings_warnings
 
 # Built from pieces so no secret scanner mistakes it for a real credential.
 PASSWORD = "pw-" + "not-a-real-one"
@@ -176,3 +176,34 @@ def test_the_policy_branch_for_a_tenant_follows_the_environment():
     assert pinned.policy_branch_for("staging") == "staging"
     with pytest.raises(ValueError, match="tracks the policy branch 'staging'"):
         pinned.policy_branch_for("main")
+
+
+def test_settings_warnings_name_what_works_but_is_unsafe_or_silent():
+    """DF-575, DF-578: settings that start but send nothing, or send a secret in clear, are
+    named at startup (serve and worker log each one)."""
+    assert settings_warnings(Settings.from_env(_env())) == []
+    good = _env(
+        AGENTIC_CP_SMTP_HOST="relay.example",
+        AGENTIC_CP_SMTP_FROM="agentic@example.org",
+        AGENTIC_CP_PUBLIC_URL="https://cp.example.org",
+    )
+    assert settings_warnings(Settings.from_env(good)) == []
+    no_sender = settings_warnings(Settings.from_env(_env(AGENTIC_CP_SMTP_HOST="relay.example")))
+    assert any("AGENTIC_CP_SMTP_FROM" in w for w in no_sender), no_sender
+    assert any("AGENTIC_CP_PUBLIC_URL" in w for w in no_sender), no_sender
+    clear = settings_warnings(
+        Settings.from_env(
+            {**good, "AGENTIC_CP_SMTP_SECURITY": "none", "AGENTIC_CP_SMTP_USERNAME": "relay"}
+        )
+    )
+    assert any("in clear" in w and "SMTP" in w for w in clear), clear
+    gateway = settings_warnings(
+        Settings.from_env(_env(AGENTIC_CP_GATEWAY_ADMIN_URL="http://gw.example:8080"))
+    )
+    assert any("AGENTIC_CP_GATEWAY_ADMIN_URL" in w and "http://" in w for w in gateway), gateway
+    # review: the URL may carry credentials; only its host is shown
+    leaky = _env(AGENTIC_CP_GATEWAY_ADMIN_URL="http://ops:sekrit-value@gw.example:8080")
+    shown = " ".join(settings_warnings(Settings.from_env(leaky)))
+    assert "gw.example" in shown and "sekrit-value" not in shown
+    loopback = _env(AGENTIC_CP_GATEWAY_ADMIN_URL="http://127.0.0.1:8080")
+    assert settings_warnings(Settings.from_env(loopback)) == []

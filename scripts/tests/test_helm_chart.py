@@ -163,8 +163,14 @@ def test_the_runbooks_exist_and_link_each_other():
     assert "(release.md)" in upgrade and "(postgres-backup-restore.md)" in upgrade
     assert "(upgrade.md)" in restore and "scripts/restore_drill.py" in restore
     assert "min_cli_version" in upgrade and "helm rollback" in upgrade
-    for name in ("upgrade.md", "postgres-backup-restore.md"):
+    for name in ("upgrade.md", "postgres-backup-restore.md", "day-0-bootstrap.md"):
         assert f"(../../../docs/runbooks/{name})" in readme
+    bootstrap = (runbooks / "day-0-bootstrap.md").read_text(encoding="utf-8")
+    for link in ("(environments-and-promotion.md)", "(release.md)", "(postgres-backup-restore.md)"):
+        assert link in bootstrap
+    assert "(day-0-bootstrap.md)" in (runbooks / "environments-and-promotion.md").read_text(
+        encoding="utf-8"
+    )
     assert "(upgrade.md)" in (runbooks / "release.md").read_text(encoding="utf-8")
 
 
@@ -217,7 +223,7 @@ def test_default_render_objects(default_render):
     assert "Secret" not in kinds
     for kind in ("Deployment", "HorizontalPodAutoscaler", "PodDisruptionBudget", "Service"):
         assert kind in kinds
-    assert kinds.count("Deployment") == 2
+    assert kinds.count("Deployment") == 3  # api, worker, operator (zero replicas)
     assert "Ingress" not in kinds and "NetworkPolicy" not in kinds
     assert "ServiceMonitor" not in kinds
 
@@ -292,6 +298,40 @@ def test_the_worker_is_one_leader_with_standbys(default_render):
     assert container["resources"]["limits"]["memory"] == "1Gi"
 
 
+def test_the_operator_pod_is_idle_at_zero_replicas_with_the_owner_dsn(full_render, chart_tools):
+    """DF-892: operator commands run in a chart-provided pod with the environment's policy
+    branch, both DSNs and the tenants' git config, so nobody copies them by hand. It holds
+    the owner DSN, so it runs no replica until an operator scales it up for a task."""
+    objects = _objects(full_render)
+    operator = _one(objects, "Deployment", "operator")
+    api = _one(objects, "Deployment", "api")
+    assert operator["spec"]["replicas"] == 0
+    pod = operator["spec"]["template"]["spec"]
+    assert pod["automountServiceAccountToken"] is False
+    (container,) = pod["containers"]
+    assert container["command"] == ["sleep", "infinity"] and "args" not in container
+    assert "ports" not in container and "livenessProbe" not in container
+    env = _env(container)
+    assert env["AGENTIC_CP_OWNER_DATABASE_URL"]["valueFrom"]["secretKeyRef"]["key"] == (
+        "owner-database-url"
+    )
+    (api_container,) = api["spec"]["template"]["spec"]["containers"]
+    api_env = _env(api_container)
+    for setting in ("AGENTIC_CP_POLICY_BRANCH", "AGENTIC_CP_PUBLIC_URL", "AGENTIC_CP_DATABASE_URL"):
+        if setting in api_env:
+            assert env[setting] == api_env[setting], setting
+    # none of the long-running pods' optional secrets: least privilege (DF-807)
+    assert "AGENTIC_CP_SMTP_PASSWORD" not in env and "AGENTIC_CP_GATEWAY_ADMIN_KEY" not in env
+    assert container["volumeMounts"] == api_container["volumeMounts"]
+    off = _template(chart_tools, "--set", "operator.enabled=false")
+    assert off.returncode == 0, off.stderr
+    assert not [
+        o
+        for o in _objects(off.stdout)
+        if o["metadata"]["labels"].get("app.kubernetes.io/component") == "operator"
+    ]
+
+
 def test_the_migration_job_is_a_pre_install_and_pre_upgrade_hook(default_render):
     job = _one(_objects(default_render), "Job", "migrate")
     annotations = job["metadata"]["annotations"]
@@ -323,8 +363,9 @@ def test_no_secret_value_is_rendered_and_the_owner_dsn_reaches_only_the_jobs(ful
             for setting in SECRET_SETTINGS & env.keys():
                 assert "value" not in env[setting], f"{name}: {setting} has a literal value"
                 assert env[setting]["valueFrom"]["secretKeyRef"]["name"] == SECRET
-            # the migration Job and the retention CronJob (M3-06) only
-            is_job = name.endswith(("-migrate", "-retention"))
+            # the migration Job, the retention CronJob (M3-06) and the operator pod (M3-05,
+            # zero replicas unless an operator scales it up) only
+            is_job = name.endswith(("-migrate", "-retention", "-operator"))
             assert ("AGENTIC_CP_OWNER_DATABASE_URL" in env) == is_job, name
     assert "postgresql://" not in full_render
 

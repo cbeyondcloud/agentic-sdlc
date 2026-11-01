@@ -15,7 +15,10 @@
     db dashboard-role --tenant S --role R [--password-env VAR]
                           bind one Grafana reader role to one tenant: the dash_* views,
                           that tenant's rows only
-    db verify-restore     check a restored database (owner role): migration revision, the
+    db backup-role --role R [--password-env VAR] [--admin-dsn-env VAR] [--check]
+                          create (superuser DSN from the variable) or check the backup
+                          CronJob's role: BYPASSRLS + pg_read_all_data
+    db verify-restore    check a restored database (owner role): migration revision, the
                           runtime role's guarantees, every tenant's audit chain
     admin audit verify --tenant S
                           verify one tenant's audit chain
@@ -169,6 +172,15 @@ def _settings() -> Settings:
     return Settings.from_env(os.environ)
 
 
+def _warn(settings: Settings) -> None:
+    """Startup warnings (DF-575, DF-578): settings that work but send nothing, or a secret
+    in clear."""
+    from agentic_cp.settings import settings_warnings
+
+    for warning in settings_warnings(settings):
+        print(f"warning: {warning}", file=sys.stderr)
+
+
 _PREFLIGHT_HINT = (
     "hint: fix the database (python -m agentic_cp migrate re-applies the grants); "
     "AGENTIC_CP_REQUIRE_DB_ENFORCEMENT=false is for local development only"
@@ -181,6 +193,7 @@ def _serve(args: argparse.Namespace) -> int:
     from agentic_cp.app import create_app, serve_preflight
 
     settings = _settings()
+    _warn(settings)
     refusal = asyncio.run(serve_preflight(settings))
     if refusal:
         print(f"error: refusing to serve - {refusal}", file=sys.stderr)
@@ -200,6 +213,7 @@ def _worker(args: argparse.Namespace) -> int:
     from agentic_cp.policy_sync.worker import run_forever
 
     settings = _settings()
+    _warn(settings)
     refusal = asyncio.run(serve_preflight(settings))  # what serve refuses, the worker does too
     if refusal:
         print(f"error: refusing to run the worker - {refusal}", file=sys.stderr)
@@ -429,6 +443,70 @@ def _dashboard_role(args: argparse.Namespace) -> int:
     return 0
 
 
+def _backup_role(args: argparse.Namespace) -> int:
+    """Create or check the backup CronJob's role (M3-05, DF-891): BYPASSRLS and
+    pg_read_all_data. Creating needs a superuser DSN (from `--admin-dsn-env`); `--check`
+    reads pg_roles with it, or with the owner DSN when that variable is unset."""
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from agentic_cp.db import engine_for
+    from agentic_cp.db_roles import BackupRoleError, backup_role_problems, create_backup_role
+
+    settings = _settings()
+    owner = _owner_dsn(settings)
+    admin = os.environ.get(args.admin_dsn_env, "").strip()
+    if not admin and not args.check:
+        raise CommandError(
+            f"set {args.admin_dsn_env} to a superuser DSN (only a superuser may give a role "
+            "BYPASSRLS; it is never read from the command line)",
+            3,
+        )
+    protected = {settings.runtime_role, make_url(owner).username or ""}
+    if admin:  # never the DBA's own role (re-aligning would take its SUPERUSER away)
+        protected.add(make_url(admin).username or "")
+    password = os.environ.get(args.password_env) or None
+
+    async def run():
+        engine = engine_for(admin or owner, settings.db_schema, pool_size=1, max_overflow=0)
+        try:
+            created = None
+            if not args.check:
+                async with engine.begin() as conn:
+                    created = await create_backup_role(
+                        conn, args.role, password, protected=protected
+                    )
+            async with engine.connect() as conn:
+                return created, await backup_role_problems(conn, args.role)
+        finally:
+            await engine.dispose()
+
+    try:
+        created, problems = asyncio.run(run())
+    except BackupRoleError as error:
+        message = str(error)
+        if "new role" in message:
+            message += f": set {args.password_env} (or name another variable with --password-env)"
+        raise CommandError(message, error.code) from None
+    except (OSError, SQLAlchemyError) as error:  # one line, never the DSN
+        cause = getattr(error, "orig", None) or error
+        reason = str(cause).strip().splitlines()[0][:200] if str(cause).strip() else ""
+        raise CommandError(
+            f"the database could not be used ({type(cause).__name__}: {reason})", 2
+        ) from None
+    if created is not None:
+        print(f"backup role {args.role} {'created' if created else 're-aligned'}")
+    for problem in problems:
+        print(problem)
+    if problems:
+        return 1
+    print(
+        f"backup role {args.role} is ready for the backup CronJob: put its DSN in the chart's "
+        "Secret under backup-database-url"
+    )
+    return 0
+
+
 async def _with_tenant(settings: Settings, slug: str, work, *, allow_deleted: bool = False):
     """Run `work(conn, tenant)` as the owner role inside `slug`'s tenant context: an
     operator command never touches a tenant without setting it (Review Focus 6). A deleted
@@ -601,6 +679,9 @@ def _tenant_set_mail_from(args: argparse.Namespace) -> int:
         except ValueError as error:
             raise CommandError(f"--address: {error}", 3) from None
         name = (args.name or "").strip() or None
+        if name and any(ord(char) < 32 or ord(char) == 127 for char in name):
+            # DF-578: the name goes into every mail's From header, one line
+            raise CommandError("--name: one line of text, no newline or control character", 3)
 
     async def work(conn, tenant):
         await conn.execute(
@@ -910,6 +991,23 @@ def build_parser() -> argparse.ArgumentParser:
         "an existing role's password)",
     )
     reader.set_defaults(run=_dashboard_role)
+    backup = db.add_parser(
+        "backup-role", help="create or check the backup CronJob's role (BYPASSRLS, read-only)"
+    )
+    backup.add_argument("--role", required=True, help="the login role the backup runs as")
+    backup.add_argument(
+        "--password-env",
+        default="BACKUP_DB_PASSWORD",
+        help="the variable holding its password (default BACKUP_DB_PASSWORD; unset keeps an "
+        "existing role's password)",
+    )
+    backup.add_argument(
+        "--admin-dsn-env",
+        default="PG_ADMIN_DSN",
+        help="the variable holding a superuser DSN (default PG_ADMIN_DSN)",
+    )
+    backup.add_argument("--check", action="store_true", help="only check an existing role")
+    backup.set_defaults(run=_backup_role)
 
     admin = commands.add_parser("admin", help="operator commands (owner role)")
     admin_commands = admin.add_subparsers(dest="admin_command", required=True)

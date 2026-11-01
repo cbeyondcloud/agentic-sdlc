@@ -113,8 +113,10 @@ def register(app: typer.Typer) -> None:
         with _client() as client:
             made = client.assign(_email(email), _role(role), _team(team))
         where = f"team {made.team}" if made.team else "the org"
-        invited = " (invite mailed)" if made.invited else ""
+        invited = " (invited)" if made.invited and not made.invite_note else ""
         line = f"{made.email} holds {made.role} in {where}{invited}"
+        if made.invite_note:  # DF-575: why no invite, or why it is not mailed yet
+            line += f"\n{made.invite_note}"
         out.result(made.model_dump(mode="json"), lambda c: c.print(line, markup=False))
 
     @group.command("revoke")

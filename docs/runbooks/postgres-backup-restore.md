@@ -79,8 +79,20 @@ between Postgres versions and providers, and it is what the restore drill uses.
 
 Take it as a **backup role**, not the owner: every tenant table forces row-level
 security, also on its owner, so `pg_dump` as the owner stops with "query would be affected
-by row-level security policy" (found by the M3-04 kind run). A superuser makes the role
-once (Postgres 14 or later):
+by row-level security policy" (found by the M3-04 kind run). Make the role once (Postgres
+14 or later) with the operator command, which needs a superuser DSN because only a
+superuser may grant `BYPASSRLS` (DF-891). Both values come from variables, never the
+command line:
+
+```bash
+# PG_ADMIN_DSN: a superuser DSN; BACKUP_DB_PASSWORD: the role's password (secret manager)
+python -m agentic_cp db backup-role --role agentic_backup
+python -m agentic_cp db backup-role --role agentic_backup --check   # any DSN: reads pg_roles
+```
+
+Run again, it re-aligns the role (and keeps its password when `BACKUP_DB_PASSWORD` is
+unset). Where nobody may hold a superuser DSN, a DBA runs the same statements by hand and
+`--check` confirms them:
 
 ```sql
 CREATE ROLE agentic_backup LOGIN BYPASSRLS PASSWORD '<from your secret manager>';

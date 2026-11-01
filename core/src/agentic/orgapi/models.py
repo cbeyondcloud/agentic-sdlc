@@ -133,6 +133,9 @@ class Assignment(BaseModel):
     team: str | None = None
     invited: bool = False
     """The person was new: an invite was created (and mailed when the relay is set up)."""
+    invite_note: str | None = None
+    """For a new person, why no invite was made or why it is not mailed yet (DF-575): no
+    public URL, or no mail relay. None when the invite goes out, or the person was known."""
 
 
 class AssignmentRequest(RequestModel):

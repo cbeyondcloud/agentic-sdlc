@@ -41,8 +41,13 @@ release still uses. Drop it one release later. Reviewers check this on every mig
    events, ingest pauses for the length of the build (DF-614). Schedule that upgrade in a
    quiet hour, or build the index first without blocking, as the owner role:
    `CREATE INDEX CONCURRENTLY IF NOT EXISTS run_events_tenant_id_received_at_idx ON agentic.run_events (tenant_id, received_at);`
-   The migration then finds it and skips the build. Later migrations that index a large
-   table say so in their docstring and in the release notes.
+   The migration then finds it and skips the build. A `CONCURRENTLY` build that fails or
+   is cancelled leaves an INVALID index behind, which `IF NOT EXISTS` would then skip
+   silently (DF-810). Check it before upgrading; the query must return `t`:
+   `SELECT indisvalid FROM pg_index WHERE indexrelid = 'agentic.run_events_tenant_id_received_at_idx'::regclass;`
+   If it returns `f`, `DROP INDEX CONCURRENTLY agentic.run_events_tenant_id_received_at_idx;`
+   and build it again. Later migrations that index a large table say so in their docstring
+   and in the release notes.
 
 ## Upgrade
 

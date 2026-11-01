@@ -68,6 +68,16 @@ def test_assign_gives_a_role_and_says_an_invite_went_out(plane, capsys):
     ]
 
 
+def test_assign_says_when_no_invite_went_out(plane, capsys):
+    """DF-575: the server's note (no public URL, no relay) is shown, never 'invite mailed'
+    for a mail that is not sent."""
+    plane.invite_note = "no invite: this control plane has no public URL (AGENTIC_CP_PUBLIC_URL)"
+    plane.invited = False
+    assert main(["rbac", "assign", "dev@acme.example", "developer", "--team", "payments"]) == 0
+    out = capsys.readouterr().out
+    assert "AGENTIC_CP_PUBLIC_URL" in out and "invite mailed" not in out
+
+
 def test_assignments_lists_them(plane, capsys):
     agentic(capsys, "rbac", "assign", "dev@acme.example", "developer", "--team", "payments")
     code, data, _ = agentic(capsys, "rbac", "assignments", "--team", "payments")

@@ -64,6 +64,17 @@
             "title": "Id",
             "type": "string"
           },
+          "invite_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invite Note"
+          },
           "invited": {
             "default": false,
             "title": "Invited",

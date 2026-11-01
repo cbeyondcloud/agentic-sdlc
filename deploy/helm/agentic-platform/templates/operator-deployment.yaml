@@ -1,0 +1,45 @@
+{{- if .Values.operator.enabled }}
+{{- /* The operator pod (M3-05, DF-892): where `python -m agentic_cp admin ...` and the other
+operator commands run, with the same image, settings, policy branch and git config as the
+API and the owner DSN the migration Job gets, so nobody copies them by hand. It holds the
+owner DSN, so it runs no replica until an operator scales it up for a task:
+  kubectl -n <ns> scale deploy/<release>-agentic-platform-operator --replicas=1
+  kubectl -n <ns> exec deploy/<release>-agentic-platform-operator -- python -m agentic_cp ...
+  kubectl -n <ns> scale deploy/<release>-agentic-platform-operator --replicas=0
+(scripts/bootstrap.py does this). `helm upgrade` sets it back to operator.replicas. */ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agentic.fullname" . }}-operator
+  labels:
+    {{- include "agentic.labels" (list . "operator") | nindent 4 }}
+spec:
+  replicas: {{ .Values.operator.replicas }}
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      {{- include "agentic.selector" (list . "operator") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "agentic.labels" (list . "operator") | nindent 8 }}
+    spec:
+      {{- include "agentic.podCommon" (list . "") | nindent 6 }}
+      terminationGracePeriodSeconds: 5
+      containers:
+        - name: operator
+          image: {{ include "agentic.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # idle until an operator execs a command; the image's entrypoint would serve
+          command: ["sleep", "infinity"]
+          env:
+            {{- include "agentic.env" (list . "job") | nindent 12 }}
+          resources:
+            {{- toYaml .Values.operator.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            {{- include "agentic.volumeMounts" . | nindent 12 }}
+      volumes:
+        {{- include "agentic.volumes" . | nindent 8 }}
+{{- end }}

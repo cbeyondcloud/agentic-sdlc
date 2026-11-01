@@ -222,7 +222,8 @@ class FakeControlPlane:
                 "role": body["role"],
                 "scope": "team" if body.get("team") else "org",
                 "team": body.get("team"),
-                "invited": True,
+                "invited": getattr(self, "invited", True),
+                "invite_note": getattr(self, "invite_note", None),
             }
             self.role_assignments.append(made)
             return httpx2.Response(201, json=made)

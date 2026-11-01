@@ -63,12 +63,14 @@ async def test_a_new_persons_assignment_queues_one_invite_mail(inviting):
     api = inviting
     reply = await assign(api, api.a.admin_token, "dev@a.example.test", "developer", "payments")
     assert reply.status_code == 201 and reply.json()["invited"] is True
+    assert reply.json()["invite_note"] is None  # a relay is set up: nothing to explain
     [mail] = await _mails(api, api.a)
     assert mail.recipient == "dev@a.example.test" and mail.status == "pending"
     assert LINK.search(mail.body_text) and LINK.search(mail.body_html)
     assert "developer" in mail.body_text and "payments" in mail.body_text
     again = await assign(api, api.a.admin_token, "dev@a.example.test", "approver", "payments")
     assert again.json()["invited"] is False and len(await _mails(api, api.a)) == 1
+    assert again.json()["invite_note"] is None  # not new: nobody expected an invite
     events = [r.event for r in await _chain(api, api.a)]
     assert "invite.created" in events
 
@@ -177,9 +179,20 @@ async def test_a_suspended_tenants_invite_is_invalid(inviting):
     assert (await _redeem(api, token)).status_code == 404
 
 
+async def test_without_a_relay_the_answer_says_the_invite_waits(inviting):
+    """DF-575: an invite made while no relay is set up stays queued, and the answer says so
+    instead of letting the admin expect a mail."""
+    api = inviting.with_settings(smtp_host=None)
+    reply = await assign(api, api.a.admin_token, "dev@a.example.test", "developer", "payments")
+    assert reply.json()["invited"] is True
+    assert "AGENTIC_CP_SMTP_HOST" in reply.json()["invite_note"]
+
+
 async def test_without_a_public_url_nothing_is_mailed(api):
     reply = await assign(api, api.a.admin_token, "dev@a.example.test", "developer", "payments")
     assert reply.json()["invited"] is False
+    # DF-575: and the answer says why, so nobody waits for a mail that never comes
+    assert "AGENTIC_CP_PUBLIC_URL" in reply.json()["invite_note"]
     assert await _mails(api, api.a) == []
     again = await api.post("/v1/users/dev@a.example.test/invite", api.a.admin_token)
     assert again.status_code == 409 and again.json()["code"] == "invite.unconfigured"
