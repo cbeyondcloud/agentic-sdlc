@@ -538,3 +538,35 @@ def test_a_team_learning_without_a_policy_repo_is_refused_first(
     assert refused.code == ExitCode.REFUSED, refused.err
     assert "policy_checkout" in error(refused)["hint"]
     assert sides == [] and only_proposal(cli)["status"] == "pending"
+
+
+def test_a_learned_files_skeleton_is_recognised_for_its_own_file_only(tmp_path):
+    """DF-768: the revert's `leftover` test is the learned file's skeleton (front matter and
+    title, no block, either line ending), for that learning's own file only."""
+    from datetime import UTC, datetime
+
+    from agentic.learning.changes import Evidence, draft, learned_skeleton
+    from agentic.learning.clustering import Proposal
+    from agentic_cli.learning_apply import skeleton_left
+
+    at = datetime(2026, 11, 1, tzinfo=UTC)
+    pid = "lp-" + "9" * 20
+    proposal = Proposal(
+        id=pid,
+        agent="ba",
+        scope="repo:local",
+        lesson="Name every column.",
+        evidence=("fb-1",),
+        sources=("s",),
+        actors=("alice",),
+        created_at=at,
+    )
+    seen = Evidence(
+        feedback_id="fb-1", signal="gate-rejection", actor="alice", given_at=at, run_id="run-1"
+    )
+    made = draft(proposal, [seen], lambda root, path: None, kind="personal-note", at=at)
+    left = skeleton_left(made)
+    skeleton = learned_skeleton("personal-note", "ba")
+    assert left(skeleton, made.path) and left(skeleton.replace("\n", "\r\n"), made.path)
+    assert not left(skeleton + "My own line.\n", made.path)
+    assert not left(skeleton, "memory/other.md")

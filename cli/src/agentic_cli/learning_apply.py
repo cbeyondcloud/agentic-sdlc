@@ -54,6 +54,7 @@ from agentic.learning.changes import (
     Evidence,
     draft,
     instruction_only_problems,
+    learned_skeleton,
     render_change,
     strip_change,
 )
@@ -565,7 +566,7 @@ def revert(rt: Runtime, pid: str, warn: Callable[[str], None]) -> tuple[Proposal
     user = check_owner(rt, made, "revert", warn)
     applied = record.get("applied") or {}
     if applied.get("kind") == "personal":
-        reverted = revert_personal(rt, pid, applied, user, warn)
+        reverted = revert_personal(rt, made, applied, user, warn)
     else:
         reverted = revert_shared(rt, made, applied, warn)
     reverted["at"] = _now().isoformat()
@@ -573,13 +574,23 @@ def revert(rt: Runtime, pid: str, warn: Callable[[str], None]) -> tuple[Proposal
     return store(rt).decide(pid, "revert", user, _now()), reverted
 
 
+def skeleton_left(made: Draft) -> Callable[[str, str], bool]:
+    """Whether a text left in the learning's own file is only the skeleton a learning
+    writes into a file it creates (DF-768: such a file is removed, not left empty)."""
+    skeleton = learned_skeleton(made.kind, made.agent)
+    return lambda text, path: path == made.path and text.replace("\r\n", "\n") == skeleton
+
+
 def revert_personal(
-    rt: Runtime, pid: str, applied: dict, user: str, warn: Callable[[str], None]
+    rt: Runtime, made: Draft, applied: dict, user: str, warn: Callable[[str], None]
 ) -> dict:
     """Zyroflo's undo; when the file changed since (a later learning on it, a hand edit),
-    only this learning's block is taken out, and the person is told (review F2)."""
+    only this learning's block is taken out, and the person is told (review F2). A file a
+    learning created that is left holding only its skeleton is removed (DF-768)."""
     try:
-        rows = PersonalChanges(rt.ws.home).revert(pid, by=user, strip=strip_change)
+        rows = PersonalChanges(rt.ws.home).revert(
+            made.proposal_id, by=user, strip=strip_change, leftover=skeleton_left(made)
+        )
     except LearningApplyError as error:
         raise CliError(str(error), ExitCode.REFUSED) from None
     for row in rows:
@@ -971,7 +982,7 @@ def org_revert(rt: Runtime, pid: str, warn: Callable[[str], None]) -> dict:
     _owner_only(detail, made, "revert")
     applied = detail.applied_ref or {}
     if applied.get("kind") == "personal":
-        reverted = revert_personal(rt, pid, applied, rt.known_user(), warn)
+        reverted = revert_personal(rt, made, applied, rt.known_user(), warn)
     else:
         reverted = revert_shared(rt, made, applied, warn)
     reverted["at"] = _now().isoformat()
