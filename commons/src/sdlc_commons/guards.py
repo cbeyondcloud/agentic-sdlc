@@ -4,14 +4,27 @@ May an agent run this command, write these paths, hand over this diff, push
 there? Zyroflo's guard functions (`zyroflo.sdlc.policy`) judge Zyroflo's walls;
 this module adds the framework's rules on top:
 
-  * command - Zyroflo's destructive defaults (`destructive`), plus the agent's
+  * command - Zyroflo's destructive defaults (`destructive`, which itself reads
+              the spellings that hide a program, a script a shell takes from its
+              stdin and the text an interpreter or carrier runs), asked of the
+              command, of the command with its line continuations joined, and of
+              further readings of each spelling for shapes Zyroflo does not
+              follow (DF-930): quotes, carets and backticks removed; braces as
+              separators, `${...}` removed and unknown shells as `sh`; the
+              command a Start-Process starts; a pipe into a program that runs
+              its stdin as a pipe into `sh`; the program behind a wrapper only
+              agentic lists. When `_beyond_zyroflo` holds (a substitution, or a
+              stdin source with a program that may run what it reads), also of
+              agentic's own quote-free spellings from before M2-58
+              (`_fed_spellings`). The price is some harmless shapes refused
+              (DF-931); the shapes neither reads are DF-933 to DF-935. Then the agent's
               resolved deny list (org + team + agent, D31) and the framework's
               floor (`FRAMEWORK_DENY_SHELL`), matched by where a word stands (a
               rule's program at a command position, its first word the
-              subcommand - see "how a command is read"). Each is asked of the
-              command as typed AND of the spellings that hide a program from a
-              tokenizer (quotes inside a word, a quoted Windows path, a leading
-              redirect, `then`/`do`/`!`). Any hit refuses. A command longer than
+              subcommand - see "how a command is read"), in the command as typed
+              AND in the spellings that hide a program from a tokenizer (quotes
+              inside a word, a quoted Windows path, a leading redirect,
+              `then`/`do`/`!`). Any hit refuses. A command longer than
               MAX_COMMAND is refused unread. Files written past the file tools'
               checks are refused too: git's output options (`git diff --output=f`)
               for every agent, and any redirect into a file (`> f`) for an agent
@@ -29,7 +42,7 @@ this module adds the framework's rules on top:
 Zyroflo's defaults are a FLOOR: a repository's own policy file may add to its
 lists, never remove from them.
 
-**What a deny list cannot do.** Text handed to an interpreter (`… | bash`,
+**What a deny list cannot do.** Text handed to an interpreter (`curl … | bash`,
 `$VAR`, `python -c`, `docker run`, `ssh`) is not visible to any command matcher.
 The allow-list (M1-31: an unknown program is refused) and the OS sandbox
 (M1-32/33) are the controls for those; this guard is defence in depth.
@@ -186,6 +199,18 @@ class Guard:
     def command(self, command: str) -> list[Block]:
         """Every reason this shell command is refused. Reasons never quote the
         command, so a credential typed in it does not reach a log."""
+        try:
+            return self._command(command)
+        except RecursionError:  # Zyroflo's reader recurses per nested string (DF-932)
+            return [
+                Block(
+                    "framework",
+                    "the command nests command strings deeper than the guard reads "
+                    "- refused unread (framework floor)",
+                )
+            ]
+
+    def _command(self, command: str) -> list[Block]:
         if len(command) > MAX_COMMAND:
             return [
                 Block(
@@ -195,13 +220,43 @@ class Guard:
                 )
             ]
         blocks: dict[tuple[str, str], Block] = {}
-        spellings = _spellings(command)
-        for spelling in spellings:
-            for reason in policy.destructive(self.policy, spelling):
-                why = scrub(reason.replace(repr(spelling), "the command", 1))
-                blocks.setdefault(("destructive", why), Block("destructive", why))
+        # Zyroflo reads the spellings that hide a program, a script a shell takes from
+        # its stdin and the text an interpreter or carrier runs (T695, T697, T703);
+        # each reason names the command as typed.
+        self._destructive([command], blocks)
+        # Every spelling is also read with its quotes, carets and backticks removed:
+        # Zyroflo keeps PowerShell's escape character (`Remove-It`em -Recurse x`) and a
+        # quote inside a word of text it does not carry (`env -S 'rm -""rf x'`, `trap`,
+        # `alias`, `$(...)`). The GIT_* and search walls read the same texts, so an
+        # assignment in a script a shell takes from its stdin is seen too (`echo 'ls;
+        # GIT_DIR=x git status' | sh`).
+        zyroflo = policy.spellings(command)
+        # A line continuation (backtick, caret or backslash before a line break) is
+        # joined first: `Remove-Item `<NL>-Recurse x` is one command.
+        joined = _CONTINUATION.sub("", command)
+        base = zyroflo + (policy.spellings(joined) if joined != command else [])
+        # A brace glued to a command, a `${x}` prefix or a shell Zyroflo does not know
+        # hides the program from it (`if($true){Remove-Item ...}`, `f(){ rm -rf x;}`,
+        # `${IFS}rm -rf x`, `ksh93 -c '...'`): each spelling is also read reshaped.
+        base = list(dict.fromkeys(base + [_reshaped(text) for text in base]))
+        spellings = list(
+            dict.fromkeys(
+                text for spelling in base for text in (spelling, _QUOTES.sub("", spelling))
+            )
+        )
+        # `Start-Process` (Zyroflo reads no carrier there) is also read as the command
+        # it starts, its parameters in any order (`Start-Process -ArgumentList
+        # '-rf','x' -FilePath rm` reads `rm -rf x`).
+        arrays = [_started(text) for text in spellings if _START_PROCESS.search(text)]
+        # A script piped into a program that may run it is judged as piped into `sh`
+        # (`echo 'rm -rf x' | sudo -s`, `| irb`, `| strace sh`).
+        piped = [text for spelling in base for text in _piped(spelling)]
         try:
             commands = [c for spelling in _rule_spellings(command) for c in _commands(spelling)]
+            # A program behind a wrapper agentic lists and Zyroflo does not (`strace`,
+            # `nsenter -t 1`, `faketime x`), also past an output redirect (`strace
+            # 2>&1 rm -fr x`), is read as a command of its own.
+            wrapped = [t for text in base for t in _wrapped(text)]
         except _TooComplex:
             return [
                 Block(
@@ -210,6 +265,10 @@ class Guard:
                     f"in one segment - refused unread (framework floor)",
                 )
             ]
+        texts = dict.fromkeys(spellings + arrays + piped + wrapped)
+        self._destructive([text for text in texts if text not in zyroflo], blocks)
+        if _beyond_zyroflo(command):
+            self._destructive(_fed_spellings(command), blocks)
         layers = (
             ("denied-command", self.deny_shell, "org, team or agent policy"),
             ("framework", FRAMEWORK_DENY_SHELL, "framework floor"),
@@ -250,6 +309,14 @@ class Guard:
             why = "a GIT_* variable can make git run a command (framework floor)"
             blocks.setdefault(("framework", why), Block("framework", why))
         return list(blocks.values())
+
+    def _destructive(self, texts: list[str], blocks: dict[tuple[str, str], Block]) -> None:
+        """Zyroflo's destructive reasons for each text, naming none of them: a reason
+        quotes the text it read, which may hold a credential."""
+        for text in texts:
+            for reason in policy.destructive(self.policy, text):
+                why = scrub(reason.replace(repr(text), "the command", 1))
+                blocks.setdefault(("destructive", why), Block("destructive", why))
 
     def _allow_refusals(self, command: str) -> list[Block]:
         """Every command in `command` that no allow rule covers.
@@ -570,6 +637,9 @@ _SEPARATORS = frozenset(";|&()<>{}`\n\r")
 _ENV_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 _GIT_ENV = re.compile(r"GIT_[A-Z0-9_]*=")
 _ANSI_QUOTING = re.compile(r"""\$['"]""")
+#: Quotes, cmd's caret and PowerShell's backtick, which hide a word: the GIT_* and search
+#: walls read each spelling without them too.
+_QUOTES = re.compile(r"""['"^`]""")
 #: Words skipped at a segment's start: they are not the program.
 _TRANSPARENT = frozenset(
     {"if", "while", "until", "select", "elif", "then", "do", "else", "!", "{", "time", "coproc"}
@@ -612,11 +682,26 @@ _WRAPPERS = frozenset(
         "flock",
         "docker",
         "podman",
+        "unshare",
+        "faketime",
+        "dbus-launch",
+        "nsenter",
+        "setpriv",
+        "taskset",
+        "numactl",
+        "systemd-run",
+        "sg",
+        "time",
+        "script",
+        "tmux",
+        "screen",
     }
 )
 _WRAPPER_REACH = 3  # how many plain words after a wrapper may be the command
 _MAX_POSITIONS = 32  # more programs nested in one segment is refused unread
-_SHELLS = frozenset({"sh", "bash", "zsh", "dash", "ksh", "ash", "fish"})
+_SHELLS = frozenset(
+    {"sh", "bash", "zsh", "dash", "ksh", "ksh93", "mksh", "ash", "fish", "csh", "tcsh"}
+)
 _SHELL_RUN = re.compile(r"-[A-Za-z]*c[A-Za-z]*")  # -c, -lc, -ec, -xc …
 #: Options whose value is a plain word that is not a subcommand.
 _VALUE_OPTIONS = frozenset(
@@ -696,16 +781,347 @@ def _words(text: str) -> list[str]:
     return [t.text for t in _tokens(text) if not t.sep]
 
 
-def _spellings(command: str) -> list[str]:
-    """The command as typed, and as it reads once structure (keywords,
-    redirects), cmd's doubled quotes, quotes and quoted program paths no longer
-    hide its programs."""
+#: Programs that run text as commands: one in a process substitution is judged whole.
+_INTERPRETERS = _SHELLS | _POWERSHELL | {"cmd"}
+#: Programs that hand their stdin to a shell whatever their arguments.
+_STDIN_CARRIERS = frozenset(
+    {"su", "runuser", "wsl", "at", "batch", "login", "newgrp", "expect"}
+    | {"mosh", "telnet", "lima", "colima", "vagrant", "multipass"}
+    | {"tmux", "screen"}
+)
+#: Words after a program that are not its script (`find -exec bash \;`).
+_NOT_SCRIPTS = frozenset({"\\", "{}", "+"})
+#: A shell's options that take a value (`bash -o pipefail`, `--rcfile f`).
+_SHELL_VALUE_OPTIONS = frozenset({"-o", "-O", "+o", "+O", "--rcfile", "--init-file"})
+#: sudo's options that start a shell (`-s`, `-i`, in a cluster too: `-Es`).
+_SUDO_SHELL = re.compile(r"--shell|--login|-[A-Za-z]*[si][A-Za-z]*")
+
+
+def _reads_stdin(program: str, args: list[str]) -> bool:
+    """Whether `program` (at a command position, with the words after it) may run a
+    script it reads from its stdin: a shell with no script or command string of its
+    own (`bash`, `bash -o pipefail`, `sh -s`, `bash /dev/stdin`), cmd without /c,
+    PowerShell with neither `-File` nor `-Command <text>`, `sudo -s` or `--login`,
+    `script` with no `-c`, `parallel` with no command, or a remote, deferred or
+    interactive shell (`ssh host`, `at now`, `newgrp`, `tmux`)."""
+    lowered = [a.lower() for a in args]
+    if program in _SHELLS:
+        if any(_READS_CAT.search(a) for a in args):
+            return True  # `bash -c "$(cat)"` runs what reaches its stdin
+        if any(_SHELL_RUN.fullmatch(a) for a in args):
+            return False  # the command string is read as a command of its own
+        operands, skip = [], False
+        for a in args:
+            if skip:
+                skip = False
+            elif a in _SHELL_VALUE_OPTIONS:
+                skip = True
+            elif not a.startswith(("-", "+")) and a not in _NOT_SCRIPTS:
+                operands.append(a)
+        return "-s" in args or not operands or operands[0] in ("-", "/dev/stdin")
+    if program == "cmd":
+        return not {"/c", "/k", "/r"} & set(lowered)
+    if program in _POWERSHELL:
+        for i, a in enumerate(lowered):
+            if len(a) >= 2 and "-file".startswith(a):
+                return False
+            if len(a) >= 2 and "-command".startswith(a):
+                return lowered[i + 1 : i + 2] in ([], ["-"])
+        return True
+    if program in ("sudo", "doas"):
+        return any(_SUDO_SHELL.fullmatch(a) for a in args)
+    if program in ("xargs", "parallel"):
+        if "--dry-run" in args:
+            return False
+        # it runs what it reads when it has no command, or hands it to a shell or
+        # wrapper; a printer (`xargs echo rm -r`) only prints it
+        words = _xargs_command(args)
+        return not words or _program(words[0]) in _INTERPRETERS | _WRAPPERS
+    if program == "script":
+        return not any(a == "--command" or _SHELL_RUN.fullmatch(a) for a in args)
+    if program in _REPLS:  # `python`, `irb`, `gdb` with no script of their own
+        return not [a for a in args if not a.startswith("-")] or "-" in args
+    if program == "ssh":  # a remote shell, unless it is given a command of its own
+        remote = _after_options(args, _SSH_VALUES)[1:]
+        return not remote or _program(remote[0]) in _INTERPRETERS
+    return program in _STDIN_CARRIERS
+
+
+#: Interpreters, REPLs and debuggers that run a script read from their stdin when given
+#: none of their own.
+_REPLS = frozenset(
+    {"python", "python3", "py", "node", "deno", "perl", "ruby", "php", "lua", "tclsh"}
+    | {"irb", "pry", "gdb", "lldb", "jshell", "ghci", "rscript", "osascript"}
+)
+#: ssh's options that take a separate value.
+_SSH_VALUES = frozenset(
+    {"-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o"}
+    | {"-p", "-Q", "-R", "-S", "-W", "-w"}
+)
+
+
+def _after_options(args: list[str], values: frozenset[str]) -> list[str]:
+    """The words after a program's options, skipping the values `values` take."""
+    skip = False
+    for i, word in enumerate(args):
+        if skip:
+            skip = False
+        elif word in values:
+            skip = True
+        elif not word.startswith("-"):
+            return args[i:]
+    return []
+
+
+#: A command string that reads its own stdin (`bash -c "$(cat)"`).
+_READS_CAT = re.compile(r"\$\(\s*(?:cat\b|<)|`\s*cat\b|/dev/stdin")
+#: xargs's and parallel's options that take a separate value.
+_XARGS_VALUES = frozenset(
+    {"-a", "-d", "-E", "-I", "-L", "-n", "-P", "-s", "-j", "-S", "--arg-file"}
+    | {"--delimiter", "--eof", "--replace", "--max-lines", "--max-args", "--max-procs"}
+    | {"--max-chars", "--jobs", "--sshlogin"}
+)
+
+
+def _xargs_command(args: list[str]) -> list[str]:
+    """The command xargs or parallel runs: the words after its options."""
+    skip = False
+    for i, word in enumerate(args):
+        if skip:
+            skip = False
+        elif word in _XARGS_VALUES:
+            skip = True
+        elif not word.startswith("-"):
+            return args[i:]
+    return []
+
+
+#: Programs that only read or print data, whatever reaches their stdin. Any other
+#: program next to a stdin source may run what it reads there (a REPL, a debugger, a
+#: remote or emulated shell: `irb`, `gdb`, `nc h 22`, `vagrant ssh`); no list of those
+#: is complete, so it is this list that is kept.
+_DATA_READERS = frozenset(
+    {"cat", "tac", "head", "tail", "grep", "egrep", "fgrep", "rg", "findstr", "wc"}
+    | {"sort", "uniq", "tr", "cut", "paste", "join", "comm", "nl", "fold", "fmt", "rev"}
+    | {"column", "od", "xxd", "hexdump", "base64", "md5sum", "sha1sum", "sha256sum"}
+    | {"cksum", "diff", "cmp", "jq", "yq", "less", "more", "echo", "printf", "true"}
+    | {"false", "ls", "pwd", "cd", "test", "[", "file", "stat", "find", "git", "sleep"}
+    | {"type", "which", "where"}
+)
+
+
+def _beyond_zyroflo(command: str) -> bool:
+    """Whether `command` holds a shape Zyroflo 0ea0477 does not follow, so agentic
+    also judges it in its own quote-free spellings, as before M2-58: a substitution,
+    whose commands run (`cat <(watch '{ rm -rf x; }')`, `bash -c "$(cat <<< ...)"`);
+    or a stdin source (`<<<`, `<`, `|`) with a variable used as a program (`read c;
+    $c`), a shell run on a file the command writes (`cat <<< ... > s.sh; sh s.sh`), or
+    any program that may run what it reads there: one `_reads_stdin` names (`find .
+    -exec bash \\;`, `sh -c 'faketime x bash'`, `xargs -0 sh -c`), or one that is
+    neither a known data reader, a wrapper nor a shell given a script (`python -c
+    '...input()...'`, `irb`, `nc h 22`)."""
+    if any(s in command for s in ("<(", ">(", "$(", "`")):
+        return True
+    if "<" not in command and "|" not in command:
+        return False
+    if "$" in command:
+        return True
+    try:  # read as typed: a here-string's text is data, not a program at a position
+        typed = {_with_paths_as_programs(command), command.replace("\\", "")}
+        commands = [c for text in (command, *typed) for c in _commands(text)]
+    except _TooComplex:
+        return True
+    for name, args in commands:
+        if _reads_stdin(name, args):
+            return True
+        if name not in _DATA_READERS | _WRAPPERS | _INTERPRETERS:
+            return True
+    names = {name for name, _ in commands}
+    return bool(names & _INTERPRETERS) and bool(_file_redirects(command))
+
+
+#: An output redirect and its target (`2>&1`, `>log`, `2> /dev/null`, `&>>f`).
+_OUTPUT_REDIRECT = re.compile(r"(?<![\w-])(?:\d*|&)>>?&?\s*[^\s;&|<>()]*")
+
+
+def _wrapped(text: str, depth: int = 0) -> list[str]:
+    """The text from each command position a wrapper reaches in `text` (`strace 2>&1
+    rm -fr x` gives `rm -fr x`), output redirects removed and a quoted word with
+    spaces kept quoted, so it stays one word (`strace git commit -m "rm -rf x"`); and
+    the same inside each quoted word with spaces, to _MAX_DEPTH."""
+    out: dict[str, None] = {}
+    segment: list[_Word] = []
+    after = ""
+    for token in [*_tokens(_OUTPUT_REDIRECT.sub(" ", text)), _Word(";", sep=True)]:
+        if not token.sep:
+            segment.append(token)
+            continue
+        start = 1 if after in "<>" and after else 0
+        while start < len(segment) and (
+            _ENV_ASSIGNMENT.match(segment[start].text) or segment[start].text in _TRANSPARENT
+        ):
+            start += 1
+        positions = _positions(segment, start)
+        if any(_program(segment[j].text) in _WRAPPERS for j in positions):
+            for j in positions[1:]:
+                if _one_word(segment[j]) == segment[j].text:  # `'rm -rf x'` names no program
+                    out[" ".join(_one_word(w) for w in segment[j:])] = None
+                if _program(segment[j].text) in _DATA_READERS | _INTERPRETERS:
+                    break  # its words are its own (`xargs echo rm -r` prints them)
+            for j in range(1, len(segment)):
+                if segment[j - 1].text in ("-c", "--command") and segment[j].quoted:
+                    out[segment[j].text] = None  # `sg docker -c "rm -rf x"`
+        if depth < _MAX_DEPTH:
+            for word in segment:
+                if word.quoted and any(ch.isspace() for ch in word.text):
+                    out.update(dict.fromkeys(_wrapped(word.text, depth + 1)))
+        segment, after = [], token.text
+    return list(out)
+
+
+def _one_word(word: _Word) -> str:
+    """A word as one word again: quoted when it holds a space."""
+    if word.quoted and any(ch.isspace() for ch in word.text):
+        return "'" + word.text.replace("'", "") + "'"
+    return word.text
+
+
+#: A line continuation: PowerShell's backtick, cmd's caret or a backslash before a
+#: line break (CRLF too).
+_CONTINUATION = re.compile(r"[`^\\]\r?\n")
+#: `${...}` parameter expansion: empty or a separator at run time (`${IFS}rm`).
+_PARAMETER = re.compile(r"\$\{[^}]*\}")
+#: Shells Zyroflo does not know by name, read as `sh`.
+_OTHER_SHELLS = re.compile(
+    r"(?<![\w.-])(?:ksh93|rksh|rbash|yash|oksh|pdksh|posh|lksh|loksh|mksh|hush"
+    r"|csh|tcsh)(?![\w-])"
+)
+
+
+def _reshaped(text: str) -> str:
+    """`text` with each `${...}` removed, each brace read as a statement separator and
+    each shell Zyroflo does not know read as `sh`: `if($true){Remove-Item x}` reads
+    `if($true) ; Remove-Item x ; `, `${x}rm -rf x` reads `rm -rf x`."""
+    text = _PARAMETER.sub("", text)
+    text = text.replace("{", " ; ").replace("}", " ; ")
+    return _OTHER_SHELLS.sub("sh", text)
+
+
+def _piped(text: str) -> list[str]:
+    """For each pipe in `text` whose right side runs what it reads - a program
+    `_reads_stdin` names (`| sudo -s`, `| irb`, `| strace sh`, `| ksh93`) - the left
+    side piped into `sh` instead. Any other program is taken to read data: a program
+    of its own (`| python x.py`, `| psql`) is not read (DF-934)."""
+    out: list[str] = []
+    quote = ""
+    for i, ch in enumerate(text):
+        if quote:
+            quote = "" if ch == quote else quote
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "|" and text[i - 1 : i] != "|" and text[i + 1 : i + 2] != "|":
+            right = re.split(r"[;&|\n]", text[i + 1 :].lstrip("&"), maxsplit=1)[0]
+            try:
+                commands = _commands(right)
+            except _TooComplex:
+                commands = [("sh", [])]
+            if any(_reads_stdin(name, args) for name, args in commands):
+                out.append(text[:i] + "| sh")
+    return out
+
+
+_START_PROCESS = re.compile(r"(?i)(?<![\w-])(?:start-process|saps)(?![\w-])")
+#: Start-Process's parameters: dropped, so its program and arguments read as a command;
+#: the ones that take a value drop it too.
+#: Start-Process's switches, its parameters that take a value, and the names (and
+#: aliases) of the two that say what runs.
+_START_FLAGS = ("wait", "nonewwindow", "passthru", "loaduserprofile", "usenewenvironment")
+_START_VALUES = (
+    "verb",
+    "windowstyle",
+    "workingdirectory",
+    "credential",
+    "redirectstandardinput",
+    "redirectstandardoutput",
+    "redirectstandarderror",
+    "environment",
+)
+_START_PROGRAM = ("filepath", "path", "pspath")
+_START_ARGUMENTS = ("argumentlist", "args")
+#: Where a Start-Process statement ends.
+_STATEMENT_END = re.compile(r"[;|&\n]")
+
+
+def _started(text: str) -> str:
+    """`text` with each Start-Process (or `saps`) statement read as the command it
+    starts: its program (`-FilePath`, or the first positional word) and then its
+    arguments (`-ArgumentList`, or the second positional word, commas as spaces), in
+    whatever order they were given: `Start-Process -ArgumentList '-rf','x' -FilePath
+    rm` reads `rm -rf x`."""
+    out = []
+    rest = text
+    while match := _START_PROCESS.search(rest):
+        out.append(rest[: match.start()])
+        tail = rest[match.end() :]
+        end = _STATEMENT_END.search(tail)
+        statement, rest = (tail[: end.start()], tail[end.start() :]) if end else (tail, "")
+        out.append(_start_command(statement))
+    out.append(rest)
+    return " ".join(part for part in out if part)
+
+
+def _start_parameter(word: str) -> bool:
+    """Whether `word` names one of Start-Process's parameters."""
+    name = word.lower().lstrip("-")
+    names = (*_START_PROGRAM, *_START_ARGUMENTS, *_START_VALUES, *_START_FLAGS)
+    return word.startswith("-") and len(name) >= 2 and any(p.startswith(name) for p in names)
+
+
+def _start_command(statement: str) -> str:
+    """The command one Start-Process statement starts (see `_started`)."""
+    words = statement.split()
+    program, arguments, positional = "", [], []
+    i = 0
+    while i < len(words):
+        word = words[i]
+        name = word.lower().lstrip("-")
+        if word.startswith("-") and len(name) >= 2 and not name.startswith(("-", ",")):
+            if any(p.startswith(name) for p in _START_PROGRAM):
+                program, i = " ".join(words[i + 1 : i + 2]), i + 2
+                continue
+            if any(p.startswith(name) for p in _START_ARGUMENTS):
+                i += 1  # the list runs to the next Start-Process parameter
+                while i < len(words) and not _start_parameter(words[i]):
+                    arguments.append(words[i])
+                    i += 1
+                continue
+            if any(p.startswith(name) for p in _START_VALUES):
+                i += 2
+                continue
+            if any(p.startswith(name) for p in _START_FLAGS):
+                i += 1
+                continue
+        positional.append(word)
+        i += 1
+    if not program and positional:
+        program = positional.pop(0)
+    if not arguments:
+        arguments = positional
+    return " ".join([program, *arguments]).replace(",", " ")
+
+
+def _fed_spellings(command: str) -> list[str]:
+    """For a command whose stdin may reach a shell: the spellings agentic asked of
+    every command before M2-58 - structure (keywords, redirects, a here-string) as
+    separators and every quote removed, so text on that stdin (`find . -exec bash \\;
+    <<< 'rm -rf x'`) is judged as a command. The command as typed is not among them."""
     out: dict[str, None] = {}
     for base in (command, command.replace('""', '"')):
         for shaped in (base, _STRUCTURE.sub(";", base)):
             for text in (shaped, _with_paths_as_programs(shaped)):
-                light = re.sub(r"""['"^`]""", "", text)
+                light = _QUOTES.sub("", text)
                 out.update({text: None, light: None, light.replace("\\", ""): None})
+    out.pop(command, None)
     return list(out)
 
 

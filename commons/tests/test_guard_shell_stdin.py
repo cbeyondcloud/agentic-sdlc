@@ -1,8 +1,8 @@
 """A script handed to a shell on its standard input is a command, wherever the
-here-string, redirect or process substitution stands. Zyroflo reads many of these since
-T697 (pin 96b3e53, M2-58); agentic keeps its own spellings on top, because a review of
-the attempt to drop them found shapes only they refuse (decision 108). Data that only
-looks like a command stays refused until Zyroflo reads every shape (DF-723)."""
+here-string, redirect or process substitution stands. Zyroflo reads these since T697 and
+T703 (pin 0ea0477, M2-58), so agentic asks Zyroflo alone. The shapes a review of the first
+attempt to drop agentic's own spellings found (decision 108) stay pinned here, and data
+that only looks like a command is allowed (DF-723)."""
 
 import subprocess
 
@@ -70,8 +70,7 @@ def test_a_script_piped_into_a_shell_and_a_recursive_del_are_refused(guard, comm
     ],
 )
 def test_text_passed_through_a_program_into_a_shell_is_refused(guard, command):
-    """Zyroflo reads what echo/printf print into a shell, not what cat, head or tr
-    pass on; agentic's own spellings refuse these until it does (M2-58, DF-779)."""
+    """Zyroflo follows text through any program into a shell since T703 (DF-779)."""
     assert "destructive" in {block.wall for block in guard.command(command)}
 
 
@@ -87,8 +86,7 @@ def test_text_passed_through_a_program_into_a_shell_is_refused(guard, command):
     ],
 )
 def test_a_group_or_a_pipe_in_a_command_string_is_refused(guard, command):
-    """Zyroflo reads `bash -c 'rm -rf x'` but not a brace group in that text; agentic
-    judges the text an interpreter runs as a command of its own (M2-58, DF-780)."""
+    """Zyroflo reads a brace group in the text an interpreter runs since T703 (DF-780)."""
     assert "destructive" in {block.wall for block in guard.command(command)}
 
 
@@ -122,11 +120,36 @@ def test_a_group_or_a_pipe_in_a_command_string_is_refused(guard, command):
         "at now <<< 'rm -rf x'",
     ],
 )
-def test_shapes_only_agentics_own_spellings_refuse(guard, command):
+def test_shapes_the_m2_58_review_found_are_refused(guard, command):
     """The M2-58 review found each of these allowed once agentic's spellings were
-    dropped, and a real shell runs it (decision 108). They stay refused until Zyroflo
-    reads them (DF-779, DF-780)."""
+    dropped, and a real shell runs it (decision 108). Zyroflo reads them since T703
+    (DF-779, DF-780, DF-782)."""
     assert guard.command(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "find . -exec bash \\; <<< 'rm -rf x'",  # find hands its stdin to the shell it runs
+        "find . -exec sh -c 'unshare sh -c bash' \\; <<< 'rm -rf x'",
+        "echo 'rm -rf x' | find . -exec bash \\;",
+        "sh -c 'unshare sh -c bash' <<< 'rm -rf x'",  # a shell with no script, carried
+        "echo 'rm -rf x' | sh -c 'unshare sh -c bash'",
+        "sh -c 'sudo -s' <<< 'rm -rf x'",
+        "find . -exec ssh h \\; <<< 'rm -rf x'",
+        "find . -exec at now \\; <<< 'rm -rf x'",
+        # a command string run inside a process substitution
+        'cat <(sh -c "{ rm -rf x; }")',
+        'cat <(echo ls; sh -c "{ rm -rf x; }")',
+        "sudo bash -c 'cat <(echo ls; sh -c \"{ rm -rf x; }\")'",
+    ],
+)
+def test_a_shell_zyroflo_does_not_follow_is_refused(guard, command):
+    """Zyroflo 0ea0477 follows neither a script on the stdin of a command into a shell
+    with no script of its own that a carrier runs, nor a command string inside a process
+    substitution; a real bash runs each. agentic judges such a command in its own
+    quote-free spellings too (M2-58)."""
+    assert "destructive" in {block.wall for block in guard.command(command)}
 
 
 @pytest.mark.parametrize(
@@ -141,5 +164,64 @@ def test_a_program_search_change_in_a_command_string_is_refused(tmp_path, comman
     assert Guard(repo, "r-shell-stdin", allow_shell=allow).command(command)
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo 'ls; GIT_DIR=x git status' | sh",  # a script a shell takes from its stdin
+        "cat <<< 'ls; GIT_DIR=x git status' | sh",
+        "sh <<< 'ls; GIT_DIR=x git status'",
+        "echo 'ls; export GIT_SSH_COMMAND=x; git fetch' | bash",
+    ],
+)
+def test_a_git_variable_in_a_script_on_a_shells_input_is_refused(guard, command):
+    """Zyroflo's spellings carry a command string's text, not a stdin script, so the
+    GIT_* wall also reads each spelling with its quotes removed (M2-58)."""
+    assert "framework" in {block.wall for block in guard.command(command)}
+
+
+@pytest.mark.parametrize("command", ["echo 'ls; PATH=/tmp ls' | sh", "bash <<< 'ls; PATH=/tmp ls'"])
+def test_a_program_search_change_on_a_shells_input_is_refused(tmp_path, command):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    allow = ("bash", "sh", "echo", "ls")
+    assert Guard(repo, "r-shell-stdin", allow_shell=allow).command(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <<< 'rm -rf x'",  # a here-string fed to a program that reads data (DF-723)
+        "grep -c rm <<< 'rm -rf x'",
+        "bash run.sh <<< 'rm -rf x'",  # bash runs run.sh; the here-string is its data
+        "echo do rm -rf x",  # a keyword in argument position is a word
+        "echo if rm -rf x",
+        "echo ! rm -rf x",
+        "cat <<< 'rm -rf x' | grep bash",  # the pipe goes to grep, not a shell
+    ],
+)
+def test_data_that_only_looks_like_a_command_is_allowed(guard, command):
+    """Zyroflo Z10 (pin 0ea0477) reads every shape agentic's own spellings were kept
+    for, so those spellings are gone and their over-refusals with them (DF-723)."""
+    assert guard.command(command) == []
+
+
 def test_a_one_file_delete_is_allowed(guard):
     assert guard.command("del -Force x.txt") == []
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <(echo rm -rf x)",  # a process substitution runs its commands: judged whole
+        'echo "{ rm -rf x; }"',  # every spelling is also read without its quotes
+        'sudo "{ rm -rf x; }"',
+        'find "{ rm -rf x; }"',
+        "cat <<< 'rm -rf x' || sh",  # a shell that reads its stdin, with a stdin source
+    ],
+)
+def test_data_kept_refused_for_strictness(guard, command):
+    """Harmless shapes still refused, the price of reading PowerShell's escape and a
+    quote inside a word, and of judging a process substitution whole (DF-931). They
+    go when Zyroflo reads those shapes itself (DF-930)."""
+    assert guard.command(command)
