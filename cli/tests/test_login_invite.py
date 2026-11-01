@@ -144,3 +144,36 @@ def test_invite_redemption_is_refused_in_ci(plane, capsys, monkeypatch):
 def test_invite_takes_no_other_key_option(plane, capsys):
     assert main(["login", "--invite", LINK, "--rotate"]) == ExitCode.USAGE
     assert main(["login", "--invite", LINK, "--for", "jira"]) == ExitCode.USAGE
+
+
+@pytest.mark.parametrize(
+    "gateway",
+    ["http://gateway.acme.example", "https://user:pw@gateway.acme.example", "not a url"],
+)
+def test_an_unsafe_gateway_url_is_not_written(plane, capsys, gateway):  # review F6
+    plane.add_invite(INVITE, gateway_key=GATEWAY_KEY)["gateway_url"] = gateway
+    assert main(["login", "--invite", LINK]) == ExitCode.OK
+    captured = capsys.readouterr()
+    text = (agentic_home() / "config.yaml").read_text(encoding="utf-8")
+    assert "gateway_url" not in text and f"control_plane_url: {CP_URL}" in text
+    assert "gateway_url" in captured.err and "pw" not in captured.err + captured.out
+
+
+def test_an_invite_is_not_used_when_no_key_could_be_stored(plane, capsys, monkeypatch):
+    """Review F3: no keyring and a credential file that cannot be written - checked before
+    the link is used up."""
+    import keyring as keyring_module
+    from test_credential_store import NoBackend
+
+    plane.add_invite(INVITE, gateway_key=GATEWAY_KEY)
+    monkeypatch.delenv("AGENTIC_CREDENTIAL_STORE", raising=False)
+    previous = keyring_module.get_keyring()
+    keyring_module.set_keyring(NoBackend())
+    try:
+        agentic_home().parent.mkdir(parents=True, exist_ok=True)
+        agentic_home().write_text("a file where the folder should be", encoding="utf-8")
+        code, _, err = _run(capsys, "--invite", LINK)
+    finally:
+        keyring_module.set_keyring(previous)
+    assert code == ExitCode.ERROR and "credential file" in err
+    assert plane.requests == []

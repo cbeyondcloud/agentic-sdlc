@@ -13,8 +13,9 @@ sent to a site nobody named:
 
 `AGENTIC_JIRA_URL` and `AGENTIC_JIRA_USER` override `url` and `user` (CI, service
 accounts). The token comes from `agentic.auth.Credentials`: `AGENTIC_JIRA_TOKEN` (or
-`AGENTIC_<CREDENTIAL>`) first, then the OS keyring (`agentic login --for jira`). It is held
-only in memory, never shown, logged or written to the run folder.
+`AGENTIC_<CREDENTIAL>`) first, then the OS keyring (`agentic login --for jira`) or the
+credential file where there is none (`agentic_cli.credential_store`). It is held only in
+memory, never shown, logged or written to the run folder.
 """
 
 import json

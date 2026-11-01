@@ -139,7 +139,10 @@ def run_doctor(cwd: Path, home: Path, env: Mapping[str, str], deps: DoctorDeps) 
     """Every check, in order; never raises for a failing check (each is reported)."""
     report = DoctorReport()
     add = report.checks.append
-    credentials = deps.credentials or cli_credentials(env, home)
+    try:
+        credentials = deps.credentials or cli_credentials(env, home)
+    except CliError:  # an unknown credential_store: the `credential file` check names it
+        credentials = Credentials(environ=env)
     try:
         ws: Workspace | None = Workspace.load(cwd, env=env, home=home)
         settings = ws.settings

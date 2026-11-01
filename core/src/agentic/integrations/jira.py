@@ -24,6 +24,7 @@ connector adapter's job (`sdlc_commons.connectors`), and the CLI decides when to
 
 import base64
 import ipaddress
+import math
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -306,7 +307,7 @@ def _retry_after(response: httpx2.Response) -> float | None:
         seconds = float(response.headers.get("retry-after", ""))
     except ValueError:
         return None
-    return seconds if seconds >= 0 else None
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
 def _explain(where: str, response: httpx2.Response) -> str:

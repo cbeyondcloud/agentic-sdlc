@@ -17,7 +17,8 @@ nobody named:
 
 The token comes from `agentic.auth.Credentials`: `AGENTIC_<CREDENTIAL>` in the
 environment first (CI, service accounts), then the OS keyring (`agentic login --for
-github`). It is held only in memory and never shown.
+github`), or the credential file where there is none (`agentic_cli.credential_store`). It
+is held only in memory and never shown.
 """
 
 import re

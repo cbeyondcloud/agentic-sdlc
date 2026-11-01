@@ -174,3 +174,31 @@ def test_a_file_too_open_is_a_credential_error_naming_the_fix(tmp_path):
     with pytest.raises(CredentialError, match="chmod 600") as refused:
         credentials.find(TOKENLEAN_KEY)
     assert SECRET not in str(refused.value)
+
+
+# ── can a key be stored at all? (review F3: before an invite link is used up) ─
+
+
+def test_check_store_names_the_keyring_when_it_works(tmp_path):
+    credentials = Credentials(environ={}, keyring=Ring(), file_store=store(tmp_path))
+    assert credentials.check_store() == "keyring"
+
+
+def test_check_store_names_the_file_without_a_keyring_and_leaves_nothing(tmp_path):
+    files = store(tmp_path)
+    credentials = Credentials(environ={}, keyring=NoKeyring(), file_store=files)
+    assert credentials.check_store() == "file"
+    assert not files.exists() and list(files.path.parent.iterdir()) == []
+
+
+def test_check_store_fails_when_the_file_cannot_be_written(tmp_path):
+    blocker = tmp_path / ".agentic"
+    blocker.write_text("a file where the folder should be", encoding="utf-8")
+    credentials = Credentials(environ={}, keyring=NoKeyring(), file_store=store(tmp_path))
+    with pytest.raises(CredentialError, match="credential file"):
+        credentials.check_store()
+
+
+def test_check_store_fails_without_a_keyring_or_a_file(tmp_path):
+    with pytest.raises(CredentialError, match="keyring"):
+        Credentials(environ={}, keyring=NoKeyring()).check_store()

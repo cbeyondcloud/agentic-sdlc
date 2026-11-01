@@ -85,6 +85,8 @@ def set_user_config(home: Path, values: Mapping[str, str]) -> ConfigChange:
     file that is not a YAML mapping, or whose value spans several lines, is left alone:
     `reason` says why, and the caller shows the lines instead."""
     path = home / CONFIG_FILE
+    if path.is_symlink():  # replacing it would detach a dotfile manager's link
+        return ConfigChange(path, False, reason="it is a symbolic link; edit the file it points to")
     try:
         raw = path.read_bytes() if path.is_file() else b""
         text = raw.decode("utf-8-sig")
@@ -120,7 +122,11 @@ def set_user_config(home: Path, values: Mapping[str, str]) -> ConfigChange:
     if not changed:
         return ConfigChange(path, False)
     new = newline.join(rows + added) + newline
-    if load_yaml(new)[0] != {**data, **values}:  # never write what reads back otherwise
+    try:  # never write what reads back otherwise (a '...' end marker, a flow mapping)
+        same = load_yaml(new)[0] == {**data, **values}
+    except YamlFileError:
+        same = False
+    if not same:
         return ConfigChange(path, False, reason="the edited file would not read back the same")
     try:
         _replace(path, ("\ufeff" if bom else "") + new)

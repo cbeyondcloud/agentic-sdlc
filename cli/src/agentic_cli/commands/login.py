@@ -280,6 +280,7 @@ def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool
         )
     try:
         credentials.find(control_plane.CONTROL_PLANE_TOKEN)  # can the keyring be used at all?
+        credentials.check_store()  # and can a key be stored (the credential file writable)?
     except CredentialError as error:
         raise CliError(
             str(error),
@@ -311,8 +312,14 @@ def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool
     config = {}
     if control_plane.control_plane_url(os.environ, settings) != base:
         config["control_plane_url"] = base
-    if got.gateway_url and (settings.get("gateway_url") or "").rstrip("/") != got.gateway_url:
-        config["gateway_url"] = got.gateway_url
+    gateway = _checked_gateway(got.gateway_url)
+    if got.gateway_url and gateway is None:  # the key would be sent there: never written
+        out.warn(
+            "the invite's gateway_url is not an https URL without a user name, so it was not "
+            "used; ask your org admin for the gateway URL"
+        )
+    if gateway and (settings.get("gateway_url") or "").rstrip("/") != gateway:
+        config["gateway_url"] = gateway
     change = set_user_config(home, config) if config and write_config else None
     if change is not None and change.reason:
         out.warn(f"{change.path} was not changed: {change.reason}")
@@ -359,13 +366,27 @@ def _warn_where(out: Output, where: str) -> str:
     (DF-955): it is readable only by this user but not encrypted."""
     if where != "file":
         return "the OS keyring"
-    path = store_choice().path
+    choice = store_choice()
+    why = "credential_store is file" if choice.mode == "file" else "no OS keyring on this machine"
     out.warn(
-        f"no OS keyring on this machine: keys are kept in {path}, readable only by you but "
-        "not encrypted. `agentic doctor` shows it; the developer guide says how to use a "
-        "keyring instead"
+        f"{why}: keys are kept in {choice.path}, readable only by you but not encrypted. "
+        "`agentic doctor` shows it; the developer guide says how to use a keyring instead"
     )
+    path = choice.path
     return str(path)
+
+
+def _checked_gateway(url: str | None) -> str | None:
+    """The invite's gateway URL when it is safe to send the gateway key to: https (or
+    plain http to this machine) and no user name or password; else None."""
+    if not url:
+        return None
+    try:
+        parsed = httpx2.URL(url.strip())
+        base = control_plane.checked_base(url)
+    except (CliError, httpx2.InvalidURL, ValueError):
+        return None
+    return None if parsed.userinfo else base
 
 
 def _file(where: str, place: str) -> dict:

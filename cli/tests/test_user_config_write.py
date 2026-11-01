@@ -115,3 +115,23 @@ def test_the_file_keeps_its_mode(tmp_path):
     path.chmod(0o600)
     set_user_config(tmp_path, {"gateway_url": GATEWAY})
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize("text", ["org: acme\n...\n", "{org: acme}\n"])
+def test_a_file_an_appended_line_would_break_is_left_alone(tmp_path, text):  # review F1
+    path = write(tmp_path, text)
+    change = set_user_config(tmp_path, {"gateway_url": GATEWAY})
+    assert not change.written and change.reason
+    assert path.read_text(encoding="utf-8") == text
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolic links need privileges on Windows")
+def test_a_symbolic_link_is_left_alone(tmp_path):  # review F5: a dotfile manager's link
+    real = tmp_path / "dotfiles" / "config.yaml"
+    real.parent.mkdir()
+    real.write_text("org: acme\n", encoding="utf-8")
+    tmp_path.joinpath("h").mkdir()
+    config(tmp_path / "h").symlink_to(real)
+    change = set_user_config(tmp_path / "h", {"gateway_url": GATEWAY})
+    assert not change.written and "link" in change.reason
+    assert config(tmp_path / "h").is_symlink() and real.read_text(encoding="utf-8") == "org: acme\n"

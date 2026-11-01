@@ -63,6 +63,22 @@ class FileStore:
             )
         return None
 
+    def check_writable(self) -> None:
+        """Raise CredentialFileError unless a key could be stored now: the file, if there,
+        is usable, and its folder takes a new file (one is made and removed)."""
+        self._read()
+        try:
+            folder = self.path.parent
+            if not folder.is_dir():
+                folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+            handle, probe = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=folder)
+            os.close(handle)
+            os.unlink(probe)
+        except OSError as error:
+            raise CredentialFileError(
+                f"{self.path.parent} cannot hold the credential file ({error.strerror or error})"
+            ) from None
+
     def get_password(self, service: str, username: str) -> str | None:
         value = self._read().get(service, {}).get(username)
         return value if isinstance(value, str) else None

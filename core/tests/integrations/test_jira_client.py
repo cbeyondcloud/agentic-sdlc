@@ -345,3 +345,13 @@ def test_a_rate_limit_says_how_long_jira_asked_to_wait():  # DF-548
     with pytest.raises(JiraError, match="try again in 42 s") as raised:
         client(handler).issue("PROJ-123")
     assert raised.value.retry_after == 42.0
+
+
+@pytest.mark.parametrize("header", ["inf", "nan", "1e400"])
+def test_a_retry_after_that_is_not_a_finite_number_is_ignored(header):  # review F12
+    def handler(request):
+        return httpx2.Response(429, headers={"Retry-After": header})
+
+    with pytest.raises(JiraError, match="try again later") as raised:
+        client(handler).issue("PROJ-123")
+    assert raised.value.retry_after is None

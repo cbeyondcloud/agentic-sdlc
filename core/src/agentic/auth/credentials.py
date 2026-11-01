@@ -40,6 +40,10 @@ SERVICE = "agentic-sdlc"
 #: naming only its type (DF-157): its message could carry the secret.
 _KEYRING_ERRORS = (Exception,)
 TOKENLEAN_KEY = "tokenlean_api_key"
+_NO_STORE = (
+    "the OS keyring cannot be used ({}), so a key cannot be stored here; fix the keyring "
+    "or set the AGENTIC_* variables instead"
+)
 _NAME = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _NOT_CI = frozenset({"", "0", "false", "no", "off"})
 #: Set by CI systems; most set `CI`, these do not always (Azure Pipelines, Jenkins...).
@@ -141,6 +145,26 @@ class Credentials:
         except CredentialFileError as error:
             raise CredentialError(f"{error} (it holds keys `{login}` stored)") from None
         return Credential(stored, "file") if stored else None
+
+    def check_store(self) -> Literal["keyring", "file"]:
+        """Where `store` would put a key now, checked without storing one - for a caller
+        that must not spend something first (an invite link works once). A
+        CredentialError when nothing could take it."""
+        if not self.prefer_file:
+            try:
+                self._ring().get_password(self.service, "agentic_store_check")
+                return "keyring"
+            except NoKeyringError as error:
+                if self.file_store is None:
+                    raise CredentialError(_NO_STORE.format(type(error).__name__)) from error
+            except _KEYRING_ERRORS as error:
+                raise CredentialError(_NO_STORE.format(type(error).__name__)) from error
+        assert self.file_store is not None
+        try:
+            self.file_store.check_writable()
+        except CredentialFileError as error:
+            raise CredentialError(f"the credential file cannot be used: {error}") from None
+        return "file"
 
     def _unreadable(self, name: str, login: str, error: Exception) -> CredentialError:
         return CredentialError(

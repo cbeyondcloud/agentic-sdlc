@@ -37,7 +37,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from agentic.auth import TOKENLEAN_KEY, CredentialError
+from agentic.auth import (
+    FILE_NAME,
+    SERVICE,
+    TOKENLEAN_KEY,
+    CredentialError,
+    CredentialFileError,
+    Credentials,
+    FileStore,
+)
 from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.sandbox.process import SECRET_NAME
 from agentic.security.pii import PiiDetector
@@ -46,6 +54,7 @@ from agentic.security.secret_scan import SecretScanner
 from agentic.telemetry.logs import redact_record
 from agentic.yamlio import YamlFileError, dump_yaml, load_yaml, read_text
 from agentic_cli import control_plane
+from agentic_cli.config import agentic_home
 from agentic_cli.credential_store import cli_credentials
 from agentic_cli.doctor import DoctorReport, versions
 from agentic_cli.driving import summary
@@ -184,13 +193,25 @@ def _leftover(text: str, check: Callable[[str], str | None]) -> str | None:
 
 def _cleaner(env: Mapping[str, str]) -> _Cleaner:
     known = []
+    try:
+        credentials = cli_credentials(env)
+    except CliError:  # an unknown credential_store: the keyring and environment still count
+        credentials = Credentials(environ=env)
+    # the credential file's keys are masked whatever the choice or policy says (DF-955)
+    files = FileStore(agentic_home(env) / FILE_NAME)
     for name in CREDENTIALS:
         try:
-            found = cli_credentials(env).find(name)
+            found = credentials.find(name)
         except CredentialError:
             found = None
         if found is not None:
             known.append(found.value)
+        try:
+            stored = files.get_password(SERVICE, name)
+        except (CredentialFileError, OSError):
+            stored = None
+        if stored and stored.strip():
+            known.append(stored.strip())
     guard = PublishGuard(
         SecretScanner("mask", on_event=lambda event: None),
         PiiDetector(),

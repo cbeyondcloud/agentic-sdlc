@@ -200,3 +200,36 @@ def test_doctor_fails_a_file_others_can_read(no_keyring, capsys, monkeypatch, tm
     checks = doctor_checks(capsys)
     assert checks["credential file"]["status"] == "fail"
     assert "chmod 600" in checks["credential file"]["fix"] + checks["credential file"]["detail"]
+
+
+# ── an unknown choice never crashes the diagnostics (review F4) ──────────────
+
+
+def test_doctor_reports_an_unknown_choice_as_a_failing_check(
+    no_keyring, capsys, monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(STORE_ENV, "bogus")
+    checks = doctor_checks(capsys)
+    assert checks["credential file"]["status"] == "fail"
+    assert "auto, keyring or file" in checks["credential file"]["detail"]
+
+
+def test_the_support_bundle_masks_file_keys_even_when_the_choice_is_unknown(
+    no_keyring, capsys, monkeypatch
+):
+    from agentic_cli.support_bundle import _cleaner
+
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(KEY + "\n"))
+    login(capsys)  # the gateway key, into the file
+    monkeypatch.setenv(STORE_ENV, "bogus")
+    cleaned = _cleaner(dict(__import__("os").environ)).text(f"the key is {KEY}")
+    assert KEY not in cleaned
+
+
+def test_a_chosen_file_is_not_called_a_missing_keyring(home, capsys, monkeypatch):  # review F7
+    monkeypatch.setenv(STORE_ENV, "file")
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(KEY + "\n"))
+    assert main(["login", "--key-stdin", "--for", "jira"]) == ExitCode.OK
+    err = capsys.readouterr().err
+    assert "credential_store is file" in err and "no OS keyring" not in err
