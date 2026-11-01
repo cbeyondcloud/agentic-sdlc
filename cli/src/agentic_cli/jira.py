@@ -20,6 +20,7 @@ only in memory, never shown, logged or written to the run folder.
 import json
 import os
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -43,6 +44,7 @@ LOGIN = "agentic login --for jira"
 _KEYS = frozenset({"url", "user", "credential", "api_version", "transition"})
 _CREDENTIAL = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _CONFIG_HINT = "fix jira in ~/.agentic/config.yaml"
+SUMMARY_LIMIT = 80  # the summary on the request's header line (DF-547)
 
 
 @dataclass(frozen=True)
@@ -204,9 +206,24 @@ def read_request(
 
 
 def request_text(item: ExternalItem, key: str) -> str:
-    """The run's request: a header naming the issue, then Zyroflo's specification inside an
-    `<untrusted-data>` fence - ticket text is data, never instructions (M1-42)."""
-    return f"Jira issue {key}\n\n" + untrusted(item.spec, source=f"jira {key}")
+    """The run's request: a header naming the issue and its summary (what a pull request
+    title is made from, DF-547), then Zyroflo's specification inside an `<untrusted-data>`
+    fence - ticket text is data, never instructions (M1-42)."""
+    summary = header_summary(item.title)
+    header = f"Jira issue {key}: {summary}" if summary else f"Jira issue {key}"
+    return f"{header}\n\n" + untrusted(item.spec, source=f"jira {key}")
+
+
+def header_summary(title: str) -> str:
+    """The issue summary as one short, plain line: whitespace collapsed, control and
+    format characters (bidi overrides) and angle brackets removed - outside the fence it
+    can open or close no tag - and cut to SUMMARY_LIMIT characters."""
+    text = " ".join(str(title or "").split())
+    text = "".join(c for c in text if c not in "<>" and unicodedata.category(c)[0] != "C")
+    text = " ".join(text.split())
+    if len(text) > SUMMARY_LIMIT:
+        text = text[: SUMMARY_LIMIT - 3].rstrip() + "..."
+    return text
 
 
 def jira_failure(error: JiraError, token: str | None = None) -> CliError:
@@ -217,7 +234,23 @@ def jira_failure(error: JiraError, token: str | None = None) -> CliError:
         return CliError(str(error), ExitCode.REFUSED, hint=hint)
     if error.status == 404:
         return CliError(str(error), ExitCode.INVALID, hint="check the issue key and the site")
-    return CliError(str(error), ExitCode.ERROR)
+    return CliError(str(error), ExitCode.ERROR, hint=_retry_hint(error))
+
+
+def _retry_hint(error: JiraError) -> str | None:
+    """When to try a transient failure again (DF-548), and for a site that cannot be
+    reached at all, the settings a corporate network usually needs."""
+    if not error.transient:
+        return None
+    if error.status is None:
+        return (
+            "check the network or VPN; behind a proxy set HTTPS_PROXY (and NO_PROXY for "
+            "hosts that bypass it), and if your network re-signs TLS, point SSL_CERT_FILE at "
+            "the corporate CA bundle"
+        )
+    if error.retry_after is not None:
+        return f"Jira asked to wait {error.retry_after:g} s: try again then"
+    return "Jira is busy or failing: try again in a few minutes"
 
 
 def start_transition(

@@ -105,6 +105,7 @@ class JiraClient:
         self.api_version = str(api_version)
         self._origin = httpx2.URL(self.base_url)
         self._api = f"{self.base_url}/rest/api/{self.api_version}"
+        _check_secret(token, basic=bool(user and user.strip()))
         if user and user.strip():
             pair = base64.b64encode(f"{user.strip()}:{token}".encode()).decode("ascii")
             authorization = f"Basic {pair}"
@@ -219,6 +220,12 @@ class JiraClient:
             reason = f"{type(error).__name__}: {error}"
             message = f"Jira {where}: could not reach {self._origin.host} ({reason})"
             raise JiraError(self._scrub(message), transient=True) from None
+        except (httpx2.InvalidURL, UnicodeError) as error:  # DF-543: e.g. an empty host label
+            message = (
+                f"Jira {where}: the site URL cannot be used ({type(error).__name__}: {error}); "
+                "check jira.url"
+            )
+            raise JiraError(self._scrub(message)) from None
         if response.status_code >= 300:
             status = response.status_code
             raise JiraError(
@@ -255,6 +262,23 @@ def _checked_base_url(base_url: str) -> str:
         if parsed.scheme == "https" or (parsed.scheme == "http" and _loopback(parsed.host)):
             return url
     raise JiraError(f"the Jira URL must be https (plain http only to this machine): {url!r}")
+
+
+def _check_secret(token: str, *, basic: bool) -> None:
+    """A token an HTTP header cannot carry is refused here, never as a UnicodeEncodeError
+    from deep in the client (DF-543). A Bearer token is visible ASCII; a Basic password
+    (base64-encoded) may hold any letter but no control character. Never echoed."""
+    text = str(token or "")
+    if basic:
+        bad = any(ord(c) < 0x20 or ord(c) == 0x7F for c in text)
+    else:
+        bad = not all(0x21 <= ord(c) <= 0x7E for c in text)
+    if bad:
+        what = "control characters" if basic else "spaces, control or non-ASCII characters"
+        raise JiraError(
+            f"the Jira token holds {what}, which a token never has - was it pasted with "
+            "extra text? Store it again with `agentic login --for jira`"
+        )
 
 
 def _loopback(host: str) -> bool:
@@ -310,7 +334,9 @@ def _explain(where: str, response: httpx2.Response) -> str:
     elif status == 404:
         meaning = "not found: the issue does not exist or the token's user cannot see it"
     elif status == 429:
-        meaning = "rate limited by Jira; try again later"
+        wait = _retry_after(response)
+        later = f"in {wait:g} s" if wait is not None else "later"
+        meaning = f"rate limited by Jira; try again {later}"
     elif 300 <= status < 400:
         meaning = (
             "Jira answered with a redirect, which is not followed (check jira.url: a Cloud "

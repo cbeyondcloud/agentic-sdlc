@@ -27,6 +27,11 @@ Then run `agentic login --for jira` once. In CI, set `AGENTIC_JIRA_URL`, `AGENTI
 and `AGENTIC_JIRA_TOKEN` instead. The repository's `.sdlc/connectors/jira.json` maps the
 issue's fields to the run's request when the defaults do not fit.
 
+The run's pull request is titled `<pipeline>: Jira issue PROJ-123: <summary>`, with the
+summary on one line and cut to 80 characters. When Jira is busy (HTTP 429 or 5xx), the
+message says how long Jira asked you to wait; when the site cannot be reached, it names
+the proxy (`HTTPS_PROXY`, `NO_PROXY`) and CA bundle (`SSL_CERT_FILE`) settings to check.
+
 ### Git hosts (`git_hosts:`)
 
 github.com is known. Any other host, such as GitHub Enterprise Server, must be declared
