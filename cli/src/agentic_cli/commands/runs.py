@@ -99,7 +99,12 @@ def register(app: typer.Typer) -> None:
             ),
         ] = None,
     ) -> None:
-        """Run a pipeline (or show what it would do, with --dry-run)."""
+        """Run a pipeline (or show what it would do, with --dry-run).
+
+        With --json, stdout holds one result and stderr is JSON Lines: a live run first
+        writes {"started": "<run>"}, and an error object, when there is one, is the last
+        line.
+        """
         out: Output = ctx.obj
         given = _inputs(inputs or [])
         if jira_transition is not None and from_jira is None:

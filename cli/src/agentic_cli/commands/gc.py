@@ -27,7 +27,7 @@ def register(app: typer.Typer) -> None:
                 "--older-than",
                 metavar="DAYS",
                 help="Finished runs older than this many days (default: gc.older_than_days "
-                "in the user config, else the org policy, else 14).",
+                "in the user config, else the org policy, else 30).",
             ),
         ] = None,
         dry_run: Annotated[

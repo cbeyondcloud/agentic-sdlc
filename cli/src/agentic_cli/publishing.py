@@ -452,6 +452,10 @@ def merge_body(current: str | None, block: str) -> str:
 
 
 def _marked(body: str) -> str:
+    # a marker quoted by a run input or handoff would end the region early (DF-376): it
+    # shows as text instead, and the only markers are the two around the block
+    for marker in (BODY_BEGIN, BODY_END):
+        body = body.replace(marker, marker.replace("<!--", "&lt;!--"))
     return f"{BODY_BEGIN}\n{body.rstrip()}\n{BODY_END}\n"
 
 

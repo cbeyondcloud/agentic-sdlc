@@ -3,7 +3,8 @@
 * Results go to stdout; errors, warnings and progress to stderr, so a command's
   output can be piped or parsed.
 * `--json` prints each result as one JSON document and each error as a JSON object
-  (`{"error", "exit_code", "hint"}`) on stderr, for scripts and CI.
+  (`{"error", "exit_code", "hint"}`) on stderr, for scripts and CI. stderr is then JSON
+  Lines: a `notice` comes first and the error object is the last line (DF-380).
 * Human output uses Rich; colour follows the terminal and `NO_COLOR` (Rich honours it),
   and `--no-color` turns it off.
 * Text from agents, repositories and providers (handoffs, diffs, logs, error reasons)

@@ -144,7 +144,11 @@ def _not_a_run_tree_or_submodule(cwd: Path, top: Path) -> None:
         raise GuardRefusal(
             3,
             f"This worktree is inside its main checkout ({main_tree}) - run init there",
-            hint="keep linked worktrees outside the main checkout (git worktree add ../<name>)",
+            # a coding tool often makes its worktrees under the repo: it is the same
+            # repository, so init belongs in the main checkout (DF-382)
+            hint=f'cd "{main_tree}" and run init there: it is the same repository. Keep '
+            "linked worktrees (yours or a tool's) outside the main checkout "
+            "(git worktree add ../<name>)",
         )
     superproject = _git(top, "rev-parse", "--show-superproject-working-tree")
     if superproject and not _listed_component(Path(superproject), top):
