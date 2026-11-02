@@ -5,6 +5,7 @@ with two workers at once."""
 
 import asyncio
 import logging
+import socket
 import uuid
 from datetime import timedelta
 
@@ -184,6 +185,18 @@ def _outgoing(**values) -> Outgoing:
         "html": "<p>html</p>",
     }
     return Outgoing(**{**fields, **values})
+
+
+def test_the_capture_relay_starts_without_looking_up_its_own_name(monkeypatch):
+    """aiosmtpd names itself by `socket.getfqdn()` unless given a name; on macOS runners
+    that lookup outlasts the controller's start-up wait, and the relay never starts."""
+
+    def no_lookup(*args):
+        raise AssertionError("the capture relay looked up this machine's name")
+
+    monkeypatch.setattr(socket, "getfqdn", no_lookup)
+    with capture_relay(starttls=False) as relay:
+        assert relay.port > 0
 
 
 async def test_a_mail_the_relay_cannot_carry_fails_for_good():
