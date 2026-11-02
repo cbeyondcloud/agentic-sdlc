@@ -40,10 +40,9 @@ from types import SimpleNamespace
 from typing import Any, Literal
 
 import httpx2
-from keyring.errors import NoKeyringError
 from rich.console import Console
 
-from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials, FileStore
+from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials, FileStore, NoKeyringError
 from agentic.codeintel import index as codeintel_index
 from agentic.hosting import HostingError, ProtectionHost, RepoRef, parse_remote
 from agentic.hosting.git import remote_url

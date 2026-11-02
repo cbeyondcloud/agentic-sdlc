@@ -8,6 +8,7 @@ from agentic.auth.credentials import (
     CredentialError,
     CredentialProvider,
     Credentials,
+    NoKeyringError,
     env_var,
 )
 from agentic.auth.filestore import FILE_NAME, CredentialFileError, FileStore
@@ -22,5 +23,6 @@ __all__ = [
     "CredentialError",
     "CredentialProvider",
     "Credentials",
+    "NoKeyringError",
     "env_var",
 ]

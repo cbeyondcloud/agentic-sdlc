@@ -44,6 +44,7 @@ CHART = "agentic-platform"
 EXAMPLE_ADMINS = "@your-org/agentic-org-admins"
 EXAMPLE_TEAM = "payments"
 EXAMPLE_LEADS = "@your-org/payments-leads"
+EXAMPLE_SECURITY = " @your-org/agentic-security"
 EXAMPLE_PATTERNS = 'allowed_repo_patterns: ["git.example.com/your-org/*"]'
 TOKEN_MARKER = "token (shown once"
 #: The smoke run's repository config (the release smoke's, scripts/agentic_release/smoke.py).
@@ -267,6 +268,10 @@ def _build_policy_repo(args: argparse.Namespace, out: Path, runner: Runner) -> P
         _teams(out, teams)
     if args.admins:
         _edit(out / "CODEOWNERS", EXAMPLE_ADMINS, " ".join(args.admins))
+    # never leave the example security team in CODEOWNERS: GitHub flags an unknown owner
+    _edit(out / "CODEOWNERS", EXAMPLE_SECURITY, "".join(f" {s}" for s in args.security))
+    if not args.security:
+        say("CODEOWNERS: no security reviewers on /policy/, /skills/ and CODEOWNERS (--security)")
     if args.repo_pattern:
         _edit(
             out / "policy" / "org.yaml",
@@ -771,6 +776,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         required=True,
         help="the org admins' CODEOWNERS handle (@org/team or @login; the budget guard's admins)",
+    )
+    repo.add_argument(
+        "--security",
+        action="append",
+        default=[],
+        help="security reviewers' CODEOWNERS handle on policy/, skills/ and CODEOWNERS (repeat)",
     )
     repo.add_argument("--team", action="append", default=[], help="TEAM=@org/leads (repeat)")
     repo.add_argument("--model", action="append", default=[], help="TIER=provider/model")
