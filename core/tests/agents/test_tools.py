@@ -183,12 +183,14 @@ def test_read_refuses_outside_denied_and_secret_paths(tree, resolved, path):
 
 
 def test_read_refuses_an_absolute_path_outside(tree, resolved, tmp_path):
+    # the file's content must not leak; the refusal may echo the path the agent gave
+    # (on macOS that path itself holds "private": /private/var/...)
     outside = tmp_path / "elsewhere.txt"
-    outside.write_text("private\n", encoding="utf-8")
+    outside.write_text("CONTENT-NOT-TO-LEAK\n", encoding="utf-8")
     tools = build_tools(agent_with(resolved, ["read_files"]), context(tree, resolved))
 
     seen = call(tools, "read_file", path=str(outside))
-    assert seen.startswith("REFUSED") and "private" not in seen
+    assert seen.startswith("REFUSED") and "CONTENT-NOT-TO-LEAK" not in seen
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlinks need privileges on Windows")
