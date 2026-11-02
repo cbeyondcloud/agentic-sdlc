@@ -15,6 +15,10 @@ from email.message import EmailMessage
 import trustme
 from aiosmtpd.controller import Controller
 
+RELAY_NAME = "relay.capture.test"
+#: aiosmtpd waits 1 s by default for its thread to answer; a busy CI runner can be slower.
+READY_TIMEOUT_S = 10.0
+
 
 @dataclass
 class Received:
@@ -83,7 +87,16 @@ def capture_relay(*, starttls: bool = True, smtputf8: bool = True) -> Iterator[R
     options = {"tls_context": server_context, "require_starttls": True} if starttls else {}
     options["enable_SMTPUTF8"] = smtputf8
     port = _free_port()
-    controller = Controller(capture, hostname="127.0.0.1", port=port, **options)
+    controller = Controller(
+        capture,
+        hostname="127.0.0.1",
+        port=port,
+        # named, so aiosmtpd never calls socket.getfqdn(): a reverse lookup that takes
+        # seconds on macOS runners, longer than the wait below
+        server_hostname=RELAY_NAME,
+        ready_timeout=READY_TIMEOUT_S,
+        **options,
+    )
     controller.start()
     try:
         yield Relay(capture=capture, port=port, client_context=client_context)

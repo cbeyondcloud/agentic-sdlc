@@ -5,7 +5,8 @@ image (`scripts/check.py --linux`) they are installed, pinned by sha256
 (scripts/linux-check.Dockerfile); on Windows and macOS they run in the pinned images below
 through the container engine (docker or podman). The chart and any values file travel into
 the container as a tar on stdin, so no bind mount or path conversion is involved. Without
-either, the tests skip with the reason; in the check image a missing binary fails."""
+either - or with an engine whose daemon is down or runs Windows containers - the tests
+skip with the reason; in the check image a missing binary fails."""
 
 from __future__ import annotations
 
@@ -152,7 +153,28 @@ def tools() -> Tools:
         pytest.skip(f"{error} - {NO_TOOLS}")
     if engine is None:
         pytest.skip(NO_TOOLS)
+    problem = engine_problem(engine)
+    if problem is not None:
+        pytest.skip(f"{problem} - {NO_TOOLS}")
     return Tools(engine=engine)
+
+
+def engine_problem(engine: str, run=subprocess.run) -> str | None:
+    """Why `engine` cannot run the pinned Linux tool images, or None. Its CLI on PATH is
+    not enough: the daemon may not be running (docker on a Windows runner, Docker Desktop
+    not started; `docker run` then exits 1, not 125) or may run Windows containers. Asked
+    of the engine when the tests run, never decided by the OS name."""
+    field = "{{.Host.OS}}" if engine == "podman" else "{{.OSType}}"
+    try:
+        done = run([engine, "info", "--format", field], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return f"`{engine} info` failed: {error}"
+    said = (done.stdout or "").strip()
+    if done.returncode != 0:
+        return f"{engine} cannot reach its daemon: {(done.stderr or said).strip()[:300]}"
+    if said != "linux":
+        return f"{engine} runs {said or 'unknown'} containers, not Linux ones"
+    return None
 
 
 def values_file(values: dict[str, Any]) -> str:

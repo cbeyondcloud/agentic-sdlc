@@ -10,9 +10,11 @@ Grafana ConfigMap."""
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
+import helm_support
 import pytest
 from helm_support import (
     CHART,
@@ -22,6 +24,7 @@ from helm_support import (
     KUBECONFORM_VERSION,
     KUBERNETES_VERSIONS,
     ROOT,
+    engine_problem,
     manifests,
     tools,
     values_file,
@@ -124,6 +127,48 @@ def test_chart_metadata_and_the_optional_tokenlean_dependency():
     assert _yaml(CHART / "values.yaml")["tokenlean"]["enabled"] is False
     stub = _yaml(CHART / "charts" / "tokenlean-lite" / "Chart.yaml")
     assert stub["name"] == "tokenlean-lite"
+
+
+def _info(returncode: int, stdout: str = "", stderr: str = ""):
+    """A stand-in for `subprocess.run` answering `<engine> info` (and recording the call)."""
+    calls: list[list[str]] = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, returncode, stdout, stderr)
+
+    return run, calls
+
+
+def test_an_engine_whose_daemon_is_down_is_named():
+    """A Windows runner has docker on PATH but not always a running daemon; `docker run`
+    then exits 1, which no test could tell from helm failing."""
+    run, _ = _info(1, stderr="failed to connect to the docker API at npipe:////./pipe/x\n")
+    problem = engine_problem("docker", run=run)
+    assert problem is not None and "failed to connect to the docker API" in problem
+
+
+def test_an_engine_running_windows_containers_is_named():
+    run, _ = _info(0, stdout="windows\n")
+    assert "windows" in engine_problem("docker", run=run)
+
+
+@pytest.mark.parametrize(("engine", "field"), [("docker", ".OSType"), ("podman", ".Host.OS")])
+def test_an_engine_running_linux_containers_is_usable(engine, field):
+    run, calls = _info(0, stdout="linux\n")
+    assert engine_problem(engine, run=run) is None
+    assert calls[0][:2] == [engine, "info"] and field in calls[0][-1]
+
+
+def test_without_a_usable_engine_the_chart_tests_skip(monkeypatch):
+    """Decided when the tests run, from the engine itself, never from the OS name."""
+    monkeypatch.delenv("AGENTIC_CHECK_IMAGE", raising=False)
+    # scripts/check.py first, so its defaults never bind the stand-in `which` below
+    monkeypatch.setattr(helm_support._check_module(), "container_engine", lambda: "docker")
+    monkeypatch.setattr(helm_support.shutil, "which", lambda name: None)
+    monkeypatch.setattr(helm_support, "engine_problem", lambda engine: "the daemon is down")
+    with pytest.raises(pytest.skip.Exception, match="the daemon is down"):
+        tools()
 
 
 def test_the_tool_images_are_pinned_and_match_the_check_image():
