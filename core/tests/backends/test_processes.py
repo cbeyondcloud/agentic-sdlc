@@ -5,12 +5,14 @@ spawns a grandchild that would outlive its parent and proves it does not survive
 import asyncio
 import contextvars
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
 
+import _process_support
 import pytest
 from _process_support import PARENT, alive, gone
 
@@ -69,6 +71,26 @@ def cleanup(parent: subprocess.Popen, *pids: int) -> None:
     for pid in pids:  # a failed test must not leave its grandchild behind
         if alive(pid):
             kill_tree(pid)
+
+
+# ── the liveness probe the tests rely on ─────────────────────────────────────
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX zombies")
+@pytest.mark.parametrize("table", ["/proc", "/no-process-table"])  # Linux, and macOS
+def test_a_killed_child_no_one_reaped_is_not_alive(monkeypatch, table):
+    """A killed process stays a zombie until its parent reaps it; it runs nothing. Without
+    /proc (macOS) `kill(pid, 0)` still succeeds for it, so the probe must ask `ps`."""
+    if not Path(table).is_dir() and shutil.which("ps") is None:
+        pytest.skip("no ps here (a slim Linux image); macOS always has it")
+    monkeypatch.setattr(_process_support, "PROC", Path(table))
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        assert alive(child.pid)
+        child.kill()  # never waited for below: it stays a zombie
+        assert gone(child.pid)
+    finally:
+        child.wait(timeout=10)
 
 
 # ── the tree ──────────────────────────────────────────────────────────────────

@@ -122,8 +122,11 @@ async def run_tests(
 ) -> dict[str, bool]:
     """Run `test_ids` with pytest in `folder`: test id -> passed. A timeout fails them all;
     a test whose file is gone did not pass. Raises `CouldNotRunTests` when pytest did
-    not report (see `run_case_tests` for telling the harness's fault from the code's)."""
-    folder = Path(folder)
+    not report (see `run_case_tests` for telling the harness's fault from the code's).
+    The folder is resolved first: pytest's working folder is the real path (the OS
+    resolves links in it; macOS's temporary folder is one), and a `--rootdir` spelt
+    through a link would give node ids that are not the folder's own."""
+    folder = Path(folder).resolve()
     files = [f for f in test_files(test_ids) if (folder / f).is_file()]
     if not files:
         return dict.fromkeys(test_ids, False)
