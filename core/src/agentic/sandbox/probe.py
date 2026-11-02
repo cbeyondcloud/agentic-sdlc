@@ -11,6 +11,8 @@ can tell the difference.
 
 import argparse
 import asyncio
+import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -23,6 +25,9 @@ from agentic.sandbox.rules import SandboxRules
 from agentic.sandbox.srt import SrtSandbox
 
 ALLOWED_HOST = "pypi.org"
+#: The longest Unix socket path every OS takes (macOS's sun_path is 104 bytes with the
+#: terminating NUL; Linux's is 108).
+SOCKET_PATH_MAX = 103
 
 # (name, command, wanted, judged by): a path is judged by whether it exists afterwards,
 # "config" by whether .git/config changed, "exit" by the exit code.
@@ -91,12 +96,38 @@ CASES: list[tuple[str, str, str, str]] = [
 ]
 
 
-def _unix_server(path: Path) -> None:
+def unix_listener(workdir: Path) -> tuple[socket.socket, Path]:
+    """A listening Unix socket for the "unix socket to host" case: in the worktree, or in
+    a short temporary folder when that path is longer than the OS takes. It binds here,
+    not in the thread, so a socket that cannot listen stops the probe instead of the
+    case reading as blocked whatever the sandbox did."""
+    path = workdir / "wt" / "probe.sock"
+    if len(os.fsencode(path)) > SOCKET_PATH_MAX:
+        path = Path(tempfile.mkdtemp(prefix="agentic-probe-")) / "probe.sock"
     server = socket.socket(socket.AF_UNIX)
-    server.bind(str(path))
-    server.listen(4)
+    try:
+        server.bind(str(path))
+        server.listen(4)
+    except OSError:
+        server.close()
+        remove_listener(path, workdir)
+        raise
+    return server, path
+
+
+def remove_listener(path: Path, workdir: Path) -> None:
+    """Remove the socket file, and the temporary folder `unix_listener` made for it."""
+    path.unlink(missing_ok=True)
+    if not path.is_relative_to(workdir):
+        shutil.rmtree(path.parent, ignore_errors=True)
+
+
+def _accept(server: socket.socket) -> None:
     while True:
-        connection, _ = server.accept()
+        try:
+            connection, _ = server.accept()
+        except OSError:  # closed: the probe is over
+            return
         connection.close()
 
 
@@ -114,12 +145,24 @@ def run_cases(workdir: Path, *, unsandboxed: bool = False) -> list[tuple[str, st
         folder.mkdir(parents=True, exist_ok=True)
     (secrets / "key").write_text("PRIVATE KEY\n", encoding="utf-8")
     subprocess.run(["git", "init", "-q", str(wt)], check=True)
-    sock = wt / "probe.sock"
+    sock, server = wt / "probe.sock", None
     cases = list(CASES)
     if hasattr(socket, "AF_UNIX"):
-        threading.Thread(target=_unix_server, args=(sock,), daemon=True).start()
+        server, sock = unix_listener(workdir)
+        threading.Thread(target=_accept, args=(server,), daemon=True).start()
     else:
         cases = [c for c in cases if c[0] != "unix socket to host"]
+    try:
+        return _run(cases, workdir, sock, unsandboxed=unsandboxed)
+    finally:
+        if server is not None:
+            server.close()
+            remove_listener(sock, workdir)
+
+
+def _run(cases, workdir: Path, sock: Path, *, unsandboxed: bool) -> list[tuple[str, str, str, str]]:
+    """Run `cases` in the folders `run_cases` prepared, the socket listening at `sock`."""
+    wt, other, secrets = workdir / "wt", workdir / "other", workdir / "secrets"
     rules = SandboxRules(
         write=(wt,),
         deny_write=(wt / ".env",),
