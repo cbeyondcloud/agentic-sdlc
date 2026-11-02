@@ -163,8 +163,9 @@ def test_an_engine_running_linux_containers_is_usable(engine, field):
 def test_without_a_usable_engine_the_chart_tests_skip(monkeypatch):
     """Decided when the tests run, from the engine itself, never from the OS name."""
     monkeypatch.delenv("AGENTIC_CHECK_IMAGE", raising=False)
-    monkeypatch.setattr(helm_support.shutil, "which", lambda name: None)
+    # scripts/check.py first, so its defaults never bind the stand-in `which` below
     monkeypatch.setattr(helm_support._check_module(), "container_engine", lambda: "docker")
+    monkeypatch.setattr(helm_support.shutil, "which", lambda name: None)
     monkeypatch.setattr(helm_support, "engine_problem", lambda engine: "the daemon is down")
     with pytest.raises(pytest.skip.Exception, match="the daemon is down"):
         tools()
