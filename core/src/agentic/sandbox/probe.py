@@ -104,12 +104,14 @@ def unix_listener(workdir: Path) -> tuple[socket.socket, Path]:
     path = workdir / "wt" / "probe.sock"
     if len(os.fsencode(path)) > SOCKET_PATH_MAX:
         path = Path(tempfile.mkdtemp(prefix="agentic-probe-")) / "probe.sock"
-    server = socket.socket(socket.AF_UNIX)
+    server = None
     try:
+        server = socket.socket(socket.AF_UNIX)
         server.bind(str(path))
         server.listen(4)
     except OSError:
-        server.close()
+        if server is not None:
+            server.close()
         remove_listener(path, workdir)
         raise
     return server, path
@@ -156,11 +158,17 @@ def run_cases(workdir: Path, *, unsandboxed: bool = False) -> list[tuple[str, st
         return _run(cases, workdir, sock, unsandboxed=unsandboxed)
     finally:
         if server is not None:
+            try:
+                server.shutdown(socket.SHUT_RDWR)  # wakes the accepting thread
+            except OSError:
+                pass
             server.close()
             remove_listener(sock, workdir)
 
 
-def _run(cases, workdir: Path, sock: Path, *, unsandboxed: bool) -> list[tuple[str, str, str, str]]:
+def _run(
+    cases: list[tuple[str, str, str, str]], workdir: Path, sock: Path, *, unsandboxed: bool
+) -> list[tuple[str, str, str, str]]:
     """Run `cases` in the folders `run_cases` prepared, the socket listening at `sock`."""
     wt, other, secrets = workdir / "wt", workdir / "other", workdir / "secrets"
     rules = SandboxRules(

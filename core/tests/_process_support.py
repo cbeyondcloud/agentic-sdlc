@@ -38,6 +38,8 @@ def ps_state(pid: int) -> str:
     listing = subprocess.run(
         ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False
     )
+    if listing.returncode not in (0, 1) or listing.stderr.strip():  # 1: no such process
+        raise RuntimeError(f"ps could not tell whether {pid} runs: {listing.stderr.strip()}")
     return listing.stdout.strip()[:1]
 
 
