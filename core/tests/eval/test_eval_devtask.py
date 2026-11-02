@@ -61,6 +61,32 @@ def test_a_test_that_cannot_import_counts_as_failed(tmp_path: Path):
     assert results == {"tests/test_b.py::test_x": False}
 
 
+def link_to(target: Path, link: Path) -> Path:
+    """`link` pointing at the folder `target`: a symlink, or a junction on Windows (no
+    privilege needed); skips where neither can be made."""
+    try:
+        if os.name == "nt":
+            import _winapi
+
+            _winapi.CreateJunction(str(target), str(link))
+        else:
+            link.symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"cannot link a folder here: {error}")
+    return link
+
+
+def test_run_tests_reads_outcomes_through_a_linked_folder(tmp_path: Path):
+    """macOS's temporary folder is /var/..., a link to /private/var/...: the folder handed
+    in is a linked path while pytest's working folder is the real one, and the node ids
+    must still be the folder's own."""
+    real = tmp_path / "real"
+    write(real / "tests" / "test_a.py", "def test_ok():\n    assert True\n")
+    linked = link_to(real, tmp_path / "linked")
+    results = asyncio.run(run_tests(linked, ["tests/test_a.py::test_ok"]))
+    assert results == {"tests/test_a.py::test_ok": True}
+
+
 def test_overlay_replaces_and_adds_files(tmp_path: Path):
     write(tmp_path / "tree" / "a.py", "old\n")
     write(tmp_path / "solution" / "a.py", "new\n")
