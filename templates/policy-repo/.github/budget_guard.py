@@ -11,13 +11,15 @@ file, a removed team file, or a budget removed or set to 0 or less, which the ga
 as no cap) passes only when an org admin is its author or approved its head commit.
 Lowering, or not touching a budget, always passes.
 
-Org admins are the owners of `policy/org.yaml` in the BASE branch's CODEOWNERS (the pull
-request cannot add itself). An `@login` owner counts as is. An `@org/team` owner counts
-through its members, which the git host only shows to a token with read access to the
-organisation's members (`ORG_READ_TOKEN`, used for that call only); without it the team
-stays unresolved and a raise fails closed. The workflow runs this file from the base branch
-(`git show`), outside the checkout and with `--no-config`, so a pull request can neither
-weaken the check that judges it nor point uv at another package index.
+Org admins are the owners of this guard (`.github/budget_guard.py`) in the BASE branch's
+CODEOWNERS (the pull request cannot add itself): `.github/` is the org admins' alone,
+while `policy/` also names reviewers such as security, who may not approve a raise. An
+`@login` owner counts as is. An `@org/team` owner counts through its members, which the
+git host only shows to a token with read access to the organisation's members
+(`ORG_READ_TOKEN`, used for that call only); without it the team stays unresolved and a
+raise fails closed. The workflow runs this file from the base branch (`git show`), outside
+the checkout and with `--no-config`, so a pull request can neither weaken the check that
+judges it nor point uv at another package index.
 
     uv run --no-config --script budget_guard.py --repo-root CHECKOUT --base origin/main \\
         --author LOGIN --repo OWNER/NAME --pull N --head-sha SHA [--expand-teams]
@@ -41,8 +43,9 @@ from ruamel.yaml import YAML, YAMLError
 
 TEAMS_DIR = "policy/teams"
 FIELD = "monthly_budget_usd"
-#: The file whose CODEOWNERS owners are the org admins (the org policy is theirs alone).
-ORG_POLICY = "policy/org.yaml"
+#: The file whose CODEOWNERS owners are the org admins: this guard, under `.github/`, which
+#: only they own (`policy/` also names its reviewers, such as security - DF-954).
+ADMIN_PATH = ".github/budget_guard.py"
 #: Where git hosts look for CODEOWNERS, in GitHub's order.
 CODEOWNERS_FILES = (".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS")
 #: A budget that is missing, unreadable or not a number: treated as no cap (the highest).
@@ -118,7 +121,7 @@ def budget_changes(base: dict[str, str | None], head: dict[str, str | None]) -> 
 def org_admins(codeowners_text: str) -> tuple[set[str], set[str]]:
     """The owners of the org policy: (`@login` owners, `org/team` owners), lower case."""
     logins, teams = set(), set()
-    for kind, owner in CodeOwners(codeowners_text).of(ORG_POLICY):
+    for kind, owner in CodeOwners(codeowners_text).of(ADMIN_PATH):
         if kind == "USERNAME":
             logins.add(owner.removeprefix("@").lower())
         elif kind == "TEAM":
@@ -143,7 +146,7 @@ def decide(
         return []
     problems = [
         f"{change.path}: {FIELD} {change.before} -> {change.after} raises the team's budget; "
-        "it needs an org admin (an owner of policy/org.yaml in the base branch's CODEOWNERS) "
+        "it needs an org admin (an owner of .github/ in the base branch's CODEOWNERS) "
         "as the author or an approving reviewer of this commit"
         for change in raises
     ]

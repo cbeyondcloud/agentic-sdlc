@@ -846,6 +846,10 @@ class OrgPolicy(_Strict):
     min_cli_version: Annotated[str, StringConstraints(pattern=MIN_VERSION_PATTERN)] | None = None
     # D39: `init --repo` adds the nightly index export workflow only when this is on
     index_export_workflow: bool = False
+    # DF-955: where a machine has no OS keyring (WSL2 without a Secret Service), keys may
+    # be kept in ~/.agentic/credentials.json (user-only, plaintext). False forbids it once
+    # this policy is cached on the machine (`agentic init`)
+    credential_file_fallback: bool = True
     sandbox: SandboxPolicy = SandboxPolicy()  # D38
     secret_scan: SecretScanPolicy = SecretScanPolicy()  # M1-41
     publish_scan: PublishScanPolicy = PublishScanPolicy()  # M2-49

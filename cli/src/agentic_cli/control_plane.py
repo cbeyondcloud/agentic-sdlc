@@ -28,7 +28,7 @@ from urllib.parse import quote
 
 import httpx2
 
-from agentic.auth import CredentialError, Credentials
+from agentic.auth import CredentialError
 from agentic.hosting.base import scrub_url_credentials
 from agentic.orgapi import (
     API_PREFIX,
@@ -68,6 +68,7 @@ from agentic.security.secret_scan import SecretScanner
 from agentic.telemetry.sinks import SinkBehind
 from agentic.transport.network import NetworkSettings, ssl_context
 from agentic_cli import __version__
+from agentic_cli.credential_store import cli_credentials
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 
@@ -835,7 +836,7 @@ def client_for(
     if url is None:
         return None
     try:
-        found = Credentials(environ=env).find(CONTROL_PLANE_TOKEN, login=LOGIN)
+        found = cli_credentials(env).find(CONTROL_PLANE_TOKEN, login=LOGIN)
     except CredentialError as error:
         raise ControlPlaneRefused(str(error), hint=LOGIN_HINT) from None
     if found is None:
@@ -843,7 +844,7 @@ def client_for(
             f"not signed in to the control plane at {scrub_url_credentials(url)}",
             hint=LOGIN_HINT,
         )
-    if found.source == "keyring":
+    if found.source != "env":  # the keyring or the credential file (DF-955)
         record = login_record(home) or {}
         if str(record.get("url", "")).rstrip("/") != url:
             raise ControlPlaneRefused(

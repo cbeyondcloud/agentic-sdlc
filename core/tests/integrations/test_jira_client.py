@@ -311,3 +311,47 @@ def test_basic_credentials_are_scrubbed_in_their_encoded_form_too():
     with pytest.raises(JiraError) as raised:
         client(echo).issue("PROJ-123")
     assert pair not in str(raised.value) and TOKEN not in str(raised.value)
+
+
+# ── a token or URL a request cannot carry (DF-543) ───────────────────────────
+
+
+@pytest.mark.parametrize("token", ["tök" + "en123", "abc\ndef", "abc\x00def"])
+def test_a_bearer_token_a_header_cannot_carry_is_a_jira_error(token):
+    with pytest.raises(JiraError, match="agentic login --for jira") as raised:
+        JiraClient(DC, token)
+    assert token not in str(raised.value)
+
+
+def test_a_basic_secret_with_a_control_character_is_a_jira_error():
+    with pytest.raises(JiraError, match="agentic login --for jira"):
+        JiraClient(CLOUD, "abc\rdef", user="mia@acme.example")
+
+
+def test_a_basic_password_may_hold_non_ascii_letters():
+    JiraClient(DC, "pässwort", user="mia").close()  # Data Center: user name and password
+
+
+def test_a_site_url_the_request_cannot_use_is_a_jira_error():
+    with pytest.raises(JiraError, match="jira.url") as raised:
+        JiraClient("https://jira..acme.example", TOKEN).issue("PROJ-1")
+    assert raised.value.transient is False
+
+
+def test_a_rate_limit_says_how_long_jira_asked_to_wait():  # DF-548
+    def handler(request):
+        return httpx2.Response(429, headers={"Retry-After": "42"})
+
+    with pytest.raises(JiraError, match="try again in 42 s") as raised:
+        client(handler).issue("PROJ-123")
+    assert raised.value.retry_after == 42.0
+
+
+@pytest.mark.parametrize("header", ["inf", "nan", "1e400"])
+def test_a_retry_after_that_is_not_a_finite_number_is_ignored(header):  # review F12
+    def handler(request):
+        return httpx2.Response(429, headers={"Retry-After": header})
+
+    with pytest.raises(JiraError, match="try again later") as raised:
+        client(handler).issue("PROJ-123")
+    assert raised.value.retry_after is None

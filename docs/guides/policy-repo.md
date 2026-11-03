@@ -38,9 +38,9 @@ environment tracks its own branch, so a change goes to staging first:
 | `policy/eval.yaml`, `retention.yaml`, `prices.yaml` | quality-gate targets, retention periods, model prices | org admins |
 | `policy/teams/<team>.yaml` | one team's narrowing (it can only narrow) | that team's leads, or org admins |
 | `agents/`, `pipelines/` | org agents and pipelines (copy `library/` here) | org admins |
-| `skills/catalog.yaml` | approved skills, pinned by hash | org admins |
+| `skills/catalog.yaml` | approved skills, pinned by hash | org admins, with security reviewing |
 | `teams/<team>/` | a team's agents, pipelines, per-repo overlays and skills | that team's leads |
-| `CODEOWNERS` | who reviews what | org admins |
+| `CODEOWNERS` | who reviews what; `policy/`, `skills/` and this file also name the security group (`@your-org/agentic-security`) as reviewers | org admins |
 
 People's roles are assigned in the control plane, not here. Repository maintainers come
 from each repository's own CODEOWNERS.

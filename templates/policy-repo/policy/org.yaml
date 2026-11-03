@@ -62,6 +62,15 @@ required_steps:
 # the `push` trigger shown, commented, in its workflow.
 index_export_workflow: false
 
+# Where keys are kept on a machine with no OS keyring (DF-955). Windows developers work in
+# WSL2, which usually has no Secret Service, so `agentic login` keeps keys there in
+# ~/.agentic/credentials.json: readable only by the user (0600), not encrypted, warned
+# about at login and shown by `agentic doctor`. The OS keyring always comes first. false
+# forbids the file once this policy is cached on a laptop (`agentic init`); to forbid it
+# from the very first login, also set AGENTIC_CREDENTIAL_STORE=keyring in the managed
+# shell profile, and give WSL2 a Secret Service or the AGENTIC_* variables instead.
+credential_file_fallback: true
+
 # OS sandbox for agent commands (D38). Runs in these regimes refuse to start without
 # one; the library pipelines run in the `team` regime. On Windows the sandbox needs
 # WSL2 (`agentic init` says what to install).

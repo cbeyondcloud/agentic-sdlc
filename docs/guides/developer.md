@@ -29,10 +29,15 @@ wsl --install -d Ubuntu-24.04
 Then open Ubuntu and do everything below in its bash shell. `agentic doctor` prints the
 remaining sandbox steps, with the exact versions your org pins.
 
-WSL2 often has no OS keyring, where agentic keeps your keys. Run `agentic doctor` after
-step 2: if it shows `keyring` as `FAIL`, ask your platform team for the org's WSL2 keyring
-setup before step 3. Your invite link is safe meanwhile: `agentic login --invite` checks
-the keyring before it uses the link up.
+WSL2 usually has no OS keyring, where agentic keeps your keys. There, `agentic login`
+keeps them in `~/.agentic/credentials.json` instead: readable only by you (mode 0600),
+not encrypted. It warns when it does, and `agentic doctor` shows it (`keyring` WARN,
+`credential file`). To use a keyring in WSL2 instead, install and unlock a Secret Service
+(for example `sudo apt install gnome-keyring` in a WSLg desktop session), then run
+`agentic login` again. If your org does not allow the file, `agentic doctor` shows
+`keyring` as `FAIL`: ask your platform team for the org's WSL2 keyring setup before
+step 3. Your invite link is safe meanwhile: `agentic login --invite` checks where it can
+store keys before it uses the link up.
 
 ## First run (about 15 minutes)
 
@@ -57,8 +62,12 @@ the link has a `#` in it.
 agentic login --invite "https://agentic.your-org.internal/invite#..."
 ```
 
-This stores your control-plane token and gateway key in the OS keyring. If it prints
-`Add to ~/.agentic/config.yaml:` lines, add them to that file.
+This stores your control-plane token and gateway key in the OS keyring, and writes the
+control plane and gateway addresses the invite names into `~/.agentic/config.yaml`. It
+prints what it changed; your other lines and comments stay as they were, and a value it
+replaces stays in the file as a comment. To only print the lines and edit the file
+yourself, add `--print-config`. If the file cannot be edited safely (it is not valid
+YAML, say), it is left alone and the lines are printed for you to add.
 
 **4. Sign in to your git host**, so agentic can open pull requests (a token with
 repository write access):

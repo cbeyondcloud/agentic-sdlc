@@ -63,7 +63,7 @@ strips it.
 
 | Review | Where |
 |---|---|
-| Policy changes | pull requests to the org policy repo. The template's CODEOWNERS names only org admins and team leads: ask the org admins to add your group as a required reviewer. See the [policy-repo guide](policy-repo.md) |
+| Policy changes | pull requests to the org policy repo. The template's CODEOWNERS names a security group (`@your-org/agentic-security`) next to the org admins on `policy/`, `skills/` and `CODEOWNERS`, so you are asked to review those changes. GitHub needs only one code owner's approval: to make yours required, ask the org admins for a branch ruleset that requires a review from your team on those paths. See the [policy-repo guide](policy-repo.md) |
 | Skills with scripts, new skills in the org catalog | policy repo `skills/` pull requests |
 | Retention periods and legal holds | [retention runbook](../runbooks/retention.md); periods are in `policy/retention.yaml` |
 | Who holds which role | ask an org admin for `agentic rbac assignments`; every change is in the audit chain |

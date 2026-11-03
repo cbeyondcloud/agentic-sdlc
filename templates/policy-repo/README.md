@@ -52,7 +52,7 @@ policy-repo/
    copy `teams/payments/` to `teams/<team>/`, and add the team's two lines to CODEOWNERS.
    Delete the `payments` example if you have no such team.
 5. In CODEOWNERS, replace the example handles (`@your-org/agentic-org-admins`,
-   `@your-org/payments-leads`) with your org's teams.
+   `@your-org/agentic-security`, `@your-org/payments-leads`) with your org's teams.
 6. Turn on branch protection for `main`, `staging` and `dev`: require pull requests, turn
    on **Require review from Code Owners**, and require both status checks of the
    `policy-check` workflow, `check` and `budget`. Without branch protection, CODEOWNERS only
@@ -87,7 +87,8 @@ policy-repo/
 
 | Path | Owner (CODEOWNERS) | Notes |
 |---|---|---|
-| `policy/`, `agents/`, `pipelines/`, `skills/` | org admins | org-wide; pipelines are admin-controlled (D33) |
+| `agents/`, `pipelines/` | org admins | org-wide; pipelines are admin-controlled (D33) |
+| `policy/`, `skills/`, `CODEOWNERS` | org admins, with security / compliance as reviewers | GitHub needs one code owner's approval; to require security's too, add a branch ruleset requiring a review from the security team on these paths |
 | `policy/teams/<team>.yaml` | that team's leads, or org admins | can only narrow org policy |
 | `teams/<team>/` | that team's leads | the team's agents, pipelines, per-repo overlays (`pipelines/overlays/<repo>.yaml`) and skills |
 
@@ -176,8 +177,9 @@ The template answers the spec's open questions with defaults an org can change l
 | Repo class when a repo declares none | `internal`; its full prompts and responses stay off the control plane | `policy/classifications.yaml` `default_classification` |
 | Caps per agent | each agent type's `limits` (for example the Developer: 5 USD, 80 turns, 60 minutes a run) | `policy/agent-types.yaml`; a team lowers them in `limits_max` |
 | Runs at once | 3 a person, 20 a team | `policy/limits.yaml` `concurrency` |
-| Team monthly budget | every team sets `monthly_budget_usd`, one cap per team for the whole team's gateway spend: start at 20 USD a developer a month (a 10-person team: 200), then adjust after the first month from the Team view and Executive ROI dashboards. Org admins change any team's value; a team lead may only lower their own. Both by pull request to this repo: the `budget` check (`.github/budget_guard.py`, run from the base branch) refuses a raise, a new team file or a removed budget unless an org admin (an owner of `policy/org.yaml` in CODEOWNERS) wrote the pull request or approved its latest commit | `policy/teams/<team>.yaml` |
+| Team monthly budget | every team sets `monthly_budget_usd`, one cap per team for the whole team's gateway spend: start at 20 USD a developer a month (a 10-person team: 200), then adjust after the first month from the Team view and Executive ROI dashboards. Org admins change any team's value; a team lead may only lower their own. Both by pull request to this repo: the `budget` check (`.github/budget_guard.py`, run from the base branch) refuses a raise, a new team file or a removed budget unless an org admin (an owner of `.github/` in CODEOWNERS; security, a reviewer of `policy/`, does not count) wrote the pull request or approved its latest commit | `policy/teams/<team>.yaml` |
 | Evaluation spend cap | 100 USD an evaluation; 250 for QA, 750 for the Developer. These are org budgets for an evaluation the platform team runs (a quality gate or an A/B), not part of any team's monthly budget: run them with the platform team's own gateway key, since under a product team's key its monthly cap (200 USD for 10 people) would stop a 750 USD Developer evaluation early | `policy/eval.yaml` |
+| Credential file | where a laptop has no OS keyring (WSL2), `agentic login` keeps keys in `~/.agentic/credentials.json`, user-only and not encrypted, with a warning; `credential_file_fallback: false` forbids it once the policy is cached (add `AGENTIC_CREDENTIAL_STORE=keyring` to managed shell profiles to forbid it from the first login) | `policy/org.yaml` |
 | Code-intelligence index | each laptop builds its own; `index_export_workflow: true` adds a nightly CI export. No refresh on every merge by default: a busy repo adds the commented `push` trigger to its workflow | `policy/org.yaml` |
 
 **Notifications** (invites, gate waits, budget alerts) go through your org's own SMTP relay,

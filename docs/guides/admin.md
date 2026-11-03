@@ -73,6 +73,14 @@ agentic rbac import leads.csv            # shows what would change
 agentic rbac import leads.csv --apply
 ```
 
+Windows developers work in WSL2, which usually has no OS keyring. There `agentic login`
+keeps keys in `~/.agentic/credentials.json` (readable only by the user, not encrypted)
+and says so; `agentic doctor` shows it. To forbid that file, set
+`credential_file_fallback: false` in `policy/org.yaml` (it applies once a laptop has the
+policy, after `agentic init`) and `AGENTIC_CREDENTIAL_STORE=keyring` in the managed shell
+profile (it applies from the first login); then give WSL2 a Secret Service, or the
+`AGENTIC_*` variables.
+
 Everyone new gets an invite mail. Check delivery:
 
 ```bash

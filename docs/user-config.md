@@ -7,6 +7,23 @@
 there. `agentic login --for <name>` keeps them in the OS keyring, and CI passes them as
 `AGENTIC_<CREDENTIAL>` environment variables.
 
+### Where keys are kept (`credential_store:`)
+
+The OS keyring (Windows Credential Manager, macOS Keychain, a Secret Service on Linux)
+always comes first. A machine with no keyring at all - WSL2 or a Linux box without a
+Secret Service - keeps keys in `~/.agentic/credentials.json` instead: readable only by
+you (0600; agentic refuses the file when others can read it), not encrypted. `agentic
+login` warns when it uses the file and `agentic doctor` shows it.
+
+```yaml
+credential_store: auto     # auto (default): the keyring, the file only without one
+                           # keyring: never the file; file: the file, skipping the keyring
+```
+
+`AGENTIC_CREDENTIAL_STORE` overrides it. Your org can forbid the file with
+`credential_file_fallback: false` in its policy; then only the keyring or the
+`AGENTIC_<CREDENTIAL>` variables work.
+
 ### Jira (`jira:`)
 
 To start a run from an issue (`agentic run feature-delivery --from-jira PROJ-123`) and
@@ -26,6 +43,11 @@ jira:
 Then run `agentic login --for jira` once. In CI, set `AGENTIC_JIRA_URL`, `AGENTIC_JIRA_USER`
 and `AGENTIC_JIRA_TOKEN` instead. The repository's `.sdlc/connectors/jira.json` maps the
 issue's fields to the run's request when the defaults do not fit.
+
+The run's pull request is titled `<pipeline>: Jira issue PROJ-123: <summary>`, with the
+summary on one line and cut to 80 characters. When Jira is busy (HTTP 429 or 5xx), the
+message says how long Jira asked you to wait; when the site cannot be reached, it names
+the proxy (`HTTPS_PROXY`, `NO_PROXY`) and CA bundle (`SSL_CERT_FILE`) settings to check.
 
 ### Git hosts (`git_hosts:`)
 

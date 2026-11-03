@@ -28,7 +28,7 @@ Set `AGENTIC_DEBUG=1` to see a traceback when a command fails unexpectedly.
 |---|---|---|
 | `agentic version` | Show the installed version. | All |
 | `agentic exit-codes` | List the exit codes every command uses. | All |
-| `agentic login` | Store a key in the OS keyring: the gateway key (default), or `--for control-plane`, `--for jira`, `--for github` or a `git_hosts` host. `--invite <link>` redeems an invite mail. `--rotate` replaces your gateway key. | Dev |
+| `agentic login` | Store a key in the OS keyring (where there is none, as in WSL2, in `~/.agentic/credentials.json` with a warning, unless policy forbids it): the gateway key (default), or `--for control-plane`, `--for jira`, `--for github` or a `git_hosts` host. `--invite <link>` redeems an invite mail and writes the addresses it names to `~/.agentic/config.yaml` (`--print-config` only prints them). `--rotate` replaces your gateway key. | Dev |
 | `agentic init` | Set up this repository on your machine: checks, policy, skills, tools, index. `--repo` sets up the repository itself on a new branch and opens its PR. `--standalone` uses a local policy with no control plane. | Dev, Lead |
 | `agentic doctor` | Check this machine, its settings and the services a run needs. Changes nothing. | Dev, Platform |
 | `agentic support-bundle` | Write a redacted zip for the platform team. | Dev |
