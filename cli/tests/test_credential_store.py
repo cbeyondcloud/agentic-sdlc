@@ -233,3 +233,20 @@ def test_a_chosen_file_is_not_called_a_missing_keyring(home, capsys, monkeypatch
     assert main(["login", "--key-stdin", "--for", "jira"]) == ExitCode.OK
     err = capsys.readouterr().err
     assert "credential_store is file" in err and "no OS keyring" not in err
+
+
+def test_doctor_fails_a_file_it_cannot_check_with_a_fix(no_keyring, monkeypatch):  # DF-962
+    from pathlib import Path
+
+    from agentic_cli import doctor
+
+    real = Path.is_symlink
+
+    def denied(self):
+        if self.name == FILE_NAME:
+            raise PermissionError(13, "Permission denied")
+        return real(self)
+
+    monkeypatch.setattr(Path, "is_symlink", denied)
+    check = doctor._credential_file(store_choice())
+    assert check.status == "fail" and "cannot be checked" in check.detail and check.fix

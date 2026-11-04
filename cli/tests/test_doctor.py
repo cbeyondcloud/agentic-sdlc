@@ -6,6 +6,7 @@ GitHub answer from memory (recorded GitHub responses)."""
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from email.utils import format_datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ import httpx2
 import pytest
 from cp_fakes import CP_URL, TOKEN, FakeControlPlane
 
+from agentic.auth import Credentials
 from agentic.hosting.github import GitHubHost, api_url_for
 from agentic.yamlio import dump_yaml
 from agentic_cli import control_plane, doctor, hosting
@@ -501,3 +503,22 @@ def test_asking_for_the_backend_without_a_pin_warns_with_a_fix(repo, capsys):
     found = check(data, "code intelligence")
     assert found["status"] == "warn" and "codebase-memory-mcp is not available" in found["detail"]
     assert "tool-pins.yaml" in found["fix"]
+
+
+def test_the_keyring_probe_asks_the_injected_provider(home, gateway):  # DF-961
+    asked = []
+
+    class Ring:
+        def get_password(self, service, name):
+            asked.append(name)
+            return None
+
+        def set_password(self, service, name, value):
+            raise AssertionError("doctor never stores a key")
+
+    deps = doctor.default_deps()
+    deps.credentials = Credentials(environ=os.environ, keyring=Ring())
+    deps.gateway_transport = gateway.transport()
+    report = doctor.run_doctor(Path.cwd(), home / ".agentic", os.environ, deps)
+    assert "doctor_probe" in asked
+    assert next(c for c in report.checks if c.name == "keyring").status == "ok"

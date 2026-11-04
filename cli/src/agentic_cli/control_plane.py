@@ -836,7 +836,7 @@ def client_for(
     if url is None:
         return None
     try:
-        found = cli_credentials(env).find(CONTROL_PLANE_TOKEN, login=LOGIN)
+        found = cli_credentials(env, home).find(CONTROL_PLANE_TOKEN, login=LOGIN)
     except CredentialError as error:
         raise ControlPlaneRefused(str(error), hint=LOGIN_HINT) from None
     if found is None:

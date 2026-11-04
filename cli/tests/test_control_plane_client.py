@@ -182,3 +182,14 @@ def test_kill_state_without_an_answer_is_unavailable(fake, monkeypatch):
     monkeypatch.setattr(client, "kill_state_reply", lambda **kw: KillStateReply(None, "t"))
     with pytest.raises(ControlPlaneUnavailable, match="no kill-switch state"):
         client.kill_state(team="payments", repo=None, pipeline=None)
+
+
+def test_the_stored_token_is_looked_up_in_the_home_given(fake, home, tmp_path):  # DF-961
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    (other / "config.yaml").write_text("credential_store: file\n", encoding="utf-8")
+    auth.FileStore(other / auth.FILE_NAME).set_password(auth.SERVICE, CONTROL_PLANE_TOKEN, TOKEN)
+    record_login(other, CP_URL, "acme", "dev@acme.example")
+    env = {"AGENTIC_CONTROL_PLANE_URL": CP_URL}
+    client = client_for(env, {}, other, transport=fake.transport)
+    assert client is not None and client.me().tenant.slug == "acme"
