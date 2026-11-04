@@ -567,3 +567,21 @@ def test_org_init_offline_with_an_expired_cache_refuses(
     stamp_file.write_text(json.dumps(stamp), encoding="utf-8")
     shutil.move(str(org_config), str(tmp_path / "moved-away"))
     assert org_init(setup_repo, monkeypatch) == ExitCode.REFUSED
+
+
+def test_init_warns_once_about_a_credential_file_the_org_now_forbids(
+    setup_repo, policy_repo, deps, monkeypatch, capsys
+):  # DF-960: the policy init caches may forbid a file an earlier login wrote
+    from agentic.auth import FILE_NAME, SERVICE, FileStore
+
+    monkeypatch.delenv("AGENTIC_CREDENTIAL_STORE", raising=False)
+    home = agentic_home()
+    FileStore(home / FILE_NAME).set_password(SERVICE, "jira_token", "x" * 12)
+    (home / "config.yaml").write_text("org: acme\n", encoding="utf-8")
+    cached = home / "policy" / "acme" / "repo" / "policy"
+    cached.mkdir(parents=True)
+    (cached / "org.yaml").write_text("credential_file_fallback: false\n", encoding="utf-8")
+    monkeypatch.chdir(setup_repo)
+    main(["init", "--standalone", "--policy", str(policy_repo)])
+    err = capsys.readouterr().err
+    assert err.count("still holds keys") == 1 and str(home / FILE_NAME) in err

@@ -250,3 +250,60 @@ def test_doctor_fails_a_file_it_cannot_check_with_a_fix(no_keyring, monkeypatch)
     monkeypatch.setattr(Path, "is_symlink", denied)
     check = doctor._credential_file(store_choice())
     assert check.status == "fail" and "cannot be checked" in check.detail and check.fix
+
+
+# ── a file left from before a ban (DF-960) ───────────────────────────────────
+
+
+class Memory(KeyringBackend):
+    priority = 1
+
+    def __init__(self):
+        super().__init__()
+        self.stored = {}
+
+    def get_password(self, service, username):
+        return self.stored.get((service, username))
+
+    def set_password(self, service, username, password):
+        self.stored[(service, username)] = password
+
+    def delete_password(self, service, username):
+        self.stored.pop((service, username), None)
+
+
+def leave_a_forbidden_file() -> None:
+    from agentic.auth import FileStore
+
+    FileStore(agentic_home() / FILE_NAME).set_password(SERVICE, "jira_token", KEY)
+    write_config("org: acme\n")
+    cache_policy("acme", "credential_file_fallback: false\n")
+
+
+def test_login_warns_once_about_a_file_the_org_now_forbids(home, capsys, monkeypatch):
+    monkeypatch.delenv(STORE_ENV, raising=False)
+    leave_a_forbidden_file()
+    previous = keyring.get_keyring()
+    keyring.set_keyring(Memory())
+    try:
+        monkeypatch.setattr("sys.stdin", __import__("io").StringIO(KEY + "\n"))
+        assert main(["login", "--key-stdin", "--for", "jira"]) == ExitCode.OK
+    finally:
+        keyring.set_keyring(previous)
+    err = capsys.readouterr().err
+    path = str(agentic_home() / FILE_NAME)
+    assert err.count("still holds keys") == 1 and path in err
+    assert "credential_file_fallback" in err and "delete it" in err and KEY not in err
+
+
+def test_no_warning_without_a_file_or_when_the_file_is_allowed(home, monkeypatch):
+    from agentic_cli.credential_store import forbidden_file_warning
+
+    monkeypatch.delenv(STORE_ENV, raising=False)
+    write_config("org: acme\n")
+    cache_policy("acme", "credential_file_fallback: false\n")
+    assert forbidden_file_warning() is None  # nothing on disk
+    leave_a_forbidden_file()
+    assert "still holds keys" in forbidden_file_warning()
+    cache_policy("acme", "credential_file_fallback: true\n")
+    assert forbidden_file_warning() is None

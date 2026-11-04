@@ -82,6 +82,27 @@ def cli_credentials(env: Mapping[str, str] | None = None, home: Path | None = No
     return Credentials(environ=env, file_store=files, prefer_file=choice.mode == "file")
 
 
+def forbidden_file_warning(
+    env: Mapping[str, str] | None = None, home: Path | None = None
+) -> str | None:
+    """What `agentic login` and `agentic init` warn about once (DF-960): a credential file
+    still on disk although it may no longer be used - written before the org policy that
+    forbids it was cached, or before `credential_store: keyring`. None otherwise."""
+    try:
+        choice = store_choice(env, home)
+        present = choice.path.is_file() or choice.path.is_symlink()
+    except (CliError, OSError):  # an unknown choice or an unreadable folder: doctor says so
+        return None
+    if choice.file_allowed or not present:
+        return None
+    why = choice.forbidden or "credential_store is keyring"
+    return (
+        f"{choice.path} still holds keys, but {why}, so they are not used; delete it "
+        f"(`rm {choice.path}`) and store your keys in the OS keyring with `agentic login` "
+        "(or set the AGENTIC_* variables)"
+    )
+
+
 def _forbidden(home: Path, settings: Mapping[str, Any]) -> str | None:
     org = str(settings.get("org") or "").strip()
     if not org:
