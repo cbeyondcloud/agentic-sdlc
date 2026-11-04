@@ -66,6 +66,36 @@ def test_parse_reports_bad_rows_with_their_line(text, line, words):
     assert errors and errors[0].line == line and words in errors[0].error
 
 
+@pytest.mark.parametrize("separator", [";", "\t"])
+def test_parse_accepts_the_separators_european_excel_writes(separator):  # DF-573
+    text = GOOD.replace(",", separator)
+    rows, errors = parse(text)
+    assert errors == [] and rows == parse(GOOD)[0]
+
+
+def test_parse_ignores_trailing_empty_header_cells_and_their_empty_cells():  # DF-573
+    text = "email;role;;\nann@a.example.test;developer;;\nbob@a.example.test;approver\n"
+    rows, errors = parse(text)
+    assert errors == []
+    assert [(r.line, r.email, r.role) for r in rows] == [
+        (2, "ann@a.example.test", "developer"),
+        (3, "bob@a.example.test", "approver"),
+    ]
+    _, errors = parse("email;role;;\nann@a.example.test;developer;;payments\n")
+    assert errors and errors[0].line == 2 and "fields" in errors[0].error
+
+
+@pytest.mark.parametrize("header", ["email|role", "email:role|team"])
+def test_an_unknown_separator_says_to_use_commas(header):  # DF-573
+    _, errors = parse(f"{header}\nann@a.example.test|developer\n")
+    assert errors[0].line == 1 and "separate the columns with commas" in errors[0].error
+
+
+def test_a_plain_unknown_column_gets_no_separator_hint():
+    _, errors = parse("email,role,colour\n")
+    assert "colour" in errors[0].error and "commas" not in errors[0].error
+
+
 async def _import(api, token, text, *, dry_run=True):
     return await api.post("/v1/rbac/import", token, {"csv": text, "dry_run": dry_run})
 
