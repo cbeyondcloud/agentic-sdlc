@@ -35,7 +35,8 @@ def register(app: typer.Typer) -> None:
             out.result({"reset": True}, lambda c: c.print(message, markup=False))
             return
         data = onboarding.report()
-        out.result(data, lambda console: _show(console, data))
+        shown = {k: v for k, v in data.items() if k != "file"}
+        out.result(shown, lambda console: _show(console, data))
 
 
 def _show(console, data: dict) -> None:

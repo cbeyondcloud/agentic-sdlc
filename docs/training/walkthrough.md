@@ -143,6 +143,7 @@ unset AGENTIC_GATEWAY_URL
 | `init` says the repository is not set up | The training repository was not set up: tell the facilitator |
 | `approve` says you may not approve this gate | Tell the facilitator: the training team must let trainees approve their own runs |
 | `the run made more calls than recorded`, or `cassette_exhausted` | The training gateway serves one walkthrough: Ctrl-C it, start it again, and start a new run |
+| `run` cannot reach `127.0.0.1` with the training gateway running | Your proxy settings send local calls to the proxy: `export NO_PROXY=127.0.0.1,localhost` (add to it if you already have one), then start the run again |
 | Anything else | `agentic doctor`, then `agentic support-bundle` for the facilitator; never a screenshot of a token |
 
 Trying it alone, with no org? `agentic init --standalone` sets up a local policy with no

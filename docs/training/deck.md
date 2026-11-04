@@ -222,9 +222,10 @@ Presenter: this is why "reject with a note" matters. The note is the lesson.
 
 ## 10. Live demo on the sample repo (5 min)
 
-The [15-minute walkthrough](walkthrough.md), on the `invoices` training repository:
+The [15-minute walkthrough](walkthrough.md), on the `invoices` training repository, where
+the presenter ran `agentic login` and `agentic init` before the session:
 
-1. `agentic init`, then `agentic pipelines list`
+1. `agentic pipelines list`
 2. `agentic run feature-delivery --input request="..." --dry-run`
 3. `agentic training-gateway` in a second terminal: recorded answers, nothing spent
 4. the real run pauses at `requirements-approval`; `agentic show`, then `agentic approve`
@@ -234,7 +235,8 @@ The [15-minute walkthrough](walkthrough.md), on the `invoices` training reposito
 <!--
 Presenter: rehearse it the day before on the presenter laptop, then
 `agentic onboarding --reset`. Have the walkthrough open in case of a network problem: the
-dry run needs the control plane, the recorded run does not need the gateway.
+dry run needs the control plane; the recorded run needs only `agentic training-gateway`,
+never the org's model gateway.
 -->
 
 ---

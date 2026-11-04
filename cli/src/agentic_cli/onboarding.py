@@ -101,12 +101,13 @@ def _load(path: Path) -> dict:
         return {}
     if not isinstance(data, dict) or not isinstance(data.get("steps"), dict):
         return {}
-    return data
+    steps = {k: v for k, v in data["steps"].items() if k in STEPS and isinstance(v, dict)}
+    return {**data, "steps": steps}
 
 
 def _save(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")  # one per process
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(data, indent=2) + "\n")
@@ -124,11 +125,14 @@ def reset(home: Path | None = None) -> bool:
 
 
 def report(home: Path | None = None) -> dict:
-    """Each recorded step's time since the step before it succeeded (login: since its
-    first try), and the total from the first login try to the first successful dry run."""
+    """Each recorded step's time since the success just before it, whichever step that
+    was (the first login: since its first try), so the steps add up to the total even when
+    run out of order; and the total, from the first login try to the first successful dry
+    run. The path is the human output's only: `--json` output gets pasted into issues."""
     path = (home or agentic_home()) / FILE
     steps = _load(path).get("steps", {})
-    rows, previous, missing = [], None, None
+    successes = sorted(t for t in (_time(e.get("first_ok")) for e in steps.values()) if t)
+    rows, missing = [], None
     for step in STEPS:
         entry = steps.get(step) or {}
         ok = _time(entry.get("first_ok"))
@@ -136,7 +140,8 @@ def report(home: Path | None = None) -> dict:
         if try_ is None and ok is None:
             missing = missing or step
             continue
-        since = previous if previous is not None else try_
+        earlier = [t for t in successes if ok is not None and t < ok]
+        since = earlier[-1] if earlier else try_
         rows.append(
             {
                 "step": step,
@@ -148,8 +153,6 @@ def report(home: Path | None = None) -> dict:
         )
         if ok is None:
             missing = missing or step
-        else:
-            previous = ok
     login = _time((steps.get("login") or {}).get("first_try"))
     done = _time((steps.get("dry-run") or {}).get("first_ok"))
     complete = login is not None and done is not None

@@ -140,3 +140,32 @@ def test_reset_starts_the_timer_again(timer_home: Path, capsys):
     assert main(["onboarding", "--reset"]) == ExitCode.OK
     assert not (timer_home / onboarding.FILE).exists()
     assert "reset" in capsys.readouterr().out
+
+
+def test_steps_run_out_of_order_still_add_up_to_the_total(timer_home: Path):
+    """Each step is timed from the success just before it, whichever step that was."""
+    for args, start, end in [
+        (["login"], 0, 3),
+        (["pipelines", "list"], 4, 5),  # before init
+        (["init"], 6, 10),
+        (["run", "p", "--dry-run"], 11, 12),
+    ]:
+        onboarding.note(args, 0, at(start), at(end), home=timer_home)
+    report = onboarding.report(home=timer_home)
+    seconds = {s["step"]: s["seconds"] for s in report["steps"]}
+    assert seconds == {"login": 180, "pipelines": 120, "init": 300, "dry-run": 120}
+    assert sum(seconds.values()) == report["total_seconds"] == 720
+
+
+def test_an_entry_that_is_not_an_object_is_dropped(timer_home: Path, capsys):
+    timer_home.mkdir(parents=True, exist_ok=True)
+    (timer_home / onboarding.FILE).write_text('{"steps": {"login": "x"}}', encoding="utf-8")
+    assert onboarding.report(home=timer_home)["steps"] == []
+    onboarding.note(["login"], 0, at(0), at(1), home=timer_home)
+    assert saved(timer_home)["steps"]["login"]["first_ok"] == at(1).isoformat()
+
+
+def test_the_json_report_names_no_path(timer_home: Path, capsys):
+    onboarding.note(["login"], 0, at(0), at(1), home=timer_home)
+    assert main(["--json", "onboarding"]) == ExitCode.OK
+    assert "file" not in json.loads(capsys.readouterr().out)  # pasted into issues

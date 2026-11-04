@@ -34,7 +34,8 @@ agentic onboarding
 ```
 
 and reads out the total and the step times (or `agentic --json onboarding` into the
-tracking issue). Write them down:
+tracking issue). Each step is timed from the success before it, so the `init` time also
+holds the `git clone`. Write them down:
 
 | # | Developer (initials) | OS | Unaided? | login | init | pipelines list | dry run | **Total** | Where they got stuck |
 |---|---|---|---|---|---|---|---|---|---|
