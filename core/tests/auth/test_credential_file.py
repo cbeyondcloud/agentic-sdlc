@@ -197,6 +197,38 @@ def test_no_mount_table_means_no_windows_drive(tmp_path):
     assert drvfs_mount(PurePosixPath("/mnt/c/x"), tmp_path / "missing") is None
 
 
+@pytest.mark.parametrize(
+    "line",
+    [
+        r"C:\134 /mnt/c 9p rw,noatime,aname=drvfs;path=C:\;metadata;uid=1000 0 0",
+        r"C:\134 /mnt/c drvfs rw,noatime,metadata,uid=1000 0 0",
+    ],
+)
+def test_a_windows_drive_mounted_with_metadata_keeps_the_chmod_advice(tmp_path, line):
+    mounts = tmp_path / "mounts"  # review I2: with `metadata`, chmod works there
+    mounts.write_text(line + "\n", encoding="utf-8")
+    path = PurePosixPath("/mnt/c/Users/ann/.agentic/credentials.json")
+    assert drvfs_mount(path, mounts) is None
+    problem = _posix_problem(path, stat_of(0o777, 1000), 1000, mounts)
+    assert "chmod 600" in problem and "AGENTIC_HOME" not in problem
+
+
+@POSIX
+@pytest.mark.parametrize("how", ["relative", "symlink"])
+def test_the_folder_is_resolved_before_mounts_are_matched(tmp_path, monkeypatch, how):
+    drive = tmp_path / "drive"  # review M4: a home reached through a link, or relative
+    (drive / "home").mkdir(parents=True)
+    mounts = tmp_path / "mounts"
+    mounts.write_text(f"C: {drive.resolve()} 9p rw,aname=drvfs;path=C:\\ 0 0\n", encoding="utf-8")
+    if how == "symlink":
+        (tmp_path / "link").symlink_to(drive / "home")
+        path = tmp_path / "link" / FILE_NAME
+    else:
+        monkeypatch.chdir(drive)
+        path = Path("home") / FILE_NAME
+    assert drvfs_mount(path, mounts) == str(drive.resolve())
+
+
 def test_a_file_on_a_windows_drive_names_agentic_home_not_chmod(tmp_path):  # DF-960
     mounts = tmp_path / "mounts"
     mounts.write_text(MOUNTS, encoding="utf-8")

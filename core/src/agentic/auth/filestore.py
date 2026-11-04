@@ -183,12 +183,18 @@ def _too_open(path: PurePath, mode: int, mounts: Path | None = None) -> str:
 
 def drvfs_mount(path: PurePath, mounts: Path | None = None) -> str | None:
     """The mount point when `path` is on a Windows drive under WSL (drvfs, listed as `drvfs`
-    or as `9p` with `aname=drvfs`), else None - also where there is no mount table."""
+    or as `9p` with `aname=drvfs`) where file modes cannot be set, else None - also where
+    there is no mount table, or the drive is mounted with `metadata` (chmod works there).
+    The folder is resolved first, so a home reached through a link or a relative
+    AGENTIC_HOME is matched where it really is (review M4)."""
     try:
         table = (MOUNTS if mounts is None else mounts).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    target = PurePosixPath(os.fspath(path))
+    where = os.fspath(path)
+    if sys.platform != "win32":  # on Windows only the tests call this, with POSIX paths
+        where = os.path.realpath(where)
+    target = PurePosixPath(where)
     best: tuple[PurePosixPath, bool] | None = None
     for line in table.splitlines():
         fields = line.split()
@@ -198,8 +204,9 @@ def drvfs_mount(path: PurePath, mounts: Path | None = None) -> str | None:
         if point != target and point not in target.parents:
             continue
         if best is None or len(point.parts) >= len(best[0].parts):  # the innermost mount
-            kind = fields[2]
-            best = (point, kind == "drvfs" or (kind == "9p" and "aname=drvfs" in fields[3]))
+            kind, options = fields[2], set(re.split(r"[,;]", fields[3]))  # 9p: ';' inside
+            drvfs = kind == "drvfs" or (kind == "9p" and "aname=drvfs" in options)
+            best = (point, drvfs and "metadata" not in options)  # review I2
     return str(best[0]) if best is not None and best[1] else None
 
 
