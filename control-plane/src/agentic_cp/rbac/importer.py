@@ -71,6 +71,11 @@ def parse(text: str) -> tuple[list[CsvRow], list[ImportRow]]:
     names = [name.strip().lower() for name in header]
     while len(names) > 1 and not names[-1]:  # Excel's trailing empty cells (DF-573)
         names.pop()
+    if not any(names):  # a blank first line, or separators only (review M7)
+        columns = ",".join(COLUMNS)
+        return [], [
+            _error(1, f"the header row is empty: the first line must name the columns {columns}")
+        ]
     unknown = [name for name in names if name not in COLUMNS]
     missing = [name for name in REQUIRED if name not in names]
     if unknown or missing or len(set(names)) != len(names):
@@ -133,12 +138,19 @@ def parse(text: str) -> tuple[list[CsvRow], list[ImportRow]]:
 
 def _separator(text: str) -> str:
     """The header's separator: a comma, or the ';' or tab Excel writes in European locales
-    (DF-573), as `csv.Sniffer` reads the first line; a comma when it cannot tell."""
+    (DF-573) - whichever splits the first line into the most cells (at least 2), a comma
+    winning a tie; a comma when none does. One CSV pass per candidate, so linear in the
+    line's length (`csv.Sniffer` is superlinear: seconds for a 24 KB line)."""
     first = text.split("\n", 1)[0]
-    try:
-        return csv.Sniffer().sniff(first, delimiters=SEPARATORS).delimiter
-    except csv.Error:
-        return ","
+    best, most = ",", 1
+    for candidate in SEPARATORS:
+        try:
+            cells = len(next(csv.reader([first], delimiter=candidate), []))
+        except csv.Error:
+            continue
+        if cells > most:
+            best, most = candidate, cells
+    return best
 
 
 def _row_problem(values: dict) -> str | None:
