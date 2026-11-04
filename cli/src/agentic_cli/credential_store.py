@@ -20,6 +20,8 @@ that cannot be read forbids it too.
 """
 
 import os
+import shlex
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -96,10 +98,15 @@ def forbidden_file_warning(
     if choice.file_allowed or not present:
         return None
     why = choice.forbidden or "credential_store is keyring"
+    shown = f'"{choice.path}"' if sys.platform == "win32" else shlex.quote(str(choice.path))
+    what = (
+        "still holds keys, but {why}, so they are not used"
+        if FileStore(choice.path).holds_keys()
+        else "is still on disk, but {why}"
+    ).format(why=why)
     return (
-        f"{choice.path} still holds keys, but {why}, so they are not used; delete it "
-        f"(`rm {choice.path}`) and store your keys in the OS keyring with `agentic login` "
-        "(or set the AGENTIC_* variables)"
+        f"{choice.path} {what}; delete it (`rm {shown}`) and store your keys in the OS "
+        "keyring with `agentic login` (or set the AGENTIC_* variables)"
     )
 
 

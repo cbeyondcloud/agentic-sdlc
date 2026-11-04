@@ -372,3 +372,26 @@ def test_a_chosen_file_is_used_although_a_keyring_works(home, capsys, monkeypatc
         assert cli_credentials().get("jira_token").source == "file"
     finally:
         keyring.set_keyring(previous)
+
+
+def test_the_delete_hint_quotes_a_path_with_a_space(home, monkeypatch):  # review M5
+    import shlex
+
+    from agentic_cli.credential_store import forbidden_file_warning
+
+    monkeypatch.delenv(STORE_ENV, raising=False)
+    monkeypatch.setenv("AGENTIC_HOME", str(home / "my home" / ".agentic"))
+    leave_a_forbidden_file()
+    path = str(agentic_home() / FILE_NAME)
+    quoted = f'"{path}"' if sys.platform == "win32" else shlex.quote(path)
+    assert f"`rm {quoted}`" in forbidden_file_warning()
+
+
+def test_a_file_without_keys_is_called_still_on_disk(home, monkeypatch):  # review M5
+    from agentic_cli.credential_store import forbidden_file_warning
+
+    monkeypatch.delenv(STORE_ENV, raising=False)
+    leave_a_forbidden_file()
+    (agentic_home() / FILE_NAME).write_text("not json", encoding="utf-8")
+    shown = forbidden_file_warning()
+    assert "is still on disk" in shown and "still holds keys" not in shown

@@ -73,6 +73,13 @@ class FileStore:
             return None
         return _posix_problem(self.path, info, os.getuid())
 
+    def holds_keys(self) -> bool:
+        """Whether the file can be read and holds at least one key (never which)."""
+        try:
+            return any(isinstance(keys, dict) and keys for keys in self._read().values())
+        except CredentialFileError:
+            return False
+
     def check_writable(self) -> None:
         """Raise CredentialFileError unless a key could be stored now: the file, if there,
         is usable, and its folder takes a new file (one is made and removed)."""
