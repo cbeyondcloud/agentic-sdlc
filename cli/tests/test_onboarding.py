@@ -169,3 +169,58 @@ def test_the_json_report_names_no_path(timer_home: Path, capsys):
     onboarding.note(["login"], 0, at(0), at(1), home=timer_home)
     assert main(["--json", "onboarding"]) == ExitCode.OK
     assert "file" not in json.loads(capsys.readouterr().out)  # pasted into issues
+
+
+def test_a_dry_run_before_the_first_login_still_completes(timer_home: Path):
+    """The standalone path, or a team lead: the file is frozen only once both ends exist."""
+    onboarding.note(["run", "p", "--dry-run"], 0, at(0), at(1), home=timer_home)
+    onboarding.note(["login"], 0, at(2), at(3), home=timer_home)
+    onboarding.note(["run", "p", "--dry-run"], 0, at(4), at(5), home=timer_home)
+    report = onboarding.report(home=timer_home)
+    assert report["complete"] is True
+    assert saved(timer_home)["steps"]["login"]["first_try"] == at(2).isoformat()
+
+
+def test_the_human_output_names_the_file_from_home(timer_home: Path, capsys):
+    onboarding.note(["login"], 0, at(0), at(1), home=timer_home)
+    assert main(["onboarding"]) == ExitCode.OK
+    text = capsys.readouterr().out
+    assert "~/.agentic/onboarding.json" in text
+    assert str(timer_home.parent) not in text  # no OS user name
+
+
+def test_an_agentic_home_elsewhere_is_shown_from_home(home: Path, monkeypatch, capsys):
+    monkeypatch.delenv("AGENTIC_ONBOARDING_TIMER", raising=False)
+    monkeypatch.setenv("AGENTIC_HOME", str(home / "work" / "agentic"))
+    assert main(["onboarding"]) == ExitCode.OK
+    assert "~/work/agentic/onboarding.json" in capsys.readouterr().out
+
+
+def test_a_failed_write_never_changes_the_exit_code(timer_home: Path, monkeypatch, capsys):
+    def broken(path, data):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(onboarding, "_save", broken)
+    assert main(["login", "--help"]) == ExitCode.OK  # not a step: _save never runs
+    code = main(["exit-codes"])
+    assert code == ExitCode.OK
+    monkeypatch.setattr(onboarding, "step_of", lambda args: "login")
+    assert main(["version"]) == ExitCode.OK
+
+
+def test_ctrl_c_during_the_write_never_changes_the_exit_code(timer_home, monkeypatch, capsys):
+    def interrupted(path, data):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(onboarding, "_save", interrupted)
+    monkeypatch.setattr(onboarding, "step_of", lambda args: "login")
+    assert main(["version"]) == ExitCode.OK
+
+
+def test_an_agentic_home_that_is_a_file_never_fails_a_command(home: Path, monkeypatch, capsys):
+    monkeypatch.delenv("AGENTIC_ONBOARDING_TIMER", raising=False)
+    blocker = home / "not-a-folder"
+    blocker.write_text("", encoding="utf-8")
+    monkeypatch.setenv("AGENTIC_HOME", str(blocker))
+    monkeypatch.setattr(onboarding, "step_of", lambda args: "login")
+    assert main(["version"]) == ExitCode.OK

@@ -8,6 +8,7 @@ pilot's facilitator collects the total (docs/training/facilitator-sheet.md); not
 sent anywhere.
 """
 
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -59,4 +60,5 @@ def _show(console, data: dict) -> None:
                 printable(row["first_ok"] or "not yet"),
             )
         console.print(table)
-    console.print(f"{NOTHING_SENT} ({printable(data['file'])})", markup=False)
+    where = onboarding.shown_path(Path(data["file"]))
+    console.print(f"{NOTHING_SENT} ({printable(where)})", markup=False)

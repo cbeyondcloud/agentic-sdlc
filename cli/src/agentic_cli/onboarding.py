@@ -67,8 +67,8 @@ def note(
     """Keep the first try (`started`) and first success (`finished`, exit 0) of a step."""
     try:
         _note(args, code, started, finished, home, env)
-    except Exception:  # noqa: BLE001 - a timer must never fail the command it times
-        pass
+    except BaseException:  # noqa: BLE001 - a timer never fails the command it times:
+        pass  # not even Ctrl-C during its write (the command's own code is returned)
 
 
 def _note(args, code, started, finished, home, env) -> None:
@@ -78,8 +78,9 @@ def _note(args, code, started, finished, home, env) -> None:
     path = (home or agentic_home(env)) / FILE
     data = _load(path)
     steps = data.setdefault("steps", {})
-    if (steps.get("dry-run") or {}).get("first_ok"):
-        return  # onboarded: the file is never touched again
+    login, dry_run = steps.get("login") or {}, steps.get("dry-run") or {}
+    if login.get("first_try") and dry_run.get("first_ok"):
+        return  # onboarded (both ends recorded): the file is never touched again
     changed = step not in steps
     entry = steps.setdefault(step, {"first_try": started.isoformat(), "first_ok": None})
     if code == 0 and not entry.get("first_ok"):
@@ -179,6 +180,15 @@ def _seconds(start: datetime | None, end: datetime | None) -> int | None:
     if start is None or end is None:
         return None
     return max(0, round((end - start).total_seconds()))
+
+
+def shown_path(path: Path, user_home: Path | None = None) -> str:
+    """`path` from `~` when it is under the home folder: the full path names the OS user."""
+    base = user_home or Path.home()
+    try:
+        return "~/" + path.relative_to(base).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def duration(seconds: int | None) -> str:
