@@ -5,6 +5,8 @@ from another host (no analytics, font host or CDN: orgs host it internally, offl
 Needs the optional docs group (`uv sync --group docs`); skipped, with that hint, without
 it. CI installs the group."""
 
+import base64
+import hashlib
 import re
 import shutil
 import subprocess
@@ -113,3 +115,37 @@ def test_the_site_is_never_committed():
         ["git", "check-ignore", "-q", "site/index.html"], cwd=ROOT, capture_output=True
     )
     assert ignored.returncode == 0, "add site/ to .gitignore"
+
+
+def csp_sources() -> dict[str, set[str]]:
+    """The Content-Security-Policy the hosting runbook gives, directive by directive."""
+    text = (ROOT / "docs" / "runbooks" / "docs-site.md").read_text(encoding="utf-8")
+    policy = re.search(r"`Content-Security-Policy: ([^`]+)`", text)
+    assert policy, "the runbook names no Content-Security-Policy"
+    directives = {}
+    for part in policy.group(1).split(";"):
+        name, *sources = part.split()
+        directives[name] = set(sources)
+    return directives
+
+
+def test_the_runbook_csp_allows_what_the_built_site_uses(built):
+    """The header the runbook gives must not break the site: MkDocs writes an inline
+    script per page (base_url, keyboard shortcuts) and inline style attributes."""
+    site, _ = built
+    csp = csp_sources()
+    scripts = csp.get("script-src", csp["default-src"])
+    styles = csp.get("style-src", csp["default-src"])
+    inline = re.compile(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", re.S)
+    problems = []
+    for page in sorted(site.rglob("*.html")):
+        text = page.read_text(encoding="utf-8")
+        for body in inline.findall(text):
+            digest = base64.b64encode(hashlib.sha256(body.encode("utf-8")).digest()).decode()
+            if "'unsafe-inline'" not in scripts and f"'sha256-{digest}'" not in scripts:
+                problems.append(f"{page.name}: an inline script the CSP blocks")
+        if re.search(r"<style\b|\sstyle=", text) and "'unsafe-inline'" not in styles:
+            problems.append(f"{page.name}: inline styles the CSP blocks")
+        if "<script src=" in text and "'self'" not in scripts:
+            problems.append(f"{page.name}: the site's own scripts are blocked")
+    assert not problems, sorted(set(problems))[:10]

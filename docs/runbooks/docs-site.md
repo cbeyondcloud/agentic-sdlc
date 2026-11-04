@@ -44,8 +44,13 @@ Any server that serves static files over HTTPS works. Pick the one your org alre
 Whichever you pick:
 
 - **HTTPS only**, with the org's internal certificate.
-- **Headers:** `Content-Security-Policy: default-src 'self'; img-src 'self' data:` works,
-  because the site loads nothing from elsewhere. Add `X-Content-Type-Options: nosniff`.
+- **Headers:** `Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:`
+  works, because the site loads nothing from elsewhere. The two `'unsafe-inline'` are
+  needed: MkDocs writes a small inline script on every page (the page's `base_url` and
+  the keyboard shortcuts, which differ by folder depth, so a hash list would change with
+  the pages) and inline style attributes. A stricter header breaks the menu and search;
+  `scripts/tests/test_docs_site.py` checks this header against the built site. Add
+  `X-Content-Type-Options: nosniff`.
 - **Caching:** `Cache-Control: no-cache` on `.html` files, so a release shows at once; the
   CSS, JavaScript and fonts can be cached for a day.
 - **Access logs:** your server's own logs are the only record of who read what; the site

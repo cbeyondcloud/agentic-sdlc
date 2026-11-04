@@ -326,8 +326,10 @@ For the pilot training ([walkthrough](../training/walkthrough.md),
    `agentic init` finds it set up. Never point trainees at a product repository.
 2. **The training team.** A team `training` that holds only that repository, with its own
    `policy/teams/training.yaml` (a small `monthly_budget_usd`, the pilot's `auto_trip`).
-   Trainees approve their own training runs, so give each trainee the Team lead role on the
-   `training` team only (`agentic rbac assign`), and remove it after the pilot.
+   Trainees approve their own training runs (owner decision, 2026-11-04), so give each
+   trainee the Team lead role on the `training` team only, before the session:
+   `agentic rbac assign <email> team-lead --team training`. **Remove it after the
+   session:** `agentic rbac revoke <email> team-lead --team training`.
 3. **The recorded run.** The walkthrough's real run uses `agentic training-gateway`, which
    ships with the CLI and replays recorded answers on the trainee's laptop: nothing to
    deploy, no model calls, no gateway spend. It follows the library `feature-delivery`
