@@ -11,7 +11,7 @@ and L4-L6 (M3-14..M3-16):
 
     agentic learn list [--status S]                   proposals, with who would decide them
     agentic learn show <id>                           the change: diff, evidence, eval case
-    agentic learn approve <id>                        the owner approves; the change is applied
+    agentic learn approve <id> [--no-eval]            the owner approves; measured, then applied
     agentic learn edit <id> [--kind K] [--lesson T]   retarget or reword it before deciding
     agentic learn reject <id> [--reason T]            remembered: not proposed again as is
     agentic learn defer <id>                          decide later (stays in the list)
@@ -239,14 +239,27 @@ def register_decisions(group: typer.Typer) -> None:
         out.result(data, lambda console: _show_draft(console, data))
 
     @group.command("approve")
-    def approve(ctx: typer.Context, proposal_id: IdArgument) -> None:
+    def approve(
+        ctx: typer.Context,
+        proposal_id: IdArgument,
+        no_eval: Annotated[
+            bool,
+            typer.Option(
+                "--no-eval", help="Do not run the regression case before and after the change."
+            ),
+        ] = False,
+    ) -> None:
         """Approve a proposal you own and apply it: a personal change is written into your
-        ~/.agentic; a shared one is a pull request on a new branch."""
+        ~/.agentic; a shared one is a pull request on a new branch. Its regression case runs
+        first, without and with the change (model calls through your gateway); the result
+        is recorded and never blocks the approval."""
         out: Output = ctx.obj
         rt = Runtime(Workspace.load())
-        data = learning_apply.approve_any(rt, proposal_id, out.warn)
-        line = _applied_line(proposal_id, data["applied"])
-        out.result(data, lambda c: c.print(line, markup=False))
+        skip = "--no-eval" if no_eval else None
+        data = learning_apply.approve_any(rt, proposal_id, out.warn, skip)
+        lines = [_applied_line(proposal_id, data["applied"])]
+        lines.append(_measured_line(data.get("measurement") or {}))
+        out.result(data, lambda c: c.print("\n".join(lines), markup=False))
 
     @group.command("edit")
     def edit(
@@ -335,6 +348,16 @@ def _applied_line(pid: str, applied: dict) -> str:
     if applied.get("kind") == "pull-request":
         return f"{pid}: approved; pull request #{applied['number']} {applied['url']}"
     return f"{pid}: approved and applied to " + ", ".join(applied.get("paths", []))
+
+
+def _measured_line(measured: dict) -> str:
+    if measured.get("status") == "measured":
+        verdict = "lower with the change" if measured.get("regressed") else "not lower"
+        return (
+            f"regression case {measured['case']}: before {measured['before']:.2f}, "
+            f"after {measured['after']:.2f} ({verdict})"
+        )
+    return f"regression case: {measured.get('status', 'not run')} ({measured.get('reason', '')})"
 
 
 def _show_list(console, rows: list[dict]) -> None:

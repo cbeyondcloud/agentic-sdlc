@@ -44,7 +44,9 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, StringConstraints
 from agentic.learning.clustering import Proposal
 from agentic.learning.records import AGENT_NAME
 from agentic.learning.regression import case_path, regression_case
+from agentic.skills import SkillsError
 from agentic.skills.admission import scan_text
+from agentic.skills.authoring import check_name
 from agentic.skills.personal import ALLOWED_FRONT_MATTER, load_personal
 from agentic.yamlio import YamlFileError, load_yaml, split_front_matter
 
@@ -139,6 +141,10 @@ def target(kind: str, agent: str, team: str | None) -> tuple[Root, str]:
     if kind == "team-skill":
         if not team:
             raise DraftError("a team skill needs the team")
+        try:  # one folder, `teams/<team>/`: a slash or dots would reach another team's files
+            check_name(team, "a team name")
+        except SkillsError as error:
+            raise DraftError(str(error)) from None
         return "policy", f"teams/{team}/skills/internal/{learned}/SKILL.md"
     raise DraftError(f"unknown change kind {kind!r} (one of {', '.join(CHANGE_KINDS)})")
 
@@ -190,6 +196,12 @@ def _new_file(kind: str, agent: str) -> list[str]:
     if kind == "personal-note":
         return [f"# Learned: {agent}"]
     raise DraftError(f"there is no definition of agent {agent!r} to add an instruction to")
+
+
+def learned_skeleton(kind: str, agent: str) -> str:
+    """What a file a learning created holds once every learned block is out of it (its
+    front matter and title): nothing anyone wrote, so a revert may remove it (DF-768)."""
+    return _text(_new_file(kind, agent), crlf=False)
 
 
 def render_change(kind: str, before: str | None, lesson: str, agent: str, proposal_id: str) -> str:
@@ -327,6 +339,8 @@ def draft(
             f"{kind} is not a {narrowest} change: the corrections come from more than one "
             f"person, so the change is {narrowest}-wide or wider ({', '.join(KINDS[narrowest])})"
         )
+    if scope == "team" and proposal.scope.startswith("team:"):
+        team = proposal.scope.removeprefix("team:")  # the proposal's team, not the approver's
     root, path = target(kind, proposal.agent, team)
     before = read(root, path)
     if kind == "agent-instruction" and before is None:
@@ -351,7 +365,7 @@ def draft(
         diff=_diff(path, before, after),
         evidence=tuple(evidence),
         eval_case=case.model_dump(mode="json", exclude_defaults=True),
-        eval_path=case_path(root, proposal.id),
+        eval_path=case_path(root, proposal.id, team if root == "policy" else None),
         problems=tuple(instruction_only_problems(kind, before, after)),
         drafted_at=at or datetime.now(UTC),
     )
@@ -370,6 +384,7 @@ __all__ = [
     "Scope",
     "draft",
     "instruction_only_problems",
+    "learned_skeleton",
     "narrowest_scope",
     "render_change",
     "strip_change",

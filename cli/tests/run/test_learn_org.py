@@ -184,6 +184,9 @@ def test_org_approve_applies_a_personal_learning_and_revert_restores(org, cli, t
     assert decision["draft"]["path"] == "skills/learned-ba/SKILL.md"
     assert (reported, report["ref"]["kind"]) == ("applied", "personal")
     assert done.json()["status"] == "applied"
+    # the regression case ran before and after (M3-16), and the control plane is told
+    assert report["measurement"]["case"] == f"learned-{PID}"
+    assert report["measurement"]["status"] == "measured", report["measurement"]
 
     reverted = cli("--json", "learn", "revert", PID)
     assert reverted.code == ExitCode.OK, reverted.err
@@ -262,3 +265,24 @@ def test_org_approve_resumes_an_approved_proposal(org, cli, tmp_path):
     assert done.code == ExitCode.OK, done.err
     assert [call for call, _ in org.learning_calls] == ["applied"]
     assert (tmp_path / "home" / "skills" / "learned-ba" / "SKILL.md").is_file()
+
+
+def test_org_approve_of_a_decided_proposal_spends_nothing(org, cli, monkeypatch, tmp_path):
+    """Review I1: a rejected (or applied, reverted) proposal is refused before its
+    regression case runs - no model call, nothing asked of the control plane."""
+    import httpx2
+
+    calls: list[str] = []
+
+    def counting(request: httpx2.Request) -> httpx2.Response:
+        calls.append(request.headers.get("x-agentic-step", "?"))
+        return httpx2.Response(500)
+
+    monkeypatch.setattr(runtime, "network_transport", lambda: httpx2.MockTransport(counting))
+    for status in ("rejected", "applied", "reverted"):
+        org.learning[PID] = {**personal_detail(), "status": status}
+        refused = cli("--json", "learn", "approve", PID)
+        assert refused.code == ExitCode.REFUSED, refused.err
+        assert status in json.loads(refused.err)["error"]
+    assert calls == [] and org.learning_calls == []
+    assert not (tmp_path / "home" / "skills").exists()

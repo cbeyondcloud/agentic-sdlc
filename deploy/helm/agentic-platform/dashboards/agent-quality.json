@@ -184,7 +184,7 @@
         "type": "grafana-postgresql-datasource",
         "uid": "agentic-postgres"
       },
-      "description": "Each applied learning (M3-16): its agent's corrections per run of its team in the 30 days before and after it was applied. A window without a run is empty, not zero.",
+      "description": "Each applied learning (M3-16): its agent's corrections per run of its team (a personal learning: of its owner, lesson hidden) in the 30 days before and after it was applied. A window without a run is empty, not zero.",
       "fieldConfig": {
         "defaults": {},
         "overrides": []

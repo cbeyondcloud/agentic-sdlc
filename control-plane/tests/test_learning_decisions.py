@@ -391,3 +391,38 @@ async def test_attribution_correction_reclusters_at_once(api, dev, tmp_path):
     assert corrected.status_code == 200, corrected.text
     (proposal,) = (await api.get("/v1/learning/proposals", dev)).json()
     assert proposal["agent"] == "developer" and len(proposal["evidence"]) == 3
+
+
+async def test_the_measurement_is_stored_and_on_the_applied_audit_event(api, dev, tmp_path):
+    """M3-16 (DF-756): the CLI ran the regression case before and after; the control plane
+    keeps the measurement and puts its verdict on the `learning.applied` audit event."""
+    await corrections(api, dev, tmp_path)
+    (listed,) = (await api.get("/v1/learning/proposals", dev)).json()
+    pid = listed["id"]
+    assert (await decide(api, dev, pid, "approve", draft=DRAFT)).status_code == 200
+    measured = {
+        "status": "measured",
+        "case": f"learned-{pid}",
+        "before": 0.25,
+        "after": 0.75,
+        "regressed": False,
+        "unscored": [],
+        "agent": "developer",
+        "ledger": "eval-learning-20261101T000000-abc123",
+    }
+    body = {"ref": {"kind": "personal"}, "measurement": measured}
+    applied = await api.post(f"/v1/learning/proposals/{pid}/applied", dev, body)
+    assert applied.status_code == 200, applied.text
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        row = (
+            await conn.execute(select(learning_proposals).where(learning_proposals.c.id == pid))
+        ).one()
+    assert row.measurement == measured
+    (event,) = await audit_events(api, api.a.id, "learning.applied")
+    assert event.after["measurement"] == {
+        "status": "measured",
+        "case": f"learned-{pid}",
+        "before": "0.2500",  # decimal strings: the audit chain keeps no floats
+        "after": "0.7500",
+        "regressed": False,
+    }

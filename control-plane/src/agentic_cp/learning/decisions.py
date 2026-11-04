@@ -165,6 +165,15 @@ def _moved(row, action: str) -> str:
         raise ApiProblem(409, "learning.status", str(error)) from None
 
 
+#: What the `learning.applied` audit event says of the regression case before and after.
+MEASURED = ("status", "case", "before", "after", "regressed")
+
+
+def _audited(value):
+    """A score as a decimal string: the audit chain keeps no floats (jsonb round trip)."""
+    return f"{value:.4f}" if isinstance(value, float) else value
+
+
 async def _audit(conn, ctx, row, event: str, clock, *, after: dict, reason: str = "") -> None:
     await append(
         conn,
@@ -312,6 +321,9 @@ async def _report(request: Request, ctx, pid: str, body: ChangeReport, action: s
             }
             event = "reverted"
         ref = {k: body.ref.get(k) for k in ("kind", "url", "number", "branch") if k in body.ref}
+        if action == "apply" and body.measurement is not None:  # its verdict, never free text
+            measured = body.measurement
+            ref["measurement"] = {k: _audited(measured[k]) for k in MEASURED if k in measured}
         await _audit(conn, ctx, row, event, state.clock, after={"status": status, **ref})
         changed = await _updated(conn, row, values)
         return proposal_info(changed, await _owner_email(conn, changed))

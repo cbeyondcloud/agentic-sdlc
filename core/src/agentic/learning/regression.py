@@ -6,8 +6,8 @@
 prompt's context and the lesson as the key point the agent's answer must now cover, tagged
 `learning` and `regression`. It lands next to the change, in the target's eval corpus
 (`case_path`): `~/.agentic/eval/` for a personal learning, the repo's `.agentic/eval/`, the
-policy repo's `eval/`. Its source is the adopter's (`synthetic: false`), so it never belongs
-in `library/eval/` (decision 17).
+policy repo's `teams/<team>/eval/` for a team learning. Its source is the adopter's
+(`synthetic: false`), so it never belongs in `library/eval/` (decision 17).
 
 `measure` runs the case through the eval harness (`run_eval`, pydantic-evals) under two
 labels, `before` (the agent's instructions as they are) and `after` (with the change), and
@@ -42,10 +42,16 @@ class _Correction(Protocol):
     text: str
 
 
-def case_path(root: str, proposal_id: str) -> str:
-    """Where the regression case of a learning lands, under its target's root."""
+def case_path(root: str, proposal_id: str, team: str | None = None) -> str:
+    """Where the regression case of a learning lands, under its target's root: a team
+    learning's case stays in the team's own folder of the policy repo (`teams/<team>/`),
+    which that team's leads own (D30), beside the skill it tests."""
     name = f"eval/cases/scoping/learned-{proposal_id}.yaml"
-    return f".agentic/{name}" if root == "repo" else name
+    if root == "repo":
+        return f".agentic/{name}"
+    if root == "policy" and team:
+        return f"teams/{team}/{name}"
+    return name
 
 
 def regression_case(
@@ -85,14 +91,17 @@ class Measurement:
     case: str
     before: float
     after: float
+    #: "<label>: <why>" for a side whose run could not be scored (an infrastructure failure,
+    #: the budget cap): its 0.0 is no score, so the measurement is not one.
+    unscored: tuple[str, ...] = ()
 
     @property
     def regressed(self) -> bool:
         """The per-case regression rule: the change makes the lesson's coverage worse."""
-        return self.after < self.before
+        return not self.unscored and self.after < self.before
 
     def as_dict(self) -> dict:
-        return {**asdict(self), "regressed": self.regressed}
+        return {**asdict(self), "unscored": list(self.unscored), "regressed": self.regressed}
 
 
 async def measure(case: EvalCase, *, before: "RunCase", after: "RunCase", kind: str) -> Measurement:
@@ -110,7 +119,12 @@ async def measure(case: EvalCase, *, before: "RunCase", after: "RunCase", kind: 
         name=f"learning-{case.id}",
     )
     score = {r.request.label: r.metrics.get("lesson_covered", 0.0) for r in found.runs}
-    return Measurement(case=case.id, before=score["before"], after=score["after"])
+    unscored = tuple(
+        f"{r.request.label}: {r.record.error or r.record.status}"
+        for r in sorted(found.runs, key=lambda r: r.request.label != "before")
+        if r.record.error is not None or r.record.status == "skipped"
+    )
+    return Measurement(case.id, score["before"], score["after"], unscored)
 
 
 __all__ = [

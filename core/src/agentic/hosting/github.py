@@ -170,6 +170,11 @@ class GitHubHost:
         spliced = splice_body(said if isinstance(said, str) else None, body)
         return _pull_request(self._json("PATCH", path, json={"body": spliced}))
 
+    def close_pull_request(self, repo: RepoRef, number: int) -> PullRequest:
+        """Close the pull request unmerged (`ClosingHost`)."""
+        path = f"{self._repo_path(repo)}/pulls/{int(number)}"
+        return _pull_request(self._json("PATCH", path, json={"state": "closed"}))
+
     def checks(self, repo: RepoRef, sha: str) -> list[CheckRun]:
         commit = f"{self._repo_path(repo)}/commits/{quote(sha, safe='')}"
         runs = [

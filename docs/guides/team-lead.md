@@ -101,7 +101,19 @@ agentic skills decline <pr-number> --to team --reason "Add an eval case for retr
 agentic learn list --status pending
 agentic learn show <proposal>
 agentic learn approve <proposal>            # team-scope proposals: a policy-repo PR
+agentic learn revert <proposal>             # a revert PR (or closes the unmerged one)
 ```
+
+A team-scope learning becomes a pull request in the policy repo. It changes only your
+team's folder: `teams/<team>/skills/internal/learned-<agent>/SKILL.md`, its pin in
+`teams/<team>/skills/catalog.yaml`, and its regression case in `teams/<team>/eval/`. As
+CODEOWNERS of `teams/<team>/`, you review and merge it. `approve` needs a checkout of the
+policy repo: set `policy_checkout` (or `policy_repo`) in `~/.agentic/config.yaml`, as for
+`agentic skills submit --to team`. It runs the regression case before and after the change
+first (`--no-eval` skips that).
+
+`revert` opens a revert pull request when the learning was merged. When it was not merged,
+`revert` closes its pull request, so a later merge cannot bring it back.
 
 Rejected proposals are not proposed again without new evidence.
 

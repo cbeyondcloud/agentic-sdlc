@@ -136,6 +136,7 @@ class FakeGitHub:
                     pull["head"]["sha"] = self._head(pull["head"]["ref"]) or pull["head"]["sha"]
                 return 200, {**pull, "changed_files": len(self._changed(pull))}
             pull["body"] = body.get("body", pull["body"])
+            pull["state"] = body.get("state", pull["state"])
             pull["head"]["sha"] = self._head(pull["head"]["ref"]) or pull["head"]["sha"]
             return 200, pull
         if method == "GET" and re.fullmatch(_REPO + r"/commits/[^/]+/check-runs", path):

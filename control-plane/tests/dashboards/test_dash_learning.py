@@ -123,3 +123,45 @@ async def test_learning_effect_view_shows_before_and_after(dash_db):
     (row,) = await _rows(db.owner, seeded.b)  # tenant b sees only its own
     assert row["proposal_id"] == other
     assert (row["runs_after"], row["rate_after"]) == (0, None)  # unmeasured, not 0
+
+
+async def test_a_personal_learning_counts_its_owner_only_and_hides_its_lesson(dash_db):
+    """DF-763 (review F9): a personal learning changed one person's runs, so its rates are
+    that person's corrections over that person's runs - never the team's - and its lesson
+    text (one person's own note) is not shown to every dashboard viewer."""
+    db, seeded = dash_db
+    async with tenant_tx(db.owner, seeded.a) as conn:
+        shared = await _seed(conn, seeded.a)  # alice: 2 runs and 3 corrections before, 2/1 after
+        owner = (
+            await conn.execute(text("select author_id from feedback where team = 'learning'"))
+        ).first()[0]
+        await _seed(conn, seeded.a, agent="qa")  # bob's runs in the same team (another agent)
+        personal = f"lp-{uuid.uuid4().hex[:20]}"
+        await conn.execute(
+            learning_proposals.insert().values(
+                tenant_id=seeded.a,
+                id=personal,
+                team="learning",
+                agent="developer",
+                scope="repo:github.com/acme/app",
+                lesson="My own private note.",
+                status="applied",
+                applied_at=APPLIED,
+                authors=[owner],
+                owner="dev@a.test",
+                draft={"scope": "personal", "kind": "personal-note"},
+            )
+        )
+        found = await conn.execute(
+            text(
+                "select proposal_id, lesson, corrections_before, runs_before, "
+                "corrections_after, runs_after from dash_learning_effect "
+                "where team = 'learning' and agent = 'developer'"
+            )
+        )
+        rows = {r.proposal_id: r for r in found}
+    assert rows[personal].lesson is None  # one person's note stays theirs
+    assert (rows[personal].corrections_before, rows[personal].runs_before) == (3, 2)
+    assert (rows[personal].corrections_after, rows[personal].runs_after) == (1, 2)
+    assert rows[shared].lesson == "Wrap HTTP calls in with_retry()."
+    assert (rows[shared].runs_before, rows[shared].runs_after) == (4, 4)  # the team's runs

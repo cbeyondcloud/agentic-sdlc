@@ -101,3 +101,18 @@ async def test_bound_reader_reads_new_views_after_upgrade(readers, monkeypatch):
     reader = await made.connect(role, password)
     for view in ROI_VIEWS:
         assert await reader.fetch(f"select * from {view}"), view
+
+
+async def test_reader_without_the_learning_view_reads_it_after_upgrade(readers, monkeypatch):
+    """DF-763: a reader bound by a release before `m3_14_learning_apply` (its grants never
+    named `dash_learning_effect`) may read it after `m3_16_learning_effect`, without
+    re-binding."""
+    db, seeded, made = readers
+    await downgrade_async(db.owner_dsn, db.schema, "m3_06_retention")
+    role, password = made.name("m2"), secrets.token_hex(12)
+    monkeypatch.setattr("agentic_cp.dashboards.readers.DASH_VIEWS", M2_37_VIEWS + ROI_VIEWS)
+    await made.bind(seeded.a, role, password)
+    await migrate_async(db.owner_dsn, db.schema)
+    reader = await made.connect(role, password)
+    for view in LEARNING_VIEWS:
+        await reader.fetch(f"select * from {view}")  # permission denied before DF-763

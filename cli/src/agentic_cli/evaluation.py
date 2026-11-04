@@ -581,6 +581,9 @@ class EvalLedger:
       eval.report_written   -> step_finished  (step "eval", outcome verdict,
                                artifacts {report.json: sha}), then run_closed
       eval.failed           -> run_closed     (status error: the run raised)
+      eval.learning_measured -> step_finished (step "learning", outcome measured|regressed,
+                               artifacts {measurement: sha}), then run_closed - a learning's
+                               regression case before and after (`agentic learn approve`)
 
     It is also the `record(event, **fields)` callback `agentic.eval.abtest` takes.
     """
@@ -620,6 +623,14 @@ class EvalLedger:
                 artifacts = {"report.json": fields["report"]}
                 self.ledger.record(
                     "step_finished", phase="eval", outcome=outcome, artifacts=artifacts
+                )
+                self.ledger.record("run_closed", status=outcome)
+                self.ledger.release()
+            elif event == "eval.learning_measured":
+                outcome = fields["verdict"].lower()
+                artifacts = {"measurement": fields["measurement"]}
+                self.ledger.record(
+                    "step_finished", phase="learning", outcome=outcome, artifacts=artifacts
                 )
                 self.ledger.record("run_closed", status=outcome)
                 self.ledger.release()
