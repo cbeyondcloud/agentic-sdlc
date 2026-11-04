@@ -12,9 +12,9 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
     tool-pins.yaml        tools (per-platform artefacts `init` fetches from the mirror)
     org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines,
                           required_steps, checkpoint_exclude, commit_override,
-                          index_export_workflow, sandbox, unhonoured, secret_scan, publish_scan,
-                          review_prepass, review_batch, auto_trip, learning,
-                          run_health
+                          index_export_workflow, credential_file_fallback, sandbox,
+                          unhonoured, secret_scan, publish_scan, review_prepass,
+                          review_batch, auto_trip, learning, run_health
     eval.yaml            eval                      (agent evaluation defaults, M1-63)
     rollout.yaml          rollout, deprecated       (versions team by team, M2-15)
     teams/<team>.yaml     one TeamPolicy per team
@@ -68,6 +68,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
         "commit_override": "commit_override",
         "min_cli_version": "min_cli_version",
         "index_export_workflow": "index_export_workflow",
+        "credential_file_fallback": "credential_file_fallback",
         "sandbox": "sandbox",
         "unhonoured": "unhonoured",
         "secret_scan": "secret_scan",

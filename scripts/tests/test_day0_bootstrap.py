@@ -447,3 +447,22 @@ def test_byte_code_in_the_template_never_reaches_a_policy_repo(tmp_path, monkeyp
     out = tmp_path / "policy"
     bootstrap.build_policy_repo(_args(step="policy-repo", out=str(out), admins=["@acme/a"]))
     assert not list(out.rglob("__pycache__")) and not list(out.rglob("*.pyc"))
+
+
+def test_security_handle_replaces_the_template_example(tmp_path):
+    out = tmp_path / "policy"
+    bootstrap.build_policy_repo(
+        _args(step="policy-repo", out=str(out), admins=["@acme/a"], security=["@acme/sec"])
+    )
+    codeowners = (out / "CODEOWNERS").read_text(encoding="utf-8")
+    assert "/policy/                         @acme/a @acme/sec" in codeowners
+    assert "agentic-security" not in codeowners
+
+
+def test_without_a_security_handle_the_example_is_dropped_and_said(tmp_path, capsys):
+    out = tmp_path / "policy"
+    bootstrap.build_policy_repo(_args(step="policy-repo", out=str(out), admins=["@acme/a"]))
+    codeowners = (out / "CODEOWNERS").read_text(encoding="utf-8")
+    assert "agentic-security" not in codeowners
+    assert "/skills/                         @acme/a\n" in codeowners
+    assert "--security" in capsys.readouterr().out

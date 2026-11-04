@@ -13,13 +13,15 @@ sent to a site nobody named:
 
 `AGENTIC_JIRA_URL` and `AGENTIC_JIRA_USER` override `url` and `user` (CI, service
 accounts). The token comes from `agentic.auth.Credentials`: `AGENTIC_JIRA_TOKEN` (or
-`AGENTIC_<CREDENTIAL>`) first, then the OS keyring (`agentic login --for jira`). It is held
-only in memory, never shown, logged or written to the run folder.
+`AGENTIC_<CREDENTIAL>`) first, then the OS keyring (`agentic login --for jira`) or the
+credential file where there is none (`agentic_cli.credential_store`). It is held only in
+memory, never shown, logged or written to the run folder.
 """
 
 import json
 import os
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -31,6 +33,7 @@ from agentic.definitions.pipeline import PipelineDefinition
 from agentic.engine.state import RunState
 from agentic.integrations.jira import API_VERSIONS, JiraClient, JiraError, is_cloud, issue_key
 from agentic.security.untrusted import untrusted
+from agentic_cli.credential_store import cli_credentials
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from sdlc_commons.connectors import ConnectorError, ExternalItem, item_for, mapping_for
@@ -43,6 +46,7 @@ LOGIN = "agentic login --for jira"
 _KEYS = frozenset({"url", "user", "credential", "api_version", "transition"})
 _CREDENTIAL = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _CONFIG_HINT = "fix jira in ~/.agentic/config.yaml"
+SUMMARY_LIMIT = 80  # the summary on the request's header line (DF-547)
 
 
 @dataclass(frozen=True)
@@ -109,7 +113,7 @@ def jira_settings(settings: Mapping[str, Any], env: Mapping[str, str]) -> JiraSe
 
 def default_credentials() -> Credentials:
     """Where the token is looked up (tests replace it)."""
-    return Credentials()
+    return cli_credentials()
 
 
 def connect_jira(ws, credentials: Credentials | None = None) -> JiraClient:
@@ -204,9 +208,24 @@ def read_request(
 
 
 def request_text(item: ExternalItem, key: str) -> str:
-    """The run's request: a header naming the issue, then Zyroflo's specification inside an
-    `<untrusted-data>` fence - ticket text is data, never instructions (M1-42)."""
-    return f"Jira issue {key}\n\n" + untrusted(item.spec, source=f"jira {key}")
+    """The run's request: a header naming the issue and its summary (what a pull request
+    title is made from, DF-547), then Zyroflo's specification inside an `<untrusted-data>`
+    fence - ticket text is data, never instructions (M1-42)."""
+    summary = header_summary(item.title)
+    header = f"Jira issue {key}: {summary}" if summary else f"Jira issue {key}"
+    return f"{header}\n\n" + untrusted(item.spec, source=f"jira {key}")
+
+
+def header_summary(title: str) -> str:
+    """The issue summary as one short, plain line: whitespace collapsed, control and
+    format characters (bidi overrides) and angle brackets removed - outside the fence it
+    can open or close no tag - and cut to SUMMARY_LIMIT characters."""
+    text = " ".join(str(title or "").split())
+    text = "".join(c for c in text if c not in "<>" and unicodedata.category(c)[0] != "C")
+    text = " ".join(text.split())
+    if len(text) > SUMMARY_LIMIT:
+        text = text[: SUMMARY_LIMIT - 3].rstrip() + "..."
+    return text
 
 
 def jira_failure(error: JiraError, token: str | None = None) -> CliError:
@@ -217,7 +236,23 @@ def jira_failure(error: JiraError, token: str | None = None) -> CliError:
         return CliError(str(error), ExitCode.REFUSED, hint=hint)
     if error.status == 404:
         return CliError(str(error), ExitCode.INVALID, hint="check the issue key and the site")
-    return CliError(str(error), ExitCode.ERROR)
+    return CliError(str(error), ExitCode.ERROR, hint=_retry_hint(error))
+
+
+def _retry_hint(error: JiraError) -> str | None:
+    """When to try a transient failure again (DF-548), and for a site that cannot be
+    reached at all, the settings a corporate network usually needs."""
+    if not error.transient:
+        return None
+    if error.status is None:
+        return (
+            "check the network or VPN; behind a proxy set HTTPS_PROXY (and NO_PROXY for "
+            "hosts that bypass it), and if your network re-signs TLS, point SSL_CERT_FILE at "
+            "the corporate CA bundle"
+        )
+    if error.retry_after is not None:
+        return f"Jira asked to wait {error.retry_after:g} s: try again then"
+    return "Jira is busy or failing: try again in a few minutes"
 
 
 def start_transition(

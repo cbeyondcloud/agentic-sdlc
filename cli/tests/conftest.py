@@ -39,6 +39,8 @@ def no_real_secrets(monkeypatch: pytest.MonkeyPatch):
     previous = keyring.get_keyring()
     keyring.set_keyring(EmptyKeyring())
     monkeypatch.delenv("AGENTIC_GITHUB_TOKEN", raising=False)
+    # nor the developer's own credential file (DF-955): tests of the fallback unset this
+    monkeypatch.setenv("AGENTIC_CREDENTIAL_STORE", "keyring")
     for name in NETWORK_VARS:
         monkeypatch.delenv(name, raising=False)
     yield

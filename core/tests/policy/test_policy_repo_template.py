@@ -96,6 +96,18 @@ def test_every_team_has_its_layer_and_a_codeowners_line(policy):
         assert f"/policy/teams/{team}.yaml " in owners, team
 
 
+def test_security_reviews_the_org_policy_skills_and_codeowners():
+    """DF-954 (spec §23): security is a reviewer of policy repo PRs. The last matching
+    CODEOWNERS line wins, so the group sits on the lines for these paths themselves."""
+    owners = {}
+    for line in read_text(TEMPLATE / "CODEOWNERS").splitlines():
+        if line.strip() and not line.lstrip().startswith("#"):
+            path, *handles = line.split()
+            owners[path] = handles
+    for path in ("/policy/", "/skills/", "/CODEOWNERS"):
+        assert owners[path] == ["@your-org/agentic-org-admins", "@your-org/agentic-security"]
+
+
 def test_template_definitions_discover(policy):
     found = DefinitionSet.discover(org=TEMPLATE, team=TEMPLATE / "teams" / "payments", repo=None)
     assert found.pipelines == {} and found.agents == {}  # the library is copied in later
@@ -314,3 +326,11 @@ def test_the_jvm_backend_pin_is_shown_but_not_active(policy):
         "ed0f1f548cd79b121c401c2e9f7841c189a001af26d3768368088c24f6a53533",  # linux-aarch64
     ):
         assert digest in text
+
+
+def test_the_credential_file_fallback_is_allowed_and_documented(policy):
+    """DF-955: the template allows the credential file on machines with no OS keyring
+    (WSL2), and says how an org forbids it."""
+    text = read_text(TEMPLATE / "policy" / "org.yaml")
+    assert "\ncredential_file_fallback: true" in text and policy.credential_file_fallback
+    assert "AGENTIC_CREDENTIAL_STORE" in text

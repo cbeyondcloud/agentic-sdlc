@@ -1,7 +1,7 @@
 """The policy repo's team budget guard (M3-05, DF-857): a team lead may only lower their own
 team's `monthly_budget_usd`; a raise needs an org admin, as the author or as an approving
 reviewer of the pull request's head commit. Org admins are the owners of
-`policy/org.yaml` in the base branch's CODEOWNERS; when they cannot be told (a team handle
+`.github/budget_guard.py` in the base branch's CODEOWNERS; when they cannot be told (a team handle
 whose members are unknown), a raise fails closed."""
 
 from __future__ import annotations
@@ -102,6 +102,13 @@ def test_the_guard_reads_budgets_as_the_policy_loader_does():
 def test_org_admins_are_the_base_codeowners_of_org_policy():
     logins, teams = guard.org_admins(CODEOWNERS)
     assert logins == {"root-admin"} and teams == {"acme/agentic-org-admins"}
+
+
+def test_the_template_security_reviewers_are_not_org_admins():  # DF-954 review F2
+    """Security reviews policy/ but may not approve a budget raise: the admins are the
+    owners of the guard itself (.github/), which the template gives to the admins alone."""
+    logins, teams = guard.org_admins((TEMPLATE / "CODEOWNERS").read_text(encoding="utf-8"))
+    assert logins == set() and teams == {"your-org/agentic-org-admins"}
 
 
 def test_unexpanded_admin_teams_fail_closed_and_say_how_to_fix():

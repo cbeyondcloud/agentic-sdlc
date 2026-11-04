@@ -18,6 +18,7 @@ TEMPLATE = REPO_ROOT / "templates" / "policy-repo"
 VERSION = "git:" + "c" * 40
 ADMINS = "@your-org/agentic-org-admins"
 LEADS = "@your-org/payments-leads"
+SECURITY = "@your-org/agentic-security"  # DF-954: reviews policy/, skills/, CODEOWNERS
 
 
 def owners(path: str) -> list[str]:
@@ -29,10 +30,11 @@ def owners(path: str) -> list[str]:
     ("path", "expected"),
     [
         ("pipelines/feature-delivery.yaml", [ADMINS]),
-        ("policy/tiers.yaml", [ADMINS]),
-        ("skills/catalog.yaml", [ADMINS]),
+        ("policy/tiers.yaml", [ADMINS, SECURITY]),
+        ("skills/catalog.yaml", [ADMINS, SECURITY]),
         ("agents/developer.md", [ADMINS]),
-        ("CODEOWNERS", [ADMINS]),
+        ("CODEOWNERS", [ADMINS, SECURITY]),
+        (".github/budget_guard.py", [ADMINS]),
         ("teams/payments/pipelines/feature-delivery.yaml", [LEADS]),
         ("teams/payments/pipelines/overlays/app.yaml", [LEADS]),
         ("teams/payments/skills/catalog.yaml", [LEADS]),

@@ -42,7 +42,7 @@ from typing import Any, Literal
 import httpx2
 from rich.console import Console
 
-from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials
+from agentic.auth import TOKENLEAN_KEY, CredentialError, Credentials, FileStore, NoKeyringError
 from agentic.codeintel import index as codeintel_index
 from agentic.hosting import HostingError, ProtectionHost, RepoRef, parse_remote
 from agentic.hosting.git import remote_url
@@ -52,6 +52,7 @@ from agentic.sandbox.process import withheld_names
 from agentic.transport import probe_gateway
 from agentic_cli import __version__, codeintel, control_plane, hosting, housekeeping, readiness
 from agentic_cli.config import user_config
+from agentic_cli.credential_store import StoreChoice, cli_credentials, store_choice
 from agentic_cli.errors import CliError
 from agentic_cli.standalone import PLACEHOLDER
 from agentic_cli.workspace import INIT_STATE, Workspace
@@ -65,6 +66,10 @@ DISK_FAIL_BYTES = 1024**3
 DISK_WARN_BYTES = 5 * 1024**3
 #: An org policy cache with less than this share of its lifetime left is worth refreshing.
 CACHE_WARN_SHARE = 0.1
+KEYRING_FIX = (
+    "fix the OS keyring (Windows Credential Manager, macOS Keychain, a Secret Service such "
+    "as gnome-keyring in Linux or WSL2)"
+)
 #: A control-plane token that expires within this is worth renewing now.
 TOKEN_WARN = timedelta(days=7)
 _MARK = {
@@ -133,7 +138,10 @@ def run_doctor(cwd: Path, home: Path, env: Mapping[str, str], deps: DoctorDeps) 
     """Every check, in order; never raises for a failing check (each is reported)."""
     report = DoctorReport()
     add = report.checks.append
-    credentials = deps.credentials or Credentials(environ=env)
+    try:
+        credentials = deps.credentials or cli_credentials(env, home)
+    except CliError:  # an unknown credential_store: the `credential file` check names it
+        credentials = Credentials(environ=env)
     try:
         ws: Workspace | None = Workspace.load(cwd, env=env, home=home)
         settings = ws.settings
@@ -159,7 +167,14 @@ def run_doctor(cwd: Path, home: Path, env: Mapping[str, str], deps: DoctorDeps) 
     if ws is not None and policy is not None:
         add(_placeholders(policy))
         add(_policy_cache(ws, home))
-    add(_keyring(credentials))
+    try:
+        choice: StoreChoice | None = store_choice(env, home, settings)
+    except CliError as error:
+        choice = None
+        add(Check("credential file", "fail", str(error), error.hint or ""))
+    add(_keyring(credentials, env, choice))
+    if choice is not None:
+        add(_credential_file(choice))
     gateway = _gateway(settings, env, credentials, deps)
     report.checks += gateway.checks
     if gateway.models is not None and policy is not None:
@@ -279,20 +294,70 @@ def _policy_cache(ws: Workspace, home: Path) -> Check:
     return Check("policy: cache", "warn" if left / life < CACHE_WARN_SHARE else "ok", detail, fix)
 
 
-def _keyring(credentials: Credentials) -> Check:
+def _keyring(credentials: Credentials, env: Mapping[str, str], choice: StoreChoice | None) -> Check:
     if credentials.in_ci:
         return Check("keyring", "skip", f"CI ({credentials.ci_marker} is set): not used in CI")
+    if choice is not None and choice.mode == "file":
+        return Check("keyring", "skip", "credential_store is file: the keyring is not used")
     try:
-        credentials.find("doctor_probe")
+        Credentials(environ=env).find("doctor_probe")  # the keyring alone, no file
     except CredentialError as error:
+        missing = isinstance(error.__cause__, NoKeyringError)
+        if missing and choice is not None and choice.file_allowed:
+            return Check(
+                "keyring",
+                "warn",
+                f"no OS keyring on this machine: keys are kept in the credential file "
+                f"{choice.path} instead",
+                KEYRING_FIX + ", or keep the file (see `credential file`)",
+            )
+        why = (
+            f" ({choice.forbidden} forbids the credential file)"
+            if choice and choice.forbidden
+            else ""
+        )
         return Check(
             "keyring",
             "fail",
-            str(error),
-            "fix the OS keyring (Windows Credential Manager, macOS Keychain, Secret Service), "
-            "or set the AGENTIC_* variables instead",
+            f"{error}{why}",
+            KEYRING_FIX + ", or set the AGENTIC_* variables instead",
         )
     return Check("keyring", "ok", "the OS keyring can be read")
+
+
+def _credential_file(choice: StoreChoice) -> Check:
+    """The credential file (DF-955): where it is, whether it is used and allowed, and
+    whether only its owner can read it. Never what it holds."""
+    path = choice.path
+    refused = choice.forbidden or (
+        "credential_store is keyring" if choice.mode == "keyring" else None
+    )
+    if not (path.is_file() or path.is_symlink()):
+        if refused:
+            return Check("credential file", "ok", f"not used: {refused}")
+        return Check(
+            "credential file",
+            "ok",
+            f"not used; {path} is the fallback where there is no OS keyring",
+        )
+    if refused:
+        return Check(
+            "credential file",
+            "fail",
+            f"keys are kept in {path}, but {refused}",
+            f"delete {path}, then store your keys in the OS keyring with `agentic login` "
+            "(or set the AGENTIC_* variables)",
+        )
+    problem = FileStore(path).problem()
+    if problem:
+        return Check("credential file", "fail", problem, problem.rpartition("; ")[2])
+    return Check(
+        "credential file",
+        "warn",
+        f"keys are kept in {path}: readable only by you, but not encrypted",
+        "use an OS keyring where you can (the developer guide says how in WSL2); the file "
+        "is allowed here",
+    )
 
 
 @dataclass

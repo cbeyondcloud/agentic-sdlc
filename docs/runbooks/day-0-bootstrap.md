@@ -75,7 +75,7 @@ it: give those rights to the platform team only (a Role bound to their group), o
 ```bash
 uv run python scripts/bootstrap.py policy-repo --out ../agentic-org-policy \
   --repo-pattern 'github.com/acme/*' \
-  --admins @acme/agentic-org-admins \
+  --admins @acme/agentic-org-admins --security @acme/agentic-security \
   --team checkout=@acme/checkout-leads --team search=@acme/search-leads \
   --model deep-reasoning=<gateway model> --model balanced=<gateway model> \
   --model fast=<gateway model> --model local=<local model> --model eval-judge=<model of another family> \
@@ -83,7 +83,9 @@ uv run python scripts/bootstrap.py policy-repo --out ../agentic-org-policy \
 ```
 
 It copies `templates/policy-repo/` and the framework library (agents, pipelines, skills),
-replaces the template's example handles, team and repository pattern with yours, names the
+replaces the template's example handles, team and repository pattern with yours (without
+`--security`, the example security team is removed from CODEOWNERS and nobody from security
+reviews `policy/`, `skills/` or CODEOWNERS), names the
 models you give (a tier you do not name keeps its `change-me` placeholder: name them all
 before developers start), pins the release the policy-check workflow installs, commits on
 `main` and makes the `staging` and `dev` branches. It then runs `agentic policy check`, the

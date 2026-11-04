@@ -57,7 +57,7 @@ def test_a_run_started_from_a_jira_issue_reports_back(workspace, jira, cli):
     run_id = result.json()["run_id"]
 
     request = state_of(workspace, run_id).inputs["request"]
-    assert request.startswith("Jira issue PROJ-123\n")
+    assert request.startswith("Jira issue PROJ-123: Export the ledger as CSV\n")
     assert '<untrusted-data source="jira PROJ-123">' in request
     assert "title: Export the ledger as CSV" in request and "One row per payment." in request
     assert jira.calls() == [
@@ -164,7 +164,9 @@ def test_a_pull_request_title_from_a_jira_run_is_the_header_line(workspace, jira
 
     result = cli("--json", "run", "intake", "--from-jira", "PROJ-123")
     state = state_of(workspace, result.json()["run_id"])
-    assert _title(state, lambda text: text) == "intake: Jira issue PROJ-123"
+    assert (
+        _title(state, lambda text: text) == "intake: Jira issue PROJ-123: Export the ledger as CSV"
+    )
 
 
 def test_a_ticket_cannot_close_the_untrusted_fence(workspace, jira, cli):
