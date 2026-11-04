@@ -177,3 +177,14 @@ def test_an_invite_is_not_used_when_no_key_could_be_stored(plane, capsys, monkey
         keyring_module.set_keyring(previous)
     assert code == ExitCode.ERROR and "credential file" in err
     assert plane.requests == []
+
+
+def test_a_replaced_empty_setting_is_shown_as_changed_not_added(plane, capsys):  # DF-964
+    plane.add_invite(INVITE, gateway_key=GATEWAY_KEY)
+    config = agentic_home() / "config.yaml"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text("control_plane_url:\n", encoding="utf-8")
+    assert main(["login", "--invite", LINK]) == ExitCode.OK
+    shown = capsys.readouterr().out
+    assert f"control_plane_url: {CP_URL}  (was empty)" in shown
+    assert "gateway_url: https://gateway.acme.example  (added)" in shown

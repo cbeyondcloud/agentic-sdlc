@@ -352,7 +352,7 @@ def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool
         if written:
             console.print(f"Updated {change.path}:", markup=False)
             for key, old in change.changed.items():
-                was = f"(was {old})" if old is not None else "(added)"
+                was = "(added)" if key in change.added else f"(was {old or 'empty'})"
                 console.print(f"  {key}: {config[key]}  {was}", markup=False)
         elif config:
             console.print(f"Add to {home / CONFIG_FILE}:", markup=False)
