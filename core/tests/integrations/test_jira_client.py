@@ -378,3 +378,24 @@ def test_a_retry_after_date_in_the_past_means_now(header):  # DF-963
     with pytest.raises(JiraError, match="try again in 0 s") as raised:
         client(handler).issue("PROJ-123")
     assert raised.value.retry_after == 0.0
+
+
+def test_a_retry_after_date_with_a_huge_year_is_ignored():  # review I1: no OverflowError
+    def handler(request):
+        return httpx2.Response(
+            429, headers={"Retry-After": "Wed, 04 Nov 99999999999999999999 10:00:00 GMT"}
+        )
+
+    with pytest.raises(JiraError, match="try again later") as raised:
+        client(handler).issue("PROJ-123")
+    assert raised.value.retry_after is None
+
+
+@pytest.mark.parametrize("header", ["Fri, 31 Dec 9999 23:59:59 GMT", "999999999"])
+def test_a_very_long_retry_after_is_capped_at_a_day(header):  # review I1
+    def handler(request):
+        return httpx2.Response(429, headers={"Retry-After": header})
+
+    with pytest.raises(JiraError, match="try again in 86400 s") as raised:
+        client(handler).issue("PROJ-123")
+    assert raised.value.retry_after == 86400.0
