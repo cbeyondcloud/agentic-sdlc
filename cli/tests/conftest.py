@@ -41,6 +41,8 @@ def no_real_secrets(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("AGENTIC_GITHUB_TOKEN", raising=False)
     # nor the developer's own credential file (DF-955): tests of the fallback unset this
     monkeypatch.setenv("AGENTIC_CREDENTIAL_STORE", "keyring")
+    # nor the developer's own onboarding timer (M3-23): its tests turn it back on
+    monkeypatch.setenv("AGENTIC_ONBOARDING_TIMER", "off")
     for name in NETWORK_VARS:
         monkeypatch.delenv(name, raising=False)
     yield

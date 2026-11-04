@@ -21,10 +21,11 @@ import sys
 import traceback
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from datetime import UTC, datetime
 
 import typer
 
-from agentic_cli import __version__
+from agentic_cli import __version__, onboarding
 from agentic_cli.commands import COMMANDS
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
@@ -75,12 +76,17 @@ def main(argv: Sequence[str] | None = None, app: typer.Typer | None = None) -> i
     safe_streams()  # a Windows pipe is not UTF-8: never crash on an arrow in agent text
     command = typer.main.get_command(app or build_app())
     out = Output(json_mode="--json" in args, color="--no-color" not in args)
+    started, code = datetime.now(UTC), ExitCode.ERROR
     try:
         with stop_signals_as_interrupts():
-            return _run(command, args, out)
+            code = _run(command, args, out)
+            return code
     except KeyboardInterrupt:  # a stop signal between commands' own handling
         out.err.print("interrupted", markup=False)
-        return ExitCode.INTERRUPTED
+        code = ExitCode.INTERRUPTED
+        return code
+    finally:  # the first login .. first dry run, on this machine only (M3-23)
+        onboarding.note(args, code, started, datetime.now(UTC))
 
 
 def _run(command, args: list[str], out: Output) -> int:
