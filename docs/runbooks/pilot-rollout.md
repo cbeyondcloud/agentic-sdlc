@@ -84,14 +84,18 @@ auto_trip:
 
 | When | What | Who | Length |
 |---|---|---|---|
-| Week 0, day 1 | Kick-off: why, what the agents do and do not do, how gates work, how to stop a run | pilot lead, all pilot devs | 30 min (the M3-23 deck) |
-| Week 0 | Onboarding: each developer installs and initialises unaided (`agentic init`, then `agentic doctor`) | each developer; the champion nearby | target 15 min or less, timed |
+| Week 0, day 1 | Kick-off: why, what the agents do and do not do, how gates work, how to stop a run | pilot lead, all pilot devs | 30 min ([the deck](../training/deck.md)) |
+| Week 0 | Onboarding: each developer follows the [walkthrough](../training/walkthrough.md) unaided, on the training repository | each developer; the champion nearby | target 15 min or less, timed |
 | Week 0 | Team-lead session: approving gates, budgets, the Team view, the kill switch | pilot lead, team leads | 45 min |
-| Weeks 1-8 | Office hours, twice a week | platform team | 30 min each |
+| Weeks 1-8 | [Office hours](../training/office-hours.md), twice a week | platform team | 30 min each |
 | Week 1 | First runs together: one bugfix pipeline per developer on a real, small issue | champion | 1 h |
 
-Time each onboarding from "opens the guide" to "first `agentic doctor` all green" and write
-it down: the median is an exit criterion of the next wave. Someone who gets stuck sends an
+Time each onboarding from the first `agentic login` to the first successful
+`agentic run --dry-run`: `agentic onboarding` prints it on the developer's laptop (nothing
+is sent), and the [facilitator sheet](../training/facilitator-sheet.md) collects the times
+and the median, an exit criterion of the next wave. The training material is in
+[docs/training](../training/walkthrough.md); the [docs site](docs-site.md) serves it with
+the guides. Someone who gets stuck sends an
 `agentic support-bundle` (redacted) to the platform channel; never a screenshot of a token.
 
 ## 5. Running the pilot, week by week

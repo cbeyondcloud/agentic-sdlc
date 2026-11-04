@@ -19,6 +19,7 @@ maps capability tiers to whatever models the org chooses.
 | Changing org policy | [Policy-repo guide](docs/guides/policy-repo.md) |
 | Looking up a command | [Command reference](docs/guides/command-reference.md) |
 | Running a procedure | [Runbooks](docs/runbooks/README.md) |
+| Running or taking the training | [Training](docs/training/walkthrough.md): the 15-minute walkthrough, the 30-minute deck, office hours |
 
 ## Quick start (developer)
 
@@ -60,5 +61,6 @@ uv run ruff format --check .
 uv run pytest cli/tests
 ```
 
-`scripts/check.py` runs the full CI. Licence: MIT (see `LICENSE` and
+The docs site: `uv sync --group docs`, then `uv run mkdocs build --strict` (start page
+`docs/index.md`; hosting in `docs/runbooks/docs-site.md`). `scripts/check.py` runs the full CI. Licence: MIT (see `LICENSE` and
 `THIRD_PARTY_NOTICES.md`).
