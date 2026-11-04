@@ -44,7 +44,7 @@ from agentic.yamlio import dump_yaml, load_yaml, split_front_matter
 from agentic_cli.main import main
 
 HERE = Path(__file__).resolve().parent
-SAMPLE_REPO = HERE / "sample-repo"
+SAMPLE_REPO = HERE.parents[2] / "examples" / "sample-repo"  # also the training repo (M3-23)
 CASSETTES = HERE / "cassettes"
 #: `scripts/record_acceptance.py` sets this: answer from the scripted upstream and record
 RECORD = os.environ.get("AGENTIC_ACCEPTANCE_RECORD", "").strip() == "1"
@@ -256,6 +256,7 @@ class Scenario:
     monkeypatch: object
     capsys: object
     name: str = ""
+    cassettes: Path = CASSETTES  # the training walkthrough's live in the CLI (M3-23)
     github: FakeGitHub | None = None
     server: WatchedCassetteServer | None = None
     upstream: ScriptedUpstream | None = None
@@ -415,14 +416,14 @@ class Scenario:
         key = f"{self.name}/acceptance/1"
         if RECORD:
             self.upstream = ScriptedUpstream(script)
-            self.server = WatchedCassetteServer(CASSETTES, "record", self.upstream).start()
+            self.server = WatchedCassetteServer(self.cassettes, "record", self.upstream).start()
         else:
-            cassette = CASSETTES.joinpath(*key.split("/")).with_suffix(".json")
+            cassette = self.cassettes.joinpath(*key.split("/")).with_suffix(".json")
             assert cassette.is_file(), (
                 f"no cassette {cassette}: record it with `uv run python scripts/"
                 "record_acceptance.py`"
             )
-            self.server = WatchedCassetteServer(CASSETTES, "replay").start()
+            self.server = WatchedCassetteServer(self.cassettes, "replay").start()
         self.server.expect([key])
         self.monkeypatch.setenv("AGENTIC_GATEWAY_URL", self.server.base_url(key))
 
@@ -433,7 +434,7 @@ class Scenario:
         problems = self.server.finish()
         if self.upstream is not None and self.upstream.leftovers():
             problems.append(f"scripted turns never asked for: {self.upstream.leftovers()}")
-        stamp = CASSETTES / self.name / "acceptance" / FINGERPRINT
+        stamp = self.cassettes / self.name / "acceptance" / FINGERPRINT
         current = prompt_fingerprint()
         if RECORD:
             if not problems:  # written with the cassette, only when it was written
