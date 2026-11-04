@@ -307,3 +307,68 @@ def test_no_warning_without_a_file_or_when_the_file_is_allowed(home, monkeypatch
     assert "still holds keys" in forbidden_file_warning()
     cache_policy("acme", "credential_file_fallback: true\n")
     assert forbidden_file_warning() is None
+
+
+# ── more ways into the file, through the CLI (DF-965) ────────────────────────
+
+
+def stored_in_file(name: str) -> str | None:
+    data = json.loads((agentic_home() / FILE_NAME).read_text(encoding="utf-8"))
+    return data[SERVICE].get(name)
+
+
+@pytest.fixture
+def plane(monkeypatch):
+    from cp_fakes import CP_URL, FakeControlPlane
+
+    from agentic_cli import control_plane
+
+    fake = FakeControlPlane()
+    monkeypatch.setattr(control_plane, "make_transport", lambda: fake.transport)
+    monkeypatch.setenv("AGENTIC_CONTROL_PLANE_URL", CP_URL)
+    return fake
+
+
+def test_login_for_the_control_plane_stores_into_the_file(no_keyring, plane, capsys, monkeypatch):
+    from cp_fakes import TOKEN
+
+    from agentic_cli.control_plane import CONTROL_PLANE_TOKEN
+
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(TOKEN + "\n"))
+    code, data, err = login(capsys, "--for", "control-plane")
+    assert code == ExitCode.OK, err
+    assert data["where"] == "file" and data["credential_file"] == str(agentic_home() / FILE_NAME)
+    assert stored_in_file(CONTROL_PLANE_TOKEN) == TOKEN and TOKEN not in json.dumps(data)
+
+
+def test_login_rotate_stores_the_new_key_into_the_file(no_keyring, plane, capsys, monkeypatch):
+    from cp_fakes import CP_URL, TOKEN
+
+    from agentic.auth import TOKENLEAN_KEY
+
+    write_config(f"control_plane_url: {CP_URL}\n")
+    monkeypatch.setenv("AGENTIC_CONTROL_PLANE_TOKEN", TOKEN)
+    plane.proxy_key = KEY
+    code = main(["--json", "login", "--rotate"])
+    out = capsys.readouterr()
+    assert code == ExitCode.OK, out.err
+    data = json.loads(out.out)
+    assert data["where"] == "file" and data["rotated"] is True
+    assert stored_in_file(TOKENLEAN_KEY) == KEY and KEY not in out.out + out.err
+
+
+def test_a_chosen_file_is_used_although_a_keyring_works(home, capsys, monkeypatch):
+    monkeypatch.delenv(STORE_ENV, raising=False)
+    write_config("credential_store: file\n")
+    ring = Memory()
+    previous = keyring.get_keyring()
+    keyring.set_keyring(ring)
+    try:
+        monkeypatch.setattr("sys.stdin", __import__("io").StringIO(KEY + "\n"))
+        code, data, err = login(capsys, "--for", "jira")
+        assert code == ExitCode.OK, err
+        assert data["where"] == "file" and stored_in_file("jira_token") == KEY
+        assert ring.stored == {}  # the keyring is skipped, not written
+        assert cli_credentials().get("jira_token").source == "file"
+    finally:
+        keyring.set_keyring(previous)
