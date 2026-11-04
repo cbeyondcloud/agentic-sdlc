@@ -8,8 +8,11 @@ from the scripted turns below: no model is called. The walkthrough stops at the 
 gate, so only the Business Analyst, the test baseline and the Design agent answer.
 """
 
+import json
+
 from _acceptance_support import (
     FINGERPRINT,
+    RECORD,
     Scenario,
     approvals,
     prompt_drift,
@@ -18,7 +21,7 @@ from _acceptance_support import (
 )
 from _invoice_story import PYTEST, REQUEST, design, passing, requirements
 
-from agentic_cli.commands.training import CASSETTES, KEY
+from agentic_cli.commands.training import CASSETTES, KEY, STEPS
 from agentic_cli.exit_codes import ExitCode
 
 SCENARIO = "training"
@@ -58,6 +61,11 @@ def test_the_training_walkthrough(scenario: Scenario):
     scenario.ok("--json", "stop", run_id, "--reason", "training walkthrough done")
 
     assert scenario.finish_models() == []  # every recorded answer used, none missing
+    # the step of each call, which `agentic training-gateway` compares a trainee's run to
+    steps = [call["step"] for call in scenario.server.seen]
+    if RECORD:
+        STEPS.write_text(json.dumps(steps, indent=2) + "\n", encoding="utf-8", newline="\n")
+    assert json.loads(STEPS.read_text(encoding="utf-8")) == steps, "re-record: steps changed"
     assert [(a["gate"], a["verdict"]) for a in approvals(repo, run_id)] == [
         ("requirements-approval", "approve")
     ]

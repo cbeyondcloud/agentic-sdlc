@@ -144,6 +144,7 @@ unset AGENTIC_GATEWAY_URL
 | `approve` says you may not approve this gate | Tell the facilitator: the training team must let trainees approve their own runs |
 | `the run made more calls than recorded`, or `cassette_exhausted` | The training gateway serves one walkthrough: Ctrl-C it, start it again, and start a new run |
 | `run` cannot reach `127.0.0.1` with the training gateway running | Your proxy settings send local calls to the proxy: `export NO_PROXY=127.0.0.1,localhost` (add to it if you already have one), then start the run again |
+| The gateway prints `N requests differed from the recording (the training pipeline differs)` when stopped | The training team's `feature-delivery` is not the one recorded, so the answers may not fit: tell the facilitator (the [day-0 runbook](../runbooks/day-0-bootstrap.md#training-environment-m3-23) says the training team uses the library pipeline) |
 | Anything else | `agentic doctor`, then `agentic support-bundle` for the facilitator; never a screenshot of a token |
 
 Trying it alone, with no org? `agentic init --standalone` sets up a local policy with no

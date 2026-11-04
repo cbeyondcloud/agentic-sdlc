@@ -8,8 +8,13 @@ acceptance scenario `test_accept_training_walkthrough.py`) with the eval cassett
 it with `AGENTIC_GATEWAY_URL` gets the recorded answers in order: no model is called,
 nothing leaves the machine, nothing is spent. It never forwards a call; one call more
 than the recording is refused. Start it again for each new try of the walkthrough.
+
+Whether the trainee's pipeline is the recorded one shows in the pipeline step each call
+names (its `X-Agentic-Step` header) against the recording's (`steps.json`, written with
+the cassette). Request hashes cannot tell: they differ on every run (run ids, paths).
 """
 
+import json
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -21,6 +26,27 @@ from agentic_cli.output import Output
 
 CASSETTES = Path(__file__).resolve().parent.parent / "training" / "cassettes"
 KEY = "training/acceptance/1"  # the walkthrough scenario's cassette
+STEPS = CASSETTES / "training" / "acceptance" / "steps.json"  # the step of each call
+
+
+class TrainingServer(CassetteServer):
+    """The cassette server, counting calls whose pipeline step is not the recording's."""
+
+    def __init__(self, root: Path, expected: list[str]) -> None:
+        super().__init__(root, "replay")
+        self.expected = expected
+        self.steps: list[str | None] = []
+
+    def _answer(self, path: str, body: bytes, headers: dict[str, str]):
+        with self._lock:
+            self.steps.append(headers.get("x-agentic-step"))
+        return super()._answer(path, body, headers)
+
+    @property
+    def differed(self) -> int:
+        with self._lock:
+            pairs = list(enumerate(self.steps))
+        return sum(1 for i, step in pairs if i >= len(self.expected) or step != self.expected[i])
 
 
 def _until_interrupted() -> None:
@@ -36,7 +62,8 @@ def register(app: typer.Typer) -> None:
     def training_gateway(ctx: typer.Context) -> None:
         """Serve the training walkthrough's recorded model answers (no model, no spend)."""
         out: Output = ctx.obj
-        server = CassetteServer(CASSETTES, "replay").start()
+        expected = json.loads(STEPS.read_text(encoding="utf-8"))
+        server = TrainingServer(CASSETTES, expected).start()
         try:
             server.expect([KEY])
             url = server.base_url(KEY)
@@ -58,6 +85,11 @@ def register(app: typer.Typer) -> None:
             problems = server.finish()
         finally:
             server.close()
-        summary = {"gateway_url": url, "problems": problems}
+        differed = server.differed  # answered, but for another step: another pipeline
+        summary = {"gateway_url": url, "problems": problems, "differed": differed}
         message = "stopped" + (": " + "; ".join(problems) if problems else "")
+        if differed:
+            message += (
+                f"\n{differed} requests differed from the recording (the training pipeline differs)"
+            )
         out.result(summary, lambda c: c.print(message, markup=False))
