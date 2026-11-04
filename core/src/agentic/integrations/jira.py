@@ -27,6 +27,8 @@ import ipaddress
 import math
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import quote
 
@@ -303,10 +305,18 @@ def _adf(text: str) -> dict:
 
 
 def _retry_after(response: httpx2.Response) -> float | None:
+    """Retry-After in seconds: a number, or an HTTP date (DF-963) as whole seconds from now
+    (0 for a date already past). None when it is absent or neither."""
+    header = response.headers.get("retry-after", "").strip()
     try:
-        seconds = float(response.headers.get("retry-after", ""))
+        seconds = float(header)
     except ValueError:
-        return None
+        try:
+            when = parsedate_to_datetime(header)
+        except (TypeError, ValueError, IndexError):
+            return None
+        when = when if when.tzinfo else when.replace(tzinfo=UTC)
+        return float(max(0, math.ceil((when - datetime.now(UTC)).total_seconds())))
     return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
