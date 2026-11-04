@@ -5,6 +5,7 @@ file is replaced in one step; and a file it cannot edit safely is left alone."""
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,22 @@ from agentic_cli.config import CONFIG_FILE, set_user_config
 
 URL = "https://cp.acme.example"
 GATEWAY = "https://gateway.acme.example"
+
+
+def _symlinks_work() -> bool:
+    """Whether this user may make symbolic links (on Windows: Developer Mode or admin)."""
+    with tempfile.TemporaryDirectory() as folder:
+        try:
+            os.symlink(os.path.join(folder, "target"), os.path.join(folder, "link"))
+        except (OSError, NotImplementedError):
+            return False
+    return True
+
+
+#: Symbolic-link tests run wherever links can be made, Windows included (DF-965).
+SYMLINKS = pytest.mark.skipif(
+    not _symlinks_work(), reason="symbolic links need Developer Mode (or admin rights) on Windows"
+)
 
 
 def config(home: Path) -> Path:
@@ -125,7 +142,7 @@ def test_a_file_an_appended_line_would_break_is_left_alone(tmp_path, text):  # r
     assert path.read_text(encoding="utf-8") == text
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="symbolic links need privileges on Windows")
+@SYMLINKS
 def test_a_symbolic_link_is_left_alone(tmp_path):  # review F5: a dotfile manager's link
     real = tmp_path / "dotfiles" / "config.yaml"
     real.parent.mkdir()

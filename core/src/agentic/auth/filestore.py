@@ -12,10 +12,13 @@ The file:
   * is created with mode 0600 inside a folder that is 0700 when agentic creates it, and
     replaced in one step (a temporary file, then a rename), so a crash never leaves half
     a file;
-  * is refused on POSIX when anyone but its owner can read or write it, or when it is a
-    symbolic link - like ssh with a private key - with the command that fixes it;
-  * holds `{"version": 1, "<service>": {"<name>": "<value>"}}`; its contents never appear
-    in an error, a repr or a log.
+  * is refused on POSIX when anyone but its owner can read or write it, when another user
+    owns it, or when it is a symbolic link - like ssh with a private key - with the
+    command that fixes it; on a Windows drive in WSL2 (/mnt/c, a drvfs mount) file modes
+    cannot be set, so there it is refused before a key is written, naming AGENTIC_HOME;
+  * holds `{"version": 1, "<service>": {"<name>": "<value>"}}` (a rewrite keeps any other
+    top-level key, for a later version's fields); its contents never appear in an error,
+    a repr or a log.
 
 On Windows the folder's default access list already limits it to the user; Windows has
 the Credential Manager, so the file is used there only when someone chooses it.
@@ -24,13 +27,16 @@ the Credential Manager, so the file is used there only when someone chooses it.
 import contextlib
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath
 
 FILE_NAME = "credentials.json"
 _VERSION = 1
+#: Where Linux lists its mounts; WSL2 shows a Windows drive there as drvfs (or 9p).
+MOUNTS = Path("/proc/mounts")
 
 
 class CredentialFileError(Exception):
@@ -50,18 +56,22 @@ class FileStore:
         return self.path.is_file() or self.path.is_symlink()
 
     def problem(self) -> str | None:
-        """Why the file must not be used now (too open, a link), or None."""
-        if self.path.is_symlink():
-            return f"{self.path} is a symbolic link; replace it with a regular file"
-        if not self.path.is_file() or sys.platform == "win32":
-            return None
-        mode = stat.S_IMODE(self.path.stat().st_mode)
-        if mode & 0o077:
+        """Why the file must not be used now (too open, another user's, a link, or it
+        cannot be checked), or None; never raises. Always "<what>; <fix>"."""
+        try:
+            if self.path.is_symlink():
+                return f"{self.path} is a symbolic link; replace it with a regular file"
+            if not self.path.is_file() or sys.platform == "win32":
+                return None
+            info = self.path.stat()
+        except OSError as error:
             return (
-                f"{self.path} can be read or changed by other users (mode {mode:04o}); "
-                f"run `chmod 600 {self.path}`"
+                f"{self.path} cannot be checked ({error.strerror or type(error).__name__}); "
+                f"make sure you can read {self.path.parent} and the file in it"
             )
-        return None
+        if sys.platform == "win32":  # pragma: no cover - returned above (for type checkers)
+            return None
+        return _posix_problem(self.path, info, os.getuid())
 
     def check_writable(self) -> None:
         """Raise CredentialFileError unless a key could be stored now: the file, if there,
@@ -72,23 +82,34 @@ class FileStore:
             if not folder.is_dir():
                 folder.mkdir(mode=0o700, parents=True, exist_ok=True)
             handle, probe = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=folder)
-            os.close(handle)
-            os.unlink(probe)
+            try:
+                mode = _mode(handle)
+            finally:
+                os.close(handle)
+                os.unlink(probe)
         except OSError as error:
             raise CredentialFileError(
                 f"{self.path.parent} cannot hold the credential file ({error.strerror or error})"
             ) from None
+        if mode & 0o077:  # a new 0600 file reads wider: modes cannot be set here (DF-960)
+            raise CredentialFileError(_too_open(self.path, mode))
 
     def get_password(self, service: str, username: str) -> str | None:
         value = self._read().get(service, {}).get(username)
         return value if isinstance(value, str) else None
 
     def set_password(self, service: str, username: str, password: str) -> None:
-        data = self._read()
-        data.setdefault(service, {})[username] = password
+        data = self._load()
+        keys = data.get(service)
+        data[service] = {**(keys if isinstance(keys, dict) else {}), username: password}
         self._write(data)
 
     def _read(self) -> dict:
+        """The services and their keys."""
+        return {k: v for k, v in self._load().items() if isinstance(v, dict)}
+
+    def _load(self) -> dict:
+        """Every top-level key but the version, so a rewrite keeps what it does not know."""
         if not self.exists():
             return {}
         problem = self.problem()
@@ -106,7 +127,7 @@ class FileStore:
                 f"{self.path} is not an agentic credential file; move it away and run "
                 "`agentic login` again"
             )
-        return {k: v for k, v in data.items() if k != "version" and isinstance(v, dict)}
+        return {k: v for k, v in data.items() if k != "version"}
 
     def _write(self, data: dict) -> None:
         folder = self.path.parent
@@ -118,6 +139,9 @@ class FileStore:
             with os.fdopen(handle, "wb") as out:
                 if sys.platform != "win32":
                     os.fchmod(out.fileno(), 0o600)  # mkstemp makes it 0600; never wider
+                mode = _mode(out.fileno())
+                if mode & 0o077:  # modes cannot be set here (DF-960): never write a key
+                    raise CredentialFileError(_too_open(self.path, mode))
                 out.write(text.encode("utf-8"))
                 out.flush()
                 os.fsync(out.fileno())
@@ -126,3 +150,58 @@ class FileStore:
             with contextlib.suppress(OSError):
                 os.unlink(temporary)
             raise
+
+
+def _mode(handle: int) -> int:
+    """The permission bits an open file reads with (0 on Windows, which has no modes)."""
+    return 0 if sys.platform == "win32" else stat.S_IMODE(os.fstat(handle).st_mode)
+
+
+def _posix_problem(
+    path: PurePath, info: os.stat_result, uid: int, mounts: Path | None = None
+) -> str | None:
+    """Why a POSIX credential file with this `stat` must not be used by `uid`, or None."""
+    if info.st_uid != uid:
+        return (
+            f"{path} belongs to another user (uid {info.st_uid}, not yours, {uid}); move it "
+            "away and run `agentic login` again"
+        )
+    mode = stat.S_IMODE(info.st_mode)
+    return _too_open(path, mode, mounts) if mode & 0o077 else None
+
+
+def _too_open(path: PurePath, mode: int, mounts: Path | None = None) -> str:
+    drive = drvfs_mount(path, mounts)
+    if drive is not None:  # chmod cannot help there: the mount reports 0777 for every file
+        return (
+            f"{path} is on the Windows drive mounted at {drive}, where file modes cannot be "
+            f"set (it reads {mode:04o}); set AGENTIC_HOME to a folder in the Linux file "
+            "system, for example `export AGENTIC_HOME=/home/$USER/.agentic`"
+        )
+    return f"{path} can be read or changed by other users (mode {mode:04o}); run `chmod 600 {path}`"
+
+
+def drvfs_mount(path: PurePath, mounts: Path | None = None) -> str | None:
+    """The mount point when `path` is on a Windows drive under WSL (drvfs, listed as `drvfs`
+    or as `9p` with `aname=drvfs`), else None - also where there is no mount table."""
+    try:
+        table = (MOUNTS if mounts is None else mounts).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    target = PurePosixPath(os.fspath(path))
+    best: tuple[PurePosixPath, bool] | None = None
+    for line in table.splitlines():
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        point = PurePosixPath(_OCTAL.sub(lambda m: chr(int(m[1], 8)), fields[1]))
+        if point != target and point not in target.parents:
+            continue
+        if best is None or len(point.parts) >= len(best[0].parts):  # the innermost mount
+            kind = fields[2]
+            best = (point, kind == "drvfs" or (kind == "9p" and "aname=drvfs" in fields[3]))
+    return str(best[0]) if best is not None and best[1] else None
+
+
+#: /proc/mounts writes a space in a mount point as \040 (octal).
+_OCTAL = re.compile(r"\\([0-7]{3})")
