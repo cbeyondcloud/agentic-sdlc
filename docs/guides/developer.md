@@ -37,7 +37,9 @@ not encrypted. It warns when it does, and `agentic doctor` shows it (`keyring` W
 `agentic login` again. If your org does not allow the file, `agentic doctor` shows
 `keyring` as `FAIL`: ask your platform team for the org's WSL2 keyring setup before
 step 3. Your invite link is safe meanwhile: `agentic login --invite` checks where it can
-store keys before it uses the link up.
+store keys before it uses the link up. Keep `~/.agentic` in the Linux file system: on a
+Windows drive (`/mnt/c`) file modes cannot be set, so agentic refuses the credential file
+there and asks you to set `AGENTIC_HOME` to a Linux-side folder.
 
 ## First run (about 15 minutes)
 

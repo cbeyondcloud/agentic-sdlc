@@ -300,7 +300,7 @@ def _keyring(credentials: Credentials, env: Mapping[str, str], choice: StoreChoi
     if choice is not None and choice.mode == "file":
         return Check("keyring", "skip", "credential_store is file: the keyring is not used")
     try:
-        Credentials(environ=env).find("doctor_probe")  # the keyring alone, no file
+        credentials.keyring_only().find("doctor_probe")  # the keyring alone, no file
     except CredentialError as error:
         missing = isinstance(error.__cause__, NoKeyringError)
         if missing and choice is not None and choice.file_allowed:
@@ -332,7 +332,11 @@ def _credential_file(choice: StoreChoice) -> Check:
     refused = choice.forbidden or (
         "credential_store is keyring" if choice.mode == "keyring" else None
     )
-    if not (path.is_file() or path.is_symlink()):
+    try:
+        present = path.is_file() or path.is_symlink()
+    except OSError:  # it cannot be looked at: `problem()` below says why (DF-962)
+        present = True
+    if not present:
         if refused:
             return Check("credential file", "ok", f"not used: {refused}")
         return Check(

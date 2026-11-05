@@ -42,7 +42,7 @@ from agentic.orgapi import Me, parse_invite
 from agentic.transport import verify_gateway_key
 from agentic_cli import control_plane
 from agentic_cli.config import CONFIG_FILE, agentic_home, set_user_config, user_config
-from agentic_cli.credential_store import cli_credentials, store_choice
+from agentic_cli.credential_store import cli_credentials, forbidden_file_warning, store_choice
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.hosting import login_names
@@ -90,6 +90,8 @@ def register(app: typer.Typer) -> None:
         """Store your gateway key (or a control-plane or git host token) in the OS keyring."""
         out: Output = ctx.obj
         home = agentic_home()
+        if stale := forbidden_file_warning(home=home):  # a file from before a ban (DF-960)
+            out.warn(stale)
         wanted = target.strip().lower()
         if invite is not None:
             if rotate or key_stdin or wanted != GATEWAY:
@@ -350,7 +352,7 @@ def _redeem(out: Output, home, link: str, url: str | None, *, write_config: bool
         if written:
             console.print(f"Updated {change.path}:", markup=False)
             for key, old in change.changed.items():
-                was = f"(was {old})" if old is not None else "(added)"
+                was = "(added)" if key in change.added else f"(was {old or 'empty'})"
                 console.print(f"  {key}: {config[key]}  {was}", markup=False)
         elif config:
             console.print(f"Add to {home / CONFIG_FILE}:", markup=False)

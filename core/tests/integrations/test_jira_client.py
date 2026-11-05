@@ -8,6 +8,8 @@ origin."""
 import base64
 import json
 import logging
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from pathlib import Path
 
 import httpx2
@@ -355,3 +357,45 @@ def test_a_retry_after_that_is_not_a_finite_number_is_ignored(header):  # review
     with pytest.raises(JiraError, match="try again later") as raised:
         client(handler).issue("PROJ-123")
     assert raised.value.retry_after is None
+
+
+def test_a_retry_after_given_as_an_http_date_is_turned_into_seconds():  # DF-963
+    when = datetime.now(UTC) + timedelta(seconds=120)
+
+    def handler(request):
+        return httpx2.Response(429, headers={"Retry-After": format_datetime(when, usegmt=True)})
+
+    with pytest.raises(JiraError, match=r"try again in \d+ s") as raised:
+        client(handler).issue("PROJ-123")
+    assert 100 <= raised.value.retry_after <= 121 and raised.value.retry_after.is_integer()
+
+
+@pytest.mark.parametrize("header", ["Wed, 21 Oct 2015 07:28:00 GMT", "Wed, 21 Oct 2015 07:28:00"])
+def test_a_retry_after_date_in_the_past_means_now(header):  # DF-963
+    def handler(request):
+        return httpx2.Response(429, headers={"Retry-After": header})
+
+    with pytest.raises(JiraError, match="try again in 0 s") as raised:
+        client(handler).issue("PROJ-123")
+    assert raised.value.retry_after == 0.0
+
+
+def test_a_retry_after_date_with_a_huge_year_is_ignored():  # review I1: no OverflowError
+    def handler(request):
+        return httpx2.Response(
+            429, headers={"Retry-After": "Wed, 04 Nov 99999999999999999999 10:00:00 GMT"}
+        )
+
+    with pytest.raises(JiraError, match="try again later") as raised:
+        client(handler).issue("PROJ-123")
+    assert raised.value.retry_after is None
+
+
+@pytest.mark.parametrize("header", ["Fri, 31 Dec 9999 23:59:59 GMT", "999999999"])
+def test_a_very_long_retry_after_is_capped_at_a_day(header):  # review I1
+    def handler(request):
+        return httpx2.Response(429, headers={"Retry-After": header})
+
+    with pytest.raises(JiraError, match="try again in 86400 s") as raised:
+        client(handler).issue("PROJ-123")
+    assert raised.value.retry_after == 86400.0

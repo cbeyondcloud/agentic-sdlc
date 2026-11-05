@@ -5,6 +5,7 @@ file is replaced in one step; and a file it cannot edit safely is left alone."""
 
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,22 @@ from agentic_cli.config import CONFIG_FILE, set_user_config
 
 URL = "https://cp.acme.example"
 GATEWAY = "https://gateway.acme.example"
+
+
+def _symlinks_work() -> bool:
+    """Whether this user may make symbolic links (on Windows: Developer Mode or admin)."""
+    with tempfile.TemporaryDirectory() as folder:
+        try:
+            os.symlink(os.path.join(folder, "target"), os.path.join(folder, "link"))
+        except (OSError, NotImplementedError):
+            return False
+    return True
+
+
+#: Symbolic-link tests run wherever links can be made, Windows included (DF-965).
+SYMLINKS = pytest.mark.skipif(
+    not _symlinks_work(), reason="symbolic links need Developer Mode (or admin rights) on Windows"
+)
 
 
 def config(home: Path) -> Path:
@@ -125,7 +142,7 @@ def test_a_file_an_appended_line_would_break_is_left_alone(tmp_path, text):  # r
     assert path.read_text(encoding="utf-8") == text
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="symbolic links need privileges on Windows")
+@SYMLINKS
 def test_a_symbolic_link_is_left_alone(tmp_path):  # review F5: a dotfile manager's link
     real = tmp_path / "dotfiles" / "config.yaml"
     real.parent.mkdir()
@@ -135,3 +152,45 @@ def test_a_symbolic_link_is_left_alone(tmp_path):  # review F5: a dotfile manage
     change = set_user_config(tmp_path / "h", {"gateway_url": GATEWAY})
     assert not change.written and "link" in change.reason
     assert config(tmp_path / "h").is_symlink() and real.read_text(encoding="utf-8") == "org: acme\n"
+
+
+def test_a_replaced_empty_value_is_a_change_not_an_addition(tmp_path):  # DF-964
+    write(tmp_path, "gateway_url:\norg: acme\n")
+    change = set_user_config(tmp_path, {"gateway_url": GATEWAY, "control_plane_url": URL})
+    assert change.written and change.changed == {"gateway_url": None, "control_plane_url": None}
+    assert change.added == ("control_plane_url",)
+
+
+def test_mixed_line_endings_are_kept_per_line(tmp_path):  # DF-964: never all CRLF
+    path = config(tmp_path)
+    tmp_path.mkdir(exist_ok=True)
+    path.write_bytes(b"org: acme\r\ngateway_url: https://old.example\nteam: payments\r\n")
+    set_user_config(tmp_path, {"gateway_url": GATEWAY, "control_plane_url": URL})
+    assert path.read_bytes() == (
+        b"org: acme\r\n"
+        b"# gateway_url: https://old.example  (replaced by agentic)\n"
+        + f"gateway_url: {GATEWAY}\n".encode()
+        + b"team: payments\r\n"
+        + f"control_plane_url: {URL}\r\n".encode()  # new lines: the file's majority ending
+    )
+
+
+def test_a_file_mostly_in_lf_gets_lf_lines_even_after_a_crlf_line(tmp_path):  # DF-964
+    path = config(tmp_path)
+    tmp_path.mkdir(exist_ok=True)
+    path.write_bytes(b"org: acme\r\nteam: payments\nrole: dev\n")
+    set_user_config(tmp_path, {"gateway_url": GATEWAY})
+    assert path.read_bytes().endswith(f"role: dev\ngateway_url: {GATEWAY}\n".encode())
+
+
+@pytest.mark.parametrize("separator", [" ", " ", "\x85"])
+def test_only_a_newline_ends_a_line(tmp_path, separator):  # DF-964: never splitlines()
+    before = f'note: "a{separator}b"\ngateway_url: https://old.example\norg: acme\n'
+    write(tmp_path, before)
+    change = set_user_config(tmp_path, {"gateway_url": GATEWAY})
+    assert change.written, change.reason
+    assert config(tmp_path).read_text(encoding="utf-8") == (
+        f'note: "a{separator}b"\n'
+        "# gateway_url: https://old.example  (replaced by agentic)\n"
+        f"gateway_url: {GATEWAY}\norg: acme\n"
+    )

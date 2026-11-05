@@ -27,6 +27,7 @@ from agentic.policy.repos import normalise_remote
 from agentic.repoconfig import RepoConfig
 from agentic_cli import control_plane, dev_init, repo_setup
 from agentic_cli.config import agentic_home, user_config
+from agentic_cli.credential_store import forbidden_file_warning
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.hosting import connect
@@ -104,6 +105,8 @@ def register(app: typer.Typer) -> None:
             recorded=recorded,
             refresh_template=refresh_template,
         )
+        if stale := forbidden_file_warning(home=home):  # the policy just cached may ban it
+            out.warn(stale)
         try:
             if repo:
                 settings = config if open_pr else None

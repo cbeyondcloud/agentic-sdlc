@@ -65,8 +65,9 @@ the skill catalog, retention. See the [policy-repo guide](policy-repo.md).
 | `repo-maintainer` | never assigned: it comes from each repository's CODEOWNERS | repo |
 | service accounts | `agentic rbac service-account`, one per CI pipeline | `--team` |
 
-For many people at once, use a CSV file (UTF-8, header `email,role,team,handle`). It only
-adds, and it is safe to run again:
+For many people at once, use a CSV file (UTF-8, header `email,role,team,handle`; the `;`
+or tab separators Excel writes in some locales work too). It only adds, and it is safe to
+run again:
 
 ```bash
 agentic rbac import leads.csv            # shows what would change
@@ -79,7 +80,9 @@ and says so; `agentic doctor` shows it. To forbid that file, set
 `credential_file_fallback: false` in `policy/org.yaml` (it applies once a laptop has the
 policy, after `agentic init`) and `AGENTIC_CREDENTIAL_STORE=keyring` in the managed shell
 profile (it applies from the first login); then give WSL2 a Secret Service, or the
-`AGENTIC_*` variables.
+`AGENTIC_*` variables. A file written before the policy reached a laptop is no longer
+used: `agentic login` and `agentic init` warn about it and `agentic doctor` fails it, each
+saying how to delete it.
 
 Everyone new gets an invite mail. Check delivery:
 

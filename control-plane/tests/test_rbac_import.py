@@ -66,6 +66,36 @@ def test_parse_reports_bad_rows_with_their_line(text, line, words):
     assert errors and errors[0].line == line and words in errors[0].error
 
 
+@pytest.mark.parametrize("separator", [";", "\t"])
+def test_parse_accepts_the_separators_european_excel_writes(separator):  # DF-573
+    text = GOOD.replace(",", separator)
+    rows, errors = parse(text)
+    assert errors == [] and rows == parse(GOOD)[0]
+
+
+def test_parse_ignores_trailing_empty_header_cells_and_their_empty_cells():  # DF-573
+    text = "email;role;;\nann@a.example.test;developer;;\nbob@a.example.test;approver\n"
+    rows, errors = parse(text)
+    assert errors == []
+    assert [(r.line, r.email, r.role) for r in rows] == [
+        (2, "ann@a.example.test", "developer"),
+        (3, "bob@a.example.test", "approver"),
+    ]
+    _, errors = parse("email;role;;\nann@a.example.test;developer;;payments\n")
+    assert errors and errors[0].line == 2 and "fields" in errors[0].error
+
+
+@pytest.mark.parametrize("header", ["email|role", "email:role|team"])
+def test_an_unknown_separator_says_to_use_commas(header):  # DF-573
+    _, errors = parse(f"{header}\nann@a.example.test|developer\n")
+    assert errors[0].line == 1 and "separate the columns with commas" in errors[0].error
+
+
+def test_a_plain_unknown_column_gets_no_separator_hint():
+    _, errors = parse("email,role,colour\n")
+    assert "colour" in errors[0].error and "commas" not in errors[0].error
+
+
 async def _import(api, token, text, *, dry_run=True):
     return await api.post("/v1/rbac/import", token, {"csv": text, "dry_run": dry_run})
 
@@ -166,3 +196,51 @@ async def test_an_import_in_one_tenant_never_touches_another(api):
     assert {a["email"] for a in listed.json()} == {"admin@b.example.test"}
     dry = (await _import(api, api.b.admin_token, GOOD)).json()
     assert [row["action"] for row in dry["rows"]] == ["add", "add", "add"]
+
+
+def test_a_pathological_first_line_is_parsed_in_linear_time():  # review C1
+    import time
+
+    first = '"a;"b,' * 17_000  # ~100 KB: csv.Sniffer took 3 s for 24 KB, superlinear
+    started = time.perf_counter()
+    _, errors = parse(first + "\n")
+    assert time.perf_counter() - started < 1.0
+    assert errors and errors[0].line == 1
+
+
+@pytest.mark.parametrize(
+    ("header", "ok"),
+    [
+        ("﻿email;role", True),  # a byte order mark
+        ('"email";"role"', True),  # quoted names
+        ("email,role;team", False),  # mixed: a comma wins a tie, the hint names commas
+        ("email;role,team", False),
+        ("Email,Role,,,", True),
+    ],
+)
+def test_the_separator_choice_keeps_what_the_review_confirmed(header, ok):  # review C1
+    _, errors = parse(header + "\n")
+    assert (errors == []) is ok
+    if not ok:
+        assert "separate the columns with commas" in errors[0].error
+
+
+@pytest.mark.parametrize("text", ["\nann@a.example.test,developer\n", ",,,\n", ";;\n", "\t\t\n"])
+def test_an_empty_header_row_names_the_columns(text):  # review M7
+    _, errors = parse(text)
+    assert errors[0].line == 1
+    assert errors[0].error == (
+        "the header row is empty: the first line must name the columns email,role,team,handle"
+    )
+
+
+async def test_an_unauthorised_caller_is_refused_before_the_file_is_parsed(api, monkeypatch):
+    from agentic_cp.rbac import import_api  # review C1: no parsing work for a caller who
+
+    def parse(text):  # may not import at all
+        raise AssertionError("parsed before the permission check")
+
+    monkeypatch.setattr(import_api, "parse", parse)
+    dev, _ = await member(api, api.a, "dev@a.example.test", "developer", "payments")
+    reply = await _import(api, dev, GOOD)
+    assert reply.status_code == 403 and reply.json()["code"] == "rbac.forbidden"

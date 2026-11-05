@@ -105,6 +105,11 @@ class Credentials:
         self.file_store = file_store
         self.prefer_file = prefer_file and file_store is not None
 
+    def keyring_only(self) -> "Credentials":
+        """The same environment, keyring and service without the credential file: what
+        asks whether the OS keyring itself works (`agentic doctor`)."""
+        return Credentials(environ=self.environ, keyring=self._keyring, service=self.service)
+
     @property
     def in_ci(self) -> bool:
         return self.ci_marker is not None
