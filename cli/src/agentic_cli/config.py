@@ -68,20 +68,25 @@ def user_config(home: Path) -> dict[str, Any]:
 @dataclass(frozen=True)
 class ConfigChange:
     """What `set_user_config` did: the keys it set (each with the value it replaced, None
-    when it was added), or why it wrote nothing (`reason`)."""
+    when it was added or empty), those of them it added, or why it wrote nothing
+    (`reason`)."""
 
     path: Path
     written: bool
     changed: dict[str, str | None] = field(default_factory=dict)
     reason: str | None = None
+    added: tuple[str, ...] = ()
 
 
 def set_user_config(home: Path, values: Mapping[str, str]) -> ConfigChange:
     """Set top-level string settings in the user config (DF-952), editing the file as text
     so every other line - comments, order, quoting, line endings, a byte-order mark - stays
     as written. A key already set to another value is replaced in place, the old line kept
-    above it as a comment. The new text must parse back to the old settings plus these, and
-    replaces the file in one step (a temporary file, then a rename), keeping its mode. A
+    above it as a comment. Only a line feed ends a line (never U+2028 or the other
+    characters `splitlines()` splits on); each line keeps its own ending, and an added line
+    takes the one most of the file uses (DF-964). The new text must parse back to the old
+    settings plus these, and replaces the file in one step (a temporary file, then a
+    rename), keeping its mode. A
     file that is not a YAML mapping, or whose value spans several lines, is left alone:
     `reason` says why, and the caller shows the lines instead."""
     path = home / CONFIG_FILE
@@ -93,7 +98,6 @@ def set_user_config(home: Path, values: Mapping[str, str]) -> ConfigChange:
     except (OSError, UnicodeDecodeError) as error:
         return ConfigChange(path, False, reason=f"it cannot be read ({error})")
     bom = raw.startswith(b"\xef\xbb\xbf")
-    newline = "\r\n" if "\r\n" in text else "\n"
     try:
         data, lines = load_yaml(text)
     except YamlFileError as error:
@@ -101,12 +105,18 @@ def set_user_config(home: Path, values: Mapping[str, str]) -> ConfigChange:
     data = {} if data is None else data
     if not isinstance(data, dict):
         return ConfigChange(path, False, reason="it is not a mapping of settings")
-    rows = text.splitlines()
+    rows = text.split("\n")  # each row keeps its "\r", if it had one
+    ended = rows[-1] == ""  # the file ends with a line feed (or is empty)
+    if ended:
+        rows.pop()
+    finished = rows if ended else rows[:-1]
+    crlf = sum(row.endswith("\r") for row in finished)
+    cr = "\r" if crlf > len(finished) - crlf else ""  # added lines: the file's majority
     changed: dict[str, str | None] = {}
     added: list[str] = []
     for key, value in values.items():
         if key not in data:
-            added.append(f"{key}: {_scalar(value)}")
+            added.append(key)
             changed[key] = None
             continue
         if data[key] == value:
@@ -114,14 +124,18 @@ def set_user_config(home: Path, values: Mapping[str, str]) -> ConfigChange:
         at = (lines.get((key,)) or 0) - 1
         if not isinstance(data[key], str | None) or not _one_line(rows, at):
             return ConfigChange(path, False, reason=f"its {key} is not a one-line value")
+        own = "\r" if rows[at].endswith("\r") else ""
         rows[at : at + 1] = [
-            f"# {rows[at].rstrip()}  (replaced by agentic)",
-            f"{key}: {_scalar(value)}",
+            f"# {rows[at].rstrip()}  (replaced by agentic){own}",
+            f"{key}: {_scalar(value)}{own}",
         ]
         changed[key] = data[key]
     if not changed:
         return ConfigChange(path, False)
-    new = newline.join(rows + added) + newline
+    if rows and not ended and not rows[-1].endswith("\r"):
+        rows[-1] += cr  # the last line gets an ending before the added ones
+    rows += [f"{key}: {_scalar(values[key])}{cr}" for key in added]
+    new = "".join(f"{row}\n" for row in rows)
     try:  # never write what reads back otherwise (a '...' end marker, a flow mapping)
         same = load_yaml(new)[0] == {**data, **values}
     except YamlFileError:
@@ -132,7 +146,7 @@ def set_user_config(home: Path, values: Mapping[str, str]) -> ConfigChange:
         _replace(path, ("\ufeff" if bom else "") + new)
     except OSError as error:
         return ConfigChange(path, False, reason=f"it cannot be written ({error})")
-    return ConfigChange(path, True, changed)
+    return ConfigChange(path, True, changed, added=tuple(added))
 
 
 def _one_line(rows: list[str], at: int) -> bool:

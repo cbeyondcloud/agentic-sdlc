@@ -233,3 +233,165 @@ def test_a_chosen_file_is_not_called_a_missing_keyring(home, capsys, monkeypatch
     assert main(["login", "--key-stdin", "--for", "jira"]) == ExitCode.OK
     err = capsys.readouterr().err
     assert "credential_store is file" in err and "no OS keyring" not in err
+
+
+def test_doctor_fails_a_file_it_cannot_check_with_a_fix(no_keyring, monkeypatch):  # DF-962
+    from pathlib import Path
+
+    from agentic_cli import doctor
+
+    real = Path.is_symlink
+
+    def denied(self):
+        if self.name == FILE_NAME:
+            raise PermissionError(13, "Permission denied")
+        return real(self)
+
+    monkeypatch.setattr(Path, "is_symlink", denied)
+    check = doctor._credential_file(store_choice())
+    assert check.status == "fail" and "cannot be checked" in check.detail and check.fix
+
+
+# ── a file left from before a ban (DF-960) ───────────────────────────────────
+
+
+class Memory(KeyringBackend):
+    priority = 1
+
+    def __init__(self):
+        super().__init__()
+        self.stored = {}
+
+    def get_password(self, service, username):
+        return self.stored.get((service, username))
+
+    def set_password(self, service, username, password):
+        self.stored[(service, username)] = password
+
+    def delete_password(self, service, username):
+        self.stored.pop((service, username), None)
+
+
+def leave_a_forbidden_file() -> None:
+    from agentic.auth import FileStore
+
+    FileStore(agentic_home() / FILE_NAME).set_password(SERVICE, "jira_token", KEY)
+    write_config("org: acme\n")
+    cache_policy("acme", "credential_file_fallback: false\n")
+
+
+def test_login_warns_once_about_a_file_the_org_now_forbids(home, capsys, monkeypatch):
+    monkeypatch.delenv(STORE_ENV, raising=False)
+    leave_a_forbidden_file()
+    previous = keyring.get_keyring()
+    keyring.set_keyring(Memory())
+    try:
+        monkeypatch.setattr("sys.stdin", __import__("io").StringIO(KEY + "\n"))
+        assert main(["login", "--key-stdin", "--for", "jira"]) == ExitCode.OK
+    finally:
+        keyring.set_keyring(previous)
+    err = capsys.readouterr().err
+    path = str(agentic_home() / FILE_NAME)
+    assert err.count("still holds keys") == 1 and path in err
+    assert "credential_file_fallback" in err and "delete it" in err and KEY not in err
+
+
+def test_no_warning_without_a_file_or_when_the_file_is_allowed(home, monkeypatch):
+    from agentic_cli.credential_store import forbidden_file_warning
+
+    monkeypatch.delenv(STORE_ENV, raising=False)
+    write_config("org: acme\n")
+    cache_policy("acme", "credential_file_fallback: false\n")
+    assert forbidden_file_warning() is None  # nothing on disk
+    leave_a_forbidden_file()
+    assert "still holds keys" in forbidden_file_warning()
+    cache_policy("acme", "credential_file_fallback: true\n")
+    assert forbidden_file_warning() is None
+
+
+# ── more ways into the file, through the CLI (DF-965) ────────────────────────
+
+
+def stored_in_file(name: str) -> str | None:
+    data = json.loads((agentic_home() / FILE_NAME).read_text(encoding="utf-8"))
+    return data[SERVICE].get(name)
+
+
+@pytest.fixture
+def plane(monkeypatch):
+    from cp_fakes import CP_URL, FakeControlPlane
+
+    from agentic_cli import control_plane
+
+    fake = FakeControlPlane()
+    monkeypatch.setattr(control_plane, "make_transport", lambda: fake.transport)
+    monkeypatch.setenv("AGENTIC_CONTROL_PLANE_URL", CP_URL)
+    return fake
+
+
+def test_login_for_the_control_plane_stores_into_the_file(no_keyring, plane, capsys, monkeypatch):
+    from cp_fakes import TOKEN
+
+    from agentic_cli.control_plane import CONTROL_PLANE_TOKEN
+
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(TOKEN + "\n"))
+    code, data, err = login(capsys, "--for", "control-plane")
+    assert code == ExitCode.OK, err
+    assert data["where"] == "file" and data["credential_file"] == str(agentic_home() / FILE_NAME)
+    assert stored_in_file(CONTROL_PLANE_TOKEN) == TOKEN and TOKEN not in json.dumps(data)
+
+
+def test_login_rotate_stores_the_new_key_into_the_file(no_keyring, plane, capsys, monkeypatch):
+    from cp_fakes import CP_URL, TOKEN
+
+    from agentic.auth import TOKENLEAN_KEY
+
+    write_config(f"control_plane_url: {CP_URL}\n")
+    monkeypatch.setenv("AGENTIC_CONTROL_PLANE_TOKEN", TOKEN)
+    plane.proxy_key = KEY
+    code = main(["--json", "login", "--rotate"])
+    out = capsys.readouterr()
+    assert code == ExitCode.OK, out.err
+    data = json.loads(out.out)
+    assert data["where"] == "file" and data["rotated"] is True
+    assert stored_in_file(TOKENLEAN_KEY) == KEY and KEY not in out.out + out.err
+
+
+def test_a_chosen_file_is_used_although_a_keyring_works(home, capsys, monkeypatch):
+    monkeypatch.delenv(STORE_ENV, raising=False)
+    write_config("credential_store: file\n")
+    ring = Memory()
+    previous = keyring.get_keyring()
+    keyring.set_keyring(ring)
+    try:
+        monkeypatch.setattr("sys.stdin", __import__("io").StringIO(KEY + "\n"))
+        code, data, err = login(capsys, "--for", "jira")
+        assert code == ExitCode.OK, err
+        assert data["where"] == "file" and stored_in_file("jira_token") == KEY
+        assert ring.stored == {}  # the keyring is skipped, not written
+        assert cli_credentials().get("jira_token").source == "file"
+    finally:
+        keyring.set_keyring(previous)
+
+
+def test_the_delete_hint_quotes_a_path_with_a_space(home, monkeypatch):  # review M5
+    import shlex
+
+    from agentic_cli.credential_store import forbidden_file_warning
+
+    monkeypatch.delenv(STORE_ENV, raising=False)
+    monkeypatch.setenv("AGENTIC_HOME", str(home / "my home" / ".agentic"))
+    leave_a_forbidden_file()
+    path = str(agentic_home() / FILE_NAME)
+    quoted = f'"{path}"' if sys.platform == "win32" else shlex.quote(path)
+    assert f"`rm {quoted}`" in forbidden_file_warning()
+
+
+def test_a_file_without_keys_is_called_still_on_disk(home, monkeypatch):  # review M5
+    from agentic_cli.credential_store import forbidden_file_warning
+
+    monkeypatch.delenv(STORE_ENV, raising=False)
+    leave_a_forbidden_file()
+    (agentic_home() / FILE_NAME).write_text("not json", encoding="utf-8")
+    shown = forbidden_file_warning()
+    assert "is still on disk" in shown and "still holds keys" not in shown

@@ -37,6 +37,10 @@ from agentic_cp.tables import users
 COLUMNS = ("email", "role", "team", "handle")
 REQUIRED = ("email", "role")
 MAX_ROWS = 5000
+#: The separators a header may use (Excel writes ';' or a tab in many locales).
+SEPARATORS = ",;\t"
+#: A character in an unknown column name that says the file uses some other separator.
+_OTHER_SEPARATOR = re.compile(r"[;\t|]")
 #: The import's own reason on each `role.assigned` record.
 REASON = "csv import"
 
@@ -56,7 +60,8 @@ def _error(line: int, message: str, **values) -> ImportRow:
 
 def parse(text: str) -> tuple[list[CsvRow], list[ImportRow]]:
     """The well-formed rows and an error per malformed row (or for the header)."""
-    reader = csv.reader(io.StringIO(text.removeprefix("﻿"), newline=""))
+    text = text.removeprefix("﻿")
+    reader = csv.reader(io.StringIO(text, newline=""), delimiter=_separator(text))
     try:
         header = next(reader)
     except StopIteration:
@@ -64,6 +69,13 @@ def parse(text: str) -> tuple[list[CsvRow], list[ImportRow]]:
     except csv.Error as error:
         return [], [_error(1, f"the header is not CSV: {error}")]
     names = [name.strip().lower() for name in header]
+    while len(names) > 1 and not names[-1]:  # Excel's trailing empty cells (DF-573)
+        names.pop()
+    if not any(names):  # a blank first line, or separators only (review M7)
+        columns = ",".join(COLUMNS)
+        return [], [
+            _error(1, f"the header row is empty: the first line must name the columns {columns}")
+        ]
     unknown = [name for name in names if name not in COLUMNS]
     missing = [name for name in REQUIRED if name not in names]
     if unknown or missing or len(set(names)) != len(names):
@@ -74,7 +86,12 @@ def parse(text: str) -> tuple[list[CsvRow], list[ImportRow]]:
             if missing
             else "a column is named twice"
         )
-        return [], [_error(1, f"header: {problem} (the columns are {', '.join(COLUMNS)})")]
+        hint = (
+            "; separate the columns with commas"
+            if any(_OTHER_SEPARATOR.search(name) for name in unknown)
+            else ""
+        )
+        return [], [_error(1, f"header: {problem} (the columns are {', '.join(COLUMNS)}){hint}")]
     rows: list[CsvRow] = []
     errors: list[ImportRow] = []
     seen: dict[tuple[str, str, str | None], int] = {}
@@ -94,7 +111,7 @@ def parse(text: str) -> tuple[list[CsvRow], list[ImportRow]]:
         if len(rows) + len(errors) >= MAX_ROWS:
             errors.append(_error(line, f"a file holds at most {MAX_ROWS} rows"))
             break
-        if len(record) > len(names):
+        if any(cell.strip() for cell in record[len(names) :]):
             errors.append(_error(line, f"{len(record)} fields, but the header names {len(names)}"))
             continue
         values = {name: cell.strip() for name, cell in zip(names, record, strict=False)}
@@ -117,6 +134,23 @@ def parse(text: str) -> tuple[list[CsvRow], list[ImportRow]]:
         seen[key] = line
         rows.append(CsvRow(line=line, **shown))
     return rows, errors
+
+
+def _separator(text: str) -> str:
+    """The header's separator: a comma, or the ';' or tab Excel writes in European locales
+    (DF-573) - whichever splits the first line into the most cells (at least 2), a comma
+    winning a tie; a comma when none does. One CSV pass per candidate, so linear in the
+    line's length (`csv.Sniffer` is superlinear: seconds for a 24 KB line)."""
+    first = text.split("\n", 1)[0]
+    best, most = ",", 1
+    for candidate in SEPARATORS:
+        try:
+            cells = len(next(csv.reader([first], delimiter=candidate), []))
+        except csv.Error:
+            continue
+        if cells > most:
+            best, most = candidate, cells
+    return best
 
 
 def _row_problem(values: dict) -> str | None:

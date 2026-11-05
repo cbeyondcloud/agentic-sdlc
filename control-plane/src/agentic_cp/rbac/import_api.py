@@ -24,7 +24,6 @@ async def import_roles(body: RoleImportRequest, request: Request, ctx: Caller) -
     """Org admins import any row; team leads rows of their own team (each row is checked
     like a single assignment)."""
     state = request.app.state
-    rows, errors = parse(body.csv)
     async with tenant_tx(state.engine, ctx.tenant_id) as conn:
         await lock_rbac(conn)
         held = await effective_permissions(ctx, conn=conn, cache=state.enforcers)
@@ -37,6 +36,7 @@ async def import_roles(body: RoleImportRequest, request: Request, ctx: Caller) -
                 "you do not hold rbac.assign for the org or rbac.assign.team for a team",
                 hint="ask an org admin or your team lead for a role that grants it",
             )
+        rows, errors = parse(body.csv)  # only for a caller who may import (review C1)
         planned = await plan_import(conn, ctx, state.enforcers, rows)
         shown = sorted(errors + planned, key=lambda row: row.line)
         result = RoleImportResult(
