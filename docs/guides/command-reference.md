@@ -32,6 +32,8 @@ Set `AGENTIC_DEBUG=1` to see a traceback when a command fails unexpectedly.
 | `agentic init` | Set up this repository on your machine: checks, policy, skills, tools, index. `--repo` sets up the repository itself on a new branch and opens its PR. `--standalone` uses a local policy with no control plane. | Dev, Lead |
 | `agentic doctor` | Check this machine, its settings and the services a run needs. Changes nothing. | Dev, Platform |
 | `agentic support-bundle` | Write a redacted zip for the platform team. | Dev |
+| `agentic onboarding` | How long your onboarding took: from your first `agentic login` to your first successful `agentic run --dry-run`, and each step's time. Kept in `~/.agentic/onboarding.json` on this machine only, never sent; not recorded in CI or with `AGENTIC_ONBOARDING_TIMER=off`. `--reset` starts the timer again. | Dev |
+| `agentic training-gateway` | Serve the training walkthrough's recorded model answers on 127.0.0.1 until Ctrl-C (no model, nothing spent); point a run at it with the `AGENTIC_GATEWAY_URL` it prints. See `docs/training/walkthrough.md`. | Dev, trainer |
 
 ## Find agents, pipelines, skills and policy
 

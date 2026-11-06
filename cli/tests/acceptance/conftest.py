@@ -2,16 +2,17 @@
 mode, M2-53 and M2-55 on the org stack."""
 
 import pytest
-from _acceptance_support import Scenario
-
-# the sample repository's own tests run inside the scenarios, never in this suite
-collect_ignore = ["sample-repo"]
+from _acceptance_support import CASSETTES, Scenario
 
 
 @pytest.fixture
 def scenario(request, tmp_path, monkeypatch, capsys):
-    """A fresh world per scenario; the test module's SCENARIO names its cassette."""
-    world = Scenario(tmp_path, monkeypatch, capsys, name=request.module.SCENARIO).start()
+    """A fresh world per scenario; the test module's SCENARIO names its cassette, and
+    CASSETTE_ROOT, when it has one, where the cassette lives."""
+    cassettes = getattr(request.module, "CASSETTE_ROOT", CASSETTES)
+    world = Scenario(
+        tmp_path, monkeypatch, capsys, name=request.module.SCENARIO, cassettes=cassettes
+    ).start()
     yield world
     world.stop()
 

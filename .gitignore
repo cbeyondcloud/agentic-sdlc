@@ -31,3 +31,6 @@ Thumbs.db
 
 # Agent worktrees (parallel tracks, reviewers) live here while they run
 .claude/worktrees/
+
+# --- The docs site, built by mkdocs (M3-23) ---
+site/

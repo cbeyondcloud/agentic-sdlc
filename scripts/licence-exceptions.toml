@@ -8,3 +8,4 @@ cel-python = "Apache-2.0 (LICENSE in github.com/cloud-custodian/cel-python); the
 tiktoken = "MIT (LICENSE in github.com/openai/tiktoken); the wheel carries no licence metadata"
 sdlc-harness = "The owner's own Zyroflo library, reused as a pinned internal dependency (D34)"
 certifi = "MPL-2.0, used unmodified (Mozilla CA bundle; file-level copyleft applies only to modified files). Transitive via httpx/requests; overnight decision 2026-10-21"
+pathspec = "MPL-2.0, used unmodified (gitignore-style matching; file-level copyleft applies only to modified files). Transitive via mkdocs in the optional docs group only, never in a shipped package (M3-23); same reasoning as certifi; accepted by the owner 2026-11-04 as a named exception (DF-990). MPL-2.0 still fails by default"

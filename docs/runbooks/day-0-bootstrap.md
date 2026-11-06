@@ -306,6 +306,39 @@ uv run python scripts/bootstrap.py smoke --api https://agentic-staging.acme.exam
 Nothing is pushed. A full run with real models on staging's test repositories is the
 acceptance suite (M3-25); a recorded replay is `agentic eval --mode replay`.
 
+## The docs site (M3-23)
+
+Publish the user docs where every developer can read them on the internal network:
+`uv run mkdocs build --strict` in a checkout of the release tag (after `uv sync --group
+docs`) writes a static `site/` folder, and the [docs site runbook](docs-site.md) says how to
+host it (a static bucket or an internal web server) and how to update it with each
+release. The site loads nothing from the internet. Put its address in the invite mail
+template, so a new developer's first link is the [start page](../index.md).
+
+## Training environment (M3-23)
+
+For the pilot training ([walkthrough](../training/walkthrough.md),
+[deck](../training/deck.md)), once per environment, on staging:
+
+1. **The training repository.** Create an internal repository, for example
+   `training/invoices`, from `examples/sample-repo/` of the release tag (`git init`, commit,
+   push). Run `agentic init --repo` in it once and merge its pull request, so trainees'
+   `agentic init` finds it set up. Never point trainees at a product repository.
+2. **The training team.** A team `training` that holds only that repository, with its own
+   `policy/teams/training.yaml` (a small `monthly_budget_usd`, the pilot's `auto_trip`).
+   Trainees approve their own training runs (owner decision, 2026-11-04), so give each
+   trainee the Team lead role on the `training` team only, before the session:
+   `agentic rbac assign <email> team-lead --team training`. **Remove it after the
+   session:** `agentic rbac revoke <email> team-lead --team training`.
+3. **The recorded run.** The walkthrough's real run uses `agentic training-gateway`, which
+   ships with the CLI and replays recorded answers on the trainee's laptop: nothing to
+   deploy, no model calls, no gateway spend. It follows the library `feature-delivery`
+   pipeline; if the training team's pipeline differs, the replay stops with
+   `cassette_mismatch` or `cassette_exhausted`.
+4. **Check it** before each session: run the [walkthrough](../training/walkthrough.md) on a
+   clean Windows (WSL2) and a clean macOS laptop, and `agentic onboarding --reset`
+   afterwards so the rehearsal does not count.
+
 ## Developers' first day
 
 The invite mail says it: install the CLI from the index, `agentic login --invite '<link>'`,

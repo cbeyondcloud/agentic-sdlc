@@ -19,12 +19,14 @@ from agentic_cli.commands import (
     killswitch,
     learn,
     login,
+    onboarding,
     pr,
     rbac,
     report,
     runs,
     skills,
     sync,
+    training,
 )
 
 COMMANDS: list[Callable[[typer.Typer], None]] = [
@@ -47,4 +49,6 @@ COMMANDS: list[Callable[[typer.Typer], None]] = [
     doctor.register,
     learn.register,
     report.register,
+    onboarding.register,
+    training.register,
 ]

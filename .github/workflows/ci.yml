@@ -23,7 +23,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install workspace exactly as locked
-        run: uv sync --locked
+        run: uv sync --locked --group docs  # the docs group: the strict docs-site build test (M3-23)
 
       - name: Lint
         run: uv run ruff check .

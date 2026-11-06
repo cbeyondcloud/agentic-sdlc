@@ -1,0 +1,68 @@
+# The docs site (M3-23): built from docs/, the guides' single source; nothing is copied.
+#   uv sync --group docs
+#   uv run mkdocs build --strict      # site/ ; fails on a broken link or anchor
+#   uv run mkdocs serve               # preview at http://127.0.0.1:8000
+# Hosting: docs/runbooks/docs-site.md. The built-in theme ships its CSS, JS and fonts:
+# no analytics, no font host, no CDN, so the site works on an internal server offline.
+site_name: agentic
+site_description: Governed AI agent pipelines for software teams
+docs_dir: docs
+site_dir: site
+use_directory_urls: false # plain .html files: any static server or bucket, no rewrites
+strict: true
+
+theme:
+  name: mkdocs
+  highlightjs: false # the theme's bundled highlight.js is not needed; keeps it self-contained
+  navigation_depth: 3
+  locale: en
+
+# Planning, specs, spike records and load-test data are the framework team's working
+# papers, not the users' docs: they stay in the repository and out of the site.
+exclude_docs: |
+  superpowers/
+  spikes/
+  load-test/
+  runbooks/m1-64/
+  de-scope-register.md
+
+validation:
+  omitted_files: info
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+  links:
+    not_found: warn
+    anchors: warn
+
+nav:
+  - Start here: index.md
+  - Guides:
+      - Developer: guides/developer.md
+      - Team lead: guides/team-lead.md
+      - Admin and platform team: guides/admin.md
+      - Auditor: guides/auditor.md
+      - Policy repo: guides/policy-repo.md
+      - Command reference: guides/command-reference.md
+      - User settings: user-config.md
+  - Training:
+      - 15-minute walkthrough: training/walkthrough.md
+      - 30-minute deck: training/deck.md
+      - Office hours: training/office-hours.md
+      - Facilitator sheet: training/facilitator-sheet.md
+  - Runbooks:
+      - All runbooks: runbooks/README.md
+      - Day-0 bootstrap: runbooks/day-0-bootstrap.md
+      - Docs site hosting: runbooks/docs-site.md
+      - Environments and promotion: runbooks/environments-and-promotion.md
+      - Upgrade: runbooks/upgrade.md
+      - Release: runbooks/release.md
+      - Postgres backup and restore: runbooks/postgres-backup-restore.md
+      - Retention: runbooks/retention.md
+      - Optimisation opt-in: runbooks/optimisation-opt-in.md
+      - Optimisation dry-run record: runbooks/optimisation-opt-in/dry-run-record.md
+      - CLI operations: runbooks/cli-operations.md
+      - Pilot rollout: runbooks/pilot-rollout.md
+      - M1-64 quality gate: runbooks/m1-64-quality-gate.md
+  - Architecture:
+      - Call flow: architecture/call-flow.md

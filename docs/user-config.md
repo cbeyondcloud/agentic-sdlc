@@ -77,6 +77,15 @@ gc:
 
 See [CLI operations](runbooks/cli-operations.md) for what gc always keeps.
 
+### The onboarding timer (`~/.agentic/onboarding.json`)
+
+So that your onboarding can be timed without a stopwatch, the CLI keeps the time of your
+first try and first success of four commands: `agentic login`, `agentic init`,
+`agentic pipelines list` and `agentic run --dry-run`. Times only, no command line, path or
+name; the file is never sent anywhere, and it is not touched again once your first dry run
+has passed. `agentic onboarding` prints how long it took, `agentic onboarding --reset`
+forgets it. Nothing is recorded in CI; set `AGENTIC_ONBOARDING_TIMER=off` to turn it off.
+
 ## Org settings: the policy repo's `policy/org.yaml`
 
 ### Keeping an environment variable in agent commands (`sandbox.pass_env`)

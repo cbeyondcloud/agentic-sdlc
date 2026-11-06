@@ -52,6 +52,12 @@ dev = [
     "import-linter==2.15",
     "pip-audit==2.10.1",
 ]
+# The docs site (M3-23): `uv sync --group docs`, then `uv run mkdocs build --strict`.
+# Never in a package: the CLI wheel does not depend on it. MkDocs is BSD-2-Clause; its
+# built-in theme ships its CSS, JS and fonts, so the site loads nothing from elsewhere.
+docs = [
+    "mkdocs==1.6.1",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["core/tests", "commons/tests", "cli/tests", "control-plane/tests", "scripts/tests"]
