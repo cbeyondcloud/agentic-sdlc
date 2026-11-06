@@ -14,8 +14,11 @@ The file:
     a file;
   * is refused on POSIX when anyone but its owner can read or write it, when another user
     owns it, or when it is a symbolic link - like ssh with a private key - with the
-    command that fixes it; on a Windows drive in WSL2 (/mnt/c, a drvfs mount) file modes
-    cannot be set, so there it is refused before a key is written, naming AGENTIC_HOME;
+    command that fixes it. The read opens it without following a link (O_NOFOLLOW) and
+    judges its type, owner and mode on that same descriptor (fstat), so a file swapped
+    in after a check by name is never read (DF-983). On a Windows drive in WSL2 (/mnt/c,
+    a drvfs mount) file modes cannot be set, so there it is refused before a key is
+    written, naming AGENTIC_HOME;
   * holds `{"version": 1, "<service>": {"<name>": "<value>"}}` (a rewrite keeps any other
     top-level key, for a later version's fields); its contents never appear in an error,
     a repr or a log.
@@ -25,6 +28,7 @@ the Credential Manager, so the file is used there only when someone chooses it.
 """
 
 import contextlib
+import errno
 import json
 import os
 import re
@@ -35,6 +39,9 @@ from pathlib import Path, PurePath, PurePosixPath
 
 FILE_NAME = "credentials.json"
 _VERSION = 1
+#: Open flags for the read: never follow a link, and never wait on a FIFO (POSIX only).
+_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 #: Where Linux lists its mounts; WSL2 shows a Windows drive there as drvfs (or 9p).
 MOUNTS = Path("/proc/mounts")
 
@@ -60,7 +67,7 @@ class FileStore:
         cannot be checked), or None; never raises. Always "<what>; <fix>"."""
         try:
             if self.path.is_symlink():
-                return f"{self.path} is a symbolic link; replace it with a regular file"
+                return _link(self.path)
             if not self.path.is_file() or sys.platform == "win32":
                 return None
             info = self.path.stat()
@@ -90,6 +97,8 @@ class FileStore:
                 folder.mkdir(mode=0o700, parents=True, exist_ok=True)
             handle, probe = tempfile.mkstemp(prefix=f".{self.path.name}.", dir=folder)
             try:
+                if sys.platform != "win32":
+                    os.fchmod(handle, 0o600)  # as _write does, before judging it (DF-984)
                 mode = _mode(handle)
             finally:
                 os.close(handle)
@@ -117,24 +126,52 @@ class FileStore:
 
     def _load(self) -> dict:
         """Every top-level key but the version, so a rewrite keeps what it does not know."""
-        if not self.exists():
-            return {}
-        problem = self.problem()
-        if problem:
-            raise CredentialFileError(problem)
+        if not _NOFOLLOW:  # Windows: the check by name, then the read
+            if not self.exists():
+                return {}
+            problem = self.problem()
+            if problem:
+                raise CredentialFileError(problem)
         try:
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as error:  # never the text: it holds the secrets
-            raise CredentialFileError(
-                f"{self.path} cannot be read ({type(error).__name__}); move it away and run "
-                "`agentic login` again"
-            ) from None
+            raw = self._read_checked()
+        except FileNotFoundError:
+            return {}
+        except OSError as error:
+            raise CredentialFileError(_unreadable(self.path, error)) from None
+        try:
+            data = json.loads(raw.decode("utf-8"))
+        except ValueError as error:  # never the text: it holds the secrets
+            raise CredentialFileError(_unreadable(self.path, error)) from None
         if not isinstance(data, dict) or data.get("version") != _VERSION:
             raise CredentialFileError(
                 f"{self.path} is not an agentic credential file; move it away and run "
                 "`agentic login` again"
             )
         return {k: v for k, v in data.items() if k != "version"}
+
+    def _read_checked(self) -> bytes:
+        """The file's bytes. On POSIX it is opened without following a link and judged by
+        fstat on the descriptor read from (DF-983): a link, FIFO or other user's file
+        swapped in after a check by name is refused, not read."""
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | _NOFOLLOW | _NONBLOCK
+        try:
+            handle = os.open(self.path, flags)
+        except OSError as error:
+            if _NOFOLLOW and error.errno == errno.ELOOP:  # the last part is a link
+                raise CredentialFileError(_link(self.path)) from None
+            raise
+        with os.fdopen(handle, "rb") as file:
+            if sys.platform != "win32":
+                info = os.fstat(file.fileno())
+                if not stat.S_ISREG(info.st_mode):
+                    raise CredentialFileError(
+                        f"{self.path} is not a regular file; move it away and run "
+                        "`agentic login` again"
+                    )
+                problem = _posix_problem(self.path, info, os.getuid())
+                if problem:
+                    raise CredentialFileError(problem)
+            return file.read()
 
     def _write(self, data: dict) -> None:
         folder = self.path.parent
@@ -159,6 +196,17 @@ class FileStore:
             raise
 
 
+def _link(path: PurePath) -> str:
+    return f"{path} is a symbolic link; replace it with a regular file"
+
+
+def _unreadable(path: PurePath, error: Exception) -> str:
+    return (
+        f"{path} cannot be read ({type(error).__name__}); move it away and run "
+        "`agentic login` again"
+    )
+
+
 def _mode(handle: int) -> int:
     """The permission bits an open file reads with (0 on Windows, which has no modes)."""
     return 0 if sys.platform == "win32" else stat.S_IMODE(os.fstat(handle).st_mode)
@@ -168,6 +216,11 @@ def _posix_problem(
     path: PurePath, info: os.stat_result, uid: int, mounts: Path | None = None
 ) -> str | None:
     """Why a POSIX credential file with this `stat` must not be used by `uid`, or None."""
+    if info.st_uid == 0 != uid:  # after `sudo agentic login`: moving it needs sudo (DF-982)
+        return (
+            f"{path} belongs to root, not to you (uid {uid}); run `sudo chown $USER {path}` "
+            f"(or `sudo rm {path}` and run `agentic login` again)"
+        )
     if info.st_uid != uid:
         return (
             f"{path} belongs to another user (uid {info.st_uid}, not yours, {uid}); move it "
