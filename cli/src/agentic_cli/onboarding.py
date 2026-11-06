@@ -25,6 +25,7 @@ another program (an antivirus scan, an indexer) holds the file is tried once mor
 import contextlib
 import json
 import os
+import sys
 import time
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
@@ -48,8 +49,10 @@ _GLOBAL = ("--json", "--no-color")
 _FALSE = frozenset({"", "0", "false", "no", "off"})
 #: The longest a command waits for another one's write (then its step is not recorded).
 LOCK_WAIT_S = 2.0
-#: The wait before the one retry of a replace another program held up (Windows).
+#: The wait before the one retry of a replace another program held up (Windows only: on
+#: POSIX a PermissionError from a rename is a real permission problem).
 _REPLACE_RETRY_S = 0.2
+_RETRY_HELD = sys.platform == "win32"
 
 
 def step_of(args: Sequence[str]) -> str | None:
@@ -90,32 +93,34 @@ def _note(args, code, started, finished, home, env) -> None:
     if step is None or _disabled(env):
         return
     path = (home or agentic_home(env)) / FILE
-    if _onboarded(_load(path)):
-        return  # both ends recorded: the file (and its lock) is never touched again
+    if _changed(_load(path), step, code, started, finished) is None:
+        return  # nothing to record (onboarded, or this step's times are kept): no lock
     path.parent.mkdir(parents=True, exist_ok=True)
     with FileLock(path.with_name(f"{path.name}.lock"), timeout=LOCK_WAIT_S):
-        _record(path, step, code, started, finished)
+        # read again under the lock: a step another command wrote since is kept
+        steps = _changed(_load(path), step, code, started, finished)
+        if steps is not None:
+            _save(path, {"version": 1, "steps": steps})
 
 
-def _onboarded(data: dict) -> bool:
-    steps = data.get("steps", {})
+def _changed(
+    data: dict, step: str, code: int, started: datetime, finished: datetime
+) -> dict | None:
+    """The steps with this try recorded, or None when that changes nothing: the first
+    try and first success of a step are kept, and nothing at all once onboarded."""
+    steps = dict(data.get("steps", {}))
     login, dry_run = steps.get("login") or {}, steps.get("dry-run") or {}
-    return bool(login.get("first_try") and dry_run.get("first_ok"))
-
-
-def _record(path: Path, step: str, code: int, started: datetime, finished: datetime) -> None:
-    """Read, change and replace the file, under the lock: a step another command wrote
-    since the first read is read again here, and kept."""
-    data = _load(path)
-    if _onboarded(data):
-        return
-    steps = data.setdefault("steps", {})
-    changed = step not in steps
-    entry = steps.setdefault(step, {"first_try": started.isoformat(), "first_ok": None})
-    if code == 0 and not entry.get("first_ok"):
-        entry["first_ok"], changed = finished.isoformat(), True
-    if changed:
-        _save(path, {"version": 1, "steps": steps})
+    if login.get("first_try") and dry_run.get("first_ok"):
+        return None
+    entry = steps.get(step)
+    ok = finished.isoformat() if code == 0 else None
+    if entry is None:
+        steps[step] = {"first_try": started.isoformat(), "first_ok": ok}
+    elif ok and not entry.get("first_ok"):
+        steps[step] = {**entry, "first_ok": ok}
+    else:
+        return None
+    return steps
 
 
 def _disabled(env: Mapping[str, str]) -> bool:
@@ -136,7 +141,6 @@ def _load(path: Path) -> dict:
 
 
 def _save(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")  # one per process
     try:
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -145,6 +149,8 @@ def _save(path: Path, data: dict) -> None:
         try:
             os.replace(temporary, path)
         except PermissionError:  # Windows: another program holds the file for a moment
+            if not _RETRY_HELD:
+                raise
             time.sleep(_REPLACE_RETRY_S)
             os.replace(temporary, path)
     except BaseException:

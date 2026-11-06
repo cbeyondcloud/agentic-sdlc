@@ -241,6 +241,7 @@ def test_two_commands_finishing_together_both_keep_their_step(timer_home: Path, 
         return data
 
     monkeypatch.setattr(onboarding, "_load", slow_load)
+    monkeypatch.setattr(onboarding, "LOCK_WAIT_S", 30.0)  # a slow runner: never time out
     runs = [
         threading.Thread(
             target=onboarding.note,
@@ -280,9 +281,11 @@ def test_a_file_held_by_another_program_is_written_on_the_second_try(timer_home,
         replace(source, target)
 
     monkeypatch.setattr(onboarding.os, "replace", held_once)
+    monkeypatch.setattr(onboarding, "_RETRY_HELD", True)
+    monkeypatch.setattr(onboarding, "_REPLACE_RETRY_S", 0.01)
     monkeypatch.setattr(onboarding.time, "sleep", waits.append)
     onboarding.note(["login"], 0, at(0), at(1), home=timer_home)
-    assert len(tries) == 2 and len(waits) == 1
+    assert len(tries) == 2 and waits == [0.01]
     assert saved(timer_home)["steps"]["login"]["first_ok"] == at(1).isoformat()
     assert leftovers(timer_home) == []
 
@@ -292,7 +295,34 @@ def test_a_file_still_held_after_the_retry_is_skipped_quietly(timer_home, monkey
         raise PermissionError(13, "Access is denied")
 
     monkeypatch.setattr(onboarding.os, "replace", held)
-    monkeypatch.setattr(onboarding.time, "sleep", lambda s: None)
+    monkeypatch.setattr(onboarding, "_RETRY_HELD", True)
+    monkeypatch.setattr(onboarding, "_REPLACE_RETRY_S", 0.0)
     monkeypatch.setattr(onboarding, "step_of", lambda args: "login")
     assert main(["version"]) == ExitCode.OK
-    assert leftovers(timer_home) == []
+    assert "Access is denied" not in capsys.readouterr().err
+    assert leftovers(timer_home) == [] and not (timer_home / onboarding.FILE).exists()
+
+
+def test_a_permission_error_is_not_retried_on_posix(timer_home, monkeypatch):
+    tries = []
+
+    def denied(source, target):  # POSIX: a rename refused is not a passing lock
+        tries.append(target)
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(onboarding.os, "replace", denied)
+    monkeypatch.setattr(onboarding, "_RETRY_HELD", False)
+    onboarding.note(["login"], 0, at(0), at(1), home=timer_home)
+    assert len(tries) == 1 and leftovers(timer_home) == []
+
+
+def test_a_try_that_changes_nothing_takes_no_lock(timer_home, monkeypatch):
+    onboarding.note(["login"], 0, at(0), at(1), home=timer_home)
+
+    def no_lock(*args, **kwargs):  # review M3: a repeated step never waits on the lock
+        raise AssertionError("locked for a try that changes nothing")
+
+    monkeypatch.setattr(onboarding, "FileLock", no_lock)
+    onboarding._note(["login"], 0, at(5), at(6), timer_home, {})
+    onboarding._note(["login"], 1, at(7), at(8), timer_home, {})
+    assert saved(timer_home)["steps"]["login"]["first_ok"] == at(1).isoformat()

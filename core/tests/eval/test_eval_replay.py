@@ -219,8 +219,7 @@ def test_a_key_cannot_escape_the_cassette_folder(tmp_path: Path):
 
 def test_start_binds_the_port_asked_for_and_refuses_a_busy_one(tmp_path: Path):
     """DF-998: a fixed port, for a walkthrough line that does not change. A port another
-    program listens on is an OSError, on Windows too (where the server's SO_REUSEADDR
-    does not take a port another socket listens on)."""
+    program listens on is an OSError."""
     with socket.socket() as busy:
         busy.bind(("127.0.0.1", 0))
         busy.listen()
@@ -232,3 +231,16 @@ def test_start_binds_the_port_asked_for_and_refuses_a_busy_one(tmp_path: Path):
         assert server.url == f"http://127.0.0.1:{port}"
     finally:
         server.close()
+
+
+def test_a_second_server_on_the_same_fixed_port_is_refused(tmp_path: Path):
+    """Review I2 (DF-998): a gateway left running from the last try holds the port. On
+    Windows SO_REUSEADDR would let the second one bind it too, and calls could reach the
+    old server, at its old place in the recording."""
+    first = CassetteServer(tmp_path, "replay").start()
+    try:
+        port = int(first.url.rsplit(":", 1)[1])
+        with pytest.raises(OSError):
+            CassetteServer(tmp_path, "replay").start(port=port)
+    finally:
+        first.close()

@@ -32,6 +32,7 @@ import errno
 import json
 import os
 import re
+import shlex
 import stat
 import sys
 import tempfile
@@ -136,8 +137,9 @@ class FileStore:
             raw = self._read_checked()
         except FileNotFoundError:
             return {}
-        except OSError as error:
-            raise CredentialFileError(_unreadable(self.path, error)) from None
+        except OSError as error:  # a file it may not open: say whose it is, if not its own
+            problem = self.problem() if isinstance(error, PermissionError) else None
+            raise CredentialFileError(problem or _unreadable(self.path, error)) from None
         try:
             data = json.loads(raw.decode("utf-8"))
         except ValueError as error:  # never the text: it holds the secrets
@@ -217,9 +219,10 @@ def _posix_problem(
 ) -> str | None:
     """Why a POSIX credential file with this `stat` must not be used by `uid`, or None."""
     if info.st_uid == 0 != uid:  # after `sudo agentic login`: moving it needs sudo (DF-982)
+        shown = shlex.quote(str(path))  # a home folder with a space in it
         return (
-            f"{path} belongs to root, not to you (uid {uid}); run `sudo chown $USER {path}` "
-            f"(or `sudo rm {path}` and run `agentic login` again)"
+            f"{path} belongs to root, not to you (uid {uid}); run `sudo chown $USER {shown}` "
+            f"(or `sudo rm {shown}` and run `agentic login` again)"
         )
     if info.st_uid != uid:
         return (
@@ -238,7 +241,10 @@ def _too_open(path: PurePath, mode: int, mounts: Path | None = None) -> str:
             f"set (it reads {mode:04o}); set AGENTIC_HOME to a folder in the Linux file "
             "system, for example `export AGENTIC_HOME=/home/$USER/.agentic`"
         )
-    return f"{path} can be read or changed by other users (mode {mode:04o}); run `chmod 600 {path}`"
+    return (
+        f"{path} can be read or changed by other users (mode {mode:04o}); run "
+        f"`chmod 600 {shlex.quote(str(path))}`"
+    )
 
 
 def drvfs_mount(path: PurePath, mounts: Path | None = None) -> str | None:

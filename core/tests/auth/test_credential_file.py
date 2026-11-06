@@ -173,6 +173,10 @@ def test_a_file_root_owns_names_sudo_in_the_fix(tmp_path):  # DF-982: after `sud
     assert f"sudo chown $USER {path}" in fix and f"sudo rm {path}" in fix
     other = _posix_problem(path, stat_of(0o600, 1001), 1000, tmp_path / "none")
     assert "sudo" not in other  # another ordinary user's file: moving it away is enough
+    spaced = PurePosixPath("/home/ann b/.agentic/credentials.json")  # review M2: quoted
+    fix = _posix_problem(spaced, stat_of(0o600, 0), 1000, tmp_path / "none")
+    assert f"sudo chown $USER '{spaced}'" in fix and f"sudo rm '{spaced}'" in fix
+    assert f"chmod 600 '{spaced}'" in _posix_problem(spaced, stat_of(0o644, 1000), 1000)
 
 
 @POSIX
@@ -184,6 +188,23 @@ def test_problem_uses_the_real_uid_and_accepts_the_users_own_file(tmp_path, monk
     monkeypatch.setattr(os, "getuid", lambda: files.path.stat().st_uid + 1)
     problem = files.problem()
     assert problem and "another user" in problem and f"uid {files.path.stat().st_uid}" in problem
+
+
+@POSIX
+def test_another_users_file_it_cannot_open_still_names_the_owner(tmp_path, monkeypatch):
+    files = store(tmp_path)  # review I1: `sudo agentic login` leaves root's 0600 file,
+    files.set_password(SERVICE, TOKENLEAN_KEY, SECRET)  # which the user cannot open
+    owner = files.path.stat().st_uid
+    files.path.chmod(0)
+    try:
+        if os.access(files.path, os.R_OK):
+            pytest.skip("this user reads every file (root)")
+        monkeypatch.setattr(os, "getuid", lambda: owner + 1)
+        with pytest.raises(CredentialFileError, match="another user") as refused:
+            files.get_password(SERVICE, TOKENLEAN_KEY)
+        assert f"uid {owner}" in str(refused.value)
+    finally:
+        files.path.chmod(0o600)
 
 
 def _skip_the_check_by_name(monkeypatch):
