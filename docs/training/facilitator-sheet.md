@@ -14,6 +14,10 @@ out with `agentic onboarding`.
 - [ ] The training repository and team are set up
       ([day-0 runbook](../runbooks/day-0-bootstrap.md#training-environment-m3-23)).
 - [ ] Anyone who rehearsed on their laptop ran `agentic onboarding --reset`.
+- [ ] Port 8765 is free on each laptop: step 6 starts `agentic training-gateway --port 8765`
+      and sets `AGENTIC_GATEWAY_URL=http://127.0.0.1:8765/c/training/acceptance/1`. If
+      the gateway says the port is in use, the developer picks another (`--port 8766`)
+      and uses it in that line too.
 - [ ] At least 5 developers, a mix of Windows (WSL2) and macOS laptops.
 
 ## During the session

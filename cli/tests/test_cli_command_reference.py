@@ -80,3 +80,42 @@ def test_each_guide_example_parses(home: Path, page: str, command: str, capsys):
     words = shlex.split(command, comments=True)
     code = main([*words[1:], "--help"])
     assert code == ExitCode.OK, f"{page}: {command}\n{capsys.readouterr().err}"
+
+
+def _command(words: list[str]):
+    """The command `agentic <words...>` names (the longest such prefix), and its path."""
+    command, path = typer.main.get_command(build_app()), ["agentic"]
+    for word in words:
+        children = getattr(command, "commands", None) or {}
+        if word not in children:
+            break
+        command, path = children[word], [*path, word]
+    return command, " ".join(path)
+
+
+def reference_options() -> list[tuple[str, str]]:
+    """Each `--option` a reference row names in code, with the command it belongs to: the
+    row's own, or the one a code span starting `agentic ...` names."""
+    found = []
+    rows = re.findall(
+        r"^\|\s*`(agentic [a-z][a-z0-9 -]*)`\s*\|([^|]*)\|", REFERENCE.read_text("utf-8"), re.M
+    )
+    for name, text in rows:
+        for code in re.findall(r"`([^`]*)`", text):
+            words = shlex.split(code) if code.startswith("agentic ") else []
+            owner = _command(words[1:])[1] if words else name.strip()
+            found += [(owner, o) for o in re.findall(r"(?<![\w-])(--[a-z][a-z0-9-]*)", code)]
+    return sorted(set(found))
+
+
+def test_the_reference_names_options():
+    assert ("agentic training-gateway", "--port") in reference_options()  # DF-998
+
+
+@pytest.mark.parametrize(("name", "option"), reference_options())
+def test_each_option_the_reference_names_exists(name: str, option: str):
+    """A row naming a flag its command does not have (renamed, removed) fails here."""
+    command, path = _command(name.split()[1:])
+    assert path == name
+    options = {o for p in command.params for o in [*p.opts, *p.secondary_opts]}
+    assert option in options, f"{REFERENCE.name}: `{name}` has no {option}"

@@ -2,11 +2,13 @@
 anchor, every page of the site is in the navigation, and the built site loads nothing
 from another host (no analytics, font host or CDN: orgs host it internally, offline).
 
-Needs the optional docs group (`uv sync --group docs`); skipped, with that hint, without
-it. CI installs the group."""
+The tests that build the site need the optional docs group (`uv sync --group docs`) and
+are skipped, with that hint, without it; the others always run (DF-997). CI installs the
+group."""
 
 import base64
 import hashlib
+import importlib.util
 import re
 import shutil
 import subprocess
@@ -18,10 +20,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = ROOT / "mkdocs.yml"
 
-mkdocs = pytest.importorskip(
-    "mkdocs", reason="the docs group is not installed: run `uv sync --group docs`"
+#: Only the tests that build the site need MkDocs (DF-997): the rest run without it.
+NEEDS_MKDOCS = pytest.mark.skipif(
+    importlib.util.find_spec("mkdocs") is None,
+    reason="the docs group is not installed: run `uv sync --group docs`",
 )
-yaml = pytest.importorskip("yaml")
 
 #: a resource the browser fetches by itself: scripts, stylesheets, images, fonts, frames
 REMOTE_LOAD = re.compile(
@@ -43,6 +46,10 @@ def build(config: Path, site: Path) -> subprocess.CompletedProcess:
     )
 
 
+def _yaml():
+    return pytest.importorskip("yaml")  # MkDocs brings it; the config tests need only it
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory) -> tuple[Path, str]:
     site = tmp_path_factory.mktemp("site")
@@ -51,6 +58,7 @@ def built(tmp_path_factory) -> tuple[Path, str]:
     return site, done.stderr
 
 
+@NEEDS_MKDOCS
 def test_the_strict_build_passes(built):
     site, _ = built
     assert (site / "index.html").is_file()
@@ -58,11 +66,13 @@ def test_the_strict_build_passes(built):
     assert (site / "training" / "deck.html").is_file()
 
 
+@NEEDS_MKDOCS
 def test_every_page_is_in_the_navigation(built):
     _, log = built
     assert 'not included in the "nav"' not in log, log
 
 
+@NEEDS_MKDOCS
 def test_the_site_loads_nothing_from_another_host(built):
     site, _ = built
     offenders = []
@@ -75,14 +85,16 @@ def test_the_site_loads_nothing_from_another_host(built):
 
 
 def test_the_config_turns_no_analytics_on():
-    config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    config = _yaml().safe_load(CONFIG.read_text(encoding="utf-8"))
     theme = config["theme"]
     assert "analytics" not in theme and "google_analytics" not in config
     assert theme.get("highlightjs") is False  # the theme loads highlight.js from a CDN
 
 
+@NEEDS_MKDOCS
 def test_a_broken_link_fails_the_build(tmp_path: Path):
     """The same validation settings, on a page with a link to a missing page."""
+    yaml = _yaml()
     config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     for key in ("nav", "exclude_docs"):
         config.pop(key, None)
@@ -95,7 +107,9 @@ def test_a_broken_link_fails_the_build(tmp_path: Path):
     assert "missing.md" in done.stderr
 
 
+@NEEDS_MKDOCS
 def test_a_broken_anchor_fails_the_build(tmp_path: Path):
+    yaml = _yaml()
     config = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     for key in ("nav", "exclude_docs"):
         config.pop(key, None)
@@ -129,6 +143,7 @@ def csp_sources() -> dict[str, set[str]]:
     return directives
 
 
+@NEEDS_MKDOCS
 def test_the_runbook_csp_allows_what_the_built_site_uses(built):
     """The header the runbook gives must not break the site: MkDocs writes an inline
     script per page (base_url, keyboard shortcuts) and inline style attributes."""

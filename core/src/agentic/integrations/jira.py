@@ -24,20 +24,15 @@ connector adapter's job (`sdlc_commons.connectors`), and the CLI decides when to
 
 import base64
 import ipaddress
-import math
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import quote
 
 import httpx2
 
 from agentic.transport.network import NetworkSettings, ssl_context
-
-#: The longest wait a Retry-After is believed for (review I1): a day.
-MAX_RETRY_AFTER = 86400.0
+from agentic.transport.retry_after import retry_after_seconds
 
 API_VERSIONS = ("2", "3")
 CLOUD_SUFFIXES = (".atlassian.net", ".jira.com")
@@ -308,20 +303,9 @@ def _adf(text: str) -> dict:
 
 
 def _retry_after(response: httpx2.Response) -> float | None:
-    """Retry-After in seconds: a number, or an HTTP date (DF-963) as whole seconds from now
-    (0 for a date already past), at most a day (review I1). None when it is absent or
-    neither (a date too large for a datetime included)."""
-    header = response.headers.get("retry-after", "").strip()
-    try:
-        seconds = float(header)
-    except ValueError:
-        try:
-            when = parsedate_to_datetime(header)
-        except (TypeError, ValueError, IndexError, OverflowError):
-            return None
-        when = when if when.tzinfo else when.replace(tzinfo=UTC)
-        seconds = float(max(0, math.ceil((when - datetime.now(UTC)).total_seconds())))
-    return min(seconds, MAX_RETRY_AFTER) if math.isfinite(seconds) and seconds >= 0 else None
+    """Retry-After in seconds: a number, or an HTTP date (DF-963), at most a day (review
+    I1); the shared reader (DF-986)."""
+    return retry_after_seconds(response.headers.get("retry-after"))
 
 
 def _explain(where: str, response: httpx2.Response) -> str:

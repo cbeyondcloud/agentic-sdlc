@@ -9,6 +9,7 @@ own files live in its `.agentic/` folder instead.
 import contextlib
 import json
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Mapping
@@ -87,7 +88,8 @@ def set_user_config(home: Path, values: Mapping[str, str]) -> ConfigChange:
     takes the one most of the file uses (DF-964). The new text must parse back to the old
     settings plus these, and replaces the file in one step (a temporary file, then a
     rename), keeping its mode. A
-    file that is not a YAML mapping, or whose value spans several lines, is left alone:
+    file that is not a YAML mapping, whose value spans several lines, or that ends lines
+    with a carriage return alone (DF-985), is left alone:
     `reason` says why, and the caller shows the lines instead."""
     path = home / CONFIG_FILE
     if path.is_symlink():  # replacing it would detach a dotfile manager's link
@@ -105,6 +107,15 @@ def set_user_config(home: Path, values: Mapping[str, str]) -> ConfigChange:
     data = {} if data is None else data
     if not isinstance(data, dict):
         return ConfigChange(path, False, reason="it is not a mapping of settings")
+    if all(key in data and data[key] == value for key, value in values.items()):
+        return ConfigChange(path, False)
+    if re.search(r"\r(?!\n)", text):  # YAML ends a line there; the rows here would not
+        return ConfigChange(
+            path,
+            False,
+            reason="its line endings are not supported (a carriage return alone, as in a "
+            "classic Mac file); save it with LF or CRLF line endings",
+        )
     rows = text.split("\n")  # each row keeps its "\r", if it had one
     ended = rows[-1] == ""  # the file ends with a line feed (or is empty)
     if ended:
@@ -124,7 +135,8 @@ def set_user_config(home: Path, values: Mapping[str, str]) -> ConfigChange:
         at = (lines.get((key,)) or 0) - 1
         if not isinstance(data[key], str | None) or not _one_line(rows, at):
             return ConfigChange(path, False, reason=f"its {key} is not a one-line value")
-        own = "\r" if rows[at].endswith("\r") else ""
+        last = at == len(rows) - 1 and not ended  # no ending of its own: the file's (DF-985)
+        own = "\r" if rows[at].endswith("\r") or (last and cr) else ""
         rows[at : at + 1] = [
             f"# {rows[at].rstrip()}  (replaced by agentic){own}",
             f"{key}: {_scalar(value)}{own}",

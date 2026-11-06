@@ -87,6 +87,17 @@ def test_a_missing_file_holds_nothing(tmp_path):
     assert store(tmp_path).get_password(SERVICE, TOKENLEAN_KEY) is None
 
 
+def test_a_file_where_its_folder_should_be_holds_nothing_and_cannot_be_written(tmp_path):
+    """~/.agentic is a plain file: on every OS the key reads as absent, and the write check
+    names the folder, not a read failure (the descriptor read of DF-983 got ENOTDIR)."""
+    folder = tmp_path / "home"
+    folder.write_text("a file where the folder should be", encoding="utf-8")
+    files = FileStore(folder / FILE_NAME)
+    assert files.get_password(SERVICE, TOKENLEAN_KEY) is None
+    with pytest.raises(CredentialFileError, match="cannot hold the credential file"):
+        files.check_writable()
+
+
 @POSIX
 def test_the_file_is_user_only_and_its_new_folder_too(tmp_path):
     files = store(tmp_path)
@@ -163,6 +174,98 @@ def test_a_file_owned_by_another_user_is_refused(tmp_path):  # DF-962, like ssh
     problem = _posix_problem(path, stat_of(0o600, 1001), 1000, tmp_path / "none")
     assert problem and "another user" in problem and "uid 1001" in problem
     assert _posix_problem(path, stat_of(0o600, 1000), 1000, tmp_path / "none") is None
+
+
+def test_a_file_root_owns_names_sudo_in_the_fix(tmp_path):  # DF-982: after `sudo agentic login`
+    path = PurePosixPath("/home/ann/.agentic/credentials.json")
+    problem = _posix_problem(path, stat_of(0o600, 0), 1000, tmp_path / "none")
+    assert problem and "root" in problem
+    fix = problem.rpartition("; ")[2]
+    assert f"sudo chown $USER {path}" in fix and f"sudo rm {path}" in fix
+    other = _posix_problem(path, stat_of(0o600, 1001), 1000, tmp_path / "none")
+    assert "sudo" not in other  # another ordinary user's file: moving it away is enough
+    spaced = PurePosixPath("/home/ann b/.agentic/credentials.json")  # review M2: quoted
+    fix = _posix_problem(spaced, stat_of(0o600, 0), 1000, tmp_path / "none")
+    assert f"sudo chown $USER '{spaced}'" in fix and f"sudo rm '{spaced}'" in fix
+    assert f"chmod 600 '{spaced}'" in _posix_problem(spaced, stat_of(0o644, 1000), 1000)
+
+
+@POSIX
+def test_problem_uses_the_real_uid_and_accepts_the_users_own_file(tmp_path, monkeypatch):
+    files = store(tmp_path)  # DF-987: not through _posix_problem with a fake stat
+    files.set_password(SERVICE, TOKENLEAN_KEY, SECRET)
+    assert files.problem() is None
+    assert files.path.stat().st_uid == os.getuid()
+    monkeypatch.setattr(os, "getuid", lambda: files.path.stat().st_uid + 1)
+    problem = files.problem()
+    assert problem and "another user" in problem and f"uid {files.path.stat().st_uid}" in problem
+
+
+@POSIX
+def test_another_users_file_it_cannot_open_still_names_the_owner(tmp_path, monkeypatch):
+    files = store(tmp_path)  # review I1: `sudo agentic login` leaves root's 0600 file,
+    files.set_password(SERVICE, TOKENLEAN_KEY, SECRET)  # which the user cannot open
+    owner = files.path.stat().st_uid
+    files.path.chmod(0)
+    try:
+        if os.access(files.path, os.R_OK):
+            pytest.skip("this user reads every file (root)")
+        monkeypatch.setattr(os, "getuid", lambda: owner + 1)
+        with pytest.raises(CredentialFileError, match="another user") as refused:
+            files.get_password(SERVICE, TOKENLEAN_KEY)
+        assert f"uid {owner}" in str(refused.value)
+    finally:
+        files.path.chmod(0o600)
+
+
+def _skip_the_check_by_name(monkeypatch):
+    """What a swap between `problem()` and the read looks like: the check by name passed."""
+    monkeypatch.setattr(FileStore, "problem", lambda self: None)
+
+
+@POSIX
+def test_a_link_swapped_in_after_the_check_is_not_followed(tmp_path, monkeypatch):  # DF-983
+    files = store(tmp_path)
+    real = tmp_path / "elsewhere.json"
+    real.write_text(json.dumps({"version": 1, SERVICE: {TOKENLEAN_KEY: SECRET}}), "utf-8")
+    real.chmod(0o600)
+    files.path.parent.mkdir(parents=True)
+    files.path.symlink_to(real)
+    _skip_the_check_by_name(monkeypatch)
+    with pytest.raises(CredentialFileError, match="symbolic link"):
+        files.get_password(SERVICE, TOKENLEAN_KEY)
+
+
+@POSIX
+def test_the_mode_is_judged_on_the_descriptor_that_is_read(tmp_path, monkeypatch):  # DF-983
+    files = store(tmp_path)
+    files.set_password(SERVICE, TOKENLEAN_KEY, SECRET)
+    files.path.chmod(0o644)
+    _skip_the_check_by_name(monkeypatch)
+    with pytest.raises(CredentialFileError, match="chmod 600") as refused:
+        files.get_password(SERVICE, TOKENLEAN_KEY)
+    assert SECRET not in str(refused.value)
+
+
+@POSIX
+def test_a_fifo_in_place_of_the_file_is_refused_without_hanging(tmp_path, monkeypatch):
+    files = store(tmp_path)  # DF-983: O_NONBLOCK, then fstat says it is not a regular file
+    files.path.parent.mkdir(parents=True)
+    os.mkfifo(files.path, 0o600)
+    _skip_the_check_by_name(monkeypatch)
+    with pytest.raises(CredentialFileError, match="not a regular file"):
+        files.get_password(SERVICE, TOKENLEAN_KEY)
+
+
+@POSIX
+def test_check_writable_judges_the_probe_after_making_it_0600(tmp_path, monkeypatch):
+    files = store(tmp_path)  # DF-984: the same order as _write
+    calls = []
+    fchmod, mode = os.fchmod, filestore._mode
+    monkeypatch.setattr(os, "fchmod", lambda fd, m: (calls.append(("fchmod", m)), fchmod(fd, m)))
+    monkeypatch.setattr(filestore, "_mode", lambda fd: (calls.append(("mode",)), mode(fd))[1])
+    files.check_writable()
+    assert calls == [("fchmod", 0o600), ("mode",)]
 
 
 MOUNTS = (  # as WSL2 lists them: older builds show drvfs as 9p with aname=drvfs

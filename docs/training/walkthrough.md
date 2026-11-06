@@ -90,11 +90,19 @@ gateway. It replays model answers recorded for this walkthrough, on your laptop 
 model is called and nothing is spent.
 
 ```bash
-agentic training-gateway
+agentic training-gateway --port 8765
 ```
 
-It prints a line such as `export AGENTIC_GATEWAY_URL=http://127.0.0.1:53817/c/training/acceptance/1`.
-Paste that line into your first terminal, then start the run:
+Then, in your first terminal, point agentic at it and start the run (the same line every
+time, even after you restart the gateway):
+
+```bash
+export AGENTIC_GATEWAY_URL=http://127.0.0.1:8765/c/training/acceptance/1
+```
+
+In PowerShell: `$env:AGENTIC_GATEWAY_URL = "http://127.0.0.1:8765/c/training/acceptance/1"`.
+If the gateway says port 8765 is in use, pick another, such as `--port 8766`, and use it
+in the line above too.
 
 ```bash
 agentic run feature-delivery --input request="Split an invoice total evenly between several payers"

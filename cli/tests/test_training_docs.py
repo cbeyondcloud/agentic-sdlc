@@ -1,14 +1,17 @@
 """The training material (M3-23, docs/training/): every `agentic` example in it is a real
-command with real flags, and the deck's sections add up to its 30 minutes."""
+command with real flags whose arguments the CLI's own parser accepts, and the deck's
+sections add up to its 30 minutes."""
 
 import re
 import shlex
 from pathlib import Path
 
 import pytest
+import typer
+from typer.core import TyperGroup
 
 from agentic_cli.exit_codes import ExitCode
-from agentic_cli.main import main
+from agentic_cli.main import build_app, main
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 PAGES = [DOCS / "index.md", *sorted((DOCS / "training").glob("*.md"))]
@@ -35,6 +38,42 @@ def test_each_training_example_parses(home: Path, page: str, command: str, capsy
     words = shlex.split(command, comments=True)
     code = main([*words[1:], "--help"])
     assert code == ExitCode.OK, f"{page}: {command}\n{capsys.readouterr().err}"
+
+
+def parse(words: list[str]):
+    """`words` through the CLI's click parser down to the command, as `main` would parse
+    them, without running anything: a missing argument, an unknown or misspelt option, a
+    value of the wrong type or an option given to the wrong command fails (DF-997)."""
+    ctx = typer.main.get_command(build_app()).make_context("agentic", list(words))
+    while isinstance(ctx.command, TyperGroup):
+        rest = [*ctx._protected_args, *ctx.args]
+        assert rest, f"{' '.join(words)!r} names a group, not a command"
+        name, command, rest = ctx.command.resolve_command(ctx, rest)
+        ctx = command.make_context(name, rest, parent=ctx)
+    return ctx
+
+
+@pytest.mark.parametrize(("page", "command"), examples())
+def test_each_training_example_parses_with_its_real_arguments(home: Path, page, command):
+    words = shlex.split(command, comments=True)[1:]
+    try:
+        parse(words)
+    except typer.TyperException as error:
+        pytest.fail(f"{page}: {command}\n{error}")
+
+
+@pytest.mark.parametrize(
+    "words",
+    [
+        ["resume", "r1", "--extra-minutes", "ten"],  # a value of the wrong type
+        ["resume", "r1", "--extra-minutes", "-5"],  # a value out of range
+        ["onboarding", "now"],  # an extra argument
+    ],
+)
+def test_the_parser_check_catches_what_help_does_not(home: Path, words):
+    assert main([*words, "--help"]) == ExitCode.OK  # --help stops before these are checked
+    with pytest.raises(typer.TyperException):
+        parse(words)
 
 
 def agenda() -> list[tuple[str, int]]:

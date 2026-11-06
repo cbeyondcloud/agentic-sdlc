@@ -26,6 +26,8 @@ keyed by (case, variant label, repeat, call index) and stored in
 import hashlib
 import json
 import re
+import socket
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -107,6 +109,20 @@ def check_key(key: str) -> list[str]:
     return parts
 
 
+class _LoopbackServer(ThreadingHTTPServer):
+    """On Windows SO_REUSEADDR lets a second server bind a port one already listens on,
+    so there the port is bound exclusively (SO_EXCLUSIVEADDRUSE): a fixed port that is
+    taken fails instead of being shared (DF-998, review I2). Elsewhere SO_REUSEADDR only
+    reuses a port left in TIME_WAIT, so a restarted server gets its port back at once."""
+
+    allow_reuse_address = sys.platform != "win32"
+
+    def server_bind(self) -> None:
+        if sys.platform == "win32":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 class CassetteServer:
     def __init__(
         self,
@@ -128,9 +144,12 @@ class CassetteServer:
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
-    def start(self) -> "CassetteServer":
+    def start(self, port: int = 0) -> "CassetteServer":
+        """Serve on 127.0.0.1: on `port`, or one the system picks (0). A port another
+        program listens on raises OSError (EADDRINUSE; on Windows also EACCES for a port
+        the system reserves)."""
         handler = self._handler()
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self._server = _LoopbackServer(("127.0.0.1", port), handler)
         self._server.daemon_threads = True
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
         return self

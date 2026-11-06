@@ -5,6 +5,9 @@ kill-switch poll, which a run waits on, retries at most once after a very short 
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
+
 import httpx2
 import pytest
 from cp_fakes import CP_URL, TOKEN, FakeControlPlane
@@ -69,3 +72,18 @@ def test_the_kill_poll_retries_once_after_a_very_short_wait(slept):
     with pytest.raises(ControlPlaneRefused):
         client.kill_state(team="payments", repo=None, pipeline=None)
     assert slept == [1.0]
+
+
+def test_a_short_retry_after_given_as_an_http_date_is_waited_out(slept):  # DF-986
+    soon = format_datetime(datetime.now(UTC) + timedelta(seconds=3), usegmt=True)
+    client = ControlPlaneClient(CP_URL, TOKEN, transport=limited(FakeControlPlane(), [soon]))
+    assert client.me().user.email == "dev@acme.example"
+    assert len(slept) == 1 and 1 <= slept[0] <= 4
+
+
+def test_a_long_retry_after_http_date_is_refused_at_once(slept):  # DF-986
+    late = format_datetime(datetime.now(UTC) + timedelta(hours=1), usegmt=True)
+    client = ControlPlaneClient(CP_URL, TOKEN, transport=limited(FakeControlPlane(), [late]))
+    with pytest.raises(ControlPlaneRefused) as caught:
+        client.me()
+    assert caught.value.status == 429 and slept == []

@@ -4,6 +4,7 @@ prompt is reported stale and still replays."""
 
 import asyncio
 import json
+import socket
 from pathlib import Path
 
 import httpx2
@@ -214,3 +215,32 @@ def test_a_key_cannot_escape_the_cassette_folder(tmp_path: Path):
             server.base_url("../outside")
         reply = httpx2.post(server.url + "/c/..%2F..%2Fx/v1/messages", json={})
         assert reply.status_code == 400
+
+
+def test_start_binds_the_port_asked_for_and_refuses_a_busy_one(tmp_path: Path):
+    """DF-998: a fixed port, for a walkthrough line that does not change. A port another
+    program listens on is an OSError."""
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        with pytest.raises(OSError):
+            CassetteServer(tmp_path, "replay").start(port=port)
+    server = CassetteServer(tmp_path, "replay").start(port=port)  # free again
+    try:
+        assert server.url == f"http://127.0.0.1:{port}"
+    finally:
+        server.close()
+
+
+def test_a_second_server_on_the_same_fixed_port_is_refused(tmp_path: Path):
+    """Review I2 (DF-998): a gateway left running from the last try holds the port. On
+    Windows SO_REUSEADDR would let the second one bind it too, and calls could reach the
+    old server, at its old place in the recording."""
+    first = CassetteServer(tmp_path, "replay").start()
+    try:
+        port = int(first.url.rsplit(":", 1)[1])
+        with pytest.raises(OSError):
+            CassetteServer(tmp_path, "replay").start(port=port)
+    finally:
+        first.close()
