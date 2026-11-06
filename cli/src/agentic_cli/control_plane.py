@@ -67,6 +67,7 @@ from agentic.security.publish_scan import PublishBlocked, PublishGuard
 from agentic.security.secret_scan import SecretScanner
 from agentic.telemetry.sinks import SinkBehind
 from agentic.transport.network import NetworkSettings, ssl_context
+from agentic.transport.retry_after import retry_after_seconds
 from agentic_cli import __version__
 from agentic_cli.credential_store import cli_credentials
 from agentic_cli.errors import CliError
@@ -677,12 +678,10 @@ def _proposal_path(pid: str, action: str | None = None) -> str:
 
 
 def _retry_after(response: httpx2.Response, longest: float) -> float | None:
-    """A 429's `Retry-After` in seconds when it is a number no greater than `longest`."""
-    try:
-        wait = float(response.headers.get("Retry-After", ""))
-    except ValueError:
-        return None
-    return wait if 0 <= wait <= longest else None
+    """A 429's `Retry-After` in seconds (a number or an HTTP date, read by the shared
+    reader, DF-986) when it is no greater than `longest`: a longer wait is not waited."""
+    wait = retry_after_seconds(response.headers.get("Retry-After"))
+    return wait if wait is not None and wait <= longest else None
 
 
 # ── the run event sink (M2-20) ───────────────────────────────────────────────

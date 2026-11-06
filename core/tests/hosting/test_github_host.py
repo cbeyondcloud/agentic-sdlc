@@ -3,6 +3,8 @@ token kept to the API origin and out of every message, pagination, checks and st
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 
 import httpx2
 import pytest
@@ -264,6 +266,22 @@ def test_an_error_says_whether_trying_again_may_help(status, headers, transient,
     with pytest.raises(HostingError) as raised:
         host(handler).default_branch(REPO)
     assert (raised.value.transient, raised.value.retry_after) == (transient, retry_after)
+
+
+def test_a_retry_after_http_date_is_read_and_a_long_wait_capped():  # DF-986
+    later = format_datetime(datetime.now(UTC) + timedelta(seconds=60), usegmt=True)
+    for header, check in [
+        (later, lambda wait: 55 <= wait <= 61),
+        ("999999", lambda wait: wait == 86400.0),
+        ("Wed, 04 Nov 99999999999999999999 10:00:00 GMT", lambda wait: wait is None),
+    ]:
+
+        def handler(request: httpx2.Request, header=header) -> httpx2.Response:
+            return httpx2.Response(429, headers={"retry-after": header}, json={"message": "slow"})
+
+        with pytest.raises(HostingError) as raised:
+            host(handler).default_branch(REPO)
+        assert check(raised.value.retry_after), (header, raised.value.retry_after)
 
 
 def test_a_network_failure_may_pass_on_its_own():

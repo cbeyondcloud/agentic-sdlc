@@ -41,6 +41,7 @@ from agentic.hosting.base import (
     splice_body,
 )
 from agentic.transport.network import NetworkSettings, ssl_context
+from agentic.transport.retry_after import retry_after_seconds
 
 GITHUB_COM = "github.com"
 GITHUB_COM_API = "https://api.github.com"
@@ -569,12 +570,9 @@ def _transient(response: httpx2.Response) -> bool:
 
 
 def _retry_after(response: httpx2.Response) -> float | None:
-    """`Retry-After` in seconds (GitHub sends seconds; an HTTP date is not used)."""
-    try:
-        seconds = float(response.headers.get("retry-after", ""))
-    except ValueError:
-        return None
-    return seconds if seconds >= 0 else None
+    """`Retry-After` in seconds: GitHub sends seconds, and an HTTP date (a proxy's, or a
+    GitHub Enterprise in front of one) is read too, at most a day (DF-986)."""
+    return retry_after_seconds(response.headers.get("retry-after"))
 
 
 def _explain(where: str, response: httpx2.Response) -> str:
