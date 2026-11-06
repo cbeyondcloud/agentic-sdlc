@@ -128,9 +128,12 @@ class CassetteServer:
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
-    def start(self) -> "CassetteServer":
+    def start(self, port: int = 0) -> "CassetteServer":
+        """Serve on 127.0.0.1: on `port`, or one the system picks (0). A port another
+        program listens on raises OSError (EADDRINUSE; on Windows also EACCES for a port
+        the system reserves)."""
         handler = self._handler()
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        self._server = ThreadingHTTPServer(("127.0.0.1", port), handler)
         self._server.daemon_threads = True
         threading.Thread(target=self._server.serve_forever, daemon=True).start()
         return self

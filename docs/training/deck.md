@@ -227,7 +227,7 @@ the presenter ran `agentic login` and `agentic init` before the session:
 
 1. `agentic pipelines list`
 2. `agentic run feature-delivery --input request="..." --dry-run`
-3. `agentic training-gateway` in a second terminal: recorded answers, nothing spent
+3. `agentic training-gateway --port 8765` in a second terminal: recorded answers, nothing spent
 4. the real run pauses at `requirements-approval`; `agentic show`, then `agentic approve`
 5. it pauses at `design-approval`; `agentic stop <run> --reason "demo"`
 6. `agentic onboarding`: how long onboarding took

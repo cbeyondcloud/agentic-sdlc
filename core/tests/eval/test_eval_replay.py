@@ -4,6 +4,7 @@ prompt is reported stale and still replays."""
 
 import asyncio
 import json
+import socket
 from pathlib import Path
 
 import httpx2
@@ -214,3 +215,20 @@ def test_a_key_cannot_escape_the_cassette_folder(tmp_path: Path):
             server.base_url("../outside")
         reply = httpx2.post(server.url + "/c/..%2F..%2Fx/v1/messages", json={})
         assert reply.status_code == 400
+
+
+def test_start_binds_the_port_asked_for_and_refuses_a_busy_one(tmp_path: Path):
+    """DF-998: a fixed port, for a walkthrough line that does not change. A port another
+    program listens on is an OSError, on Windows too (where the server's SO_REUSEADDR
+    does not take a port another socket listens on)."""
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        with pytest.raises(OSError):
+            CassetteServer(tmp_path, "replay").start(port=port)
+    server = CassetteServer(tmp_path, "replay").start(port=port)  # free again
+    try:
+        assert server.url == f"http://127.0.0.1:{port}"
+    finally:
+        server.close()

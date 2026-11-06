@@ -2,9 +2,12 @@
 on this machine only, in order, never forwarded."""
 
 import json
+import re
+import socket
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -103,3 +106,66 @@ def test_calls_for_another_step_than_recorded_are_counted(monkeypatch, capsys, h
 def test_the_recorded_steps_ship_with_the_cassette():
     steps = json.loads(training.STEPS.read_text(encoding="utf-8"))
     assert len(steps) == len(recorded()) and steps[0] == "requirements"
+
+
+# ── a fixed port (DF-998) ────────────────────────────────────────────────────
+
+
+def free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def test_port_serves_on_the_port_given(monkeypatch, capsys, home):
+    port, seen = free_port(), {}
+
+    def walkthrough() -> None:
+        url = json.loads(capsys.readouterr().err.splitlines()[0])["gateway_url"]
+        seen["url"], seen["reply"] = url, post(url)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(training, "wait", walkthrough)
+    assert main(["--json", "training-gateway", "--port", str(port)]) == ExitCode.OK
+    assert seen["url"] == f"http://127.0.0.1:{port}/c/{training.KEY}"
+    assert seen["reply"][0] == 200
+
+
+def test_without_port_the_system_picks_one(monkeypatch, capsys, home):
+    monkeypatch.setattr(training, "wait", lambda: (_ for _ in ()).throw(KeyboardInterrupt))
+    assert main(["--json", "training-gateway"]) == ExitCode.OK
+    url = json.loads(capsys.readouterr().out)["gateway_url"]
+    assert url.startswith("http://127.0.0.1:") and int(url.split(":")[2].split("/")[0]) > 0
+
+
+def test_a_busy_port_is_a_clear_error(monkeypatch, capsys, home):
+    with socket.socket() as busy:  # another program listening there (no SO_REUSEADDR)
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        monkeypatch.setattr(training, "wait", lambda: pytest.fail("served on a busy port"))
+        code = main(["training-gateway", "--port", str(port)])
+    err = capsys.readouterr().err
+    assert code == ExitCode.ERROR, err
+    assert f"port {port}" in err and "in use" in err
+    assert "--port" in err  # the fix: another port, or none to let the system pick
+
+
+@pytest.mark.parametrize("port", ["0", "65536", "http"])
+def test_a_port_out_of_range_is_a_usage_error(home, port, capsys):
+    assert main(["training-gateway", "--port", port]) == ExitCode.USAGE
+
+
+TRAINING = Path(__file__).resolve().parents[2] / "docs" / "training"
+
+
+def test_the_walkthrough_gives_one_fixed_line_that_matches_the_gateway():
+    """DF-998: the trainee copies the same URL every time; it must be the one the
+    gateway serves on the port the walkthrough starts it on."""
+    text = (TRAINING / "walkthrough.md").read_text(encoding="utf-8")
+    port = re.search(r"^agentic training-gateway --port (\d+)$", text, re.M)
+    assert port, "the walkthrough starts the gateway on a fixed port"
+    url = f"http://127.0.0.1:{port.group(1)}/c/{training.KEY}"
+    assert f"export AGENTIC_GATEWAY_URL={url}\n" in text
+    assert f'$env:AGENTIC_GATEWAY_URL = "{url}"' in text
+    assert f"--port {port.group(1)}" in (TRAINING / "facilitator-sheet.md").read_text("utf-8")
