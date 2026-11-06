@@ -194,3 +194,25 @@ def test_only_a_newline_ends_a_line(tmp_path, separator):  # DF-964: never split
         "# gateway_url: https://old.example  (replaced by agentic)\n"
         f"gateway_url: {GATEWAY}\norg: acme\n"
     )
+
+
+def test_a_crlf_file_without_a_final_newline_keeps_crlf_when_its_last_row_is_replaced(
+    tmp_path,
+):  # DF-985: the replaced row had no ending of its own; its comment takes the file's
+    path = write(tmp_path, "org: acme\ngateway_url: https://old.example", newline="\r\n")
+    change = set_user_config(tmp_path, {"gateway_url": GATEWAY})
+    assert change.written
+    raw = path.read_bytes().decode("utf-8")
+    assert raw.count("\n") == raw.count("\r\n") == 3, repr(raw)
+    assert raw.endswith(f"gateway_url: {GATEWAY}\r\n")
+
+
+@pytest.mark.parametrize("key", ["gateway_url", "control_plane_url"])  # replaced, or added
+def test_a_file_with_lone_cr_endings_is_refused_naming_its_line_endings(tmp_path, key):
+    path = write(tmp_path, "org: acme\ngateway_url: https://old.example\n", newline="\r")
+    before = path.read_bytes()
+    change = set_user_config(tmp_path, {key: GATEWAY})  # DF-985: not 'not a one-line value'
+    assert not change.written
+    assert change.reason and "line endings are not supported" in change.reason
+    assert "one-line" not in change.reason
+    assert path.read_bytes() == before
