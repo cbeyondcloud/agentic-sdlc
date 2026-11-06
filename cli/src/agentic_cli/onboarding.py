@@ -14,13 +14,23 @@ Times only: no command line, no path, no name. The file never leaves the machine
 reads it but `agentic onboarding`), is not written in CI or with
 `AGENTIC_ONBOARDING_TIMER=off`, and is not touched again once the dry run has passed.
 A broken or unreadable file is ignored: the timer never fails a command.
+
+Two commands finishing together read, change and replace the file under a lock
+(`onboarding.json.lock`, at most `LOCK_WAIT_S` of waiting), so neither step is lost; a
+failed write removes its temporary file, and a replace that Windows refuses because
+another program (an antivirus scan, an indexer) holds the file is tried once more
+(DF-996).
 """
 
+import contextlib
 import json
 import os
+import time
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+
+from filelock import FileLock
 
 from agentic.auth.credentials import CI_MARKERS
 from agentic_cli.config import agentic_home
@@ -36,6 +46,10 @@ COMMANDS = {
 }
 _GLOBAL = ("--json", "--no-color")
 _FALSE = frozenset({"", "0", "false", "no", "off"})
+#: The longest a command waits for another one's write (then its step is not recorded).
+LOCK_WAIT_S = 2.0
+#: The wait before the one retry of a replace another program held up (Windows).
+_REPLACE_RETRY_S = 0.2
 
 
 def step_of(args: Sequence[str]) -> str | None:
@@ -76,11 +90,26 @@ def _note(args, code, started, finished, home, env) -> None:
     if step is None or _disabled(env):
         return
     path = (home or agentic_home(env)) / FILE
-    data = _load(path)
-    steps = data.setdefault("steps", {})
+    if _onboarded(_load(path)):
+        return  # both ends recorded: the file (and its lock) is never touched again
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with FileLock(path.with_name(f"{path.name}.lock"), timeout=LOCK_WAIT_S):
+        _record(path, step, code, started, finished)
+
+
+def _onboarded(data: dict) -> bool:
+    steps = data.get("steps", {})
     login, dry_run = steps.get("login") or {}, steps.get("dry-run") or {}
-    if login.get("first_try") and dry_run.get("first_ok"):
-        return  # onboarded (both ends recorded): the file is never touched again
+    return bool(login.get("first_try") and dry_run.get("first_ok"))
+
+
+def _record(path: Path, step: str, code: int, started: datetime, finished: datetime) -> None:
+    """Read, change and replace the file, under the lock: a step another command wrote
+    since the first read is read again here, and kept."""
+    data = _load(path)
+    if _onboarded(data):
+        return
+    steps = data.setdefault("steps", {})
     changed = step not in steps
     entry = steps.setdefault(step, {"first_try": started.isoformat(), "first_ok": None})
     if code == 0 and not entry.get("first_ok"):
@@ -109,10 +138,19 @@ def _load(path: Path) -> dict:
 def _save(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")  # one per process
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(json.dumps(data, indent=2) + "\n")
-    os.replace(temporary, path)
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(data, indent=2) + "\n")
+        try:
+            os.replace(temporary, path)
+        except PermissionError:  # Windows: another program holds the file for a moment
+            time.sleep(_REPLACE_RETRY_S)
+            os.replace(temporary, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
 
 
 def reset(home: Path | None = None) -> bool:
