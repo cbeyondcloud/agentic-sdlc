@@ -135,7 +135,7 @@ class FileStore:
                 raise CredentialFileError(problem)
         try:
             raw = self._read_checked()
-        except FileNotFoundError:
+        except (FileNotFoundError, NotADirectoryError):  # no file can be under a non-folder
             return {}
         except OSError as error:  # a file it may not open: say whose it is, if not its own
             problem = self.problem() if isinstance(error, PermissionError) else None

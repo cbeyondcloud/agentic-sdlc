@@ -87,6 +87,17 @@ def test_a_missing_file_holds_nothing(tmp_path):
     assert store(tmp_path).get_password(SERVICE, TOKENLEAN_KEY) is None
 
 
+def test_a_file_where_its_folder_should_be_holds_nothing_and_cannot_be_written(tmp_path):
+    """~/.agentic is a plain file: on every OS the key reads as absent, and the write check
+    names the folder, not a read failure (the descriptor read of DF-983 got ENOTDIR)."""
+    folder = tmp_path / "home"
+    folder.write_text("a file where the folder should be", encoding="utf-8")
+    files = FileStore(folder / FILE_NAME)
+    assert files.get_password(SERVICE, TOKENLEAN_KEY) is None
+    with pytest.raises(CredentialFileError, match="cannot hold the credential file"):
+        files.check_writable()
+
+
 @POSIX
 def test_the_file_is_user_only_and_its_new_folder_too(tmp_path):
     files = store(tmp_path)
