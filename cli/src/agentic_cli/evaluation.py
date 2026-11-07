@@ -132,6 +132,8 @@ class RunOptions:
     tag: str | None = None  # only cases carrying this tag (CI: `fixture`, the cassette subset)
     # with a skill: every case runs without and with it, blind as X/Y (`skills eval`)
     skill: SkillVariant | None = None
+    # run live holdout dev tasks without srt, their answers readable (DF-392)
+    allow_unsandboxed: bool = False
 
 
 @dataclass(frozen=True)
@@ -308,7 +310,15 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
 
     prepare = None
     if any(c.inputs.workspace for c in cases):  # dev tasks: tools on a copy, tests after
-        prepare, resolved, workspace_notes = _workspaces(resolved, folder, options.mode, policy)
+        prepare, resolved, workspace_notes = _workspaces(
+            resolved,
+            folder,
+            options.mode,
+            policy,
+            corpus_root=root,
+            holdout=any(c.inputs.workspace and c.split == "holdout" for c in cases),
+            allow_unsandboxed=options.allow_unsandboxed,
+        )
         notes += workspace_notes
 
     def case_runner(agent: ResolvedAgent) -> AgentCaseRunner:
@@ -927,14 +937,26 @@ EVAL_TOOLS = ("read_files", "search", "edit_files", "run_shell")
 
 
 def _workspaces(
-    resolved: ResolvedAgent, folder: Path, mode: str, policy: OrgPolicy
+    resolved: ResolvedAgent,
+    folder: Path,
+    mode: str,
+    policy: OrgPolicy,
+    *,
+    corpus_root: Path,
+    holdout: bool,
+    allow_unsandboxed: bool = False,
 ) -> tuple[PrepareWorkspace, ResolvedAgent, list[str]]:
     """How each dev-task run gets its tree (DF-241): a copy of the workspace under a
     guard confined to it, and the agent's file and shell tools on it, sandboxed as a
     solo run would be - srt when this machine has it ready, else a plain process on
     the guards (org policy decides whether that is allowed). A replay always uses a
     plain process: its tool calls are recorded, and the result must not depend on
-    the machine. Returns the agent with the tools the eval can give it, and notes."""
+    the machine. Returns the agent with the tools the eval can give it, and notes.
+
+    The corpus holds every case's answers (solutions, golden handoffs, the cases), so
+    srt hides it from the agent's commands (DF-392). A plain process cannot be kept from
+    reading it: a live run of `holdout` dev tasks without srt is refused unless
+    `allow_unsandboxed`, and its report then says the answers were readable."""
     notes = []
     usable = [t for t in resolved.tools if t in EVAL_TOOLS]
     if dropped := [t for t in resolved.tools if t not in EVAL_TOOLS]:
@@ -954,6 +976,22 @@ def _workspaces(
                 "the case's tests run as plain processes)"
             )
         use_srt = decision.use_srt
+        if not use_srt and holdout:
+            exposed = (
+                f"the holdout answers in {corpus_root} (solutions/, golden/, cases/) are "
+                "readable to the agent's commands and the case's tests"
+            )
+            if not allow_unsandboxed:
+                raise CliError(
+                    f"no sandbox (srt) on this machine: {exposed}, so a holdout result "
+                    "could be read rather than earned",
+                    ExitCode.REFUSED,
+                    hint="run the Developer eval where srt is ready (macOS, Linux or WSL2), "
+                    "or from a checkout without the corpus answers; or pass "
+                    "--allow-unsandboxed to run anyway",
+                )
+            notes.append(f"dev tasks ran with --allow-unsandboxed: {exposed}")
+    hidden = Path(corpus_root).resolve()
 
     def prepare(request: RunRequest, source: Path) -> Workspace:
         target = folder / "workspaces" / request.run_id
@@ -962,9 +1000,12 @@ def _workspaces(
         tree = copy_workspace(source, guard.trees_root / "tree")
         sandbox = LocalProcessSandbox()
         if use_srt:
+            home = expand_home(policy.sandbox.effective_deny_read, Path.home())
+            inside = tree.resolve().is_relative_to(hidden)  # a report folder in the corpus
             rules = SandboxRules(
                 write=(tree,),
-                deny_read=expand_home(policy.sandbox.effective_deny_read, Path.home()),
+                deny_read=(*home, hidden),  # the corpus: every case's answers (DF-392)
+                allow_read=(tree.resolve(),) if inside else (),
                 allowed_domains=tuple(policy.sandbox.allowed_domains),
             )
             sandbox = SrtSandbox(rules, folder / "sandbox" / request.run_id)
