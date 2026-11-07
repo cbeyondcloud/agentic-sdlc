@@ -434,3 +434,49 @@ def test_finish_refuses_work_that_does_not_build_on_the_run_branch(repo):
     assert git(tree, "rev-parse", f"refs/heads/sdlc/{RUN}") == done["repo"]  # untouched
     assert (tree / "work.py").read_text(encoding="utf-8") == "w\n"  # the work is kept
     assert _branch(tree) == "old"
+
+
+def test_rollback_puts_the_run_branch_back_not_the_agents(repo):  # DF-590 (review)
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    first = checkpoints.begin(fresh=True)
+    (tree / "step1.py").write_text("1\n", encoding="utf-8")
+    checkpoints.finish("step 1")
+    checkpoints.begin(fresh=True)
+    git(tree, "checkout", "-q", "-b", "agent-branch")
+    _agent_commits(tree, "planted.txt")
+
+    checkpoints.rollback(first)
+
+    assert _branch(tree) == f"sdlc/{RUN}"
+    assert git(tree, "rev-parse", f"refs/heads/sdlc/{RUN}") == first["repo"]
+    assert not (tree / "step1.py").exists() and not (tree / "planted.txt").exists()
+
+
+def test_a_refused_tree_leaves_every_tree_uncommitted(estate):  # DF-590 (review)
+    checkpoints = open_run(estate)
+    root = checkpoints.prepare()
+    first = checkpoints.begin(fresh=True)
+    for name in ("api", "lib"):
+        (root / name / "step1.py").write_text("1\n", encoding="utf-8")
+    done = checkpoints.finish("step 1")
+    checkpoints.begin(fresh=True)
+    (root / "api" / "work.py").write_text("w\n", encoding="utf-8")
+    git(root / "lib", "checkout", "-q", "-b", "old", first["lib"])
+
+    with pytest.raises(WorktreeError, match="lib"):
+        checkpoints.finish("step 2")
+
+    assert git(root / "api", "rev-parse", "HEAD") == done["api"]  # nothing half-checkpointed
+    assert (root / "api" / "work.py").is_file()
+
+
+def test_a_deleted_run_branch_is_named_in_the_refusal(repo):  # DF-590 (review)
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    checkpoints.begin(fresh=True)
+    git(tree, "checkout", "-q", "-b", "agent-branch")
+    git(tree, "branch", "-q", "-D", f"sdlc/{RUN}")
+
+    with pytest.raises(WorktreeError, match="no longer exists"):
+        checkpoints.finish("step")

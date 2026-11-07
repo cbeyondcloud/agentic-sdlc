@@ -309,15 +309,18 @@ class StepCheckpoints:
     def finish(self, message: str) -> dict[str, str]:
         """Commit the step's work in every tree that changed; returns each HEAD."""
         heads = {}
-        for name, tree in self._run_trees().items():
-            path = tree.path
-            if nested := _nested_repositories(path):
+        trees = self._run_trees()
+        tips = {}
+        for name, tree in trees.items():  # every refusal before any commit, in any tree
+            if nested := _nested_repositories(tree.path):
                 raise WorktreeError(
                     f"{name}: an agent left a git repository inside the tree "
                     f"({', '.join(nested)}); it cannot be checkpointed - the next fresh "
                     f"attempt removes it"
                 )
-            tip = _off_run_branch(name, tree)  # before any commit: a refusal keeps the work
+            tips[name] = _off_run_branch(name, tree)  # a refusal keeps the work (DF-590)
+        for name, tree in trees.items():
+            path, tip = tree.path, tips[name]
             # new files, minus what running the tests leaves behind; then every change to
             # a tracked file, wherever it is (a repository may vendor node_modules)
             generated = [f":(glob){g}" for g in self.generated]
@@ -389,11 +392,11 @@ class StepCheckpoints:
     def rollback(self, to: Mapping[str, str]) -> None:
         """Put each named component back at `to[component]`, a commit of the run's own
         branch; uncommitted work is discarded."""
-        trees, in_place = self._trees(), self._in_place()
+        trees, in_place = self._run_trees(), self._in_place()
         for name, commit in to.items():
             if name not in trees and name not in in_place:
                 raise WorktreeError(f"rollback names {name!r}, which has no tree in this run")
-            path = trees[name] if name in trees else in_place[name].checkout
+            path = trees[name].path if name in trees else in_place[name].checkout
             if _git(path, "merge-base", commit, "HEAD", check=False) != commit:
                 raise WorktreeError(f"{commit} is not part of this run's branch in {name}")
         for name, commit in to.items():
@@ -401,8 +404,13 @@ class StepCheckpoints:
                 self._overridden().rollback(in_place[name], commit)
                 self._at(in_place[name], commit)
                 continue
-            _git(trees[name], "reset", "-q", "--hard", commit)
-            _git(trees[name], "clean", "-q", "-ffd")
+            path, branch = trees[name].path, trees[name].branch
+            if branch:  # the run branch goes back, wherever an agent left HEAD (DF-590)
+                config = self._commit_config(path)
+                _git(path, *config, "checkout", "-q", "-f", "-B", branch, commit, "--")
+            else:
+                _git(path, "reset", "-q", "--hard", commit)
+            _git(path, "clean", "-q", "-ffd")
         self._keep_base(None)  # the next step starts from where the trees were put
 
     def diff(self, base: Mapping[str, str], head: Mapping[str, str]) -> str:
@@ -543,10 +551,12 @@ def _off_run_branch(name: str, tree: Tree) -> str | None:
         return tip
     branch = _git(path, "symbolic-ref", "-q", "--short", "HEAD", check=False)
     where = f"branch {branch}" if branch else f"a detached HEAD at {head[:12]}"
+    why = "no longer exists" if not tip else "is not part of its history"
     raise WorktreeError(
-        f"{name}: the step left the tree on {where}, which does not build on the run branch "
-        f"{tree.branch}; nothing was committed and the work stays in {path} - only "
-        f"{tree.branch} reaches the pull request, and a fresh attempt returns the tree to it"
+        f"{name}: the step left the tree on {where}, and the run branch {tree.branch} {why}; "
+        f"nothing was committed and the work stays in {path} for now - only {tree.branch} "
+        f"reaches the pull request, and a fresh attempt returns the tree to it and discards "
+        f"that work"
     )
 
 
