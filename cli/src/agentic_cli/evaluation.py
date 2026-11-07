@@ -309,7 +309,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             return None
         return read_text(corpus.path(case.expected.golden)).replace("\r\n", "\n")
 
-    prepare = None
+    prepare, exposed = None, False
     if any(c.inputs.workspace for c in cases):  # dev tasks: tools on a copy, tests after
         prepare, resolved, workspace_notes = _workspaces(
             resolved,
@@ -321,6 +321,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             allow_unsandboxed=options.allow_unsandboxed,
         )
         notes += workspace_notes
+        exposed = any(note.startswith(EXPOSED_NOTE) for note in workspace_notes)
 
     def case_runner(agent: ResolvedAgent) -> AgentCaseRunner:
         return AgentCaseRunner(
@@ -415,6 +416,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             problems=problems,
             judge_cost_usd=_reported_total(judge_costs),
             warnings=notes,
+            holdout_exposed=exposed,
         )
         paths = write_report(report, folder, runset.runs)
         for rubric_id in rubric_ids:  # calibration shows people the rubric the judge used
@@ -932,6 +934,9 @@ def _agent(folder: Path, name: str):
     return _load(lambda: load_agent(path))
 
 
+#: How a report's notes say its holdout answers were readable (DF-392, DF-1006).
+EXPOSED_NOTE = "dev tasks ran with --allow-unsandboxed: "
+
 #: The tools an eval can give an agent on a dev task's tree; the others (code
 #: intelligence, skills) need a run's repository and installed skills.
 EVAL_TOOLS = ("read_files", "search", "edit_files", "run_shell")
@@ -984,15 +989,25 @@ def _workspaces(
                 "readable to the agent's commands and the case's tests"
             )
             if not allow_unsandboxed:
+                where = (
+                    "on Windows, run it inside WSL2 and check srt there with `agentic doctor`"
+                    if _on_windows()
+                    else "run it where srt is ready (macOS, Linux or WSL2; `agentic doctor` "
+                    "shows what is missing)"
+                )
                 raise CliError(
                     f"no sandbox (srt) on this machine: {exposed}, so a holdout result "
                     "could be read rather than earned",
                     ExitCode.REFUSED,
-                    hint="run the Developer eval where srt is ready (macOS, Linux or WSL2), "
-                    "or from a checkout without the corpus answers; or pass "
-                    "--allow-unsandboxed to run anyway",
+                    hint=f"{where}; or pass --allow-unsandboxed to run anyway (such a "
+                    "report cannot decide a gate)",
                 )
-            notes.append(f"dev tasks ran with --allow-unsandboxed: {exposed}")
+            notes.append(f"{EXPOSED_NOTE}{exposed}")
+        elif not use_srt and "run_shell" in usable:  # the dev split: still say it (M7)
+            notes.append(
+                f"dev tasks: no sandbox (srt), so the corpus answers in {corpus_root}, "
+                "holdout ones included, are readable to the agent's commands"
+            )
     hidden = Path(corpus_root).resolve()
 
     def prepare(request: RunRequest, source: Path) -> Workspace:
@@ -1015,6 +1030,10 @@ def _workspaces(
         return Workspace(tree, build_tools(agent, context), sandbox if use_srt else None)
 
     return prepare, agent, notes
+
+
+def _on_windows() -> bool:
+    return os.name == "nt"
 
 
 def _team() -> str:

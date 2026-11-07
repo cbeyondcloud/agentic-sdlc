@@ -95,10 +95,29 @@ def test_allow_unsandboxed_runs_and_says_the_answers_are_readable(developer, tmp
     assert any("readable" in note and "holdout" in note for note in notes)
 
 
-def test_dev_cases_need_no_sandbox_and_no_flag(developer, tmp_path, monkeypatch):
+def test_dev_cases_need_no_sandbox_and_no_flag_but_are_warned(developer, tmp_path, monkeypatch):
     decided(monkeypatch, NONE)
     _, _, notes = workspaces(developer, tmp_path, holdout=False)
-    assert not any("readable" in note for note in notes)
+    assert not any(note.startswith(evaluation.EXPOSED_NOTE) for note in notes)
+    # review M7: the corpus still holds the holdout answers beside the dev ones
+    assert any("readable" in note and "holdout" in note for note in notes)
+
+
+def test_the_refusal_names_wsl2_and_doctor_on_windows(developer, tmp_path, monkeypatch):  # M8
+    decided(monkeypatch, NONE)
+    monkeypatch.setattr(evaluation, "_on_windows", lambda: True)
+    with pytest.raises(CliError) as refused:
+        workspaces(developer, tmp_path)
+    assert "WSL2" in refused.value.hint and "agentic doctor" in refused.value.hint
+
+
+def test_skills_eval_takes_allow_unsandboxed(capsys, monkeypatch):  # review M7
+    from agentic_cli.main import main
+
+    monkeypatch.setenv("COLUMNS", "200")
+
+    main(["skills", "eval", "--help"])
+    assert "--allow-unsandboxed" in capsys.readouterr().out
 
 
 def test_an_agent_without_a_shell_needs_no_sandbox(developer, tmp_path, monkeypatch):
@@ -116,3 +135,61 @@ def test_an_agent_without_a_shell_needs_no_sandbox(developer, tmp_path, monkeypa
         holdout=True,
         allow_unsandboxed=False,
     )
+
+
+def _developer_upstream(request):
+    """A scripted gateway: the Developer answers its dev-report without touching files."""
+    import json
+
+    from agentic.eval.replay import UpstreamReply
+
+    answer = (LIBRARY / "golden" / "dev-report").glob("*.md")
+    body = json.loads(request.body)
+    reply = {
+        "id": "c",
+        "object": "chat.completion",
+        "created": 1,
+        "model": body["model"],
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": next(answer).read_text("utf-8")},
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    return UpstreamReply(200, json.dumps(reply).encode(), "application/json")
+
+
+def _developer_run(tmp_path, monkeypatch, **options):
+    decided(monkeypatch, NONE)
+    real = evaluation.resolve_agent
+
+    def with_shell(definition, policy, context):  # the fixture Developer has no shell
+        resolved, violations = real(definition, policy, context)
+        tools = [*resolved.tools, "run_shell"]
+        return resolved.model_copy(update={"tools": tools}), violations
+
+    monkeypatch.setattr(evaluation, "resolve_agent", with_shell)
+    return evaluation.RunOptions(
+        agent="developer",
+        corpus=LIBRARY,
+        mode="record",
+        tag="fixture",
+        out=tmp_path / "o",
+        cassettes=tmp_path / "cassettes",
+        **options,
+    )
+
+
+def test_a_holdout_run_without_srt_is_refused_end_to_end(tmp_path, monkeypatch):
+    options = _developer_run(tmp_path, monkeypatch)
+    with pytest.raises(CliError, match="readable"):
+        evaluation.execute_run(options, upstream=_developer_upstream)
+
+
+def test_an_allowed_unsandboxed_report_says_its_answers_were_exposed(tmp_path, monkeypatch):
+    options = _developer_run(tmp_path, monkeypatch, allow_unsandboxed=True)
+    result = evaluation.execute_run(options, upstream=_developer_upstream)
+    assert result.report.holdout_exposed is True  # DF-1006: `eval gate` refuses it
