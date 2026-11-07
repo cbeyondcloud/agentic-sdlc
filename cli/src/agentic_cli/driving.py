@@ -146,6 +146,8 @@ def summary(state: RunState, redact: Callable[[str], str] | None = None) -> dict
             for r in state.history
         ],
         "cost_usd": str(spent(state)),
+        # more step budget people gave on resume, and who (DF-357)
+        "budget_grants": [grant.model_dump(mode="json") for grant in state.budget_grants],
         "ended_by": state.ended_by,
         "end_reason": clean(state.end_reason) if state.end_reason else state.end_reason,
         "exit_code": int(exit_code_for(state)),
@@ -154,6 +156,14 @@ def summary(state: RunState, redact: Callable[[str], str] | None = None) -> dict
 
 def _as_is(text: str) -> str:
     return text
+
+
+#: A step paused at its own budget: a person grants it more (DF-357), never the same again.
+STEP_BUDGET_RESUME = (
+    "agentic resume {run} --add-budget <USD>   (retries the step from its start with that "
+    "much more step budget, within what the run has left and the agent type's cap; a "
+    "larger limits.budget_usd in the agent applies to new runs)"
+)
 
 
 def next_steps(state: RunState) -> list[str]:
@@ -183,11 +193,7 @@ def next_steps(state: RunState) -> list[str]:
     if pending.id == "budget":  # the run's limit: more run budget lets it go on
         return [f"agentic resume {run} --extra-budget <USD>", f"agentic stop {run} --reason ..."]
     if pending.id == "step-budget":  # the agent's own limit: more run budget does not help
-        return [
-            f"agentic stop {run} --reason ...",
-            f"agentic resume {run}   (retries the step from its start with the same step "
-            "budget; a larger limits.budget_usd in the agent applies to new runs)",
-        ]
+        return [STEP_BUDGET_RESUME.format(run=run), f"agentic stop {run} --reason ..."]
     if pending.id == "run-timeout":
         return [f"agentic resume {run} --extra-minutes <N>", f"agentic stop {run} --reason ..."]
     if pending.id == "condition":

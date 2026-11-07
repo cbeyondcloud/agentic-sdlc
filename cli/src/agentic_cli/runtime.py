@@ -58,7 +58,7 @@ from agentic.skills.select import pipeline_skills
 from agentic.telemetry.logs import StepLogs
 from agentic.telemetry.sinks import EventSink, ForwardingRecorder
 from agentic.transport import CallIdentity
-from agentic_cli import agent_backends, control_plane
+from agentic_cli import agent_backends, control_plane, test_commands
 from agentic_cli import killswitch as killswitch_port
 from agentic_cli.codeintel import (
     Backend,
@@ -79,6 +79,7 @@ from agentic_cli.step_extras import StepExtras, tool_locator
 from agentic_cli.wiring import StepWiring, production_scanner
 from agentic_cli.workspace import RUNS, Workspace, rollback_commands
 from sdlc_commons.gates import ZyrofloGates, regime_block_on
+from sdlc_commons.guards import Guard, GuardError
 from sdlc_commons.ledger import LedgerError, RunIdentity, RunLedger
 from sdlc_commons.redaction import redactor
 
@@ -391,7 +392,26 @@ class Runtime:
             report.problems.append(Problem(None, "skills", detail, severity="warning"))
         report.problems += self._publish_problems(pipeline)
         report.problems += self._personal_problems(report)
+        report.problems += self._test_command_problems(pipeline, report, tiers.parent)
         return report
+
+    def _test_command_problems(
+        self, pipeline: PipelineDefinition, report: PreflightReport, policy_dir: Path
+    ) -> list[Problem]:
+        """The repo's test command, put to the guard of each Developer and QA step (DF-359)."""
+        try:
+            return test_commands.problems(
+                report,
+                pipeline,
+                self.ws.definitions(),
+                self.ws.policy(),
+                repo=self.ws.repo,
+                policy_file=policy_dir / "agent-types.yaml",
+                guard_for=lambda agent: Guard.for_agent(self.ws.repo, "preflight", agent),
+            )
+        except GuardError as error:  # the repo's guard policy is unreadable: say so, go on
+            detail = f"the repo's test command could not be checked: {error}"
+            return [Problem(None, test_commands.CHECK, detail, severity="warning")]
 
     def _codeintel_missing(self) -> str | None:
         """What the repo's code intelligence lacks on this machine (the extra, or a built

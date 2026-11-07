@@ -1,8 +1,8 @@
 """Starting and following runs (M1-54; spec §8.2, §8.3, §24 steps 6-8):
 
     agentic run <pipeline> [--input k=v]... [--budget USD] [--run-id ID] [--dry-run]
-    agentic resume <run> [--extra-minutes N] [--extra-budget USD] [--allow CALL]...
-                         [--deny CALL]... [--skip]
+    agentic resume <run> [--extra-minutes N] [--extra-budget USD] [--add-budget USD]
+                         [--allow CALL]... [--deny CALL]... [--skip]
     agentic status [<run>]
     agentic runs [--all]
     agentic stop <run> --reason TEXT
@@ -16,7 +16,12 @@ A run that waits for a person exits 4, one stopped (or paused at a limit) exits 
 dry run whose preflight fails exits 3 with the report.
 
 `--extra-budget` raises the run's budget limit: it is refused (exit 2) for a run
-started without `--budget`, and for a step that reached its agent's own budget.
+started without `--budget`, and for a step that reached its agent's own budget unless
+`--add-budget` comes with it. `--add-budget` gives a step paused at its own budget that much
+more from then on (DF-357): never more than the run has left nor its agent type's (or
+team's) cap - a larger grant is clamped and the command says so - and recorded in the
+approval ledger under the person, like `--skip`. A bare `resume` of such a pause is
+refused (exit 2) with the command to use: it would only retry with the same budget.
 `--skip` is a person's decision: it is recorded under the workspace's person (in org mode
 with a control plane, the signed-in person, as for starting a run and approving a gate),
 in the approval ledger, and in the regulated regime it may not be the person who started
@@ -40,7 +45,7 @@ from typing import Annotated
 import typer
 from rich import box
 
-from agentic.engine.engine import TERMINAL, EngineError, check_inputs
+from agentic.engine.engine import TERMINAL, EngineError, check_inputs, grant_text
 from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
 from agentic_cli import housekeeping, learning_apply
@@ -48,6 +53,7 @@ from agentic_cli.commands.catalog import show_definition_warnings
 from agentic_cli.commands.killswitch import resume_scope
 from agentic_cli.config import agentic_home, user_config
 from agentic_cli.driving import (
+    STEP_BUDGET_RESUME,
     drive,
     engine_errors,
     exit_code_for,
@@ -183,6 +189,10 @@ def register(app: typer.Typer) -> None:
         run_id: Annotated[str | None, typer.Argument(help="The run to continue.")] = None,
         extra_minutes: Annotated[int, typer.Option(min=0, help="More run time.")] = 0,
         extra_budget: Annotated[str | None, typer.Option(help="More run budget, USD.")] = None,
+        add_budget: Annotated[
+            str | None,
+            typer.Option(help="More budget, USD, for a step paused at its own budget."),
+        ] = None,
         allow: Annotated[list[str] | None, typer.Option(help="Approve a paused tool call.")] = None,
         deny: Annotated[list[str] | None, typer.Option(help="Refuse a paused tool call.")] = None,
         skip: Annotated[
@@ -198,7 +208,14 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Continue a paused or interrupted run (or, with --scope, end a pause switch)."""
         out: Output = ctx.obj
-        granted = extra_minutes or extra_budget is not None or allow or deny or skip
+        granted = (
+            extra_minutes
+            or extra_budget is not None
+            or add_budget is not None
+            or allow
+            or deny
+            or skip
+        )
         if (run_id is None) == (scope is None) or (scope is not None and granted):
             raise CliError(
                 "resume takes a run, or --scope (and --team) to clear a pause switch",
@@ -210,20 +227,35 @@ def register(app: typer.Typer) -> None:
             return
         if team is not None:
             raise CliError("--team goes with --scope", ExitCode.USAGE)
-        if skip and (extra_minutes or extra_budget is not None or allow or deny):
+        if skip and (
+            extra_minutes or extra_budget is not None or add_budget is not None or allow or deny
+        ):
             raise CliError(
                 "--skip goes on its own: it skips the step and grants nothing else",
                 ExitCode.USAGE,
             )
+        add = _usd(add_budget, "--add-budget") or Decimal(0)
+        if add_budget is not None and not add:
+            raise CliError("--add-budget is an amount above zero, in USD", ExitCode.USAGE)
         rt = Runtime(Workspace.load())
         state = _load(rt, run_id)
+        pending = state.pending
+        if pending is not None and pending.id == "step-budget" and not add and not skip:
+            raise CliError(  # DF-357: the same budget again would stop the same way
+                f"step {pending.step} of run {run_id} reached its own budget: resuming it "
+                "as it is retries it with the same budget",
+                ExitCode.REFUSED,
+                hint=STEP_BUDGET_RESUME.format(run=run_id),
+            )
+        grants_before = len(state.budget_grants)
         show_policy_change(out, run_id, rt.check_same_policy(state))
         decisions: dict[str, bool | str] | None = None
         if allow or deny:
             decisions = {call: True for call in allow or []} | {call: False for call in deny or []}
         engine = rt.engine(regime=state.regime)
         extra = _usd(extra_budget, "--extra-budget") or Decimal(0)
-        who = rt.user if skip else None  # a person's decision: the signed-in one in org mode
+        # a person's decision (a skip, a step budget grant): the signed-in one in org mode
+        who = rt.user if skip or add else None
         with sinks_reported(out, rt), rt.heartbeat(run_id) as beats:
             state = drive(
                 rt.redact(rt.gateway()),
@@ -236,9 +268,12 @@ def register(app: typer.Typer) -> None:
                     skip=skip,
                     who=who,
                     self_approval=self_approval_refusal,
+                    add_budget_usd=add,
                 ),
             )
             beats.ended(state.status)
+        for grant in state.budget_grants[grants_before:]:
+            _show_grant(out, grant)
         _finish(out, state, rt)
 
     @app.command("status")
@@ -425,6 +460,11 @@ def _usd(text: str | None, flag: str) -> Decimal | None:
     if not amount.is_finite() or amount < 0:
         raise CliError(f"{flag} is an amount in USD, not {text!r}", ExitCode.USAGE)
     return amount
+
+
+def _show_grant(out: Output, grant) -> None:
+    """Say what a step budget grant gave, and what clamped it (DF-357)."""
+    (out.progress if grant.limited_by is None else out.warn)(grant_text(grant))
 
 
 def _check_run_id(run_id: str) -> None:

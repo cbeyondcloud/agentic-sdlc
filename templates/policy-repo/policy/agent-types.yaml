@@ -43,7 +43,8 @@ types:
     tools: [read_files, search, edit_files, run_shell, codeintel, spawn_agent, activate_skill]
     # Command prefixes, word by word: "make test" allows `make test -j4`, never
     # `make install`. To allow another test command, add its prefix here (README).
-    shell: [pytest, "python -m pytest", "uv run pytest", "coverage run -m pytest",
+    shell: [pytest, "python -m pytest", "uv run pytest", "poetry run pytest",
+            "coverage run -m pytest",
             "coverage run -m unittest", tox,
             "npm test", "npm run test", "npm run lint", "yarn test", "pnpm test",
             "mvn test", "mvn -q test", "./mvnw test", "./mvnw -q test",
@@ -82,7 +83,8 @@ types:
     tools: [read_files, search, run_shell, codeintel, activate_skill]
     # The same test runners as the developer, plus the dependency audits; their
     # fixing and file-writing forms are denied for every agent in tools.yaml.
-    shell: [pytest, "python -m pytest", "uv run pytest", "coverage run -m pytest",
+    shell: [pytest, "python -m pytest", "uv run pytest", "poetry run pytest",
+            "coverage run -m pytest",
             "coverage run -m unittest", tox,
             "npm test", "npm run test", "yarn test", "pnpm test",
             "mvn test", "mvn -q test", "./mvnw test", "./mvnw -q test",

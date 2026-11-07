@@ -4,11 +4,14 @@
 
 Copies the standalone policy template into ~/.agentic/eval-policy-m1-64/ (or
 AGENTIC_HOME/eval-policy-m1-64), replaces its tiers and prices with the OpenRouter mapping
-in this folder, adds the eval budgets, checks that the policy loads and that the judge's
-family differs from the agents', and prints the folder to pass as --policy.
+in this folder, adds the eval budgets (each agent's share of the gate's cap in
+docs/runbooks/live-spend-caps.yaml, owner decision 2026-11-07, DF-108), checks that the
+policy loads and that the judge's family differs from the agents', and prints the folder
+to pass as --policy.
 """
 
 import shutil
+import sys
 from pathlib import Path
 
 from agentic.eval.judge import model_family
@@ -18,6 +21,8 @@ from agentic_cli.config import agentic_home
 
 HERE = Path(__file__).resolve().parent
 TEMPLATE = HERE.parents[2] / "templates" / "standalone" / "policy"
+sys.path.insert(0, str(HERE.parents[2] / "scripts"))
+from live_caps import eval_budgets, load_caps  # noqa: E402
 AGENT_TIERS = ("deep-reasoning", "balanced", "fast")
 JUDGE_TIER = "eval-judge"
 
@@ -29,8 +34,10 @@ def main() -> None:
     shutil.copytree(TEMPLATE, target)
     for name in ("tiers.yaml", "prices.yaml"):
         shutil.copy(HERE / name, target / name)
-    # repeats per S10 (k = 3); per-agent spend caps are passed as --budget-usd
-    (target / "eval.yaml").write_text("eval:\n  repeats: 3\n", encoding="utf-8")
+    # repeats per S10 (k = 3), and each agent's share of the gate's cap, so a run stops at
+    # it even without --budget-usd (the runbook passes what earlier attempts left)
+    eval_policy = {"eval": {"repeats": 3, **eval_budgets(load_caps(), "m1-64-gate")}}
+    (target / "eval.yaml").write_text(dump_yaml(eval_policy), encoding="utf-8", newline="\n")
     # The judge may see `public` and `internal` cases (the corpus is synthetic, decision 17);
     # never `confidential` or `restricted` data.
     classes_file = target / "classifications.yaml"

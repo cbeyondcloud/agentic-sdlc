@@ -58,7 +58,7 @@ Set `AGENTIC_DEBUG=1` to see a traceback when a command fails unexpectedly.
 | `agentic status` | One run in detail, or the most recent runs. | Dev |
 | `agentic logs` | A run's step logs, redacted. `--follow` keeps printing until the run stops. | Dev |
 | `agentic cost` | What a run cost, by step, agent and child (or every run's total). | Dev |
-| `agentic resume` | Continue a paused or interrupted run. `--extra-budget`, `--extra-minutes`, `--allow`/`--deny` a tool call, `--skip` a condition. `--scope` clears a pause switch. | Dev, Lead |
+| `agentic resume` | Continue a paused or interrupted run. `--extra-budget` (the run's), `--add-budget` (a step paused at its own budget), `--extra-minutes`, `--allow`/`--deny` a tool call, `--skip` a condition. `--scope` clears a pause switch. | Dev, Lead |
 | `agentic stop` | End an unfinished run. Its trees are kept. | Dev |
 | `agentic gc` | Remove finished runs older than a number of days (30 by default). `--dry-run` first. | Dev |
 | `agentic sync` | Send run events still queued for the control plane. | Dev |

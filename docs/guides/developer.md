@@ -162,7 +162,7 @@ Each paused run tells you its next commands in `agentic status <run>`.
 | Pause | Next command |
 |---|---|
 | The run reached its budget | `agentic resume <run> --extra-budget 5` |
-| A step reached its own budget | `agentic resume <run>` retries the step with the same budget, or `agentic stop` |
+| A step reached its own budget (`step-budget`) | `agentic resume <run> --add-budget 2`: never more than the run has left or the agent type's cap; a larger amount is clamped and the command says so |
 | The run reached its time limit | `agentic resume <run> --extra-minutes 30` |
 | An agent asks to run a tool that needs approval | `agentic resume <run> --allow <call>` or `--deny <call>` |
 | A step condition could not be evaluated | `agentic resume <run> --skip` |

@@ -8,8 +8,8 @@ The quality gate (tracker row M1-64) measures the five built-in agents against l
   the `srt` sandbox that DF-60 proved there (decision 69). TokenLean LITE runs in the same distro
   on Docker Engine, so nothing needs Windows networking or Docker Desktop.
 
-**What it costs:** about $250 at OpenRouter list prices for the whole gate (S10 estimate).
-Each agent's run is capped by `--budget-usd` (decision 20).
+**What it may cost:** at most **$250 for the whole gate, reruns included** (owner decision
+2026-11-07, DF-108; S10 estimated about $245). See [Spend caps](#spend-caps) below.
 
 ## Owner steps (two)
 
@@ -22,7 +22,8 @@ notepad \\wsl.localhost\Debian\home\dev\token-optimisation\deploy\lite\local\.en
 ```
 
 **2. Tell the coordinator "go".** That starts the paid run. The coordinator then runs the
-steps below, and writes the gate report from `reports/m1-64/*/report.json`.
+steps below, and writes the gate report from each agent's latest
+`reports/m1-64/<agent>/<attempt>/report.json`.
 
 ## What the coordinator runs (user `dev` in the Debian WSL distro)
 
@@ -41,19 +42,51 @@ export AGENTIC_TOKENLEAN_API_KEY="$(sed -n 's/^TOKENLEAN_API_KEY=//p' .env.lite)
 cd ~/agentic-sdlc
 uv run python docs/runbooks/m1-64/make_policy.py
 
-# the gate: five agents, each capped; record mode keeps every answer for free replays
+# the gate: five agents, each capped at what its share has left (earlier attempts and
+# reruns count); record mode keeps every answer for free replays. An agent whose share is
+# spent is skipped (the others still run); the gate's total still bounds them all.
 policy=~/.agentic/eval-policy-m1-64
-for pair in business-analyst:100 design:100 code-review:100 qa:250 developer:750; do
-  agent=${pair%%:*}; cap=${pair##*:}
+mkdir -p reports/m1-64
+for agent in business-analyst design code-review qa developer; do
+  cap=$(uv run python scripts/live_caps.py remaining m1-64-gate --agent "$agent" \
+        --spent-in reports/m1-64) || continue
+  out=reports/m1-64/"$agent"/"$(date -u +%Y%m%dT%H%M%SZ)"
+  if [ -e "$out/report.json" ]; then echo "refusing to overwrite $out"; continue; fi
   uv run agentic eval run --agent "$agent" --mode record --gateway http://127.0.0.1:4100 \
     --policy "$policy" --agents library/agents --corpus library/eval \
     --cassettes ~/.agentic/eval-m1-64/cassettes/"$agent" \
-    --budget-usd "$cap" --out reports/m1-64/"$agent"
+    --budget-usd "$cap" --out "$out"
 done
 
 # afterwards
 cd ~/token-optimisation/deploy/lite/local && ./down.sh
 ```
+
+## Spend caps
+
+Owner decision 2026-11-07 (DF-108). The caps live in
+[`live-spend-caps.yaml`](live-spend-caps.yaml); `scripts/live_caps.py` reads them, and
+`make_policy.py` writes the gate's per-agent shares into the eval policy (`eval.yaml`).
+
+| Run | Ceiling (reruns included) | How it is enforced |
+|---|---|---|
+| First live acceptance run (scenario 1, M1-68) | $20 | `agentic run feature-delivery --budget "$(uv run python scripts/live_caps.py remaining acceptance-1 --spent-in <sample repo>/.agentic/local)"`; at the cap the run pauses at `budget` (exit 5) and reports |
+| Full agent quality gate (M1-64) | $250 | the loop above: BA, Design and Code Review $19.23 each, QA $48.08, Developer $144.23 (S10's placeholder A/B caps of 100/100/100/250/750, scaled to $250); at the cap an evaluation stops as `INCOMPLETE` and the loop stops |
+| Outer backstop | ~$300 | set a credit limit of about **$300** on the provider key itself (OpenRouter: the key's credit limit). It holds even if every cap above were bypassed |
+
+`live_caps.py remaining` sums what every earlier attempt recorded (eval `report.json` in live
+and record mode, at least the cap of an evaluation the cap stopped; each run's `run.json`
+budget), so a rerun gets only what is left; it exits 1 with "cap reached" when nothing is,
+and 2 when a `--spent-in` folder is missing. It warns about spend it cannot see: runs with
+no measured cost, and a folder with output but no `report.json` or `run.json` (a crashed
+attempt) - check the provider's usage page then. Each attempt writes a new folder, and the
+loop refuses one that already holds a report, so none is overwritten.
+
+**Keep the records.** `agentic gc` deletes old runs, `run.json` included: during a live
+campaign do not run it on the sample repo (or note what `live_caps.py remaining` printed
+first), and never delete `reports/m1-64/`.
+A run's `--extra-budget` or `--add-budget` on resume stays within the cap only if the amount
+comes from `live_caps.py remaining` too.
 
 ## If something goes wrong
 
@@ -63,4 +96,5 @@ cd ~/token-optimisation/deploy/lite/local && ./down.sh
 | A cost of `$0.000000` in the smoke test | TokenLean has no price for the model yet | Fine: agentic-sdlc estimates from `docs/runbooks/m1-64/prices.yaml` |
 | `model_not_configured` (400) | The model name is not served | Check the name in `docs/runbooks/m1-64/tiers.yaml` against OpenRouter |
 | `budget` stop in a report | The cap was reached | Expected protection; the report counts the cases that finished |
+| `cap reached` from `live_caps.py` | The campaign's ceiling is spent (reruns included) | Stop and report; only the owner raises a cap, in `live-spend-caps.yaml` |
 | `judge_same_family` | The judge shares the agents' family | `make_policy.py` refuses this; check `tiers.yaml` |

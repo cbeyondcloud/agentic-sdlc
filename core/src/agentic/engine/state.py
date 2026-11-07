@@ -92,6 +92,21 @@ class ApprovalMark(_Strict):
     superseded: bool = False
 
 
+class BudgetGrant(_Strict):
+    """More budget a person gave a step paused at its own budget, on resume (DF-357)."""
+
+    step: str
+    by: str
+    at: AwareDatetime
+    requested_usd: str  # Decimal, as text
+    granted_usd: str  # after the clamp
+    # what each attempt of the step may spend from then on (a fresh slice each attempt):
+    # its agent's budget plus every grant; the run's budget still bounds the total
+    step_limit_usd: str
+    earlier_usd: str = "0"  # what earlier attempts on this step spent, before the grant
+    limited_by: Literal["run budget", "policy cap"] | None = None  # what clamped it, if any
+
+
 class RunState(_Strict):
     schema_version: int = 1
     run_id: str
@@ -115,6 +130,7 @@ class RunState(_Strict):
     updated_at: AwareDatetime
     max_minutes: int | None = Field(default=None, ge=1)
     extra_minutes: int = Field(default=0, ge=0)  # granted by a person on resume
+    budget_grants: list[BudgetGrant] = []  # more step budget, granted on resume (DF-357)
     unpinned: dict[str, str] = {}  # artefacts written since the last gate: path -> digest
     approved: dict[str, dict[str, str]] = {}  # gate -> what its latest approval pinned
     approvals: list[ApprovalMark] = []  # every approval, in order (M1-45)

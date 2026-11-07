@@ -243,6 +243,8 @@ The report always includes:
 
 **Budget caps** (policy, defaults): $100 per A/B for BA, Design and Review; $250 for QA; $750 for Developer. At the cap, the run stops as `INCOMPLETE`. The cap also bounds runaway agent loops.
 
+**Live-run ceilings** (owner decision 2026-11-07, DF-108): the full M1-64 gate may spend at most **$250 in all, reruns included**, split per agent in proportion to the A/B caps above (BA, Design and Review $19.23 each, QA $48.08, Developer $144.23); the first live acceptance run (scenario 1) at most **$20**; the provider key carries a credit limit of about **$300** as the outer backstop. They live in `docs/runbooks/live-spend-caps.yaml` (read by `scripts/live_caps.py` and the gate's eval policy). The A/B defaults stay placeholders until real TokenLean cost data replaces them.
+
 **Why this is worth paying.** A skill that adds 3k tokens to each of 5,000 runs a day costs about 15 M tokens, roughly $60 a day, across the org. The most expensive A/B costs about ten days of an unhelpful skill's overhead.
 
 ## Harness sketch (M1-63)

@@ -1,0 +1,32 @@
+# Spend caps for the first live (paid) runs: owner decision 2026-11-07 (DF-108).
+#
+# Read by scripts/live_caps.py (the amount still allowed, reruns included: it sums what the
+# campaign's earlier attempts recorded) and by docs/runbooks/m1-64/make_policy.py (the
+# per-agent caps go into the eval policy's `eval.budget_usd_by_agent`). Engine code reads
+# nothing here. A run stops and reports when its cap is hit: `agentic run --budget` pauses
+# the run at `budget` (exit 5); `agentic eval run --budget-usd` stops as INCOMPLETE.
+#
+# All amounts are USD. The first estimates (spike S10) were placeholders; these are the
+# owner's ceilings until real TokenLean cost data replaces them.
+version: 1
+
+# Set this limit on the provider key itself (the provider's console): the outer backstop if
+# every cap below were bypassed. It must cover every campaign together.
+provider_key_credit_limit_usd: 300
+
+campaigns:
+  # Acceptance scenario 1 (M1-68, feature-delivery on the sample repo), first live run.
+  acceptance-1:
+    total_usd: 20
+
+  # The full agent quality gate (M1-64): one variant, all five agents. The total is split
+  # per agent in proportion to S10's placeholder A/B caps (BA, Design and Code Review 100,
+  # QA 250, Developer 750: 1300 in all), rounded to cents.
+  m1-64-gate:
+    total_usd: 250
+    by_agent:
+      business-analyst: 19.23
+      design: 19.23
+      code-review: 19.23
+      qa: 48.08
+      developer: 144.23
