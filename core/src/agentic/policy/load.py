@@ -10,8 +10,8 @@ The folder is the `policy/` directory of the org policy repo (spec §4.3):
     licences.yaml         blocked, scan, skills (licences a catalogued skill may carry)
     retention.yaml        days, legal_holds         (M3-06, OR-01: periods and holds)
     tool-pins.yaml        tools (per-platform artefacts `init` fetches from the mirror)
-    org.yaml              allowed_repo_patterns, tool_mirror_url, allow_repo_pipelines,
-                          required_steps, checkpoint_exclude, commit_override,
+    org.yaml              allowed_repo_patterns, allowed_git_hosts, tool_mirror_url,
+                          allow_repo_pipelines, required_steps, checkpoint_exclude, commit_override,
                           index_export_workflow, credential_file_fallback, sandbox,
                           unhonoured, secret_scan, publish_scan, review_prepass,
                           review_batch, auto_trip, learning, run_health
@@ -61,6 +61,7 @@ FILE_FIELDS: dict[str, dict[str, str]] = {
     "tool-pins.yaml": {"tools": "tool_pins"},
     "org.yaml": {
         "allowed_repo_patterns": "allowed_repo_patterns",
+        "allowed_git_hosts": "allowed_git_hosts",
         "tool_mirror_url": "tool_mirror_url",
         "allow_repo_pipelines": "allow_repo_pipelines",
         "required_steps": "required_steps",

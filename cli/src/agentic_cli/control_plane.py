@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -40,6 +41,7 @@ from agentic.orgapi import (
     CheckResult,
     FeedbackInfo,
     HeartbeatResult,
+    HeldBackResult,
     IngestResult,
     InviteInfo,
     InviteRedeemed,
@@ -73,6 +75,7 @@ from agentic_cli.credential_store import cli_credentials
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 
+_LOG = logging.getLogger("agentic.control_plane")
 CONTROL_PLANE_TOKEN = "control_plane_token"
 URL_ENV = "AGENTIC_CONTROL_PLANE_URL"
 LOGIN = "agentic login --for control-plane"
@@ -386,6 +389,14 @@ class ControlPlaneClient:
                 ) from None
             raise
         return IngestResult.model_validate(found)
+
+    def hold_back(self, run_id: str, seq: int, kinds: Sequence[str]) -> HeldBackResult:
+        """Tell the control plane the publish scan held the run back at event `seq`
+        (DF-536): only the finding kinds go, never a value or a field name."""
+        body = {"seq": seq, "kinds": list(kinds)}
+        return HeldBackResult.model_validate(
+            self._json("POST", f"/runs/{quote(run_id, safe='')}/held-back", body)
+        )
 
     def ingest_personal(self, device: str, entries: Sequence[Mapping[str, object]]) -> IngestResult:
         """Send a batch of this device's chained personal-backup events (M2-20), refused
@@ -728,7 +739,19 @@ class ControlPlaneSink:
         self._send(run_id, entries)
         if blocked is not None:
             blocked.delivered = len(entries)
+            self._held_back(run_id, blocked)
             raise blocked
+
+    def _held_back(self, run_id: str, blocked: PublishBlocked) -> None:
+        """Close the run out on the control plane as held back (DF-536), once the clean
+        entries before the hit are there. Not delivered (offline, refused): the run stays
+        an error for `agentic sync`, and the next sync sends the marker again."""
+        try:
+            self.client.hold_back(run_id, blocked.seq, blocked.findings or ("unscannable",))
+        except (ControlPlaneError, ValueError) as error:  # ValueError: an odd answer
+            _LOG.warning("run %s: the held-back marker was not delivered (%s)", run_id, error)
+        else:
+            blocked.marked = True
 
     def _send(self, run_id: str, entries: Sequence[Mapping[str, object]]) -> None:
         start, limit = 0, self.batch
@@ -795,6 +818,9 @@ class FeedbackSink(ControlPlaneSink):
 
     def _ingest(self, run_id: str, chunk: Sequence[Mapping[str, object]]) -> None:
         self.client.ingest_feedback(run_id, chunk)
+
+    def _held_back(self, run_id: str, blocked: PublishBlocked) -> None:
+        """A held-back feedback entry is not the run's: the run's status stays as it is."""
 
 
 # ── which client, from where ────────────────────────────────────────────────

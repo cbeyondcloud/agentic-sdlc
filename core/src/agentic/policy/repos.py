@@ -5,6 +5,7 @@ alike. Moved from `agentic_cli.repo_guard` with its behaviour unchanged (DF-199 
 from __future__ import annotations
 
 import fnmatch
+import ipaddress
 import re
 from collections.abc import Iterable
 from urllib.parse import urlsplit
@@ -40,6 +41,28 @@ def repo_allowed(patterns: Iterable[str], remote: str) -> bool:
     and `?` as globs). An empty list allows nothing: in org mode that is the safe reading."""
     origin = normalise_remote(remote)
     return any(fnmatch.fnmatchcase(origin, normalise_remote(p)) for p in patterns)
+
+
+_HOST_LABEL = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)")
+
+
+def git_host_key(host: str) -> str:
+    """A git host as `allowed_git_hosts` lists it and a URL's host is compared with it
+    (DF-484): lower case, no trailing dot, an IP literal in its canonical form (IPv6
+    without brackets). `ValueError` for anything that is not a bare host name or IP
+    address - no scheme, port, path, user or wildcard."""
+    if not host.isascii():  # lower() could fold a non-ASCII letter into the name of
+        # another host (the Kelvin sign into `k`): an IDN host is listed in its xn-- form
+        raise ValueError(f"{host!r} is not an ASCII host name (write an IDN as xn--...)")
+    text = host.strip().lower().removesuffix(".")
+    try:
+        return str(ipaddress.ip_address(text.removeprefix("[").removesuffix("]")))
+    except ValueError:
+        pass
+    labels = text.split(".")
+    if not text or len(text) > 253 or not all(_HOST_LABEL.fullmatch(label) for label in labels):
+        raise ValueError(f"{host!r} is not a host name or IP address (no scheme, port or path)")
+    return text
 
 
 def repo_host(repo_key: str) -> str:

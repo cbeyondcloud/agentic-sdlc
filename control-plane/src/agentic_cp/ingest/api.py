@@ -14,6 +14,8 @@ from agentic.orgapi import (
     ChainHead,
     HeartbeatRequest,
     HeartbeatResult,
+    HeldBackRequest,
+    HeldBackResult,
     IngestRequest,
     IngestResult,
     RunPreflight,
@@ -24,7 +26,13 @@ from agentic_cp.auth.deps import Caller
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem, not_found
 from agentic_cp.ingest.health import record_heartbeat
 from agentic_cp.ingest.register import register_run, require_cli_version
-from agentic_cp.ingest.store import AUDITED, Unaudited, audit_rejection, ingest_batch
+from agentic_cp.ingest.store import (
+    AUDITED,
+    Unaudited,
+    audit_rejection,
+    hold_back,
+    ingest_batch,
+)
 from agentic_cp.rbac.authz import Team, authorize
 from agentic_cp.tables import run_events, runs, users
 from agentic_cp.tenancy.context import tenant_tx
@@ -95,6 +103,21 @@ async def ingest(run_id: str, body: IngestRequest, request: Request, ctx: Caller
     fresh = body.entries[len(body.entries) - result.accepted :] if result.accepted else []
     state.metrics.observe_ingest(fresh, result.accepted, result.duplicates, state.clock())
     return result
+
+
+@router.post("/{run_id}/held-back")
+async def held_back(
+    run_id: str, body: HeldBackRequest, request: Request, ctx: Caller
+) -> HeldBackResult:
+    """The publish scan held the run back (DF-536): close it out as `held_back`, audited
+    with the finding kinds only. From the run's starter or a holder of `run.cancel.any` in
+    its team; `seq` must follow the stored head (409 `ingest.gap` with the head otherwise).
+    Events the scan passes later (after a local redaction) are still ingested."""
+    state = request.app.state
+    async with tenant_tx(state.engine, ctx.tenant_id) as conn:
+        return await hold_back(
+            conn, ctx, _checked_run_id(run_id), body, cache=state.enforcers, clock=state.clock
+        )
 
 
 async def _readable_run(request: Request, ctx, run_id: str, conn):

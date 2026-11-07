@@ -77,32 +77,50 @@ def test_planted_pii_is_masked_before_ingest_and_chain_verifies(org, fake, caplo
     assert [e["hash"] for e in local] == [e["hash"] for e in sent]
 
 
-def test_unmaskable_chained_pii_blocks_delivery(org, fake, monkeypatch, capsys):
+def _chained_hit(org, run_id: str) -> None:
     rt = Runtime(Workspace.load(org, home=agentic_home()))
-    ledger = rt.recorder("run-chained")  # written past the screen: already chained
+    ledger = rt.recorder(run_id)  # written past the screen: already chained
     ledger.record("step_finished", phase="develop", outcome=f"order-{CARD}")
     ledger.release()
+
+
+def test_unmaskable_chained_pii_blocks_delivery(org, fake, monkeypatch, capsys):
+    _chained_hit(org, "run-chained")
     monkeypatch.chdir(org)
     for _ in range(2):  # a second sync is held back the same way: it is not a retry case
-        assert main(["--json", "sync", "run-chained"]) == ExitCode.ERROR
+        # DF-536: the control plane took the held-back marker, so the run is not an error
+        assert main(["--json", "sync", "run-chained"]) == ExitCode.OK
         result = json.loads(capsys.readouterr().out)["runs"]["run-chained"]
         assert result["queued"] == 1  # the clean event before it went
         assert result["blocked"] == {"seq": 2}
-        assert "credit-card" in result["error"] and CARD not in result["error"]
-        assert "a retry will not send it" in result["error"]
+        assert result["held_back"] == {"seq": 2, "kinds": ["pii:credit-card"]}
+        assert "error" not in result
         assert "org admin" in result["hint"] and "run-chained" in result["hint"]
     assert [e["seq"] for e in fake.events["run-chained"]] == [1]
+    assert fake.held_back["run-chained"] == {"seq": 2, "kinds": ["pii:credit-card"]}
+    markers = [r for r in fake.requests if r.url.path.endswith("/held-back")]
+    assert markers and all(CARD not in r.content.decode("utf-8") for r in markers)
+    assert all(b"outcome" not in r.content for r in markers)  # kinds only, never a field
 
 
 def test_sync_says_what_to_do_about_a_held_back_run(org, fake, monkeypatch, capsys):
-    rt = Runtime(Workspace.load(org, home=agentic_home()))
-    ledger = rt.recorder("run-held")
-    ledger.record("step_finished", phase="develop", outcome=f"order-{CARD}")
-    ledger.release()
+    _chained_hit(org, "run-held")
     monkeypatch.chdir(org)
-    assert main(["sync", "run-held"]) == ExitCode.ERROR
+    assert main(["sync", "run-held"]) == ExitCode.OK
     shown = capsys.readouterr().out
     assert "held back" in shown and "org admin" in shown and CARD not in shown
+    assert "credit-card" in shown
+
+
+def test_a_refused_marker_keeps_the_run_an_error(org, fake, monkeypatch, capsys):
+    """Without the control plane's word the run still shows as running there: say so."""
+    _chained_hit(org, "run-refused")
+    fake.refuse_held_back = True
+    monkeypatch.chdir(org)
+    assert main(["--json", "sync", "run-refused"]) == ExitCode.ERROR
+    result = json.loads(capsys.readouterr().out)["runs"]["run-refused"]
+    assert result["blocked"] == {"seq": 2} and "held_back" not in result
+    assert "a retry will not send it" in result["error"] and CARD not in result["error"]
 
 
 def test_block_policy_keeps_pii_local(org, fake, policy_repo):

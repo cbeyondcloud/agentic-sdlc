@@ -51,6 +51,7 @@ from each repository's own CODEOWNERS.
 |---|---|---|
 | Point a tier at another model | `policy/tiers.yaml` | the model must be one the gateway serves. `agentic doctor` checks it on laptops |
 | Allow a new repository host or org | `policy/org.yaml` `allowed_repo_patterns` | `init` refuses a repo that matches no pattern |
+| Let the control plane fetch from a git host | `policy/org.yaml` `allowed_git_hosts` | host names or IP addresses, fetched whatever they resolve to; the policy repo's own host is always allowed. Unset: github.com and the hosts of repos already registered, while they resolve to public addresses only. A CLI older than the control plane that reads it refuses the key: raise `min_cli_version` first |
 | Let a command keep an environment variable | `policy/org.yaml` `sandbox.pass_env` | see [user settings](../user-config.md) |
 | Sandbox resource limits | `policy/org.yaml` `sandbox.limits` | see [CLI operations](../runbooks/cli-operations.md#sandbox-resource-limits-sandboxlimits) |
 | Add a team | copy `policy/teams/payments.yaml` and `teams/payments/`, add two CODEOWNERS lines | then the team lead assigns people |

@@ -12,19 +12,30 @@ disk - another tenant's policy work folder included - so it is accepted only whe
 deployment sets `AGENTIC_CP_ALLOW_LOCAL_REPOS` (development and tests). A remote URL must
 also be unambiguous: no '#', '?' or '\\', and at most one '@', in the authority - otherwise
 git fetches from one host while the repo key and `allowed_repo_patterns` see another
-(review F1)."""
+(review F1).
+
+A remote URL's host must also be one the org policy allows (DF-484, DF-503): `GitHosts`
+is the tenant's list and `check_git_host` the check, made when a URL is set and again
+before every fetch (DNS can change). A host listed by name is fetched whatever it resolves
+to (an org's own git server on its private network); any other allowed host must resolve
+to public addresses only, never to a private, loopback, link-local, unspecified, multicast
+or reserved one (IPv4 and IPv6, an IPv4 address mapped or embedded in IPv6 included).
+git's own error text is logged, never handed to a caller (`GitError.reason`)."""
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
+import socket
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from urllib.parse import urlsplit
 
 from agentic.hosting.base import scrub_url_credentials
-from agentic.policy.repos import normalise_remote
+from agentic.policy.repos import git_host_key, normalise_remote
 from agentic_cp.settings import Settings
 
 FLAGS = (
@@ -42,6 +53,10 @@ FLAGS = (
     # read the tree at all (review F4)
     "-c",
     "core.protectNTFS=false",
+    # a redirect would take git to a host `check_git_host` never saw (DF-484): none is
+    # followed, the first request's included
+    "-c",
+    "http.followRedirects=false",
 )
 #: Inherited GIT_* variables that only shape the network: the deployment's CA bundle and
 #: proxy. Everything else - GIT_DIR, GIT_CONFIG_PARAMETERS, GIT_SSH_COMMAND (an ssh key) -
@@ -103,16 +118,34 @@ _SCP = re.compile(r"[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:(?!\\)[^\s\\]+")
 _UNSAFE = re.compile(r"[\s\x00-\x1f\x7f]")
 
 
-class GitError(Exception):
-    """A git command failed; the message is already scrubbed of credentials."""
-
-
 class RepoUrlError(ValueError):
     """A repository URL was refused. `credentials` says whether it carried any."""
 
     def __init__(self, message: str, *, credentials: bool = False) -> None:
         super().__init__(message)
         self.credentials = credentials
+
+
+#: What a caller is told when git itself failed: git's own line (which may say whether an
+#: internal host answered) is logged, never returned (DF-503).
+GIT_FAILED = (
+    "git could not fetch the repository; an operator finds git's own message in the "
+    "control plane's log"
+)
+
+
+class GitError(Exception):
+    """A git command failed; the message is already scrubbed of credentials. It is for the
+    server's log: `reason` is what a caller may be told."""
+
+    def __init__(self, message: str, *, reason: str = GIT_FAILED) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+    @classmethod
+    def refused(cls, error: RepoUrlError) -> GitError:
+        """A URL refused before git ran: our own message, safe to show."""
+        return cls(str(error), reason=str(error))
 
 
 def check_repo_url(url: str, *, allow_local: bool) -> str:
@@ -173,11 +206,106 @@ def scrub(text: str) -> str:
     return scrub_url_credentials(text)
 
 
+# ── which hosts (DF-484, DF-503) ─────────────────────────────────────────────
+
+Resolver = Callable[[str], Sequence[str]]
+
+
+@dataclass(frozen=True)
+class GitHosts:
+    """The hosts a tenant's git URLs may name. `explicit` ones are listed by name and never
+    resolved; `implicit` ones (the defaults while org policy lists none) must resolve to
+    public addresses only."""
+
+    explicit: frozenset[str] = frozenset()
+    implicit: frozenset[str] = frozenset()
+
+
+def url_host(url: str) -> str | None:
+    """The host git connects to for a URL `check_repo_url` accepted, as `git_host_key`
+    writes it; None for a local repo (a `file://` URL or a path). `ValueError` when the
+    host cannot be read."""
+    value = url.strip()
+    if "://" in value:
+        parts = urlsplit(value)
+        if parts.scheme.lower() == "file":
+            return None
+        if not parts.netloc.isascii():  # `hostname` lower-cases first: the Kelvin sign is `k`
+            raise ValueError("the URL's host is not ASCII")
+        if not parts.hostname:
+            raise ValueError("the URL names no host")
+        return git_host_key(parts.hostname)
+    if _SCP.fullmatch(value):
+        return git_host_key(value.partition(":")[0].rpartition("@")[2])
+    return None
+
+
+def resolve_addresses(host: str) -> list[str]:
+    """Every address `host` resolves to now (an IP literal resolves to itself)."""
+    found = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    return sorted({str(info[4][0]) for info in found})
+
+
+#: Prefixes whose last 32 bits are an IPv4 address: NAT64's well-known prefix (RFC 6052)
+#: and the deprecated IPv4-compatible form (`::a.b.c.d`, RFC 4291).
+_EMBEDDING = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("::/96"))
+
+
+def blocked_address(address: str) -> bool:
+    """Whether an address is not a public unicast one: private, loopback, link-local,
+    unspecified, multicast, reserved or shared, an IPv4 address mapped or embedded in IPv6
+    (mapped, IPv4-compatible, 6to4, NAT64) judged as that IPv4 address. One that does not
+    parse is blocked."""
+    try:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return True
+    if isinstance(ip, ipaddress.IPv6Address):
+        embedded = ip.ipv4_mapped or ip.sixtofour
+        if embedded is None and any(ip in prefix for prefix in _EMBEDDING):
+            embedded = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+        if embedded is not None:
+            ip = embedded
+    return ip.is_multicast or not ip.is_global
+
+
+def check_git_host(url: str, hosts: GitHosts, *, resolve: Resolver = resolve_addresses) -> None:
+    """`RepoUrlError` unless git may fetch `url` from its host now. A local repo has no host
+    (`check_repo_url` decides whether one is allowed at all). The message names the host,
+    never the URL or an address it resolved to."""
+    try:
+        host = url_host(url)
+    except ValueError:
+        raise RepoUrlError("the repository URL names no host the control plane can check") from None
+    if host is None or host in hosts.explicit:
+        return
+    refused = RepoUrlError(
+        f"the git host {host} is not allowed: an org admin lists the hosts the control "
+        "plane may fetch from in the org policy (org.yaml allowed_git_hosts)"
+    )
+    if host not in hosts.implicit:
+        raise refused
+    try:
+        addresses = list(resolve(host))
+    except (OSError, UnicodeError):
+        raise refused from None
+    if not addresses or any(blocked_address(address) for address in addresses):
+        raise refused
+
+
 class GitRunner:
     """Runs git for one tenant at a time. Tests subclass it and override `_spawn`."""
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+
+    def resolve(self, host: str) -> Sequence[str]:
+        """The addresses `host` resolves to (`check_git_host`); tests override it."""
+        return resolve_addresses(host)
+
+    def check_host(self, url: str, hosts: GitHosts) -> None:
+        """`check_git_host` with this runner's resolver; `RepoUrlError` when refused."""
+        check_git_host(url, hosts, resolve=self.resolve)
 
     def env(self, tenant_slug: str | None) -> dict[str, str]:
         """git's environment for one tenant (R25): its own `<slug>.gitconfig` as the global
@@ -204,7 +332,7 @@ class GitRunner:
         try:
             return self._spawn(argv, self.env(tenant_slug), cwd, self.settings.git_timeout_seconds)
         except GitError as error:  # every message, whoever raised it, leaves scrubbed
-            raise GitError(scrub(str(error))[:300]) from None
+            raise GitError(scrub(str(error))[:300], reason=error.reason) from None
 
     def _spawn(self, argv: Sequence[str], env: Mapping[str, str], cwd: Path, timeout: int) -> bytes:
         try:

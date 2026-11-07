@@ -37,12 +37,19 @@ from agentic.policy import OrgPolicy, PolicyError, load_policy, tree_digest
 from agentic.policy.load import overlay_index, pipeline_digests, version_index
 from agentic.policy.portable import portable_path_problems
 from agentic_cp.audit import AuditEvent, append
-from agentic_cp.gitops import GitError, GitRunner, RepoUrlError, check_repo_url
+from agentic_cp.gitops import (
+    GitError,
+    GitHosts,
+    GitRunner,
+    RepoUrlError,
+    check_repo_url,
+    url_host,
+)
 from agentic_cp.policy_sync.validate import AUDITED, validate_policy_tree
 from agentic_cp.routing.generate import routing_plan
 from agentic_cp.routing.outbox import gateway_configured, queue_apply
 from agentic_cp.settings import Settings
-from agentic_cp.tables import policy_active, policy_versions
+from agentic_cp.tables import policy_active, policy_versions, repos
 from agentic_cp.tenancy.context import tenant_tx
 from agentic_cp.tenancy.tenants import TenantRow, current_tenant
 
@@ -122,6 +129,45 @@ async def active_repo_patterns(conn: AsyncConnection) -> list[str] | None:
     return await _active_column(conn, policy_versions.c.repo_patterns)
 
 
+#: The one host allowed by default besides the policy repo's own (DF-484), on public
+#: addresses only.
+DEFAULT_GIT_HOST = "github.com"
+
+
+def _host_of(url: str | None) -> str | None:
+    try:
+        return url_host(url or "")
+    except ValueError:  # nothing a host can be read from: allows nothing
+        return None
+
+
+async def tenant_git_hosts(conn: AsyncConnection, tenant: TenantRow) -> GitHosts:
+    """The git hosts the tenant's URLs may name (DF-484, DF-503; owner decision 2026-11-07).
+    By name: the active policy's `allowed_git_hosts`, and always the policy repo's own host
+    (an org admin set it under this list, or the operator did), so the policy repo can never
+    lock itself out. Without a list (no policy yet, or a policy naming none - every install
+    before the rule) also `github.com` and the hosts of the repos already registered, only
+    while they resolve to public addresses."""
+    row = (
+        await conn.execute(
+            select(policy_versions.c.settings).join(
+                policy_active,
+                (policy_versions.c.tenant_id == policy_active.c.tenant_id)
+                & (policy_versions.c.version == policy_active.c.version),
+            )
+        )
+    ).first()
+    listed = (row.settings or {}).get("git_hosts") if row is not None else None
+    own = frozenset({_host_of(tenant.policy_repo_url)} - {None})
+    if listed is not None:
+        return GitHosts(explicit=frozenset(listed) | own)
+    registered = {_host_of(remote) for (remote,) in await conn.execute(select(repos.c.remote))}
+    return GitHosts(
+        explicit=own,
+        implicit=frozenset(({DEFAULT_GIT_HOST} | registered) - {None}),
+    )
+
+
 async def sync_once(
     engine: AsyncEngine,
     git: GitRunner,
@@ -151,11 +197,12 @@ async def sync_once(
         if not (await conn.execute(select(func.pg_try_advisory_xact_lock(key)))).scalar():
             return SyncOutcome(kind="busy")
         workdir = Path(settings.policy_workdir) / str(tenant_id)
+        hosts = await tenant_git_hosts(conn, tenant)
         try:
-            commit, commit_at = await asyncio.to_thread(_fetch, git, workdir, tenant)
-        except GitError as error:
+            commit, commit_at = await asyncio.to_thread(_fetch, git, workdir, tenant, hosts)
+        except GitError as error:  # git's own line is logged, never returned (DF-503)
             log.warning("tenant %s: policy fetch failed: %s", tenant.slug, error)
-            return SyncOutcome(kind="failed", problems=[str(error)])
+            return SyncOutcome(kind="failed", problems=[error.reason])
         version = f"git:{commit}"
         stored = (
             await conn.execute(
@@ -174,7 +221,7 @@ async def sync_once(
             built = await asyncio.to_thread(_build, git, workdir, tenant, commit, version)
         except GitError as error:
             log.warning("tenant %s: policy archive failed: %s", tenant.slug, error)
-            return SyncOutcome(kind="failed", version=version, problems=[str(error)])
+            return SyncOutcome(kind="failed", version=version, problems=[error.reason])
         await conn.execute(
             policy_versions.insert().values(
                 tenant_id=tenant_id,
@@ -266,14 +313,17 @@ class Built:
     settings: dict = field(default_factory=dict)  # what run registration reads (M2-08/21)
 
 
-def _fetch(git: GitRunner, workdir: Path, tenant: TenantRow) -> tuple[str, datetime | None]:
+def _fetch(
+    git: GitRunner, workdir: Path, tenant: TenantRow, hosts: GitHosts
+) -> tuple[str, datetime | None]:
     """Fetch the tenant's branch head into its bare work repo; (commit, commit time)."""
     try:  # again here: a URL stored before the rule, or by hand, is never fetched (R12)
         url = check_repo_url(
             tenant.policy_repo_url or "", allow_local=git.settings.allow_local_repos
         )
+        git.check_host(url, hosts)  # and its host now, just before git resolves it (DF-484)
     except RepoUrlError as error:
-        raise GitError(str(error)) from None
+        raise GitError.refused(error) from None
     if not (workdir / "HEAD").is_file():
         workdir.mkdir(parents=True, exist_ok=True)
         git.run(["init", "--bare", "-q"], cwd=workdir, tenant_slug=tenant.slug)
@@ -354,6 +404,8 @@ def _build(git: GitRunner, workdir: Path, tenant: TenantRow, commit: str, versio
                 found = [*found, f"routing: the gateway routing cannot be generated ({error})"]
             else:
                 settings = {**run_settings(policy, root), "routing": routing}
+                if policy.allowed_git_hosts is not None:  # DF-484: `tenant_git_hosts` reads it
+                    settings["git_hosts"] = sorted(set(policy.allowed_git_hosts))
     teams = sorted(policy.teams) if policy is not None else []
     patterns = list(policy.allowed_repo_patterns) if policy is not None else []
     bundle = gzip_bytes(archive)

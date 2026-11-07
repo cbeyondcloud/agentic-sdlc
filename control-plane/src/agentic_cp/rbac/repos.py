@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from agentic.policy.repos import repo_host
 from agentic_cp.audit import AuditEvent, append
 from agentic_cp.gitops import GitError, GitRunner, RepoUrlError, check_repo_url
-from agentic_cp.policy_sync.service import Actor
+from agentic_cp.policy_sync.service import Actor, tenant_git_hosts
 from agentic_cp.rbac.codeowners import Maintainers, fetch_codeowners, maintainers
 from agentic_cp.settings import Settings
 from agentic_cp.tables import repo_maintainers, repos, users
@@ -114,10 +114,13 @@ async def refresh(
     row = await get_repo(conn, repo_key)
     if row is None:
         raise LookupError(repo_key)
+    hosts = await tenant_git_hosts(conn, tenant)
     try:  # again here: a remote stored before the rule, or by hand, never reaches git (R12)
         remote = check_repo_url(row.remote, allow_local=settings.allow_local_repos)
+        # and its host, now: DNS may have changed since it was registered (DF-484)
+        await asyncio.to_thread(git.check_host, remote, hosts)
     except RepoUrlError as error:
-        raise GitError(str(error)) from None
+        raise GitError.refused(error) from None
     workdir = Path(settings.policy_workdir) / str(tenant.id) / "repos"
     found = await asyncio.to_thread(fetch_codeowners, git, workdir, remote, tenant.slug)
     derived = Maintainers()

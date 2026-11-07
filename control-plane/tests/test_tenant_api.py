@@ -107,6 +107,9 @@ async def test_policy_source_refuses_a_bad_branch(api, branch):
 class OfflineGit(GitRunner):
     """Every git command fails as if the host were unreachable (no network in tests)."""
 
+    def resolve(self, host):  # a public answer: the host is allowed (DF-484), git fails
+        return ["140.82.112.3"]
+
     def _spawn(self, argv, env, cwd, timeout):
         raise GitError("could not resolve host")
 
@@ -115,9 +118,9 @@ async def test_remote_urls_are_accepted_when_local_repos_are_not(api):
     strict = api.with_settings(allow_local_repos=False)
     strict.app.state.git = OfflineGit(strict.settings)
     for good in (
-        "https://git.example.test/org/policy.git",
-        "git@git.example.test:org/p.git",
-        "git@git.example.test:/srv/git/policy.git",  # scp form with an absolute path
+        "https://github.com/org/policy.git",
+        "git@github.com:org/p.git",
+        "git@github.com:/srv/git/policy.git",  # scp form with an absolute path
     ):
         reply = await strict.put(
             "/v1/tenant/policy-source", api.a.admin_token, {"repo": good, "branch": "main"}
@@ -131,7 +134,7 @@ async def test_policy_source_follows_the_environment_branch(api):
     # M3-04: an omitted branch is the environment's; another branch is refused
     pinned = api.with_settings(policy_branch="staging", allow_local_repos=False)
     pinned.app.state.git = OfflineGit(pinned.settings)
-    repo = "https://git.example.test/org/policy.git"
+    repo = "https://github.com/org/policy.git"
     reply = await pinned.put("/v1/tenant/policy-source", api.a.admin_token, {"repo": repo})
     assert reply.status_code == 200, reply.text
     assert reply.json()["policy_branch"] == "staging"

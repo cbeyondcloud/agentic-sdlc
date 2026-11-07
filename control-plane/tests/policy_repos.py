@@ -88,6 +88,7 @@ APP_REMOTE = "https://git.example.test/acme/app.git"
 APP_KEY = "git.example.test/acme/app"
 ORG_YAML = (
     "allowed_repo_patterns: ['git.example.test/acme/*']\n"
+    "allowed_git_hosts: [git.example.test]\n"  # DF-484: listed, so never resolved
     "allow_repo_pipelines: false\n"
     "secret_scan:\n  action: block\n"
 )
