@@ -65,3 +65,4 @@ cd ~/token-optimisation/deploy/lite/local && ./down.sh
 | `budget` stop in a report | The cap was reached | Expected protection; the report counts the cases that finished |
 | `judge_same_family` | The judge shares the agents' family | `make_policy.py` refuses this; check `tiers.yaml` |
 | `no sandbox (srt) on this machine: the holdout answers ... are readable` (developer) | srt is not ready, so the agent could read `library/eval/solutions` (DF-392) | Run `uv run agentic doctor` in the distro and fix srt; do not pass `--allow-unsandboxed` for a gate run |
+| `ran with --allow-unsandboxed ... cannot decide a gate` from `eval gate` | That report's agent could read the holdout answers (DF-1006) | Run that agent's eval again with srt ready |
