@@ -6,7 +6,14 @@ from __future__ import annotations
 
 import pytest
 
-from agentic_cp.gitops import GitHosts, RepoUrlError, blocked_address, check_git_host, url_host
+from agentic_cp.gitops import (
+    FLAGS,
+    GitHosts,
+    RepoUrlError,
+    blocked_address,
+    check_git_host,
+    url_host,
+)
 
 PUBLIC = ["140.82.112.3"]
 
@@ -60,6 +67,7 @@ def test_url_host(url, host):
         "::ffff:169.254.169.254",
         "64:ff9b::a00:1",  # NAT64 of 10.0.0.1
         "2002:a00:1::1",  # 6to4 of 10.0.0.1
+        "::a00:1",  # IPv4-compatible 10.0.0.1 (deprecated, still routable somewhere)
     ],
 )
 def test_internal_addresses_are_blocked(address):
@@ -124,3 +132,15 @@ def test_an_ip_literal_must_be_listed_too():
 
 def test_a_local_repo_has_no_host_to_check():
     check_git_host("file:///srv/git/app.git", GitHosts(), resolve=resolver())
+
+
+def test_a_non_ascii_host_is_refused():
+    """Lower-casing the Kelvin sign gives `k`: the check must not see another host than git."""
+    hosts = GitHosts(explicit=frozenset({"kgit.example"}))
+    with pytest.raises(RepoUrlError):
+        check_git_host("https://\u212agit.example/x/y.git", hosts, resolve=resolver())
+
+
+def test_git_follows_no_redirect():
+    """A redirect would take git to a host the check never saw."""
+    assert "http.followRedirects=false" in FLAGS

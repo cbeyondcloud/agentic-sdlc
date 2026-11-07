@@ -7,7 +7,9 @@ allowed_repo_patterns: ["git.example.com/your-org/*"]
 # The git hosts the control plane may fetch from: every repo a team registers (this
 # policy repo's own host always is). A listed host is fetched whatever address it resolves
 # to (your own git server on a private network). Unset: github.com and the hosts of repos
-# already registered, while they resolve to public addresses only. EDIT and uncomment:
+# already registered, while they resolve to public addresses only. CLIs older than the
+# control plane that reads this key refuse it: raise min_cli_version first. EDIT and
+# uncomment:
 # allowed_git_hosts: ["git.example.com"]
 
 # D33: pipelines come only from this repo (pipelines/ and teams/<team>/pipelines/),

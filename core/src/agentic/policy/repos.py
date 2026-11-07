@@ -51,6 +51,9 @@ def git_host_key(host: str) -> str:
     (DF-484): lower case, no trailing dot, an IP literal in its canonical form (IPv6
     without brackets). `ValueError` for anything that is not a bare host name or IP
     address - no scheme, port, path, user or wildcard."""
+    if not host.isascii():  # lower() could fold a non-ASCII letter into the name of
+        # another host (the Kelvin sign into `k`): an IDN host is listed in its xn-- form
+        raise ValueError(f"{host!r} is not an ASCII host name (write an IDN as xn--...)")
     text = host.strip().lower().removesuffix(".")
     try:
         return str(ipaddress.ip_address(text.removeprefix("[").removesuffix("]")))

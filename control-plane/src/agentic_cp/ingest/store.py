@@ -251,6 +251,8 @@ async def ingest_batch(
         values["status"] = str(closing[-1].get("status") or "closed")[:32]
     elif row.status == HELD_BACK:  # DF-536: the rest, published after a local redaction
         values["status"] = "open"
+    if row.status == HELD_BACK:
+        values["stale_at"] = None  # it was not stale while held back, whatever it was before
     if waits(rest):  # never cleared here: a late batch must not make it look dead (M3-07)
         values["waiting"] = True
     if new_run:
@@ -329,7 +331,9 @@ async def hold_back(
         return HeldBackResult(status=HELD_BACK, head=head, duplicate=True)
     if row.status not in ("open", "stale"):
         raise ApiProblem(409, "run.closed", f"the run is already closed ({row.status})")
-    await conn.execute(update(runs).where(runs.c.run_id == run_id).values(status=HELD_BACK))
+    await conn.execute(
+        update(runs).where(runs.c.run_id == run_id).values(status=HELD_BACK, stale_at=None)
+    )
     await append(
         conn,
         AuditEvent(

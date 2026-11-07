@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import pytest
 from apiclient import member
+from sqlalchemy import select, update
 from test_ingest import chain, post
 
 from agentic_cp.audit import read_records
+from agentic_cp.tables import runs
 from agentic_cp.tenancy.context import tenant_tx
 from sdlc_commons import ledger as ledger_module
 
@@ -117,3 +119,22 @@ async def test_a_republished_run_that_closes_takes_the_closing_status(api, dev, 
     await hold(api, dev, 4)
     assert (await post(api, dev, entries[3:])).status_code == 200
     assert (await api.get("/v1/runs/run-1", dev)).json()["status"] == "done"
+
+
+async def test_a_stale_run_held_back_is_no_longer_stale(api, dev, tmp_path):
+    entries = chain(tmp_path, events=5)
+    await post(api, dev, entries[:3])
+    async with tenant_tx(api.db.owner, api.a.id) as conn:
+        await conn.execute(update(runs).values(status="stale", stale_at=api.clock()))
+    assert (await hold(api, dev, 4)).status_code == 200
+    assert (await post(api, dev, entries[3:])).status_code == 200
+    async with tenant_tx(api.db.app, api.a.id) as conn:
+        row = (await conn.execute(select(runs.c.status, runs.c.stale_at))).one()
+    assert row.status == "open" and row.stale_at is None
+
+
+async def test_a_closed_run_is_not_held_back(api, dev, tmp_path):
+    await post(api, dev, chain(tmp_path, events=5, close=True))
+    reply = await hold(api, dev, 7)
+    assert reply.status_code == 409 and reply.json()["code"] == "run.closed"
+    assert await _events(api, "run.held_back") == []

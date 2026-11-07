@@ -748,7 +748,7 @@ class ControlPlaneSink:
         an error for `agentic sync`, and the next sync sends the marker again."""
         try:
             self.client.hold_back(run_id, blocked.seq, blocked.findings or ("unscannable",))
-        except ControlPlaneError as error:
+        except (ControlPlaneError, ValueError) as error:  # ValueError: an odd answer
             _LOG.warning("run %s: the held-back marker was not delivered (%s)", run_id, error)
         else:
             blocked.marked = True

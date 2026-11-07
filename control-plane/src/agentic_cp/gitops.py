@@ -53,6 +53,10 @@ FLAGS = (
     # read the tree at all (review F4)
     "-c",
     "core.protectNTFS=false",
+    # a redirect would take git to a host `check_git_host` never saw (DF-484): none is
+    # followed, the first request's included
+    "-c",
+    "http.followRedirects=false",
 )
 #: Inherited GIT_* variables that only shape the network: the deployment's CA bundle and
 #: proxy. Everything else - GIT_DIR, GIT_CONFIG_PARAMETERS, GIT_SSH_COMMAND (an ssh key) -
@@ -124,7 +128,10 @@ class RepoUrlError(ValueError):
 
 #: What a caller is told when git itself failed: git's own line (which may say whether an
 #: internal host answered) is logged, never returned (DF-503).
-GIT_FAILED = "git could not fetch the repository; the control plane's log has git's message"
+GIT_FAILED = (
+    "git could not fetch the repository; an operator finds git's own message in the "
+    "control plane's log"
+)
 
 
 class GitError(Exception):
@@ -223,6 +230,8 @@ def url_host(url: str) -> str | None:
         parts = urlsplit(value)
         if parts.scheme.lower() == "file":
             return None
+        if not parts.netloc.isascii():  # `hostname` lower-cases first: the Kelvin sign is `k`
+            raise ValueError("the URL's host is not ASCII")
         if not parts.hostname:
             raise ValueError("the URL names no host")
         return git_host_key(parts.hostname)
@@ -237,21 +246,23 @@ def resolve_addresses(host: str) -> list[str]:
     return sorted({str(info[4][0]) for info in found})
 
 
-#: NAT64's well-known prefix: the last 32 bits are an IPv4 address (RFC 6052).
-_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+#: Prefixes whose last 32 bits are an IPv4 address: NAT64's well-known prefix (RFC 6052)
+#: and the deprecated IPv4-compatible form (`::a.b.c.d`, RFC 4291).
+_EMBEDDING = (ipaddress.ip_network("64:ff9b::/96"), ipaddress.ip_network("::/96"))
 
 
 def blocked_address(address: str) -> bool:
     """Whether an address is not a public unicast one: private, loopback, link-local,
     unspecified, multicast, reserved or shared, an IPv4 address mapped or embedded in IPv6
-    (mapped, 6to4, NAT64) judged as that IPv4 address. One that does not parse is blocked."""
+    (mapped, IPv4-compatible, 6to4, NAT64) judged as that IPv4 address. One that does not
+    parse is blocked."""
     try:
         ip = ipaddress.ip_address(address.split("%", 1)[0])
     except ValueError:
         return True
     if isinstance(ip, ipaddress.IPv6Address):
         embedded = ip.ipv4_mapped or ip.sixtofour
-        if embedded is None and ip in _NAT64:
+        if embedded is None and any(ip in prefix for prefix in _EMBEDDING):
             embedded = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
         if embedded is not None:
             ip = embedded

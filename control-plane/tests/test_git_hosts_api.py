@@ -124,6 +124,15 @@ async def test_by_default_a_private_github_answer_is_refused_at_registration(api
     assert git.fetched == []
 
 
+async def test_an_empty_list_allows_no_default_host(api, tmp_path, app):
+    git = FakeDns(api.settings, {GITHUB_APP: app}, {"github.com": ["140.82.112.3"]})
+    api.app.state.git = git
+    policy = policy_repo(tmp_path / "policy", ANY_HOST + "allowed_git_hosts: []\n")
+    await _source(api, url(policy))
+    reply = await _register(api, GITHUB_APP)
+    assert reply.status_code == 422 and reply.json()["code"] == "repo.host_not_allowed"
+
+
 async def test_the_policy_source_must_name_an_allowed_host(api, tmp_path):
     git = FakeDns(api.settings, {}, {})
     api.app.state.git = git
