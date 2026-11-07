@@ -11,7 +11,13 @@ SECURITY.md describes starts on MCP `initialize`. Each answer first re-indexes t
 (incremental after the first time; `index_timeout_s`), then queries it
 (`QUERY_TIMEOUT_S` each). The tool's home and caches stay inside the run's data
 folder, and it gets a small allow-listed environment: no credentials and no proxy
-settings. This does not block the network; the org's approval covers that (DF-921).
+settings.
+
+Every call runs inside the OS sandbox (`SrtSandbox`, D38) with no allowed host, so no
+update check or other request leaves the machine; it writes only its data folder, and
+policy's `deny_read` paths are hidden from it (DF-921, owner decision 2026-11-07). There
+is no unsandboxed fallback: without `srt` the tool cannot run, and the caller offers
+this adapter only where the sandbox is ready (`agentic_cli.codeintel.locate_backend`).
 
   * `tests_for`: the files with a TESTS edge into the seed;
   * `dependents`: files with a code edge into the seed, ranked by edge count, then the
@@ -35,6 +41,8 @@ from agentic.backends.processes import run_contained
 from agentic.codeintel.crg import diff_files
 from agentic.codeintel.interface import Candidates, CodeIntelError
 from agentic.codeintel.tools import tree_path
+from agentic.sandbox.rules import SandboxRules
+from agentic.sandbox.srt import SrtSandbox
 
 #: Edge types that are structure, similarity or git history, not dependencies (S5).
 NOISE = frozenset(
@@ -68,11 +76,21 @@ class CodebaseMemory:
     supports = frozenset({"dependents", "impact", "tests_for", "overview"})
 
     def __init__(
-        self, command: Sequence[str], tree: Path, data: Path, *, index_timeout_s: float = 600
+        self,
+        command: Sequence[str],
+        tree: Path,
+        data: Path,
+        *,
+        srt: Sequence[str] = ("srt",),
+        deny_read: Sequence[Path] = (),  # policy's `sandbox.deny_read`, absolute
+        index_timeout_s: float = 600,
     ) -> None:
         self.command, self.tree, self.data = list(command), Path(tree), Path(data)
         self.index_timeout_s = index_timeout_s
         self._broken: str | None = None  # why the tool cannot run; set once
+        folder = self.data.resolve()
+        rules = SandboxRules(write=(folder,), deny_read=tuple(deny_read), allowed_domains=())
+        self.sandbox = SrtSandbox(rules, folder / "sandbox", srt=srt)
 
     def tests_for(self, path: str) -> Candidates:
         rows = self._edges_into([path], self._project())
@@ -176,10 +194,11 @@ class CodebaseMemory:
         if self._broken is not None:
             raise CodeIntelError(f"codebase-memory-mcp could not run: {self._broken}")
         try:
+            env = self._env()
             done = run_contained(
-                [*self.command, "cli", "--quiet", "--json", tool],
+                [*self.sandbox.command_prefix(), *self.command, "cli", "--quiet", "--json", tool],
                 input=json.dumps(args),
-                env=self._env(),
+                env=env,
                 cwd=self.data,
                 timeout=timeout,
             )
