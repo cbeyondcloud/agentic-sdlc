@@ -17,6 +17,7 @@ Two kinds of outcome:
 """
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
@@ -317,6 +318,19 @@ def _clamp_one(requested: Limits, type_cap: object, team_cap: Limits | None) -> 
             for name in Limits.model_fields
         }
     )
+
+
+def budget_ceiling(policy: OrgPolicy, agent_type: str, team: str | None) -> Decimal | None:
+    """The most one step of an agent of `agent_type` may have: the type's budget cap,
+    lowered by the team's (D35). A person's grant on resume stays within it (DF-357).
+    None for a type policy does not define."""
+    kind = policy.agent_types.get(agent_type)
+    if kind is None:
+        return None
+    team_policy = policy.teams.get(team) if team else None
+    team_cap = team_policy.limits_max.get(agent_type) if team_policy else None
+    cap = _smallest(kind.limits.max.budget_usd, team_cap.max.budget_usd if team_cap else None)
+    return None if cap is None else Decimal(str(cap))
 
 
 def _clamp_limits(requested: Limits, agent_type: AgentType, team_cap: RoleLimits | None) -> Limits:

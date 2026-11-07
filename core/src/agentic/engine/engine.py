@@ -81,7 +81,15 @@ from agentic.definitions.pipeline import (
 )
 from agentic.engine.expressions import ExpressionError, compile_condition
 from agentic.engine.gates import Approve, Authorizer, Decision, Edit, GateRefused, Reject
-from agentic.engine.state import ApprovalMark, Cursor, Pending, RunState, RunStore, StepRecord
+from agentic.engine.state import (
+    ApprovalMark,
+    BudgetGrant,
+    Cursor,
+    Pending,
+    RunState,
+    RunStore,
+    StepRecord,
+)
 from agentic.handoffs import (
     EnvelopeStamp,
     Handoff,
@@ -95,6 +103,7 @@ from agentic.learning.capture import HandoffRef, gate_edit, gate_rejection
 from agentic.learning.records import FeedbackRecord
 from agentic.memory.agents_md import agents_md_knowledge, nearest_agents_md
 from agentic.policy import OrgPolicy, ResolveContext, ResolvedAgent, resolve_agent
+from agentic.policy.resolve import budget_ceiling
 from agentic.telemetry.logs import StepLogs
 from agentic.telemetry.spans import finish_step_span, step_span
 from agentic.telemetry.trailers import CommitAudit, commit_message
@@ -340,11 +349,15 @@ class Engine:
         skip: bool = False,
         who: str | None = None,
         self_approval: Callable[[str, str], str | None] | None = None,
+        add_budget_usd: Decimal = Decimal(0),
     ) -> RunState:
         """Continue a paused run: grant more time or budget, or answer pending tool
         calls (`decisions`), then advance. A run waiting at a gate is decided instead.
         More budget raises the run's limit only: it is refused for a run without one, and
-        for a step that reached its own budget (more run budget would not raise that).
+        for a step that reached its own budget (more run budget would not raise that)
+        unless that step is granted more too (`add_budget_usd`, DF-357): a person (`who`)
+        gives the paused step more budget from then on, clamped to what the run has left
+        and to its agent type's (and team's) cap, and recorded in the approval ledger.
         `skip` routes around a condition that cannot be evaluated: the step it guards is
         skipped, or a loop whose `until` it is ends as it stands (DF-59). A skip names
         the person (`who`), who is recorded; in the regulated regime it may not be the
@@ -353,7 +366,7 @@ class Engine:
             run = _Run(self, self.store.load(run_id))
             if skip:
                 return await run.skip(who, self_approval)
-            return await run.resume(extra_minutes, extra_budget_usd, decisions)
+            return await run.resume(extra_minutes, extra_budget_usd, decisions, add_budget_usd, who)
 
     async def decide(
         self,
@@ -470,7 +483,12 @@ class _Run:
         return self._close("completed")
 
     async def resume(
-        self, extra_minutes: int, extra_budget: Decimal, decisions: dict | None
+        self,
+        extra_minutes: int,
+        extra_budget: Decimal,
+        decisions: dict | None,
+        add_budget: Decimal = Decimal(0),
+        who: str | None = None,
     ) -> RunState:
         state, pending = self.state, self.state.pending
         if state.status == "killed":
@@ -498,8 +516,9 @@ class _Run:
                     pending.id, pending.reason = verdict.pause_id, self.e.redact(verdict.describe())
                 self.save()
                 return state
+        grant = self._grant(add_budget, extra_budget, who) if add_budget > 0 else None
         if extra_budget > 0:
-            if pending is not None and pending.id == "step-budget":
+            if pending is not None and pending.id == "step-budget" and grant is None:
                 raise EngineError(
                     f"step {pending.step} of run {state.run_id} reached its own budget (the "
                     "agent's limits.budget_usd): more run budget does not raise it"
@@ -511,6 +530,8 @@ class _Run:
         state.extra_minutes += extra_minutes
         if extra_budget > 0:
             self.budget.run.raise_limit(self.budget.run.limit_usd + extra_budget)
+        if grant is not None:
+            self._record_grant(grant)
         if saved:  # a tool approval, or a turn a pause switch held
             step = self._step_at_cursor()
             iteration = state.cursor.loop_iteration or 1
@@ -577,6 +598,94 @@ class _Run:
             self.recorder.record("step_finished", skipped, outcome="skipped")
             self._after_step()
         return await self.go()
+
+    def _grant(self, requested: Decimal, extra_run: Decimal, who: str | None) -> BudgetGrant:
+        """More budget for the step paused at its own budget (DF-357), clamped to what the
+        run has left (after `extra_run`) and to the agent's policy cap. Refused, changing
+        nothing, where nothing can be granted."""
+        state, pending = self.state, self.state.pending
+        if pending is None or pending.id != "step-budget":
+            raise EngineError(
+                f"run {state.run_id}: more step budget is only for a step paused at its own "
+                f"budget (it waits on {pending.id if pending else 'nothing'}); more run "
+                "budget is --extra-budget"
+            )
+        person = (who or "").strip()
+        if not person:
+            raise EngineError("a budget grant names the person who gave it")
+        step = self._step_at_cursor()
+        agent, violations = resolve_agent(
+            self.e.definitions.agent(step.agent), self.e.policy, self.e.context
+        )
+        if agent is None:
+            reason = "; ".join(f"{v.field}: {v.reason}" for v in violations)
+            raise EngineError(f"step {step.id}: policy refuses its agent now ({reason})")
+        current = self._step_limit(step.id, agent)
+        cap = budget_ceiling(self.e.policy, agent.type, self.e.context.team)
+        left = self.budget.run.available()
+        if left is not None:
+            left += extra_run
+        rooms = {
+            "policy cap": None if cap is None or current is None else cap - current,
+            "run budget": None if left is None or current is None else left - current,
+        }
+        granted, limited_by = requested, None
+        for name, room in rooms.items():
+            if room is not None and room < granted:
+                granted, limited_by = room, name
+        if granted <= 0:
+            why = (
+                f"its agent type's cap is {cap} USD (org policy, or the team's limits_max)"
+                if limited_by == "policy cap"
+                else f"the run has {max(left or Decimal(0), Decimal(0))} USD left "
+                "(--extra-budget raises it)"
+            )
+            raise EngineError(
+                f"step {step.id} of run {state.run_id} already has {current} USD: nothing "
+                f"more can be granted, {why}"
+            )
+        return BudgetGrant(
+            step=step.id,
+            by=person,
+            at=self.e.clock.now(),
+            requested_usd=str(requested),
+            granted_usd=str(granted),
+            step_limit_usd=str((current or Decimal(0)) + granted),
+            limited_by=limited_by,
+        )
+
+    def _record_grant(self, grant: BudgetGrant) -> None:
+        """The person's grant, in the approval ledger like a skip (events carry no names)."""
+        clamp = f", clamped by the {grant.limited_by}" if grant.limited_by else ""
+        self.gates.record(
+            f"budget-{grant.step}",
+            "approve",
+            grant.by,
+            {},
+            step=grant.step,
+            notes=(
+                f"granted {grant.granted_usd} of {grant.requested_usd} USD more step budget"
+                f"{clamp}; the step's budget is now {grant.step_limit_usd} USD"
+            ),
+            extra={
+                "regime": self.state.regime,
+                "action": "budget-grant",
+                "requested_usd": grant.requested_usd,
+                "granted_usd": grant.granted_usd,
+                "step_limit_usd": grant.step_limit_usd,
+                "limited_by": grant.limited_by,
+            },
+        )
+        self.state.budget_grants.append(grant)
+
+    def _step_limit(self, step_id: str, agent: ResolvedAgent) -> Decimal | None:
+        """The step's slice: its agent's own budget plus what people granted it (DF-357)."""
+        own = _usd(agent.limits.budget_usd)
+        granted = sum(
+            (Decimal(g.granted_usd) for g in self.state.budget_grants if g.step == step_id),
+            Decimal(0),
+        )
+        return None if own is None else own + granted
 
     def _clear_pending(self) -> None:
         """The person answered: the wait ends, and its time is not run time (I6)."""
@@ -1265,7 +1374,7 @@ class _Run:
             if budget is not None:
                 budget.close_children()  # their spend counts, their hold ends (DF-52)
             else:
-                budget = self.budget.run.open(name, "step", _usd(agent.limits.budget_usd))
+                budget = self.budget.run.open(name, "step", self._step_limit(step.id, agent))
         except LimitHit as hit:
             self._pause(_budget_pause(hit), str(hit), step=step.id)
             return False
@@ -1344,7 +1453,7 @@ class _Run:
                 detail=str(hit),
             )
             self.recorder.record("step_finished", step.id, outcome="budget", cost=self._usd(cost))
-            pause = _budget_pause(hit, budget, _usd(agent.limits.budget_usd))
+            pause = _budget_pause(hit, budget, self._step_limit(step.id, agent))
             self._pause(pause, str(hit), step=step.id)
             return False
         except Exception as error:  # a provider, network or tool failure: a person decides
