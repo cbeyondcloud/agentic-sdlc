@@ -151,3 +151,100 @@ def test_a_run_saved_before_grants_existed_still_loads(make_harness, lean):
     data = RunState.model_validate_json(path.read_text(encoding="utf-8")).model_dump(mode="json")
     data.pop("budget_grants")
     assert RunState.model_validate(data).budget_grants == []
+
+
+# ── review fixes ─────────────────────────────────────────────────────────────
+
+
+def test_a_grant_after_real_spend_is_bounded_by_what_the_run_has_left(make_harness, monkeypatch):
+    """Run 8, own 2, spent 2 on the first attempt, 12 asked: the run has 6 left, so the
+    retry may spend up to 6 (a grant of 4), and the record says what was spent before."""
+    from _engine_support import charge
+
+    from agentic.engine import engine as engine_module
+
+    monkeypatch.setattr(engine_module, "budget_ceiling", lambda *a: Decimal("100"))
+    limits: list = []
+
+    def behaviour(ctx: StepContext) -> str:
+        limits.append(ctx.budget.limit_usd)
+        if len(limits) == 1:
+            charge("2")(ctx)
+            raise LimitHit("step", ctx.step, ctx.budget.limit_usd, Decimal("2"))
+        return answer("requirements")
+
+    harness = make_harness(
+        PIPELINE.format(agent="ba"), {"ba": [behaviour, behaviour]}, run_budget_usd=Decimal("8")
+    )
+    assert start(harness).pending.id == "step-budget"
+    state = resume(harness, add_budget_usd=Decimal("12"), who=PERSON)
+    (grant,) = state.budget_grants
+    assert Decimal(grant.granted_usd) == 4 and Decimal(grant.earlier_usd) == 2
+    assert grant.limited_by == "run budget"
+    assert limits[-1] == Decimal("6")
+    notes = harness.gates["r-1"].entries[0]["notes"]
+    assert f"this retry may spend up to {grant.step_limit_usd} USD" in notes
+    assert Decimal(grant.step_limit_usd) == 6
+    assert f"earlier attempts on this step spent {grant.earlier_usd} USD" in notes
+    assert "for the rest of the run" in notes
+
+
+def test_two_successive_grants_add_up(make_harness, lean):
+    limits: list = []
+
+    def behaviour(ctx: StepContext) -> str:
+        limits.append(ctx.budget.limit_usd)
+        if len(limits) < 3:
+            raise LimitHit("step", ctx.step, ctx.budget.limit_usd, ctx.budget.limit_usd)
+        return answer("requirements")
+
+    harness = make_harness(PIPELINE.format(agent="lean"), {"lean": [behaviour] * 3})
+    start(harness)
+    assert resume(harness, add_budget_usd=Decimal("0.5"), who=PERSON).pending.id == "step-budget"
+    state = resume(harness, add_budget_usd=Decimal("0.5"), who=PERSON)
+    assert state.status == "completed"
+    assert limits == [Decimal("0.5"), Decimal("1.0"), Decimal("1.5")]
+    assert [g.step_limit_usd for g in state.budget_grants] == ["1.0", "1.5"]
+
+
+def test_amounts_are_recorded_as_plain_decimals(make_harness, lean):
+    harness = harness_for(make_harness, "lean", [])
+    start(harness)
+    state = resume(harness, add_budget_usd=Decimal("1E+1"), who=PERSON)
+    assert state.budget_grants[0].requested_usd == "10"
+    assert "E" not in state.budget_grants[0].step_limit_usd
+
+
+LOOP = """\
+name: test
+version: 1.0.0
+steps:
+  - loop:
+      id: refine
+      max_iterations: 2
+      until: "review.open_blocking == 0"
+      steps:
+        - id: requirements
+          agent: lean
+        - id: review
+          agent: reviewer
+"""
+
+
+def test_a_grant_holds_for_the_step_in_later_loop_iterations(make_harness, lean):
+    from _engine_support import review
+
+    limits: list = []
+
+    def behaviour(ctx: StepContext) -> str:
+        limits.append(ctx.budget.limit_usd)
+        if len(limits) == 1:
+            raise LimitHit("step", ctx.step, ctx.budget.limit_usd, ctx.budget.limit_usd)
+        return answer("requirements")
+
+    script = {"lean": [behaviour] * 3, "reviewer": [review(["open"]), review()]}
+    harness = make_harness(LOOP, script)
+    assert start(harness).pending.id == "step-budget"
+    state = resume(harness, add_budget_usd=Decimal("1"), who=PERSON)
+    assert state.status == "completed"
+    assert limits == [Decimal("0.5"), Decimal("1.5"), Decimal("1.5")]  # iteration 2 too

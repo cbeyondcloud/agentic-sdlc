@@ -59,7 +59,7 @@ def test_a_clamped_grant_says_so(paused, gateway, cli):
     result = cli("resume", paused, "--add-budget", "50")
     assert result.code == ExitCode.PAUSED, result.out + result.err
     out = " ".join((result.out + result.err).split())
-    assert "granted 1.99 of 50 USD" in out and "policy cap" in out
+    assert "granted 1.99 of 50 USD" in out and "clamped by the policy cap" in out
 
 
 def test_status_offers_the_flag_for_a_step_budget_pause(paused, cli):
@@ -76,3 +76,16 @@ def test_add_budget_is_refused_for_another_pause(workspace, gateway, cli):
 
 def test_add_budget_is_an_amount(paused, cli):
     assert cli("resume", paused, "--add-budget", "lots").code == ExitCode.USAGE
+
+
+@pytest.mark.parametrize("amount", ["0", "0.00", "-1"])
+def test_a_zero_or_negative_grant_is_a_usage_error(paused, cli, amount):
+    assert cli("resume", paused, f"--add-budget={amount}").code == ExitCode.USAGE
+
+
+def test_the_grant_says_what_the_retry_may_spend_and_for_how_long(paused, gateway, cli):
+    result = cli("resume", paused, "--add-budget", "0.5")
+    out = " ".join((result.out + result.err).split())
+    assert "this retry may spend up to 0.51 USD" in out
+    assert "earlier attempts on this step spent" in out
+    assert "for the rest of the run" in out

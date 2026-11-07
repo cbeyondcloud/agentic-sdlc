@@ -45,7 +45,7 @@ from typing import Annotated
 import typer
 from rich import box
 
-from agentic.engine.engine import TERMINAL, EngineError, check_inputs
+from agentic.engine.engine import TERMINAL, EngineError, check_inputs, grant_text
 from agentic.engine.state import RunState, RunStateError, RunStore
 from agentic.telemetry.logs import LEVELS, LogTail, redact_record, render_logs
 from agentic_cli import housekeeping, learning_apply
@@ -235,6 +235,8 @@ def register(app: typer.Typer) -> None:
                 ExitCode.USAGE,
             )
         add = _usd(add_budget, "--add-budget") or Decimal(0)
+        if add_budget is not None and not add:
+            raise CliError("--add-budget is an amount above zero, in USD", ExitCode.USAGE)
         rt = Runtime(Workspace.load())
         state = _load(rt, run_id)
         pending = state.pending
@@ -462,14 +464,7 @@ def _usd(text: str | None, flag: str) -> Decimal | None:
 
 def _show_grant(out: Output, grant) -> None:
     """Say what a step budget grant gave, and what clamped it (DF-357)."""
-    text = (
-        f"granted {grant.granted_usd} of {grant.requested_usd} USD more budget to step "
-        f"{grant.step} (now {grant.step_limit_usd} USD)"
-    )
-    if grant.limited_by is None:
-        out.progress(text)
-    else:
-        out.warn(f"{text}: clamped by the {grant.limited_by}")
+    (out.progress if grant.limited_by is None else out.warn)(grant_text(grant))
 
 
 def _check_run_id(run_id: str) -> None:

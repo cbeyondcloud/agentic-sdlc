@@ -100,7 +100,10 @@ class BudgetGrant(_Strict):
     at: AwareDatetime
     requested_usd: str  # Decimal, as text
     granted_usd: str  # after the clamp
-    step_limit_usd: str  # the step's slice from then on: its agent's budget plus every grant
+    # what each attempt of the step may spend from then on (a fresh slice each attempt):
+    # its agent's budget plus every grant; the run's budget still bounds the total
+    step_limit_usd: str
+    earlier_usd: str = "0"  # what earlier attempts on this step spent, before the grant
     limited_by: Literal["run budget", "policy cap"] | None = None  # what clamped it, if any
 
 

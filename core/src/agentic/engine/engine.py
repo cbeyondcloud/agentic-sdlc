@@ -644,29 +644,27 @@ class _Run:
                 f"step {step.id} of run {state.run_id} already has {current} USD: nothing "
                 f"more can be granted, {why}"
             )
+        earlier = sum((Decimal(r.cost_usd) for r in state.history if r.step == step.id), Decimal(0))
         return BudgetGrant(
             step=step.id,
             by=person,
             at=self.e.clock.now(),
-            requested_usd=str(requested),
-            granted_usd=str(granted),
-            step_limit_usd=str((current or Decimal(0)) + granted),
+            requested_usd=_plain(requested),
+            granted_usd=_plain(granted),
+            step_limit_usd=_plain((current or Decimal(0)) + granted),
+            earlier_usd=_plain(earlier),
             limited_by=limited_by,
         )
 
     def _record_grant(self, grant: BudgetGrant) -> None:
         """The person's grant, in the approval ledger like a skip (events carry no names)."""
-        clamp = f", clamped by the {grant.limited_by}" if grant.limited_by else ""
         self.gates.record(
             f"budget-{grant.step}",
             "approve",
             grant.by,
             {},
             step=grant.step,
-            notes=(
-                f"granted {grant.granted_usd} of {grant.requested_usd} USD more step budget"
-                f"{clamp}; the step's budget is now {grant.step_limit_usd} USD"
-            ),
+            notes=grant_text(grant),
             extra={
                 "regime": self.state.regime,
                 "action": "budget-grant",
@@ -2121,6 +2119,24 @@ def _name(agent: ResolvedAgent) -> str:
     return f"{agent.definition.name}@{agent.definition.version}"
 
 
+def _plain(amount: Decimal) -> str:
+    """Money as plain decimal text (never `1E+1`), for run.json and the ledger."""
+    return format(amount, "f")
+
+
+def grant_text(grant: BudgetGrant) -> str:
+    """A step budget grant in words (DF-357): each retry opens a fresh slice, so what it
+    may spend is said apart from what earlier attempts spent."""
+    clamp = f", clamped by the {grant.limited_by}" if grant.limited_by else ""
+    return (
+        f"granted {grant.granted_usd} of {grant.requested_usd} USD more to step "
+        f"{grant.step}{clamp}: this retry may spend up to {grant.step_limit_usd} USD; "
+        f"earlier attempts on this step spent {grant.earlier_usd} USD. The grant holds for "
+        "the rest of the run (later loop iterations too); the run's budget still bounds "
+        "the total"
+    )
+
+
 def _usd(amount: float | None) -> Decimal | None:
     """A policy amount (a float in the definitions) as Decimal, through its text (DF-26)."""
     return None if amount is None else Decimal(str(amount))
@@ -2137,5 +2153,6 @@ __all__ = [
     "StepContext",
     "StepRunnerFactory",
     "check_inputs",
+    "grant_text",
     "pipeline_digest",
 ]
