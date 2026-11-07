@@ -8,6 +8,9 @@
 # `max_output_tokens:` (optional) caps the output one call may ask for, reasoning
 # included. Set it for a model whose output limit is under what a call asks for
 # when it is unset: 16,384 (20,480 at `effort: high`).
+# It must be above the reasoning room of the tier's effort (low 2,048, medium
+# 10,000, high 16,384). A team override replaces the whole tier: repeat
+# max_output_tokens there, or the team's calls use the default cap.
 # =============================================================================
 tiers:
   deep-reasoning:                       # architecture and design: the strongest model

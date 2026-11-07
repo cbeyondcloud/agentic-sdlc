@@ -388,3 +388,28 @@ def test_an_output_cap_must_be_positive():  # DF-398
     assert TierSpec(model="x/y", max_output_tokens=8192).max_output_tokens == 8192
     with pytest.raises(ValidationError):
         TierSpec(model="x/y", max_output_tokens=0)
+
+
+def test_an_output_cap_inside_its_reasoning_budget_is_refused(policy):  # DF-398 review I4
+    from pydantic import ValidationError
+
+    data = policy.model_dump(mode="json")
+    data["tiers"]["balanced"] = {**data["tiers"]["balanced"], "effort": "high"}
+    data["tiers"]["balanced"]["max_output_tokens"] = 8192
+    with pytest.raises(ValidationError, match="balanced.*8192.*16384"):
+        OrgPolicy.model_validate(data)
+    data["tiers"]["balanced"]["max_output_tokens"] = 24000
+    assert OrgPolicy.model_validate(data).tiers["balanced"].max_output_tokens == 24000
+
+
+def test_a_team_override_that_drops_the_tiers_cap_is_warned(policy, developer, caplog):  # I5
+    policy.teams["payments"].allowed_tiers = None
+    policy.tiers["deep-reasoning"] = policy.tiers["deep-reasoning"].model_copy(
+        update={"max_output_tokens": 30000}
+    )
+    with caplog.at_level("WARNING", logger="agentic.policy"):
+        resolved, _ = resolve_agent(
+            agent_with(developer, tier="deep-reasoning"), policy, ResolveContext(team="payments")
+        )
+    assert resolved.max_output_tokens is None  # the override replaces the whole tier
+    assert "max_output_tokens" in caplog.text and "payments" in caplog.text

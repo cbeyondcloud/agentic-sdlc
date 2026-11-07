@@ -16,6 +16,7 @@ Two kinds of outcome:
                from the agent's name; a team may only lower them.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,8 @@ from pydantic import BaseModel, ConfigDict
 
 from agentic.definitions import AgentDefinition, ChildLimits, DenyRules, Limits
 from agentic.policy.model import AgentType, ClassificationRule, OrgPolicy, RoleLimits, TeamPolicy
+
+_LOG = logging.getLogger("agentic.policy")
 
 if TYPE_CHECKING:
     from agentic.handoffs.schema import HandoffCatalog
@@ -193,6 +196,17 @@ def resolve_agent(
     # Tier defaults (effort, temperature, output cap) belong to the tier's model; they are not
     # applied to an explicitly named different model.
     tier_spec = policy.team_overrides.get(ctx.team or "", {}).get(tier) or policy.tiers[tier]
+    base_cap = policy.tiers[tier].max_output_tokens
+    if tier_spec is not policy.tiers[tier] and base_cap and not tier_spec.max_output_tokens:
+        # an override replaces the whole tier: say so when that drops the org's cap
+        _LOG.warning(
+            "team_overrides.%s.%s sets no max_output_tokens: the org's cap of %s for tier "
+            "%s does not apply to it (calls use the default cap)",
+            ctx.team,
+            tier,
+            base_cap,
+            tier,
+        )
     defaults_apply = agent.model is None or agent.model == tier_model
 
     resolved = ResolvedAgent(

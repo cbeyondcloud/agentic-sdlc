@@ -31,6 +31,7 @@ from pydantic_ai.settings import ModelSettings
 
 from agentic.agents.metering import DEFAULT_MAX_OUTPUT, CostLog, MeteringTransport
 from agentic.policy import ResolvedAgent, gateway_model
+from agentic.policy.model import REASONING_OUTPUT
 from agentic.security import SecretScanner
 from agentic.transport import (
     BudgetSlice,
@@ -121,10 +122,6 @@ def metered_model(
     return model, log
 
 
-#: Output room reasoning may take at each effort level (Pydantic AI's thinking budgets).
-#: Every provider bills and caps reasoning as output, so a call's cap leaves this room
-#: beside the answer's - a cap at or under it is refused, or truncates the answer.
-REASONING_OUTPUT = {"low": 2_048, "medium": 10_000, "high": 16_384}
 #: The least room the default cap keeps for the answer, beyond the reasoning.
 MIN_ANSWER_OUTPUT = 4_096
 
