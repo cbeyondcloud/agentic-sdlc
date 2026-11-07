@@ -2,6 +2,8 @@
 (DF-359, owner decision 2026-11-07): before any spend, naming the step, the agent, the
 command and the allow-list line to add, and where. Deny still beats allow."""
 
+from pathlib import Path
+
 import pytest
 from _cli_support import write
 
@@ -69,9 +71,10 @@ def test_a_test_command_beyond_the_type_fails_preflight_with_the_line_to_add(
     text = " ".join(result.out.split())
     for shown in (
         "implement: test-command",
-        "agent dev (type builder)",
+        "agent dev (type builder; step implement)",
         "`cargo test` (from Cargo.toml)",
-        'Add the line "cargo test"',
+        "One allowed test command is enough",
+        'Add one of these lines: "cargo test"',
         "`shell:` of type builder in",
         "agent-types.yaml (org policy)",
     ):
@@ -85,7 +88,7 @@ def test_an_agent_that_narrows_its_type_is_told_to_add_it_to_its_own_file(worksp
     result = dry_run(cli)
     assert result.code == ExitCode.INVALID, result.out + result.err
     text = " ".join(result.out.split())
-    assert 'Add the line "go test" to `shell:` in' in text
+    assert 'Add one of these lines: "go test" to `shell:` in' in text
     assert "dev.md (org agent file)" in text
     assert "of type builder" not in text  # the type already lists it
 
@@ -97,7 +100,7 @@ def test_a_denied_test_command_says_deny_beats_allow(workspace, build, cli):
     assert result.code == ExitCode.INVALID, result.out + result.err
     text = " ".join(result.out.split())
     assert "`go test ./...`" in text and "deny rule beats an allow rule" in text
-    assert "Add the line" not in text
+    assert "Add one of" not in text
 
 
 def test_a_live_run_is_refused_before_any_spend(workspace, build, cli, monkeypatch):
@@ -113,3 +116,69 @@ def test_a_live_run_is_refused_before_any_spend(workspace, build, cli, monkeypat
     result = cli("run", "build")
     assert result.code == ExitCode.INVALID, result.out + result.err
     assert "cargo test" in result.out and fake.requests == []
+
+
+# ── review fixes: one allowed command is enough, one problem per agent ───────
+
+TWO_STEPS = """name: build
+version: 1.0.0
+regime: team
+steps:
+  - id: implement
+    agent: dev
+  - id: fix
+    agent: dev
+"""
+
+
+def test_a_polyglot_repo_passes_when_one_test_command_is_allowed(workspace, build, cli):
+    write(workspace / "go.mod", "module example.com/x\n")  # the type allows go test
+    write(workspace / "Cargo.toml", "[package]\nname = 'x'\n")  # but not cargo test
+    result = dry_run(cli)
+    assert result.code == ExitCode.OK, result.out + result.err
+
+
+def test_a_polyglot_repo_with_none_allowed_fails_once_listing_every_option(
+    workspace, build, policy_repo, cli
+):
+    write(policy_repo / "pipelines" / "build.yaml", TWO_STEPS)
+    write(workspace / "Cargo.toml", "[package]\nname = 'x'\n")
+    write(workspace / "Makefile", "test:\n\t./run\n")
+    result = dry_run(cli)
+    assert result.code == ExitCode.INVALID, result.out + result.err
+    text = " ".join(result.out.split())
+    assert text.count(": test-command:") == 1  # one problem for the agent, not per step
+    assert "steps implement, fix" in text
+    assert '"cargo test"' in text and '"make test"' in text
+
+
+def test_an_equivalent_spelling_is_enough(workspace, build, cli):
+    build('shell: ["go test"]\n')
+    write(workspace / "go.mod", "module example.com/x\n")
+    assert dry_run(cli).code == ExitCode.OK
+
+
+@pytest.mark.parametrize("template", ["policy-repo", "standalone"])
+@pytest.mark.parametrize("kind", ["developer", "qa"])
+@pytest.mark.parametrize("lock", [None, "uv.lock", "poetry.lock"])
+def test_the_template_developer_and_qa_allow_every_python_spelling(tmp_path, template, kind, lock):
+    from types import SimpleNamespace
+
+    from agentic.yamlio import load_yaml, read_text
+    from agentic_cli.test_commands import detect
+    from sdlc_commons.guards import Guard
+
+    root = Path(__file__).resolve().parents[3] / "templates" / template / "policy"
+    types, _ = load_yaml(read_text(root / "agent-types.yaml"))
+    shell = types["types"][kind]["shell"]
+    repo = tmp_path / "repo"
+    write(repo / "pyproject.toml", "[tool.pytest.ini_options]\n")
+    if lock:
+        write(repo / lock, "")
+    agent = SimpleNamespace(
+        shell=shell, deny_shell=[], deny_paths=[], ask_shell=[], tools=["run_shell"]
+    )
+    guard = Guard.for_agent(repo, "t", agent)
+    (found,) = detect(repo)
+    for command, _ in found.options:
+        assert guard.command(command) == [], (template, kind, command)

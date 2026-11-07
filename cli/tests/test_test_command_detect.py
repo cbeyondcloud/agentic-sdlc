@@ -97,3 +97,94 @@ def test_several_manifests_give_several_commands_once_each(tmp_path):
         },
     )
     assert commands(tmp_path) == [("pytest", "pytest"), ("npm test", "npm test")]
+
+
+# ── review fixes: more evidence, equivalents, BOMs ───────────────────────────
+
+
+def options(root: Path) -> list[list[str]]:
+    return [[command for command, _ in c.options] for c in detect(root)]
+
+
+@pytest.mark.parametrize(
+    ("named", "source"),
+    [
+        ({"pyproject.toml": "[dependency-groups]\ndev = ['pytest>=8']\n"}, "pyproject.toml"),
+        (
+            {"pyproject.toml": "[project.optional-dependencies]\ntest = ['pytest', 'x']\n"},
+            "pyproject.toml",
+        ),
+        (
+            {"pyproject.toml": "[tool.poetry.group.dev.dependencies]\npytest = '^8'\n"},
+            "pyproject.toml",
+        ),
+        ({"pyproject.toml": "[tool.poetry.dev-dependencies]\nPyTest = '^7'\n"}, "pyproject.toml"),
+        ({"conftest.py": ""}, "conftest.py"),
+        ({"tests__test_app.py": "def test_x(): pass\n"}, "tests/"),
+    ],
+)
+def test_a_pytest_dependency_or_test_files_are_python_evidence(tmp_path, named, source):
+    files(tmp_path, **named)
+    (found,) = detect(tmp_path)
+    assert (found.command, found.source) == ("pytest", source)
+
+
+def test_a_dependency_merely_named_like_pytest_is_not_evidence(tmp_path):
+    files(tmp_path, **{"pyproject.toml": "[project]\ndependencies = ['pytestify-lib']\n"})
+    assert detect(tmp_path) == []
+
+
+def test_a_poetry_lock_prefers_poetry_run_pytest(tmp_path):
+    files(tmp_path, **{"pytest.ini": "[pytest]\n", "poetry.lock": ""})
+    assert commands(tmp_path) == [("poetry run pytest", "poetry run pytest")]
+
+
+def test_python_equivalents_are_options_of_one_command(tmp_path):
+    files(tmp_path, **{"pytest.ini": "[pytest]\n"})
+    assert options(tmp_path) == [
+        ["pytest", "python -m pytest", "uv run pytest", "poetry run pytest"]
+    ]
+
+
+def test_node_runners_and_their_run_forms_are_options(tmp_path):
+    files(tmp_path, **{"package.json": '{"scripts": {"test": "jest"}}', "yarn.lock": ""})
+    assert options(tmp_path) == [["yarn test", "yarn run test", "npm test", "npm run test"]]
+
+
+@pytest.mark.parametrize(
+    ("named", "expected"),
+    [
+        ({"settings.gradle": "rootProject.name = 'x'\n"}, ["gradle test", "./gradlew test"]),
+        (
+            {"settings.gradle.kts": "\n", "gradlew.bat": "@echo off\n"},
+            ["./gradlew test", "gradle test"],
+        ),
+        ({"pom.xml": "<project/>\n", "mvnw.cmd": "\n"}, ["./mvnw test", "mvn test"]),
+        ({"App.sln": "\n"}, ["dotnet test"]),
+        ({"src__App__App.csproj": "<Project/>\n"}, ["dotnet test"]),
+    ],
+)
+def test_build_wrappers_and_dotnet(tmp_path, named, expected):
+    files(tmp_path, **named)
+    assert options(tmp_path) == [expected]
+
+
+def test_a_bom_and_crlf_package_json_and_pyproject_are_read(tmp_path):
+    (tmp_path / "package.json").write_bytes(
+        b'\xef\xbb\xbf{\r\n  "scripts": {\r\n    "test": "jest"\r\n  }\r\n}\r\n'
+    )
+    (tmp_path / "pyproject.toml").write_bytes(b"\xef\xbb\xbf[tool.pytest.ini_options]\r\n")
+    assert commands(tmp_path) == [("pytest", "pytest"), ("npm test", "npm test")]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"name": "x"}',
+        '{"scripts": {"build": "tsc"}}',
+        json.dumps({"scripts": {"test": NPM_PLACEHOLDER}}),
+    ],
+)
+def test_a_package_json_without_a_real_test_script_has_no_test_command(tmp_path, text):
+    files(tmp_path, **{"package.json": text})
+    assert detect(tmp_path) == []
