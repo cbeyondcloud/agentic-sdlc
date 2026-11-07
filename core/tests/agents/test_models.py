@@ -185,3 +185,15 @@ def test_the_default_cap_leaves_room_for_reasoning(resolved):  # DF-398
     assert model_settings(high)["max_tokens"] == DEFAULT_MAX_OUTPUT + REASONING_OUTPUT["high"]
     tight = high.model_copy(update={"max_output_tokens": 8192})
     assert model_settings(tight)["max_tokens"] > REASONING_OUTPUT["high"]
+
+
+def test_a_fresh_model_asks_the_gateway_for_a_new_answer(resolved, tokenlean):  # DF-1004
+    from agentic.agents.models import build_model_for
+
+    fresh = build_model_for(
+        resolved.model, IDENTITY, GATEWAY, httpx2.MockTransport(tokenlean), fresh=True
+    )
+    asyncio.run(Agent(fresh).run("hi"))
+    assert tokenlean.seen[-1].headers["x-no-cache"] == "true"
+    run(resolved, tokenlean)
+    assert "x-no-cache" not in tokenlean.seen[-1].headers

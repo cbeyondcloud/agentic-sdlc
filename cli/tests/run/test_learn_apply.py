@@ -602,3 +602,20 @@ def test_an_unmeasured_reason_is_redacted_and_short(workspace, gateway, monkeypa
     )
     assert found["status"] == "unmeasured" and KEY not in found["reason"]
     assert len(found["reason"]) <= learning_eval.MAX_REASON and KEY not in warned[0]
+
+
+def test_the_measurement_never_takes_a_cached_answer(workspace, gateway, cli, monkeypatch):
+    """DF-1004: before and after each get a new answer from the gateway, never its cache."""
+    corrections(cli, monkeypatch, PEOPLE[:1])
+    row = only_proposal(cli)
+    measuring(gateway, monkeypatch, "Acceptance criteria name every CSV column.")
+    inner, fresh = runtime.network_transport(), []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if request.headers.get("x-agentic-step") == "learning-eval":
+            fresh.append(request.headers.get("x-no-cache"))
+        return inner.handler(request)
+
+    monkeypatch.setattr(runtime, "network_transport", lambda: httpx2.MockTransport(handler))
+    assert cli("--json", "learn", "approve", row["id"]).code == ExitCode.OK
+    assert fresh and set(fresh) == {"true"}

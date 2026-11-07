@@ -63,6 +63,9 @@ BEHAVIOUR_HEADERS = frozenset(
         "x-rag-collection",
     }
 )
+#: The gateway's per-request opt-out from its response cache: a call that must get a new
+#: answer (an evaluation's repeats and its judge) sends it; nothing else does (DF-1004).
+FRESH_ANSWER = ("x-no-cache", "true")
 _TRACEPARENT = re.compile(r"00-(?!0{32})[0-9a-f]{32}-(?!0{16})[0-9a-f]{16}-[0-9a-f]{2}")
 
 
@@ -244,11 +247,13 @@ def make_async_client(
     allow: Iterable[str] = frozenset(),
     timeout: float = 600.0,
     scanner: SecretScanner | None = None,
+    fresh: bool = False,
     _transport: httpx2.AsyncBaseTransport | None = None,
 ) -> httpx2.AsyncClient:
     """An asynchronous client for TokenLean at `base_url`, stamping `identity`; every
-    body is secret-scanned first (`scanner`, default: block, default detectors)."""
-    stamp = _stamper(base_url, identity, _allowed(allow))
+    body is secret-scanned first (`scanner`, default: block, default detectors). A
+    `fresh` client asks for a new answer on every call, never a cached one."""
+    stamp = _stamper(base_url, identity, _allowed(allow), fresh=fresh)
 
     async def stamp_async(request: httpx2.Request) -> None:
         stamp(request)
@@ -332,7 +337,9 @@ def _origin(url: httpx2.URL) -> tuple[str, str, int | None]:
     return url.scheme, url.host, url.port or default
 
 
-def _stamper(base_url: str, identity: CallIdentity, allowed: frozenset[str]):
+def _stamper(
+    base_url: str, identity: CallIdentity, allowed: frozenset[str], *, fresh: bool = False
+):
     expected = {_normal(name): value for name, value in identity.headers().items()}
     home = _origin(httpx2.URL(base_url))
     trace_id = hashlib.sha256(identity.run_id.encode()).hexdigest()[:32]
@@ -353,6 +360,8 @@ def _stamper(base_url: str, identity: CallIdentity, allowed: frozenset[str]):
                 why = "disagrees with the run's identity - calls cannot be re-labelled"
                 raise IdentityHeaderError(f"request header {normal!r} {why}")
         request.headers.update(identity.headers())
+        if fresh:  # set here, after the check: the caller's own request cannot send it
+            request.headers[FRESH_ANSWER[0]] = FRESH_ANSWER[1]
         if not _TRACEPARENT.fullmatch(request.headers.get("traceparent", "")):
             request.headers["traceparent"] = _traceparent(trace_id)
 

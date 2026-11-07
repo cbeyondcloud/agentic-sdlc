@@ -260,6 +260,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             price_for=policy.price_for,
             fallback_estimate_usd=FALLBACK_ESTIMATE_USD,
             log=costs,
+            fresh=True,  # each repeat a new answer, never the gateway's cached one (DF-1004)
         )
         return model
 
@@ -283,7 +284,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             log=judge_costs,
         )
         who = identity(request, f"{JUDGE_TIER}@1", JUDGE_TIER)
-        return build_model_for(choice.model, who, gateway, meter)  # type: ignore[union-attr]
+        return build_model_for(choice.model, who, gateway, meter, fresh=True)  # type: ignore[union-attr]
 
     def judge_for(request: RunRequest) -> RubricJudge | None:
         if choice is None or judge_slice is None or request.case.rubric not in rubrics:

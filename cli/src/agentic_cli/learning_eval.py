@@ -140,6 +140,7 @@ def _measure(rt: Runtime, made: Draft) -> Measurement:
             price_for=policy.price_for,
             fallback_estimate_usd=evaluation.FALLBACK_ESTIMATE_USD,
             log=costs,
+            fresh=True,  # before and after each a new answer, never a cached one (DF-1004)
             _inner=runtime.network_transport(),
         )
         return model

@@ -57,10 +57,12 @@ def build_model(
     transport: httpx2.AsyncBaseTransport,
     *,
     scanner: SecretScanner | None = None,
+    fresh: bool = False,
 ) -> Model:
     """The model the agent runs on, calling TokenLean through the identity client;
-    each call secret-scanned by `scanner` (default: block, default detectors)."""
-    return build_model_for(agent.model, identity, gateway, transport, scanner=scanner)
+    each call secret-scanned by `scanner` (default: block, default detectors). A `fresh`
+    model never gets a cached answer (an evaluation's runs, DF-1004)."""
+    return build_model_for(agent.model, identity, gateway, transport, scanner=scanner, fresh=fresh)
 
 
 def build_model_for(
@@ -70,6 +72,7 @@ def build_model_for(
     transport: httpx2.AsyncBaseTransport,
     *,
     scanner: SecretScanner | None = None,
+    fresh: bool = False,
 ) -> Model:
     """`build_model` for a model id rather than a resolved agent - the eval judge, whose
     model comes from a policy tier (M1-63). Same routing, identity and scanning."""
@@ -77,7 +80,12 @@ def build_model_for(
     provider = model_id.partition("/")[0] if name != model_id else ""
     root = gateway.base_url.rstrip("/")
     client = make_async_client(
-        root, identity, network=gateway.network, scanner=scanner, _transport=transport
+        root,
+        identity,
+        network=gateway.network,
+        scanner=scanner,
+        fresh=fresh,
+        _transport=transport,
     )
     if provider == "anthropic":
         sdk = anthropic_client(root, gateway.api_key, client)
@@ -96,6 +104,7 @@ def metered_model(
     fallback_estimate_usd: Decimal,
     log: CostLog | None = None,
     scanner: SecretScanner | None = None,
+    fresh: bool = False,
     _inner: httpx2.AsyncBaseTransport | None = None,  # tests: a stand-in for the network
 ) -> tuple[Model, CostLog]:
     """The agent's model with every call secret-scanned, then charged to `budget`, and
@@ -108,7 +117,8 @@ def metered_model(
         fallback_estimate_usd=fallback_estimate_usd,
         log=log,
     )
-    return build_model(agent, identity, gateway, transport=meter, scanner=scanner), log
+    model = build_model(agent, identity, gateway, transport=meter, scanner=scanner, fresh=fresh)
+    return model, log
 
 
 #: Output room reasoning may take at each effort level (Pydantic AI's thinking budgets).
