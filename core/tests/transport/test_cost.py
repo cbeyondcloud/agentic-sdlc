@@ -413,3 +413,42 @@ def test_a_response_with_several_choices_is_priced_once_from_its_usage():
 
     assert (cost.source, cost.tokens_in, cost.tokens_out) == ("estimated", 100, 300)
     assert cost.cost_usd == Decimal("0.000625")
+
+
+# ── TokenLean's own estimates (DF-397) ────────────────────────────────────────
+# TokenLean prices a model with no row in its pricing table at default rates and says so
+# with `x-tokenlean-cost-estimated: default-rate`: that figure is not a reported cost.
+
+
+def test_a_default_rate_cost_is_repriced_with_the_policy_price(fixtures):
+    data = fixture(fixtures, "openai_nonstream.json")
+    headers = {**data["headers"], "X-TokenLean-Cost-Estimated": "default-rate"}
+
+    cost = cost_from_response(headers, data["body"], price_for)
+
+    assert cost.source == "estimated"
+    assert cost.cost_usd == Decimal("0.0009")  # 1200 x 0.25 + 300 x 2 per million
+    assert "default" in cost.reason
+
+
+def test_a_default_rate_cost_with_no_policy_price_is_kept_as_an_estimate(fixtures):
+    data = fixture(fixtures, "openai_nonstream.json")
+    headers = {
+        **data["headers"],
+        "x-tokenlean-cost-estimated": "default-rate",
+        "x-tokenlean-routed-model": "new-model",
+    }
+
+    cost = cost_from_response(headers, data["body"], price_for)
+
+    assert (cost.source, cost.cost_usd) == ("estimated", Decimal("0.004321"))
+    assert "new-model" in cost.reason and "default" in cost.reason
+
+
+def test_a_default_rate_stream_cost_is_repriced_too(fixtures):
+    headers, usage = stream(fixtures, "openai_stream_events.json")
+    flagged = {"x-tokenlean-cost-usd": "0.002", "x-tokenlean-cost-estimated": "default-rate"}
+
+    cost = usage.result(flagged, price_for, model="gpt-5-mini")
+
+    assert (cost.source, cost.cost_usd) == ("estimated", Decimal("0.0005"))
