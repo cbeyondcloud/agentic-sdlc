@@ -19,7 +19,13 @@ installed by `agentic init`); it is never downloaded here, and it is looked up o
 a repo routed to it (`backend_for`). It replaces code-review-graph: when it cannot run,
 the JVM test conventions answer alone (`Combined`) and preflight says why
 (`codeintel_warning`). A build this machine can never run (none for its platform, or an
-unsigned Windows build) is permanent: under `auto` that is information, not a warning.
+Windows host) is permanent: under `auto` that is information, not a warning.
+
+The backend runs only inside the OS sandbox with no allowed host (DF-921, owner decision
+2026-11-07: its SECURITY.md describes an update check): a machine without a ready
+sandbox does not get it, and doctor and preflight name what to install. Windows
+developers use its Linux build inside WSL2 only (DF-925): on native Windows it is never
+fetched or run, whatever the pin says, and the message points to WSL2.
 
 Core never imports commons: this module joins them. `codeintel_for` is the factory
 `StepWiring` takes; `GraphIntel` is the boundary turning commons answers and errors
@@ -38,12 +44,12 @@ from agentic.codeintel import Candidates, CodeIntel, CodeIntelError, Combined
 from agentic.codeintel.export import MANIFEST, installed_tool_version
 from agentic.codeintel.jvm import JvmConventions, is_jvm_repo
 from agentic.repoconfig import CodeIntelConfig
+from agentic.sandbox.readiness import Readiness
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
 from agentic_cli.workspace import REPO_CONFIG
 from sdlc_commons.domain_graph import DomainGraph, DomainGraphError
 from sdlc_commons.graph_codeintel import DomainGraphCodeIntel
-from sdlc_commons.tool_fetch import windows_refusal
 
 Factory = Callable[[Path, Path], CodeIntel]  # (run tree, data folder) -> adapter
 LOCAL_INDEX_REL = Path(".agentic") / "local" / "index"  # the developer's index (D39)
@@ -63,7 +69,8 @@ class Backend:
     path: Path | None  # the verified binary, or None
     pinned: bool  # whether org policy pins it at all
     why: str = ""  # why there is no path
-    permanent: bool = False  # no build this machine may ever run (platform, Windows signing)
+    permanent: bool = False  # no build this machine may ever run (platform, native Windows)
+    fix: str = ""  # what makes it available, when that is not the pin or `agentic init`
 
 
 class Locator(Protocol):
@@ -74,16 +81,37 @@ class Locator(Protocol):
 
 
 NO_BACKEND = Backend(None, pinned=False, why=f"org policy pins no {BACKEND_TOOL}")
+#: The tools `agentic init` never offers on native Windows (`ToolFetcher(wsl2_only=)`).
+WSL2_ONLY = frozenset({BACKEND_TOOL})
+NATIVE_WINDOWS = (
+    "its native Windows build is not supported: run agentic inside WSL2, where "
+    "`agentic init --install-missing` installs its Linux build and it runs in the sandbox "
+    "(`agentic doctor` lists the WSL2 setup steps)"
+)
+NO_SANDBOX = (
+    "it runs only inside the OS sandbox with no network access, and this machine has no "
+    "sandbox ready"
+)
 
 
-def locate_backend(locator: Locator) -> Backend:
-    """The backend from the verified tool cache (`sdlc_commons.review_prepass.ToolLocator`)."""
-    path, why = locator.locate(BACKEND_TOOL)
+def locate_backend(locator: Locator, ready: Callable[[], Readiness]) -> Backend:
+    """The backend from the verified tool cache (`sdlc_commons.review_prepass.ToolLocator`),
+    only where it can run inside the sandbox (`ready`: this machine's sandbox readiness,
+    asked only when the org pins a build for this platform)."""
     pin = locator.pins.get(BACKEND_TOOL)
-    artefact = pin.assets.get(locator.platform) if pin is not None else None
-    permanent = pin is not None and (
-        artefact is None or windows_refusal(locator.platform, artefact) is not None
-    )
+    if pin is not None and locator.platform.startswith("windows"):  # DF-925
+        return Backend(None, pinned=True, why=NATIVE_WINDOWS, permanent=True)
+    if pin is not None and locator.platform in pin.assets:
+        sandbox = ready()
+        if not sandbox.available:  # DF-921: never run without it
+            missing = ", ".join(check.name for check in sandbox.checks if not check.ok)
+            fix = (
+                f"set up the OS sandbox (`agentic doctor` says how; missing: {missing}), "
+                "or set codeintel.adapter: code-review-graph"
+            )
+            return Backend(None, pinned=True, why=NO_SANDBOX, fix=fix)
+    path, why = locator.locate(BACKEND_TOOL)
+    permanent = pin is not None and locator.platform not in pin.assets  # no build for it
     return Backend(path, pinned=pin is not None, why=why, permanent=path is None and permanent)
 
 
@@ -234,8 +262,9 @@ def codeintel_status(
     warning = codeintel_warning(repo, settings, crg_available=crg_available, backend=backend)
     if warning is not None:
         fix = (
-            f"ask the platform team to pin an approved {BACKEND_TOOL} build in tool-pins.yaml, "
-            "then run `agentic init`; or set codeintel.adapter: code-review-graph"
+            backend.fix
+            or f"ask the platform team to pin an approved {BACKEND_TOOL} build in "
+            "tool-pins.yaml, then run `agentic init`; or set codeintel.adapter: code-review-graph"
             if BACKEND_TOOL in warning
             else "install agentic-core[codeintel], or build the domain graph, as the warning says"
         )
@@ -265,8 +294,10 @@ def codeintel_for(
     *,
     crg_available: bool,
     backend: Backend = NO_BACKEND,
+    deny_read: tuple[Path, ...] = (),
 ) -> Factory | None:
-    """The adapter factory for a run's steps, or None (agents get no codeintel tools)."""
+    """The adapter factory for a run's steps, or None (agents get no codeintel tools).
+    `deny_read`: policy's read denials, hidden from the sandboxed backend too."""
     route = symbol_route(repo, settings)
     if route is None:
         return None
@@ -284,7 +315,8 @@ def codeintel_for(
         if binary is not None:
             from agentic.codeintel.cbm import CodebaseMemory
 
-            adapters.append(CodebaseMemory([str(binary)], tree, data / "codebase-memory"))
+            folder = data / "codebase-memory"
+            adapters.append(CodebaseMemory([str(binary)], tree, folder, deny_read=deny_read))
         elif crg_available:
             from agentic.codeintel.crg import CodeReviewGraph
             from agentic.codeintel.index import LocalIndex
