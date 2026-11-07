@@ -130,6 +130,14 @@ def register(app: typer.Typer) -> None:
             str | None, typer.Option(help="Data class of cases that name none.")
         ] = None,
         out_dir: Annotated[Path | None, typer.Option("--out", help="Where to write.")] = None,
+        allow_unsandboxed: Annotated[
+            bool,
+            typer.Option(
+                "--allow-unsandboxed",
+                help="Run holdout dev tasks live without srt, their answers readable to "
+                "the agent (the report says so).",
+            ),
+        ] = False,
     ) -> None:
         """Run AGENT over corpus cases with and without the skill (blind) and compare."""
         output: Output = ctx.obj
@@ -167,6 +175,7 @@ def register(app: typer.Typer) -> None:
                 classification=classification,
                 tag=tag,
                 skill=variant,
+                allow_unsandboxed=allow_unsandboxed,
             )
         )
         summary = evaluation.write_skill_eval(result, variant)

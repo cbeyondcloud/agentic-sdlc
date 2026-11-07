@@ -187,6 +187,11 @@ def _problems(reports: Sequence[EvalReport], min_cases: Mapping[str, int]) -> li
             problems.append(f"{name} ran on the tag subset '{r.tag}', not the whole split")
         if r.verdict != "MEASURED":
             problems.append(f"{name} is {r.verdict}, not MEASURED")
+        if r.holdout_exposed:  # DF-1006: its holdout answers were readable to the agent
+            problems.append(
+                f"{name} ran with --allow-unsandboxed: its agent could read the holdout "
+                "answers, so it cannot decide a gate - run it again where srt is ready"
+            )
     if len({r.corpus_manifest_sha for r in reports}) > 1:
         problems.append("the reports were measured on different corpora (corpus manifest sha)")
     return problems

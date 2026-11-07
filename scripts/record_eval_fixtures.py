@@ -163,7 +163,15 @@ def main() -> int:
 
 def _record(script: dict, scratch: str) -> int:
     for agent in AGENTS:
-        options = dict(agent=agent, corpus=LIBRARY, split="all", seed=0, tag=FIXTURE_TAG)
+        # the upstream is scripted: no model reads the corpus, so its answers need no srt
+        options = dict(
+            agent=agent,
+            corpus=LIBRARY,
+            split="all",
+            seed=0,
+            tag=FIXTURE_TAG,
+            allow_unsandboxed=True,
+        )
         recorded = execute_run(
             RunOptions(**options, mode="record", out=Path(scratch) / "rec" / agent),
             upstream=ScriptedUpstream(script),

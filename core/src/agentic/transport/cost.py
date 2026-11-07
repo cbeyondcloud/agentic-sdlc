@@ -6,7 +6,9 @@ is read first when present. Elsewhere - the Anthropic route, live streams - the
 call's own `usage` is priced with the org's price table. Every result says which:
 
   * reported    - TokenLean's number (itself priced from TokenLean's table);
-  * estimated   - our token counts x the policy price;
+  * estimated   - our token counts x the policy price - or TokenLean's number when
+                  TokenLean flags it as priced at its default rates and policy has no
+                  price for the model (DF-397);
   * unavailable - no cost could be known: `cost_usd` is None with a reason,
                   never a silent zero (the metrics rule: unmeasured is null).
 
@@ -32,6 +34,10 @@ _MILLION = Decimal(1_000_000)
 #: No single model call costs more than this; a larger "cost" is a bad value, not evidence.
 MAX_CALL_USD = Decimal(100_000)
 COST_HEADER = "x-tokenlean-cost-usd"
+#: Present when TokenLean priced the call at its default rates (the model has no row in
+#: its pricing table, e.g. "default-rate"): its cost is then an estimate, not a reported
+#: figure to settle a budget from (DF-397).
+ESTIMATED_HEADER = "x-tokenlean-cost-estimated"
 
 
 @dataclass(frozen=True)
@@ -211,12 +217,33 @@ def _judge(
 ) -> CallCost:
     ids = _ids(h, model)
     billed = (tokens["tokens_in"] or 0) + (tokens["tokens_out"] or 0)
+    # TokenLean's figure at its default rates is an estimate: the policy price, when known,
+    # is the better one, and either way the cost is never shown as reported (DF-397)
+    note = h.get(ESTIMATED_HEADER, "").strip()
+    note = "" if note.lower() in ("false", "0", "no") else note
+    theirs = None
     for evidence in (h.get(COST_HEADER), body_cost):
         usd = _money(evidence)
         if usd is None or (usd == 0 and billed and not cache_hit):
             continue  # a zero with tokens billed and no cache hit is not believed
-        return CallCost(source="reported", cost_usd=usd, **tokens, **ids)
+        if not note:
+            return CallCost(source="reported", cost_usd=usd, **tokens, **ids)
+        theirs = usd
+        break
+    flagged = f"TokenLean's cost is an estimate ({ESTIMATED_HEADER}: {note})"
+    if theirs == 0 and cache_hit:  # served from its cache: nothing was paid, at any price
+        return CallCost(
+            source="estimated", cost_usd=theirs, **tokens, **ids, reason=f"{flagged}; a cache hit"
+        )
     if tokens["tokens_in"] is None or tokens["tokens_out"] is None:
+        if theirs is not None:
+            return CallCost(
+                source="estimated",
+                cost_usd=theirs,
+                **tokens,
+                **ids,
+                reason=f"{flagged}, and there is no {what} to price instead",
+            )
         return CallCost(
             source="unavailable",
             cost_usd=None,
@@ -226,6 +253,14 @@ def _judge(
         )
     price = price_for(model) if model else None
     if price is None:
+        if theirs is not None:
+            return CallCost(
+                source="estimated",
+                cost_usd=theirs,
+                **tokens,
+                **ids,
+                reason=f"{flagged}, and policy has no price for model {model!r}",
+            )
         return CallCost(
             source="unavailable",
             cost_usd=None,
@@ -245,7 +280,8 @@ def _judge(
         cost_usd=usd,
         **tokens,
         **ids,
-        reason=f"priced from {what} with the policy price for {model}",
+        reason=f"priced from {what} with the policy price for {model}"
+        + (f" ({flagged})" if theirs is not None else ""),
     )
 
 

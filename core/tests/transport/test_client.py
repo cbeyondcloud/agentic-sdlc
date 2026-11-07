@@ -266,3 +266,20 @@ def test_an_scp_style_git_remote_is_fine():
 def test_clients_are_httpx2():  # D36: the Anthropic SDK requires httpx2; Pydantic AI drops httpx
     assert isinstance(make_client("https://tl.example/v1", IDENTITY), httpx2.Client)
     assert isinstance(make_async_client("https://tl.example/v1", IDENTITY), httpx2.AsyncClient)
+
+
+def test_a_fresh_answer_client_opts_out_of_the_gateways_response_cache():  # DF-1004
+    """An evaluation's repeats must each get a new answer: a cached one makes variance
+    and pass rates fake, and costs nothing."""
+    transport, seen = capturing()
+
+    async def call(**fresh):
+        client = make_async_client("https://tl.example/v1", IDENTITY, _transport=transport, **fresh)
+        async with client as c:
+            await c.post("/chat/completions", json={})
+
+    asyncio.run(call(fresh=True))
+    asyncio.run(call())
+
+    assert seen[0].headers["x-no-cache"] == "true"
+    assert "x-no-cache" not in seen[1].headers  # a pipeline run keeps the cache

@@ -64,6 +64,12 @@ class ModelPrice(_Strict):
     cache_write_per_mtok: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
+#: Output room reasoning may take at each effort level (Pydantic AI's thinking budgets).
+#: Every provider bills and caps reasoning as output, so a call's cap leaves this room
+#: beside the answer's - a cap at or under it is refused, or truncates the answer.
+REASONING_OUTPUT = {"low": 2_048, "medium": 10_000, "high": 16_384}
+
+
 class TierSpec(_Strict):
     """What one capability tier means: the real model plus default settings."""
 
@@ -74,6 +80,11 @@ class TierSpec(_Strict):
     # The model's family for the eval judge rule (spike S10), when its id's prefix before
     # '/' does not say it (a gateway alias, a team's own deployment).
     family: str | None = None
+    # The most output tokens one call may ask for, reasoning included (DF-398), sent as set:
+    # at most the model's own output limit. Every call sends a cap: without one a gateway
+    # reserves the model's whole output window per call, which fails on an account with
+    # modest credit. None: the framework's default (`agentic.agents.models.output_cap`).
+    max_output_tokens: int | None = Field(default=None, gt=0)
 
 
 def gateway_model(model_id: str) -> str:
@@ -951,6 +962,19 @@ class OrgPolicy(_Strict):
 
         for team, overrides in self.team_overrides.items():
             check_tiers(f"team_overrides.{team}", list(overrides))
+        specs = [(f"tiers.{n}", t) for n, t in self.tiers.items()] + [
+            (f"team_overrides.{team}.{n}", t)
+            for team, overrides in self.team_overrides.items()
+            for n, t in overrides.items()
+        ]
+        for where, spec in specs:  # a cap the reasoning would fill leaves no answer (DF-398)
+            reasoning = REASONING_OUTPUT.get(spec.effort or "", 0)
+            if spec.max_output_tokens and spec.max_output_tokens <= reasoning:
+                problems.append(
+                    f"{where}: max_output_tokens {spec.max_output_tokens} is not above the "
+                    f"{reasoning} tokens reasoning may take at effort {spec.effort} - raise "
+                    f"it, or lower the effort"
+                )
         for cls_name, rule in self.classifications.items():
             check_tiers(f"classifications.{cls_name}", rule.allowed_tiers)
         for team, team_policy in self.teams.items():

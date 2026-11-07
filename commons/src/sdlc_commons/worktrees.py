@@ -280,11 +280,21 @@ class StepCheckpoints:
         another process too (review F1)."""
         kept = self._kept_base()
         heads = {}
-        for name, path in self._trees().items():
-            if fresh:
+        for name, tree in self._run_trees().items():
+            path = tree.path
+            if fresh and tree.branch:
+                # back on the run branch, at the step's base: an agent may have switched
+                # branch or detached HEAD in its tree, and only the run branch is pushed
+                # (DF-590); -f discards what the attempt left, as a hard reset does. The
+                # base is the run branch's own tip when none is kept, never HEAD.
+                self._put_on_run_branch(name, tree, kept.get(name, tree.branch))
+            elif fresh:
                 _git(path, "reset", "-q", "--hard", kept.get(name, "HEAD"))
+            if fresh:
                 _git(path, "clean", "-q", "-ffd")  # -ff: nested repositories too (review I4)
-            heads[name] = _git(path, "rev-parse", "HEAD")
+            # a resumed step's base is the run branch's tip, wherever an agent left HEAD
+            tip = _run_tip(tree) if tree.branch and not fresh else ""
+            heads[name] = tip or _git(path, "rev-parse", "HEAD")
         for name, cmds in self._in_place().items():
             # in place, the rollback command discards; only when there is something to
             # discard, so a clean start runs no command
@@ -300,13 +310,19 @@ class StepCheckpoints:
     def finish(self, message: str) -> dict[str, str]:
         """Commit the step's work in every tree that changed; returns each HEAD."""
         heads = {}
-        for name, path in self._trees().items():
-            if nested := _nested_repositories(path):
+        trees = self._run_trees()
+        kept = self._kept_base()
+        tips = {}
+        for name, tree in trees.items():  # every refusal before any commit, in any tree
+            if nested := _nested_repositories(tree.path):
                 raise WorktreeError(
                     f"{name}: an agent left a git repository inside the tree "
                     f"({', '.join(nested)}); it cannot be checkpointed - the next fresh "
                     f"attempt removes it"
                 )
+            tips[name] = self._off_run_branch(name, tree, kept.get(name))  # DF-590
+        for name, tree in trees.items():
+            path, tip = tree.path, tips[name]
             # new files, minus what running the tests leaves behind; then every change to
             # a tracked file, wherever it is (a repository may vendor node_modules)
             generated = [f":(glob){g}" for g in self.generated]
@@ -331,6 +347,16 @@ class StepCheckpoints:
             # and the caches left out go, so the tree is clean again: removing the run's
             # trees at closure refuses any uncommitted change (review F2); ignored files stay
             _git(path, "clean", "-q", "-fd", "--", *generated)
+            if tip is not None:  # the work builds on the run branch: fast-forward it there
+                head, ref = _git(path, "rev-parse", "HEAD"), f"refs/heads/{tree.branch}"
+                config = self._commit_config(path)  # no reference-transaction hook
+                _git(path, *config, "update-ref", "-m", message, ref, head, tip)
+                _git(path, *config, "symbolic-ref", "HEAD", ref)
+                _LOG.warning(
+                    "%s: the step moved HEAD off %s; its work was brought back onto it",
+                    name,
+                    tree.branch,
+                )
             heads[name] = _git(path, "rev-parse", "HEAD")
         for name, cmds in self._in_place().items():
             # in place, the component's own commit command commits (the framework's
@@ -368,20 +394,26 @@ class StepCheckpoints:
     def rollback(self, to: Mapping[str, str]) -> None:
         """Put each named component back at `to[component]`, a commit of the run's own
         branch; uncommitted work is discarded."""
-        trees, in_place = self._trees(), self._in_place()
+        trees, in_place = self._run_trees(), self._in_place()
         for name, commit in to.items():
             if name not in trees and name not in in_place:
                 raise WorktreeError(f"rollback names {name!r}, which has no tree in this run")
-            path = trees[name] if name in trees else in_place[name].checkout
-            if _git(path, "merge-base", commit, "HEAD", check=False) != commit:
+            path = trees[name].path if name in trees else in_place[name].checkout
+            # a tree's run branch, wherever an agent left HEAD (DF-590 review I1)
+            on = f"refs/heads/{trees[name].branch}" if name in trees and trees[name].branch else ""
+            if _git(path, "merge-base", commit, on or "HEAD", check=False) != commit:
                 raise WorktreeError(f"{commit} is not part of this run's branch in {name}")
         for name, commit in to.items():
             if name in in_place:  # its own rollback command, never a git write (M2-61)
                 self._overridden().rollback(in_place[name], commit)
                 self._at(in_place[name], commit)
                 continue
-            _git(trees[name], "reset", "-q", "--hard", commit)
-            _git(trees[name], "clean", "-q", "-ffd")
+            path, branch = trees[name].path, trees[name].branch
+            if branch:  # the run branch goes back, wherever an agent left HEAD (DF-590)
+                self._put_on_run_branch(name, trees[name], commit)
+            else:
+                _git(path, "reset", "-q", "--hard", commit)
+            _git(path, "clean", "-q", "-ffd")
         self._keep_base(None)  # the next step starts from where the trees were put
 
     def diff(self, base: Mapping[str, str], head: Mapping[str, str]) -> str:
@@ -396,12 +428,73 @@ class StepCheckpoints:
                 parts.append(_git(path, *_PLAIN_DIFF, start, end))
         return "\n".join(part for part in parts if part)
 
+    def _put_on_run_branch(self, name: str, tree: Tree, start: str) -> None:
+        """Check the tree's run branch out at `start` (a commit of its history), discarding
+        what the tree holds; never while another worktree has the branch checked out."""
+        if elsewhere := _checked_out_elsewhere(tree):
+            raise WorktreeError(_elsewhere_message(name, tree, elsewhere))
+        config = self._commit_config(tree.path)  # no post-checkout hook
+        _git(tree.path, *config, "checkout", "-q", "-f", "-B", tree.branch, start, "--")
+
+    def _off_run_branch(self, name: str, tree: Tree, base: str | None) -> str | None:
+        """The run branch's tip when the tree's HEAD has left the run branch (an agent's own
+        branch, a detached HEAD) but builds on it, so its work can come back by a
+        fast-forward; None when HEAD is on the run branch. Work that cannot be checkpointed
+        without losing the run's history is refused, never dropped (DF-590): a merge,
+        rebase, cherry-pick or revert in progress, a HEAD that does not build on the step's
+        base (the run branch rewound, amended or rebased) or on the run branch's tip."""
+        path, ref = tree.path, f"refs/heads/{tree.branch}"
+        if not tree.branch:
+            return None
+        gitdir = Path(_git(path, "rev-parse", "--absolute-git-dir"))
+        if busy := [op for op in _IN_PROGRESS if (gitdir / op).exists()]:
+            self._refuse(name, tree, f"a git {_IN_PROGRESS[busy[0]]} is in progress")
+        head = _git(path, "rev-parse", "HEAD")
+        if base and _git(path, "merge-base", base, head, check=False) != base:
+            self._refuse(
+                name,
+                tree,
+                f"HEAD does not build on the step's base {base[:12]} (the run branch was "
+                f"rewound, amended or rebased): checkpointing it would lose the run's history",
+            )
+        if _git(path, "symbolic-ref", "-q", "HEAD", check=False) == ref:
+            return None
+        tip = _run_tip(tree)
+        if tip and _git(path, "merge-base", tip, head, check=False) == tip:
+            if elsewhere := _checked_out_elsewhere(tree):
+                raise WorktreeError(_elsewhere_message(name, tree, elsewhere))
+            return tip
+        branch = _git(path, "symbolic-ref", "-q", "--short", "HEAD", check=False)
+        where = f"branch {branch}" if branch else f"a detached HEAD at {head[:12]}"
+        why = "no longer exists" if not tip else "is not part of its history"
+        self._refuse(
+            name, tree, f"the step left the tree on {where}, and the run branch {tree.branch} {why}"
+        )
+        return None  # not reached
+
+    def _refuse(self, name: str, tree: Tree, why: str) -> None:
+        """Refuse the step's checkpoint, its commits kept under a rescue ref first: a
+        fresh attempt discards the tree's copy (DF-590 review M4)."""
+        path = tree.path
+        prefix = f"refs/agentic/rescue/{self.run_id}/"
+        taken = _git(path, "for-each-ref", "--format=%(refname)", prefix).splitlines()
+        rescue = f"{prefix}{len(taken) + 1}"
+        head = _git(path, "rev-parse", "-q", "--verify", "HEAD", check=False)
+        if head:
+            _git(path, *self._commit_config(path), "update-ref", rescue, head)
+        kept = f"its commits are saved at {rescue} " if head else ""
+        raise WorktreeError(
+            f"{name}: {why}; nothing was committed - {kept}and its uncommitted changes stay "
+            f"in {path} until a fresh attempt returns the tree to {tree.branch} and discards "
+            f"them; only {tree.branch} reaches the pull request"
+        )
+
     def _trees(self) -> dict[str, Path]:
-        return {
-            name: tree.path
-            for name, tree in self.worktrees.trees().items()
-            if tree.mode == "worktree"
-        }
+        return {name: tree.path for name, tree in self._run_trees().items()}
+
+    def _run_trees(self) -> dict[str, Tree]:
+        """The run's live trees (in-place components have none)."""
+        return {n: t for n, t in self.worktrees.trees().items() if t.mode == "worktree"}
 
     def _in_place(self) -> dict[str, InPlace]:
         """The run's in-place components whose override it accepted (M2-61)."""
@@ -506,6 +599,44 @@ def _git(where: Path, *args: str, check: bool = True) -> str:
     """A checkpoint git call: never runs an fsmonitor command the tree's or the
     repository's config names (agent-reachable without a sandbox, review I5)."""
     return worktree_git(where, "-c", "core.fsmonitor=false", *args, check=check)
+
+
+#: What a git operation an agent left half-done leaves in the tree's git folder.
+_IN_PROGRESS = {
+    "MERGE_HEAD": "merge",
+    "rebase-merge": "rebase",
+    "rebase-apply": "rebase",
+    "CHERRY_PICK_HEAD": "cherry-pick",
+    "REVERT_HEAD": "revert",
+}
+
+
+def _run_tip(tree: Tree) -> str:
+    """The tip of the tree's run branch, or "" when the branch is gone."""
+    ref = f"refs/heads/{tree.branch}^{{commit}}"
+    return _git(tree.path, "rev-parse", "-q", "--verify", ref, check=False)
+
+
+def _checked_out_elsewhere(tree: Tree) -> str:
+    """The other worktree that has the tree's run branch checked out, or "" (git refuses
+    to check it out twice, and moving it would leave that worktree stale)."""
+    top = Path(_git(tree.path, "rev-parse", "--show-toplevel")).resolve()
+    listing = _git(tree.path, "worktree", "list", "--porcelain")
+    current = ""
+    for line in listing.splitlines():
+        if line.startswith("worktree "):
+            current = line[len("worktree ") :]
+        elif line == f"branch refs/heads/{tree.branch}" and Path(current).resolve() != top:
+            return current
+    return ""
+
+
+def _elsewhere_message(name: str, tree: Tree, elsewhere: str) -> str:
+    return (
+        f"{name}: the run branch {tree.branch} is checked out in another worktree "
+        f"({elsewhere}); a step's checkpoint must move it - check that worktree out on "
+        f"another branch (or remove it) and run the step again"
+    )
 
 
 def _left(checkout: Path, shown: int = 5) -> str:

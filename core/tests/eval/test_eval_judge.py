@@ -9,6 +9,7 @@ import pytest
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
+from agentic.agents.metering import DEFAULT_MAX_OUTPUT
 from agentic.eval.blind import LeakCheck
 from agentic.eval.judge import (
     JUDGE_TIER,
@@ -83,6 +84,7 @@ def test_rubric_total_is_the_sum_with_evidence_at_temperature_zero():
     assert result.per_criterion["problem"] == 2 and result.reasks == 0
     assert result.model_id == "family-b/judge-1" and result.rubric_key == "ba-requirements@1"
     assert log[0]["settings"]["temperature"] == 0
+    assert log[0]["settings"]["max_tokens"] == DEFAULT_MAX_OUTPUT  # DF-398: always bounded
     prompt = log[0]["prompt"]
     assert "golden text" in prompt and "export as CSV" in prompt and OUTPUT.strip() in prompt
 
@@ -319,9 +321,9 @@ def test_the_judge_uses_its_tiers_temperature():
         **{JUDGE_TIER: {"model": "family-b/judge", "temperature": 0.2}},
     )
     choice = resolve_judge(org, ["family-a/m1"])
-    assert choice.settings == {"temperature": 0.2}
+    assert choice.settings["temperature"] == 0.2
     plain = policy(balanced={"model": "family-a/m1"}, **{JUDGE_TIER: {"model": "family-b/j"}})
-    assert resolve_judge(plain, ["family-a/m1"]).settings == {"temperature": 0.0}
+    assert resolve_judge(plain, ["family-a/m1"]).settings["temperature"] == 0.0
     log: list = []
     scores = dict.fromkeys(("problem", "criteria", "testability", "scope", "consistency"), 0)
     judge = RubricJudge(
@@ -418,3 +420,15 @@ def test_no_classification_means_the_org_default_never_no_check():
     with pytest.raises(JudgeError, match="restricted"):
         resolve_judge(strict, ["family-a/m1"])
     assert resolve_judge(org, ["family-a/m1"]).model == "family-b/j"
+
+
+def test_every_judge_call_sends_a_bounded_output_cap():  # DF-398 (review)
+    """The judge calls the gateway too: with no max_tokens the gateway reserves the
+    model's whole output window per call."""
+    capped = policy(
+        balanced={"model": "family-a/m1"},
+        **{JUDGE_TIER: {"model": "family-b/judge", "max_output_tokens": 4096}},
+    )
+    assert resolve_judge(capped, ["family-a/m1"]).settings["max_tokens"] == 4096
+    plain = policy(balanced={"model": "family-a/m1"}, **{JUDGE_TIER: {"model": "family-b/j"}})
+    assert resolve_judge(plain, ["family-a/m1"]).settings["max_tokens"] == DEFAULT_MAX_OUTPUT

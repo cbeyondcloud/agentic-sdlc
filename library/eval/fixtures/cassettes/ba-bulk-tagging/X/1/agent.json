@@ -3,7 +3,7 @@
  "calls": [
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:425475017854f0fdaaf11d690a2e893872779e2d50423db4ff79523245ec9547",
+   "request_sha": "sha256:45cc1cb9cfd1b2545151c0716d82af59adaa2cfc8b5171a663bb8423a7c603f9",
    "status": 200,
    "content_type": "application/json",
    "headers": {
@@ -13,7 +13,7 @@
   },
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:4fc5f7bd96e487c26c52bea4ef96ea9eb3eae32d840a6525e83c6d422d6c6449",
+   "request_sha": "sha256:822844577c69123dc15f39d4194b1ef34954739ef6ebc93413604384a641c3d1",
    "status": 200,
    "content_type": "application/json",
    "headers": {

@@ -16,6 +16,7 @@ Two kinds of outcome:
                from the agent's name; a team may only lower them.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,8 @@ from pydantic import BaseModel, ConfigDict
 
 from agentic.definitions import AgentDefinition, ChildLimits, DenyRules, Limits
 from agentic.policy.model import AgentType, ClassificationRule, OrgPolicy, RoleLimits, TeamPolicy
+
+_LOG = logging.getLogger("agentic.policy")
 
 if TYPE_CHECKING:
     from agentic.handoffs.schema import HandoffCatalog
@@ -58,6 +61,8 @@ class ResolvedAgent(BaseModel):
     model: str
     effort: str | None
     temperature: float | None
+    # the tier's output cap per call (DF-398); None: the framework's default
+    max_output_tokens: int | None = None
     backend: str
     tools: list[str]
     shell: list[str]  # allowed command prefixes, minus any that a deny entry covers
@@ -188,9 +193,20 @@ def resolve_agent(
     deny = _merge_deny(policy.deny, team.deny if team else None, agent.deny)
     team_cap = team.limits_max.get(agent.type) if team else None
 
-    # Tier defaults (effort, temperature) belong to the tier's model; they are not
+    # Tier defaults (effort, temperature, output cap) belong to the tier's model; they are not
     # applied to an explicitly named different model.
     tier_spec = policy.team_overrides.get(ctx.team or "", {}).get(tier) or policy.tiers[tier]
+    base_cap = policy.tiers[tier].max_output_tokens
+    if tier_spec is not policy.tiers[tier] and base_cap and not tier_spec.max_output_tokens:
+        # an override replaces the whole tier: say so when that drops the org's cap
+        _LOG.warning(
+            "team_overrides.%s.%s sets no max_output_tokens: the org's cap of %s for tier "
+            "%s does not apply to it (calls use the default cap)",
+            ctx.team,
+            tier,
+            base_cap,
+            tier,
+        )
     defaults_apply = agent.model is None or agent.model == tier_model
 
     resolved = ResolvedAgent(
@@ -203,6 +219,7 @@ def resolve_agent(
         temperature=agent.temperature
         if agent.temperature is not None
         else (tier_spec.temperature if defaults_apply else None),
+        max_output_tokens=tier_spec.max_output_tokens if defaults_apply else None,
         backend=backend,
         tools=tools,
         shell=[cmd for cmd in shell if not any(_covers(d, cmd) for d in deny.shell)],

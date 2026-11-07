@@ -132,6 +132,8 @@ class RunOptions:
     tag: str | None = None  # only cases carrying this tag (CI: `fixture`, the cassette subset)
     # with a skill: every case runs without and with it, blind as X/Y (`skills eval`)
     skill: SkillVariant | None = None
+    # run live holdout dev tasks without srt, their answers readable (DF-392)
+    allow_unsandboxed: bool = False
 
 
 @dataclass(frozen=True)
@@ -258,6 +260,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             price_for=policy.price_for,
             fallback_estimate_usd=FALLBACK_ESTIMATE_USD,
             log=costs,
+            fresh=True,  # each repeat a new answer, never the gateway's cached one (DF-1004)
         )
         return model
 
@@ -281,7 +284,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             log=judge_costs,
         )
         who = identity(request, f"{JUDGE_TIER}@1", JUDGE_TIER)
-        return build_model_for(choice.model, who, gateway, meter)  # type: ignore[union-attr]
+        return build_model_for(choice.model, who, gateway, meter, fresh=True)  # type: ignore[union-attr]
 
     def judge_for(request: RunRequest) -> RubricJudge | None:
         if choice is None or judge_slice is None or request.case.rubric not in rubrics:
@@ -306,10 +309,19 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             return None
         return read_text(corpus.path(case.expected.golden)).replace("\r\n", "\n")
 
-    prepare = None
+    prepare, exposed = None, False
     if any(c.inputs.workspace for c in cases):  # dev tasks: tools on a copy, tests after
-        prepare, resolved, workspace_notes = _workspaces(resolved, folder, options.mode, policy)
+        prepare, resolved, workspace_notes = _workspaces(
+            resolved,
+            folder,
+            options.mode,
+            policy,
+            corpus_root=root,
+            holdout=any(c.inputs.workspace and c.split == "holdout" for c in cases),
+            allow_unsandboxed=options.allow_unsandboxed,
+        )
         notes += workspace_notes
+        exposed = any(note.startswith(EXPOSED_NOTE) for note in workspace_notes)
 
     def case_runner(agent: ResolvedAgent) -> AgentCaseRunner:
         return AgentCaseRunner(
@@ -404,6 +416,7 @@ def execute_run(options: RunOptions, *, upstream: Upstream | None = None) -> Run
             problems=problems,
             judge_cost_usd=_reported_total(judge_costs),
             warnings=notes,
+            holdout_exposed=exposed,
         )
         paths = write_report(report, folder, runset.runs)
         for rubric_id in rubric_ids:  # calibration shows people the rubric the judge used
@@ -921,20 +934,35 @@ def _agent(folder: Path, name: str):
     return _load(lambda: load_agent(path))
 
 
+#: How a report's notes say its holdout answers were readable (DF-392, DF-1006).
+EXPOSED_NOTE = "dev tasks ran with --allow-unsandboxed: "
+
 #: The tools an eval can give an agent on a dev task's tree; the others (code
 #: intelligence, skills) need a run's repository and installed skills.
 EVAL_TOOLS = ("read_files", "search", "edit_files", "run_shell")
 
 
 def _workspaces(
-    resolved: ResolvedAgent, folder: Path, mode: str, policy: OrgPolicy
+    resolved: ResolvedAgent,
+    folder: Path,
+    mode: str,
+    policy: OrgPolicy,
+    *,
+    corpus_root: Path,
+    holdout: bool,
+    allow_unsandboxed: bool = False,
 ) -> tuple[PrepareWorkspace, ResolvedAgent, list[str]]:
     """How each dev-task run gets its tree (DF-241): a copy of the workspace under a
     guard confined to it, and the agent's file and shell tools on it, sandboxed as a
     solo run would be - srt when this machine has it ready, else a plain process on
     the guards (org policy decides whether that is allowed). A replay always uses a
     plain process: its tool calls are recorded, and the result must not depend on
-    the machine. Returns the agent with the tools the eval can give it, and notes."""
+    the machine. Returns the agent with the tools the eval can give it, and notes.
+
+    The corpus holds every case's answers (solutions, golden handoffs, the cases), so
+    srt hides it from the agent's commands (DF-392). A plain process cannot be kept from
+    reading it: a live run of `holdout` dev tasks without srt is refused unless
+    `allow_unsandboxed`, and its report then says the answers were readable."""
     notes = []
     usable = [t for t in resolved.tools if t in EVAL_TOOLS]
     if dropped := [t for t in resolved.tools if t not in EVAL_TOOLS]:
@@ -954,6 +982,33 @@ def _workspaces(
                 "the case's tests run as plain processes)"
             )
         use_srt = decision.use_srt
+        # only a shell reaches past the tree: the file tools are confined to it
+        if not use_srt and holdout and "run_shell" in usable:
+            exposed = (
+                f"the holdout answers in {corpus_root} (solutions/, golden/, cases/) are "
+                "readable to the agent's commands and the case's tests"
+            )
+            if not allow_unsandboxed:
+                where = (
+                    "on Windows, run it inside WSL2 and check srt there with `agentic doctor`"
+                    if _on_windows()
+                    else "run it where srt is ready (macOS, Linux or WSL2; `agentic doctor` "
+                    "shows what is missing)"
+                )
+                raise CliError(
+                    f"no sandbox (srt) on this machine: {exposed}, so a holdout result "
+                    "could be read rather than earned",
+                    ExitCode.REFUSED,
+                    hint=f"{where}; or pass --allow-unsandboxed to run anyway (such a "
+                    "report cannot decide a gate)",
+                )
+            notes.append(f"{EXPOSED_NOTE}{exposed}")
+        elif not use_srt and "run_shell" in usable:  # the dev split: still say it (M7)
+            notes.append(
+                f"dev tasks: no sandbox (srt), so the corpus answers in {corpus_root}, "
+                "holdout ones included, are readable to the agent's commands"
+            )
+    hidden = Path(corpus_root).resolve()
 
     def prepare(request: RunRequest, source: Path) -> Workspace:
         target = folder / "workspaces" / request.run_id
@@ -962,9 +1017,12 @@ def _workspaces(
         tree = copy_workspace(source, guard.trees_root / "tree")
         sandbox = LocalProcessSandbox()
         if use_srt:
+            home = expand_home(policy.sandbox.effective_deny_read, Path.home())
+            inside = tree.resolve().is_relative_to(hidden)  # a report folder in the corpus
             rules = SandboxRules(
                 write=(tree,),
-                deny_read=expand_home(policy.sandbox.effective_deny_read, Path.home()),
+                deny_read=(*home, hidden),  # the corpus: every case's answers (DF-392)
+                allow_read=(tree.resolve(),) if inside else (),
                 allowed_domains=tuple(policy.sandbox.allowed_domains),
             )
             sandbox = SrtSandbox(rules, folder / "sandbox" / request.run_id)
@@ -972,6 +1030,10 @@ def _workspaces(
         return Workspace(tree, build_tools(agent, context), sandbox if use_srt else None)
 
     return prepare, agent, notes
+
+
+def _on_windows() -> bool:
+    return os.name == "nt"
 
 
 def _team() -> str:

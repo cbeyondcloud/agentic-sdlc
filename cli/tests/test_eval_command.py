@@ -727,3 +727,79 @@ def test_a_budget_stop_is_exit_5_even_with_missing_calls():
 
     error = failure(failed(budget_hit=True, verdict="INCOMPLETE", problems=["1 call never made"]))
     assert error is not None and error.code == ExitCode.STOPPED
+
+
+def test_eval_calls_never_take_a_cached_answer(tmp_path: Path):
+    """DF-1004: a gateway's response cache would give every repeat of a case (and every
+    re-judging) the same answer - fake variance, fake pass rates, and a zero cost."""
+    from agentic.eval.replay import UpstreamReply
+    from agentic_cli import evaluation
+
+    seen: list[str | None] = []
+    answer = (LIBRARY / "fixtures" / "answers" / "qa-invoice-export.md").read_text(encoding="utf-8")
+
+    def upstream(request):
+        lowered = {k.lower(): v for k, v in request.headers.items()}
+        seen.append(lowered.get("x-no-cache"))
+        body = json.loads(request.body)
+        reply = {
+            "id": "c",
+            "object": "chat.completion",
+            "created": 1,
+            "model": body["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": answer},
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+        return UpstreamReply(200, json.dumps(reply).encode(), "application/json")
+
+    options = evaluation.RunOptions(
+        agent="qa",
+        corpus=LIBRARY,
+        split="all",
+        mode="record",
+        tag="fixture",
+        out=tmp_path / "o",
+        cassettes=tmp_path / "cassettes",
+    )
+    evaluation.execute_run(options, upstream=upstream)
+    assert seen and set(seen) == {"true"}
+
+
+def test_judge_calls_never_take_a_cached_answer_either(tmp_path: Path):  # DF-1004 review M10
+    import importlib.util
+
+    from agentic.yamlio import load_yaml, read_text
+    from agentic_cli import evaluation
+
+    script = Path(__file__).resolve().parents[2] / "scripts" / "record_eval_fixtures.py"
+    spec = importlib.util.spec_from_file_location("record_eval_fixtures", script)
+    recorder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(recorder)
+    scripted = recorder.ScriptedUpstream(
+        load_yaml(read_text(LIBRARY / "fixtures" / "script.yaml"))[0]
+    )
+    seen: dict[str, set] = {}
+
+    def upstream(request):
+        lowered = {k.lower(): v for k, v in request.headers.items()}
+        seen.setdefault(lowered.get("x-agentic-tier", ""), set()).add(lowered.get("x-no-cache"))
+        return scripted(request)
+
+    options = evaluation.RunOptions(
+        agent="business-analyst",
+        corpus=LIBRARY,
+        split="all",
+        mode="record",
+        tag="fixture",
+        out=tmp_path / "o",
+        cassettes=tmp_path / "cassettes",
+    )
+    evaluation.execute_run(options, upstream=upstream)
+    assert seen.get("eval-judge") == {"true"}
+    assert all(values == {"true"} for values in seen.values())

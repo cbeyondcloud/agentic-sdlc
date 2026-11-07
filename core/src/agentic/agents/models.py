@@ -29,8 +29,9 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from agentic.agents.metering import CostLog, MeteringTransport
+from agentic.agents.metering import DEFAULT_MAX_OUTPUT, CostLog, MeteringTransport
 from agentic.policy import ResolvedAgent, gateway_model
+from agentic.policy.model import REASONING_OUTPUT
 from agentic.security import SecretScanner
 from agentic.transport import (
     BudgetSlice,
@@ -57,10 +58,12 @@ def build_model(
     transport: httpx2.AsyncBaseTransport,
     *,
     scanner: SecretScanner | None = None,
+    fresh: bool = False,
 ) -> Model:
     """The model the agent runs on, calling TokenLean through the identity client;
-    each call secret-scanned by `scanner` (default: block, default detectors)."""
-    return build_model_for(agent.model, identity, gateway, transport, scanner=scanner)
+    each call secret-scanned by `scanner` (default: block, default detectors). A `fresh`
+    model never gets a cached answer (an evaluation's runs, DF-1004)."""
+    return build_model_for(agent.model, identity, gateway, transport, scanner=scanner, fresh=fresh)
 
 
 def build_model_for(
@@ -70,6 +73,7 @@ def build_model_for(
     transport: httpx2.AsyncBaseTransport,
     *,
     scanner: SecretScanner | None = None,
+    fresh: bool = False,
 ) -> Model:
     """`build_model` for a model id rather than a resolved agent - the eval judge, whose
     model comes from a policy tier (M1-63). Same routing, identity and scanning."""
@@ -77,7 +81,12 @@ def build_model_for(
     provider = model_id.partition("/")[0] if name != model_id else ""
     root = gateway.base_url.rstrip("/")
     client = make_async_client(
-        root, identity, network=gateway.network, scanner=scanner, _transport=transport
+        root,
+        identity,
+        network=gateway.network,
+        scanner=scanner,
+        fresh=fresh,
+        _transport=transport,
     )
     if provider == "anthropic":
         sdk = anthropic_client(root, gateway.api_key, client)
@@ -96,6 +105,7 @@ def metered_model(
     fallback_estimate_usd: Decimal,
     log: CostLog | None = None,
     scanner: SecretScanner | None = None,
+    fresh: bool = False,
     _inner: httpx2.AsyncBaseTransport | None = None,  # tests: a stand-in for the network
 ) -> tuple[Model, CostLog]:
     """The agent's model with every call secret-scanned, then charged to `budget`, and
@@ -108,14 +118,32 @@ def metered_model(
         fallback_estimate_usd=fallback_estimate_usd,
         log=log,
     )
-    return build_model(agent, identity, gateway, transport=meter, scanner=scanner), log
+    model = build_model(agent, identity, gateway, transport=meter, scanner=scanner, fresh=fresh)
+    return model, log
+
+
+#: The least room the default cap keeps for the answer, beyond the reasoning.
+MIN_ANSWER_OUTPUT = 4_096
+
+
+def output_cap(agent: ResolvedAgent) -> int:
+    """The most output tokens one call of the agent asks for (DF-398): the tier's cap as
+    set (its admin knows the model's output limit, which a raised cap would exceed), else
+    the output the budget hold assumes, raised where the effort's reasoning would leave
+    the answer too little room."""
+    if agent.max_output_tokens:
+        return agent.max_output_tokens
+    reasoning = REASONING_OUTPUT.get(agent.effort or "", 0)
+    return max(DEFAULT_MAX_OUTPUT, reasoning + MIN_ANSWER_OUTPUT)
 
 
 def model_settings(agent: ResolvedAgent) -> ModelSettings:
     """The sampling settings policy resolved for the agent: temperature, and effort as
     Pydantic AI's provider-neutral `thinking` level (M1-28). What a model cannot honour
-    is reported before the run by the capability matrix (M1-27)."""
-    settings = ModelSettings()
+    is reported before the run by the capability matrix (M1-27). Every call carries an
+    output cap (`output_cap`): without one a gateway reserves the model's whole output
+    window per call (DF-398)."""
+    settings = ModelSettings(max_tokens=output_cap(agent))
     if agent.temperature is not None:
         settings["temperature"] = agent.temperature
     if agent.effort is not None:

@@ -106,6 +106,7 @@ def test_a_missing_agent_report_leaves_the_gate_incomplete():
         ({"split": "dev"}, "holdout"),
         ({"tag": "fixture"}, "subset"),
         ({"budget_hit": True}, "INCOMPLETE"),
+        ({"holdout_exposed": True}, "--allow-unsandboxed"),  # DF-1006
     ],
 )
 def test_reports_that_cannot_decide_a_gate_are_named(overrides, problem):

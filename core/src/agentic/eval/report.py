@@ -142,6 +142,9 @@ class EvalReport(_Model):
     verdict: Verdict
     problems: list[str]
     warnings: list[str] = []  # how the harness ran that a reader should know (tools, sandbox)
+    # the agent could read the holdout answers (run without srt under --allow-unsandboxed,
+    # DF-392): such a report never decides a gate (DF-1006)
+    holdout_exposed: bool = False
 
     @property
     def n(self) -> int:
@@ -167,6 +170,7 @@ def build_report(
     problems: Sequence[str] = (),
     judge_cost_usd: float | None = None,
     warnings: Sequence[str] = (),
+    holdout_exposed: bool = False,
 ) -> EvalReport:
     runs = [_eval_run(r) for r in runset.runs]
     cases = sorted({r.case_id for r in runs})
@@ -233,6 +237,7 @@ def build_report(
         verdict=verdict,
         problems=problems,
         warnings=list(warnings),
+        holdout_exposed=holdout_exposed,
     )
 
 

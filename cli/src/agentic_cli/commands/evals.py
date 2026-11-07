@@ -3,7 +3,7 @@
     agentic eval run --agent <name> [--corpus DIR] [--split holdout|dev|all] [--repeat N]
                      [--mode live|record|replay] [--budget-usd N] [--out DIR]
                      [--policy DIR] [--agents DIR] [--cassettes DIR] [--gateway URL]
-                     [--classification CLASS] [--tag TAG]
+                     [--classification CLASS] [--tag TAG] [--allow-unsandboxed]
     agentic eval gate --report DIR [--report DIR ...] [--agent NAME ...] [--policy DIR]
                       [--out DIR]
     agentic eval calibrate export --report DIR [--out FILE]
@@ -79,6 +79,14 @@ def register(app: typer.Typer) -> None:
             str | None,
             typer.Option(help="Only cases carrying this tag (fixture: the recorded CI subset)."),
         ] = None,
+        allow_unsandboxed: Annotated[
+            bool,
+            typer.Option(
+                "--allow-unsandboxed",
+                help="Run holdout dev tasks live without srt, their answers readable to "
+                "the agent (the report says so).",
+            ),
+        ] = False,
     ) -> None:
         """Run an agent over an eval corpus and write a report."""
         output: Output = ctx.obj
@@ -99,6 +107,7 @@ def register(app: typer.Typer) -> None:
                 max_concurrency=concurrency,
                 classification=classification,
                 tag=tag,
+                allow_unsandboxed=allow_unsandboxed,
             )
         )
         data = evaluation.summary(result)
