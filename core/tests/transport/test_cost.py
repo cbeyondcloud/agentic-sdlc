@@ -459,3 +459,19 @@ def test_a_flag_that_says_no_leaves_the_cost_reported(fixtures, value):  # DF-39
     data = fixture(fixtures, "openai_nonstream.json")
     headers = {**data["headers"], "x-tokenlean-cost-estimated": value}
     assert cost_from_response(headers, data["body"], price_for).source == "reported"
+
+
+def test_a_flagged_cache_hit_stays_free(fixtures):  # DF-397 review M5
+    data = fixture(fixtures, "openai_nonstream.json")
+    headers = {
+        **data["headers"],
+        "x-tokenlean-cost-usd": "0",
+        "x-tokenlean-cache": "hit",
+        "x-tokenlean-cost-estimated": "default-rate",
+    }
+    body = {
+        **data["body"],
+        "_token_opt": {**data["body"].get("_token_opt", {}), "cost_actual_usd": 0},
+    }
+    cost = cost_from_response(headers, body, price_for)
+    assert (cost.source, cost.cost_usd) == ("estimated", Decimal("0"))

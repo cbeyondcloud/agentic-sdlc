@@ -231,6 +231,10 @@ def _judge(
         theirs = usd
         break
     flagged = f"TokenLean's cost is an estimate ({ESTIMATED_HEADER}: {note})"
+    if theirs == 0 and cache_hit:  # served from its cache: nothing was paid, at any price
+        return CallCost(
+            source="estimated", cost_usd=theirs, **tokens, **ids, reason=f"{flagged}; a cache hit"
+        )
     if tokens["tokens_in"] is None or tokens["tokens_out"] is None:
         if theirs is not None:
             return CallCost(
