@@ -480,3 +480,105 @@ def test_a_deleted_run_branch_is_named_in_the_refusal(repo):  # DF-590 (review)
 
     with pytest.raises(WorktreeError, match="no longer exists"):
         checkpoints.finish("step")
+
+
+# second review of DF-590 (I1, I2, M1-M4)
+
+
+def test_rollback_works_from_an_unrelated_head(repo):  # I1
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    first = checkpoints.begin(fresh=True)
+    (tree / "step1.py").write_text("1\n", encoding="utf-8")
+    checkpoints.finish("step 1")
+    checkpoints.begin(fresh=True)
+    git(tree, "checkout", "-q", "--orphan", "unrelated")
+    git(tree, "commit", "-qm", "orphan", "--allow-empty")
+
+    checkpoints.rollback(first)
+
+    assert _branch(tree) == f"sdlc/{RUN}"
+    assert git(tree, "rev-parse", "HEAD") == first["repo"]
+
+
+def test_finish_refuses_a_run_branch_rewound_under_it(repo):  # I2
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    checkpoints.begin(fresh=True)
+    (tree / "step1.py").write_text("1\n", encoding="utf-8")
+    checkpoints.finish("step 1")
+    checkpoints.begin(fresh=True)
+    git(tree, "reset", "-q", "--hard", "HEAD~1")  # the agent throws step 1 away
+    (tree / "step2.py").write_text("2\n", encoding="utf-8")
+
+    with pytest.raises(WorktreeError, match="history"):
+        checkpoints.finish("step 2")
+
+    checkpoints.begin(fresh=True)  # the retry puts the run branch back at the step's base
+    assert git(tree, "log", "--format=%s", f"sdlc/{RUN}").splitlines()[0] == "step 1"
+    assert (tree / "step1.py").is_file()
+
+
+def test_a_resume_with_no_kept_base_never_moves_the_run_branch_off_its_history(repo):  # M1
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    checkpoints.begin(fresh=True)
+    (tree / "step1.py").write_text("1\n", encoding="utf-8")
+    done = checkpoints.finish("step 1")
+    git(tree, "checkout", "-q", "-b", "side", "HEAD~1")
+    _agent_commits(tree, "side.txt")
+
+    assert checkpoints.begin(fresh=False) == done  # the base is the run branch's tip
+    checkpoints.begin(fresh=True)
+
+    assert git(tree, "rev-parse", f"refs/heads/sdlc/{RUN}") == done["repo"]
+    assert (tree / "step1.py").is_file()
+
+
+def test_finish_refuses_a_merge_in_progress(repo):  # M2
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    checkpoints.begin(fresh=True)
+    git(tree, "checkout", "-q", "-b", "other")
+    (tree / "app.py").write_text("o\n", encoding="utf-8")
+    git(tree, "commit", "-qam", "other")
+    git(tree, "checkout", "-q", f"sdlc/{RUN}")
+    (tree / "app.py").write_text("m\n", encoding="utf-8")
+    git(tree, "commit", "-qam", "mine")
+    subprocess.run(["git", "-C", str(tree), *GIT_USER, "merge", "other"], capture_output=True)
+
+    with pytest.raises(WorktreeError, match="in progress"):
+        checkpoints.finish("step")
+
+
+def test_a_run_branch_checked_out_elsewhere_is_a_clear_refusal(repo, tmp_path):  # M3
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    checkpoints.begin(fresh=True)
+    git(tree, "checkout", "-q", "--detach")
+    git(tree, "worktree", "add", "-q", str(tmp_path / "elsewhere"), f"sdlc/{RUN}")
+    (tree / "x.py").write_text("x\n", encoding="utf-8")
+
+    for attempt in (lambda: checkpoints.finish("step"), lambda: checkpoints.begin(fresh=True)):
+        with pytest.raises(WorktreeError, match="checked out in another worktree") as refused:
+            attempt()
+        assert "no-hooks" not in str(refused.value)
+
+
+def test_a_refused_steps_commits_are_kept_under_a_rescue_ref(repo):  # M4
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    first = checkpoints.begin(fresh=True)
+    (tree / "step1.py").write_text("1\n", encoding="utf-8")
+    checkpoints.finish("step 1")
+    checkpoints.begin(fresh=True)
+    git(tree, "checkout", "-q", "--detach", first["repo"])
+    _agent_commits(tree, "agent.txt")
+    agent_head = git(tree, "rev-parse", "HEAD")
+
+    with pytest.raises(WorktreeError, match=f"refs/agentic/rescue/{RUN}/") as refused:
+        checkpoints.finish("step 2")
+
+    ref = next(w for w in str(refused.value).split() if w.startswith("refs/agentic/rescue/"))
+    checkpoints.begin(fresh=True)  # the retry discards the tree's copy
+    assert git(tree, "rev-parse", ref.rstrip(".,;)")) == agent_head
