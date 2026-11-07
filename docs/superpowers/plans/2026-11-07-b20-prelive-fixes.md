@@ -53,3 +53,12 @@ M1-64 agent quality gate. Each is confirmed in the code first, then fixed test-f
 - DF-397: a TokenLean estimate is never shown as `reported`.
 - DF-392: srt `deny_read` never hides the agent's own tree (`allow_read` when the tree is
   inside the corpus); the refusal names the remedy.
+
+## Added mid-track (coordinator): DF-1004
+
+Eval calls (agent under test and judge) and the learning before/after measurement send
+the gateway's per-request cache opt-out (`x-no-cache: true`, which every TokenLean ingress
+maps to `x_no_cache`), through a `fresh` option on `make_async_client` / `build_model_for`
+/ `metered_model` in the transport layer. Pipeline runs keep the cache. Test-first in
+`core/tests/transport/test_client.py`, `core/tests/agents/test_models.py`,
+`cli/tests/test_eval_command.py` and `cli/tests/run/test_learn_apply.py`.
