@@ -106,7 +106,11 @@ def _report_spend(data: dict, agent: str | None) -> Decimal:
     if data.get("mode") not in PAID_MODES or (agent is not None and data.get("agent") != agent):
         return Decimal(0)
     costs = (data.get("cost_total_usd"), data.get("judge_cost_usd"))
-    return sum((Decimal(str(c)) for c in costs if c is not None), Decimal(0))
+    total = sum((Decimal(str(c)) for c in costs if c is not None), Decimal(0))
+    if data.get("budget_hit") and data.get("budget_usd") is not None:
+        # the cap stopped it: the provider may have billed calls the report could not price
+        total = max(total, Decimal(str(data["budget_usd"])))
+    return total
 
 
 def _run_spend(data: dict) -> Decimal:
@@ -116,16 +120,50 @@ def _run_spend(data: dict) -> Decimal:
     return BudgetLedger.restore(budget).run.total_spent()
 
 
+RECORDS = ("report.json", "run.json")
+
+
+def _unrecorded(folder: Path) -> list[Path]:
+    """Folders holding files with no report.json or run.json in them or above them (up to
+    `folder`): an attempt that crashed before writing its record, whose spend is unknown."""
+    found = []
+    for path in sorted(p for p in folder.rglob("*") if p.is_dir()):
+        if not any(child.is_file() for child in path.iterdir()):
+            continue
+        chain = [path] + [folder / parent for parent in path.relative_to(folder).parents]
+        if not any((step / name).is_file() for step in chain for name in RECORDS):
+            found.append(path)
+    return found
+
+
+def scan(folders: list[Path], agent: str | None = None) -> tuple[Decimal, list[str]]:
+    """What every attempt under `folders` recorded (eval reports only for `agent`), and
+    warnings about spend it cannot see: unmeasured runs, crashed attempts."""
+    total, warnings = Decimal(0), []
+    for folder in map(Path, folders):
+        for path in sorted(folder.rglob("report.json")):
+            data = _json(path)
+            total += _report_spend(data, agent)
+            unmeasured = data.get("cost_unmeasured_runs") or 0
+            if unmeasured and data.get("mode") in PAID_MODES:
+                warnings.append(
+                    f"{path}: {unmeasured} run(s) with no measured cost are not counted - "
+                    "check the provider's usage page"
+                )
+        if agent is None:  # a run's spend has no single agent: it counts for the campaign
+            for path in sorted(folder.rglob("run.json")):
+                total += _run_spend(_json(path))
+        for path in _unrecorded(folder):
+            warnings.append(
+                f"{path} holds output but no report.json or run.json (a crashed attempt?): "
+                "its spend is not counted - check the provider's usage page"
+            )
+    return total, warnings
+
+
 def spent(folders: list[Path], agent: str | None = None) -> Decimal:
     """What every attempt under `folders` recorded; eval reports only for `agent`."""
-    total = Decimal(0)
-    for folder in folders:
-        for path in sorted(Path(folder).rglob("report.json")):
-            total += _report_spend(_json(path), agent)
-        if agent is None:  # a run's spend has no single agent: it counts for the campaign
-            for path in sorted(Path(folder).rglob("run.json")):
-                total += _run_spend(_json(path))
-    return total
+    return scan(folders, agent)[0]
 
 
 def remaining(caps: Caps, campaign: str, folders: list[Path], agent: str | None = None) -> Decimal:
@@ -161,6 +199,12 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     try:
         caps = load_caps()
+        if args.command == "remaining":
+            if not args.spent_in:
+                raise CapsError("name where earlier attempts are recorded: --spent-in DIR")
+            for folder in args.spent_in:
+                if not folder.is_dir():
+                    raise CapsError(f"--spent-in {folder} does not exist")
         if args.command == "check":
             print(f"provider key credit limit: {caps.credit_limit} USD")
             for name in caps.campaigns:
@@ -168,6 +212,8 @@ def main(argv: list[str]) -> int:
                 print(f"{name}: {caps.total(name)} USD" + (f" ({shares})" if shares else ""))
             return 0
         amount = remaining(caps, args.campaign, args.spent_in, args.agent)
+        for warning in scan(args.spent_in)[1]:
+            print(f"live_caps: warning: {warning}", file=sys.stderr)
     except CapsError as error:
         print(f"live_caps: {error}", file=sys.stderr)
         return 2

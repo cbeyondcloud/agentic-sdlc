@@ -10,7 +10,16 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from live_caps import CAPS, CapsError, eval_budgets, load_caps, main, remaining, spent  # noqa: E402
+from live_caps import (  # noqa: E402
+    CAPS,
+    CapsError,
+    eval_budgets,
+    load_caps,
+    main,
+    remaining,
+    scan,
+    spent,
+)
 
 
 def write(path: Path, data: dict) -> Path:
@@ -121,3 +130,40 @@ def test_the_gate_caps_become_the_eval_policy_budgets():
     policy = EvalPolicy(repeats=3, **budgets)
     assert policy.budget_for("developer") == 144.23 and policy.budget_for("qa") == 48.08
     assert policy.budget_for("someone-else") == 19.23  # the smallest share, never more
+
+
+# ── review fixes: never undercount silently ──────────────────────────────────
+
+
+def test_a_missing_or_absent_spent_in_folder_is_refused(tmp_path, capsys):
+    assert main(["remaining", "acceptance-1"]) == 2
+    assert "--spent-in" in capsys.readouterr().err
+    assert main(["remaining", "acceptance-1", "--spent-in", str(tmp_path / "gone")]) == 2
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_a_stopped_evaluation_counts_at_least_its_budget(tmp_path):
+    data = {"mode": "record", "agent": "qa", "cost_total_usd": 3.0, "judge_cost_usd": None}
+    write(tmp_path / "qa" / "t1" / "report.json", {**data, "budget_hit": True, "budget_usd": 10})
+    assert spent([tmp_path], agent="qa") == Decimal("10")
+
+
+def test_unmeasured_runs_and_crashed_attempts_are_warned_about(tmp_path):
+    data = {"mode": "record", "agent": "qa", "cost_total_usd": 1.0, "cost_unmeasured_runs": 2}
+    write(tmp_path / "qa" / "t1" / "report.json", data)
+    write(tmp_path / "qa" / "t1" / "judged" / "case.json", {})  # inside a report: fine
+    (tmp_path / "qa" / "t2").mkdir(parents=True)
+    (tmp_path / "qa" / "t2" / "partial.log").write_text("crashed", encoding="utf-8")
+    total, warnings = scan([tmp_path])
+    assert total == Decimal("1.0")
+    text = " ".join(warnings)
+    assert "2 run(s) with no measured cost" in text
+    assert "t2" in text and "no report.json" in text and "judged" not in text
+
+
+def test_main_prints_warnings_on_stderr(tmp_path, capsys):
+    (tmp_path / "t2").mkdir()
+    (tmp_path / "t2" / "out.txt").write_text("x", encoding="utf-8")
+    assert main(["remaining", "acceptance-1", "--spent-in", str(tmp_path)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "20.00" and "warning:" in captured.err

@@ -43,15 +43,19 @@ cd ~/agentic-sdlc
 uv run python docs/runbooks/m1-64/make_policy.py
 
 # the gate: five agents, each capped at what its share has left (earlier attempts and
-# reruns count); record mode keeps every answer for free replays. The loop stops at the cap.
+# reruns count); record mode keeps every answer for free replays. An agent whose share is
+# spent is skipped (the others still run); the gate's total still bounds them all.
 policy=~/.agentic/eval-policy-m1-64
+mkdir -p reports/m1-64
 for agent in business-analyst design code-review qa developer; do
   cap=$(uv run python scripts/live_caps.py remaining m1-64-gate --agent "$agent" \
-        --spent-in reports/m1-64) || break
+        --spent-in reports/m1-64) || continue
+  out=reports/m1-64/"$agent"/"$(date -u +%Y%m%dT%H%M%SZ)"
+  if [ -e "$out/report.json" ]; then echo "refusing to overwrite $out"; continue; fi
   uv run agentic eval run --agent "$agent" --mode record --gateway http://127.0.0.1:4100 \
     --policy "$policy" --agents library/agents --corpus library/eval \
     --cassettes ~/.agentic/eval-m1-64/cassettes/"$agent" \
-    --budget-usd "$cap" --out reports/m1-64/"$agent"/"$(date -u +%Y%m%dT%H%M%SZ)"
+    --budget-usd "$cap" --out "$out"
 done
 
 # afterwards
@@ -71,8 +75,16 @@ Owner decision 2026-11-07 (DF-108). The caps live in
 | Outer backstop | ~$300 | set a credit limit of about **$300** on the provider key itself (OpenRouter: the key's credit limit). It holds even if every cap above were bypassed |
 
 `live_caps.py remaining` sums what every earlier attempt recorded (eval `report.json` in live
-and record mode, each run's `run.json` budget), so a rerun gets only what is left; it exits 1
-with "cap reached" when nothing is. Each attempt writes a new folder, so none is overwritten.
+and record mode, at least the cap of an evaluation the cap stopped; each run's `run.json`
+budget), so a rerun gets only what is left; it exits 1 with "cap reached" when nothing is,
+and 2 when a `--spent-in` folder is missing. It warns about spend it cannot see: runs with
+no measured cost, and a folder with output but no `report.json` or `run.json` (a crashed
+attempt) - check the provider's usage page then. Each attempt writes a new folder, and the
+loop refuses one that already holds a report, so none is overwritten.
+
+**Keep the records.** `agentic gc` deletes old runs, `run.json` included: during a live
+campaign do not run it on the sample repo (or note what `live_caps.py remaining` printed
+first), and never delete `reports/m1-64/`.
 A run's `--extra-budget` or `--add-budget` on resume stays within the cap only if the amount
 comes from `live_caps.py remaining` too.
 
