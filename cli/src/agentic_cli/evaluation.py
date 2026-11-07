@@ -977,7 +977,8 @@ def _workspaces(
                 "the case's tests run as plain processes)"
             )
         use_srt = decision.use_srt
-        if not use_srt and holdout:
+        # only a shell reaches past the tree: the file tools are confined to it
+        if not use_srt and holdout and "run_shell" in usable:
             exposed = (
                 f"the holdout answers in {corpus_root} (solutions/, golden/, cases/) are "
                 "readable to the agent's commands and the case's tests"

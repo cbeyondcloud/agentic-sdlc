@@ -452,3 +452,10 @@ def test_a_default_rate_stream_cost_is_repriced_too(fixtures):
     cost = usage.result(flagged, price_for, model="gpt-5-mini")
 
     assert (cost.source, cost.cost_usd) == ("estimated", Decimal("0.0005"))
+
+
+@pytest.mark.parametrize("value", ["false", "0", "no", " "])
+def test_a_flag_that_says_no_leaves_the_cost_reported(fixtures, value):  # DF-397 (review)
+    data = fixture(fixtures, "openai_nonstream.json")
+    headers = {**data["headers"], "x-tokenlean-cost-estimated": value}
+    assert cost_from_response(headers, data["body"], price_for).source == "reported"

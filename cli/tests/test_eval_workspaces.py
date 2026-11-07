@@ -25,7 +25,8 @@ def developer():
     definition = load_agent(LIBRARY / "fixtures" / "agents" / "developer.md")
     resolved, violations = resolve_agent(definition, policy, ResolveContext())
     assert resolved is not None, violations
-    return resolved, policy
+    # with a shell: the fixture Developer has none, and a shell is what can leave the tree
+    return resolved.model_copy(update={"tools": [*resolved.tools, "run_shell"]}), policy
 
 
 def decided(monkeypatch, decision: SandboxDecision) -> None:
@@ -98,3 +99,20 @@ def test_dev_cases_need_no_sandbox_and_no_flag(developer, tmp_path, monkeypatch)
     decided(monkeypatch, NONE)
     _, _, notes = workspaces(developer, tmp_path, holdout=False)
     assert not any("readable" in note for note in notes)
+
+
+def test_an_agent_without_a_shell_needs_no_sandbox(developer, tmp_path, monkeypatch):
+    """Its file tools are confined to its tree: with no run_shell nothing it runs can
+    reach the corpus (review)."""
+    resolved, policy = developer
+    tools = [t for t in resolved.tools if t != "run_shell"]
+    decided(monkeypatch, NONE)
+    evaluation._workspaces(
+        resolved.model_copy(update={"tools": tools}),
+        tmp_path / "out",
+        "live",
+        policy,
+        corpus_root=LIBRARY,
+        holdout=True,
+        allow_unsandboxed=False,
+    )

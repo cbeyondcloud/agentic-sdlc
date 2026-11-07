@@ -220,6 +220,7 @@ def _judge(
     # TokenLean's figure at its default rates is an estimate: the policy price, when known,
     # is the better one, and either way the cost is never shown as reported (DF-397)
     note = h.get(ESTIMATED_HEADER, "").strip()
+    note = "" if note.lower() in ("false", "0", "no") else note
     theirs = None
     for evidence in (h.get(COST_HEADER), body_cost):
         usd = _money(evidence)
