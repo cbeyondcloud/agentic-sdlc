@@ -363,3 +363,74 @@ def test_checkpoint_never_runs_repo_hooks(repo):  # Review Focus 2
 
     assert not marker.exists()
     assert git(tree, "log", "-1", "--format=%s") == "step"
+
+
+# DF-590: an agent that moves HEAD in its tree (`git checkout -b`, a detached HEAD) must
+# not leave its work off the run branch: the push sends only refs/heads/sdlc/<run>.
+
+
+def _branch(tree: Path) -> str:
+    return git(tree, "rev-parse", "--abbrev-ref", "HEAD")
+
+
+def test_a_fresh_begin_returns_an_agent_that_switched_branch_to_the_run_branch(repo):
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    base = checkpoints.begin(fresh=True)
+    git(tree, "checkout", "-q", "-b", "agent-branch")
+    _agent_commits(tree, "planted.txt")
+
+    assert checkpoints.begin(fresh=True) == base
+    assert _branch(tree) == f"sdlc/{RUN}"
+    assert git(tree, "rev-parse", "HEAD") == base["repo"]
+    assert not (tree / "planted.txt").exists()
+
+
+def test_finish_brings_an_agents_own_branch_back_onto_the_run_branch(repo):
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    base = checkpoints.begin(fresh=True)
+    git(tree, "checkout", "-q", "-b", "agent-branch")
+    _agent_commits(tree, "committed.txt")
+    (tree / "uncommitted.txt").write_text("u\n", encoding="utf-8")
+
+    heads = checkpoints.finish("step")
+
+    assert _branch(tree) == f"sdlc/{RUN}"
+    assert git(tree, "rev-parse", f"refs/heads/sdlc/{RUN}") == heads["repo"]
+    assert git(tree, "merge-base", base["repo"], heads["repo"]) == base["repo"]
+    shown = git(tree, "ls-tree", "-r", "--name-only", heads["repo"]).splitlines()
+    assert "committed.txt" in shown and "uncommitted.txt" in shown
+    assert git(tree, "status", "--porcelain") == ""
+
+
+def test_finish_brings_a_detached_head_back_onto_the_run_branch(repo):
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    checkpoints.begin(fresh=True)
+    git(tree, "checkout", "-q", "--detach")
+    (tree / "new.py").write_text("n\n", encoding="utf-8")
+
+    heads = checkpoints.finish("step")
+
+    assert _branch(tree) == f"sdlc/{RUN}"
+    assert git(tree, "rev-parse", f"refs/heads/sdlc/{RUN}") == heads["repo"]
+    assert "new.py" in git(tree, "ls-tree", "-r", "--name-only", heads["repo"]).splitlines()
+
+
+def test_finish_refuses_work_that_does_not_build_on_the_run_branch(repo):
+    checkpoints = open_run(repo)
+    tree = checkpoints.prepare()
+    first = checkpoints.begin(fresh=True)
+    (tree / "step1.py").write_text("1\n", encoding="utf-8")
+    done = checkpoints.finish("step 1")
+    checkpoints.begin(fresh=True)
+    git(tree, "checkout", "-q", "-b", "old", first["repo"])  # behind the run branch
+    (tree / "work.py").write_text("w\n", encoding="utf-8")
+
+    with pytest.raises(WorktreeError, match=f"sdlc/{RUN}"):
+        checkpoints.finish("step 2")
+
+    assert git(tree, "rev-parse", f"refs/heads/sdlc/{RUN}") == done["repo"]  # untouched
+    assert (tree / "work.py").read_text(encoding="utf-8") == "w\n"  # the work is kept
+    assert _branch(tree) == "old"
