@@ -773,6 +773,14 @@ ENDPOINT_CASES += [
         body={"beat_at": "2026-10-29T10:00:00Z", "sent_at": "2026-10-29T10:00:00Z"},
     ),
     EndpointCase(
+        # another tenant's run is unknown here: holding it back is a 404 (DF-536)
+        "runs",
+        "POST",
+        "/v1/runs/{run_id}/held-back",
+        _run_in_b,
+        body={"seq": 2, "kinds": ["pii:credit-card"]},
+    ),
+    EndpointCase(
         # another tenant's run id is a new, unknown run here: a batch not starting at
         # seq 1 is a gap at head 0, exactly as for a run id nobody used
         "runs",
