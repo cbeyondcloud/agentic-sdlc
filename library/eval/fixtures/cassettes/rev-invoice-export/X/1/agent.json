@@ -3,7 +3,7 @@
  "calls": [
   {
    "path": "/v1/chat/completions",
-   "request_sha": "sha256:498fac96f1369734e8893daac2614b098fc19ebae2e7e619a96bf687c79ea46a",
+   "request_sha": "sha256:9981709f131764cccf17d7089b056efd65a4999ce78eed5158f3e44b4d6d1c59",
    "status": 200,
    "content_type": "application/json",
    "headers": {
