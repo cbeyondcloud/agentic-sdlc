@@ -3,6 +3,8 @@ maintainers and the handles they resolve against, all in the caller's tenant."""
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import select, update
 
@@ -24,11 +26,12 @@ from agentic_cp.policy_sync.service import Actor, active_repo_patterns, active_t
 from agentic_cp.rbac import repos as store
 from agentic_cp.rbac.authz import Org, Repo, require
 from agentic_cp.tables import users
-from agentic_cp.tenancy.api import checked_url
+from agentic_cp.tenancy.api import checked_host, checked_url
 from agentic_cp.tenancy.context import tenant_tx
 from agentic_cp.tenancy.tenants import bump_rbac_revision, current_tenant, lock_rbac
 
 router = APIRouter(prefix=API_PREFIX, tags=["repos"], responses=PROBLEM_RESPONSES)
+log = logging.getLogger("agentic_cp.repos")
 
 
 def _info(row: store.RepoRow, emails: list[str]) -> RepoInfo:
@@ -44,11 +47,14 @@ def _info(row: store.RepoRow, emails: list[str]) -> RepoInfo:
     )
 
 
-def _fetch_failed(error: GitError) -> ApiProblem:
+def _fetch_failed(key: str, error: GitError) -> ApiProblem:
+    """git's own line goes to the log only (DF-503): whether an internal host answered,
+    refused or timed out is not the caller's to learn."""
+    log.warning("repo %s: CODEOWNERS fetch failed: %s", key, error)
     return ApiProblem(
         502,
         "repo.fetch_failed",
-        f"the repo's CODEOWNERS could not be fetched: {error}",
+        f"the repo's CODEOWNERS could not be fetched: {error.reason}",
         hint="check the remote and the tenant's git credentials",
     )
 
@@ -97,6 +103,7 @@ async def register_repo(
                 f"{key} does not match the org policy's allowed_repo_patterns",
                 hint="ask an org admin to allow it in org.yaml",
             )
+        await checked_host(remote, request, conn, await current_tenant(conn))
         if not await store.insert_repo(conn, key, remote, body.team, ctx.email):
             # another registration won the race: answer as for a re-registration (F8)
             existing = await store.get_repo(conn, key)
@@ -112,7 +119,7 @@ async def register_repo(
                 conn, state.git, state.settings, tenant, key, state.clock, actor
             )
         except GitError as error:  # the whole registration rolls back
-            raise _fetch_failed(error) from None
+            raise _fetch_failed(key, error) from None
         await append(
             conn,
             AuditEvent(
@@ -158,7 +165,7 @@ async def refresh_repo(repo_key: str, request: Request, ctx: Caller) -> RepoInfo
                 conn, state.git, state.settings, tenant, repo_key, state.clock, actor
             )
         except GitError as error:
-            raise _fetch_failed(error) from None
+            raise _fetch_failed(repo_key, error) from None
         return _info(row, await store.maintainer_emails(conn, repo_key))
 
 

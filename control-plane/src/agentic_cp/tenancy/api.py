@@ -3,11 +3,13 @@ names a tenant: every handler works on the tenant of the caller's token."""
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import secrets
 
 from fastapi import APIRouter, Request
 from sqlalchemy import update
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from agentic.orgapi import (
     API_PREFIX,
@@ -21,7 +23,7 @@ from agentic_cp.audit import AuditEvent, append
 from agentic_cp.auth.deps import Caller
 from agentic_cp.errors import PROBLEM_RESPONSES, ApiProblem
 from agentic_cp.gitops import RepoUrlError, check_repo_url, scrub
-from agentic_cp.policy_sync.service import Actor, sync_once
+from agentic_cp.policy_sync.service import Actor, sync_once, tenant_git_hosts
 from agentic_cp.rbac.authz import Org, require
 from agentic_cp.tables import tenants
 from agentic_cp.tenancy.context import tenant_tx
@@ -49,6 +51,23 @@ def checked_url(url: str, request: Request, *, prefix: str = "policy") -> str:
         raise ApiProblem(422, code, str(error)) from None
 
 
+async def checked_host(
+    url: str, request: Request, conn: AsyncConnection, tenant: TenantRow
+) -> None:
+    """A 422 problem unless the org policy lets the control plane fetch from the URL's host
+    (DF-484, DF-503). The fetch checks it again: DNS may change in between."""
+    hosts = await tenant_git_hosts(conn, tenant)
+    try:  # off the event loop: resolving a host blocks
+        await asyncio.to_thread(request.app.state.git.check_host, url, hosts)
+    except RepoUrlError as error:
+        raise ApiProblem(
+            422,
+            "repo.host_not_allowed",
+            str(error),
+            hint="an org admin adds the host to allowed_git_hosts in policy/org.yaml",
+        ) from None
+
+
 @router.get("")
 async def get_tenant(request: Request, ctx: Caller) -> TenantInfo:
     """The caller's tenant: its name and policy source (never a credential)."""
@@ -72,6 +91,7 @@ async def put_policy_source(
         except ValueError as error:
             raise ApiProblem(422, "policy.branch_pinned", str(error)) from None
         before = await current_tenant(conn)
+        await checked_host(repo, request, conn, before)
         await conn.execute(
             update(tenants)
             .where(tenants.c.id == ctx.tenant_id)

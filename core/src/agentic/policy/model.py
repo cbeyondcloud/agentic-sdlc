@@ -23,6 +23,7 @@ from agentic.definitions import ChildLimits, DenyRules, Limits
 from agentic.definitions.discovery import PolicyRules
 from agentic.definitions.versions import Deprecations, Pins, Rollout
 from agentic.learning.clustering import LearningSettings
+from agentic.policy.repos import git_host_key
 
 
 class _Strict(BaseModel):
@@ -823,6 +824,12 @@ class OrgPolicy(_Strict):
 
     # --- org-wide settings ---
     allowed_repo_patterns: list[str] = []  # empty = any repo (standalone use only)
+    # DF-484/DF-503: the git hosts the control plane may fetch from (registered repos, a
+    # new policy repo), host names or IP addresses, each fetched whatever it resolves to;
+    # the policy repo's own host always is. Unset: also github.com and the hosts of repos
+    # already registered, while they resolve to public addresses only (control-plane
+    # `gitops`)
+    allowed_git_hosts: list[Annotated[str, AfterValidator(git_host_key)]] | None = None
     tool_mirror_url: str | None = None
     tool_pins: dict[str, ToolPin] = {}  # tools `init` fetches from the mirror (M1-51)
     allow_repo_pipelines: bool = False  # D33: pipelines only from the policy repo
