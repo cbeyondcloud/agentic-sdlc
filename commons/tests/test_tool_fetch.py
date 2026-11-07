@@ -247,3 +247,43 @@ def test_a_pinned_file_that_is_not_a_valid_archive_fails_cleanly(
     assert result.status == "failed" and not result.ok
     assert "mytool" in result.detail and "not a valid archive" in result.detail
     assert not any(path.is_file() for path in (tmp_path / "tools").rglob("mytool"))
+
+
+# ── DF-925: a tool whose Windows developers use its Linux build inside WSL2 only ──
+
+
+def wsl2_only(tmp_path: Path, mirror: Mirror, platform: str) -> ToolFetcher:
+    return ToolFetcher(
+        tmp_path / "tools", MIRROR, platform=platform, download=mirror, wsl2_only={"mytool"}
+    )
+
+
+SIGNED_WINDOWS = Pin(
+    "1.0",
+    "mytool",
+    {
+        WINDOWS: Artefact("mytool/1.0/w.zip", "b" * 64, signed=True),
+        LINUX: Artefact(FILE, sha(BLOB)),
+    },
+)
+
+
+def test_a_wsl2_only_tool_is_never_offered_on_native_windows(tmp_path: Path):
+    mirror = Mirror({f"{MIRROR}/mytool/1.0/w.zip": b"x"})
+    tools = wsl2_only(tmp_path, mirror, WINDOWS)
+    why = tools.withheld("mytool")
+    assert why is not None and "WSL2" in why and "Linux build" in why
+    result = tools.fetch("mytool", SIGNED_WINDOWS)  # even a build the org marked signed
+    assert result.status == "unavailable" and not result.ok and result.detail == why
+    assert tools.cached("mytool", SIGNED_WINDOWS) is None
+    with pytest.raises(ToolFetchError, match="WSL2"):
+        tools.planned("mytool", SIGNED_WINDOWS)
+    assert mirror.asked == [] and not (tmp_path / "tools").exists()
+
+
+def test_a_wsl2_only_tool_is_fetched_as_usual_elsewhere(tmp_path: Path):
+    tools = wsl2_only(tmp_path, Mirror({f"{MIRROR}/{FILE}": BLOB}), LINUX)  # WSL2 is Linux
+    assert tools.withheld("mytool") is None
+    assert tools.fetch("mytool", SIGNED_WINDOWS).status == "fetched"
+    other = wsl2_only(tmp_path, Mirror({}), WINDOWS)
+    assert other.withheld("anothertool") is None  # only the tools named

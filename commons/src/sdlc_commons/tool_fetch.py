@@ -17,6 +17,10 @@ adds what the framework needs:
     is `failed`, naming the host - never a silent "no tool";
   * Windows: an artefact the org manifest does not mark `signed` is refused and never
     downloaded - no unsigned native binary is installed on a Windows laptop;
+  * `wsl2_only`: tools whose Windows developers use the Linux build inside WSL2 only.
+    On native Windows such a tool is never offered, fetched or taken from the cache,
+    whatever its pin says (`withheld`); inside WSL2 the platform is Linux, so its Linux
+    build is fetched as usual;
   * `record("init.tool_fetched", fields)` for each download, for the audit trail.
 
 The install is atomic: the binary is extracted beside its destination, then renamed into
@@ -29,7 +33,7 @@ import os
 import re
 import shutil
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -119,6 +123,7 @@ class ToolFetcher:
         download: Callable[[str], bytes],
         platform: str | None = None,
         record: Record | None = None,
+        wsl2_only: Collection[str] = (),
     ) -> None:
         if urlsplit(mirror_url).scheme != "https":
             raise ToolFetchError(f"the tool mirror must be an https URL, not {mirror_url!r}")
@@ -127,16 +132,28 @@ class ToolFetcher:
         if self.platform not in PLATFORMS:
             raise ToolFetchError(f"unknown platform {self.platform!r}")
         self._download, self._record = download, record or (lambda event, fields: None)
+        self.wsl2_only = frozenset(wsl2_only)
+
+    def withheld(self, name: str) -> str | None:
+        """Why this tool is never offered on this platform, or None (`wsl2_only`)."""
+        if name in self.wsl2_only and self.platform.startswith("windows"):
+            return (
+                f"{name}'s native Windows build is not supported: run agentic inside WSL2, "
+                "where `agentic init` installs its Linux build"
+            )
+        return None
 
     def planned(self, name: str, pin: PinLike) -> tuple[str, Path]:
         """(url, destination) of the tool on this platform, without fetching anything."""
+        if why := self.withheld(name):
+            raise ToolFetchError(why)
         artefact = pin.assets[self.platform]
         return self._url(artefact), self._destination(name, pin)
 
     def cached(self, name: str, pin: PinLike) -> Path | None:
         """The verified cached binary for this platform, or None. Never downloads."""
         artefact = pin.assets.get(self.platform)
-        if artefact is None:
+        if artefact is None or self.withheld(name):
             return None
         try:
             dest = self._destination(name, pin)
@@ -148,6 +165,8 @@ class ToolFetcher:
         def result(status: Status, path: Path | None = None, detail: str = "") -> FetchResult:
             return FetchResult(name, pin.version, self.platform, status, path, detail)
 
+        if why := self.withheld(name):
+            return result("unavailable", detail=why)
         artefact = pin.assets.get(self.platform)
         if artefact is None:
             declared = ", ".join(sorted(pin.assets)) or "none"
