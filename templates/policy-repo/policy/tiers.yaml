@@ -5,6 +5,8 @@
 # EDIT EVERY `model:` BELOW: replace each change-me name with a model the gateway
 # serves, written the way the gateway names it. `family:` groups models from one
 # maker, so the eval judge can be chosen from another family than the agents.
+# `max_output_tokens:` (optional) caps the output one call may ask for, reasoning
+# included; unset, each call asks for 16,384 plus its effort's reasoning room.
 # =============================================================================
 tiers:
   deep-reasoning:                       # architecture and design: the strongest model

@@ -29,7 +29,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.settings import ModelSettings
 
-from agentic.agents.metering import CostLog, MeteringTransport
+from agentic.agents.metering import DEFAULT_MAX_OUTPUT, CostLog, MeteringTransport
 from agentic.policy import ResolvedAgent, gateway_model
 from agentic.security import SecretScanner
 from agentic.transport import (
@@ -111,11 +111,30 @@ def metered_model(
     return build_model(agent, identity, gateway, transport=meter, scanner=scanner), log
 
 
+#: Output room reasoning may take at each effort level (Pydantic AI's thinking budgets).
+#: Every provider bills and caps reasoning as output, so a call's cap leaves this room
+#: beside the answer's - a cap at or under it is refused, or truncates the answer.
+REASONING_OUTPUT = {"low": 2_048, "medium": 10_000, "high": 16_384}
+#: The least room a capped call keeps for its answer, beyond its reasoning.
+MIN_ANSWER_OUTPUT = 4_096
+
+
+def output_cap(agent: ResolvedAgent) -> int:
+    """The most output tokens one call of the agent asks for (DF-398): the tier's cap, else
+    the answer room the budget hold assumes plus the effort's reasoning room - never so
+    small that reasoning leaves no room for the answer."""
+    reasoning = REASONING_OUTPUT.get(agent.effort or "", 0)
+    cap = agent.max_output_tokens or DEFAULT_MAX_OUTPUT + reasoning
+    return max(cap, reasoning + MIN_ANSWER_OUTPUT)
+
+
 def model_settings(agent: ResolvedAgent) -> ModelSettings:
     """The sampling settings policy resolved for the agent: temperature, and effort as
     Pydantic AI's provider-neutral `thinking` level (M1-28). What a model cannot honour
-    is reported before the run by the capability matrix (M1-27)."""
-    settings = ModelSettings()
+    is reported before the run by the capability matrix (M1-27). Every call carries an
+    output cap (`output_cap`): without one a gateway reserves the model's whole output
+    window per call (DF-398)."""
+    settings = ModelSettings(max_tokens=output_cap(agent))
     if agent.temperature is not None:
         settings["temperature"] = agent.temperature
     if agent.effort is not None:

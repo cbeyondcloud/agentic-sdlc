@@ -74,6 +74,11 @@ class TierSpec(_Strict):
     # The model's family for the eval judge rule (spike S10), when its id's prefix before
     # '/' does not say it (a gateway alias, a team's own deployment).
     family: str | None = None
+    # The most output tokens one call may ask for, reasoning included (DF-398). Every call
+    # sends a cap: without one a gateway reserves the model's whole output window per call,
+    # which fails on an account with modest credit. None: the framework's default
+    # (`agentic.agents.models.output_cap`).
+    max_output_tokens: int | None = Field(default=None, gt=0)
 
 
 def gateway_model(model_id: str) -> str:

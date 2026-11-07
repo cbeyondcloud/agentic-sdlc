@@ -360,3 +360,31 @@ def test_an_explicit_model_does_not_inherit_tier_effort_or_temperature(policy): 
         None,
         None,
     )
+
+
+def test_a_tiers_output_cap_is_resolved_for_its_model(policy, developer):  # DF-398
+    policy.tiers["balanced"] = policy.tiers["balanced"].model_copy(
+        update={"max_output_tokens": 4096}
+    )
+    resolved, _ = resolve_agent(developer, policy, ResolveContext())
+    assert resolved.max_output_tokens == 4096
+    other, _ = resolve_agent(
+        agent_with(developer, model="google/gemini-flash"), policy, ResolveContext()
+    )
+    assert other.max_output_tokens is None  # the tier's cap belongs to its model
+
+
+def test_a_tier_without_an_output_cap_resolves_none(policy, developer):  # DF-398
+    resolved, _ = resolve_agent(developer, policy, ResolveContext())
+    assert resolved.max_output_tokens is None
+
+
+def test_an_output_cap_must_be_positive():  # DF-398
+    from pydantic import ValidationError
+
+    from agentic.policy.model import TierSpec
+
+    assert TierSpec(model="x/y").max_output_tokens is None  # optional: old policies load
+    assert TierSpec(model="x/y", max_output_tokens=8192).max_output_tokens == 8192
+    with pytest.raises(ValidationError):
+        TierSpec(model="x/y", max_output_tokens=0)

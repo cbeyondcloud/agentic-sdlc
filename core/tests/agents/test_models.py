@@ -155,3 +155,33 @@ def test_a_refused_reservation_is_not_retried_by_the_sdk(resolved, tokenlean, mo
     assert _limit_hit(caught.value) is not None
     assert time.perf_counter() - started < 1  # no backoff and retry first
     assert tokenlean.seen == []
+
+
+def test_every_call_sends_a_bounded_output_cap(resolved, tokenlean):  # DF-398
+    """A request with no max_tokens lets a gateway reserve the model's whole output per
+    call, which fails on an account with modest credit."""
+    from agentic.agents.metering import DEFAULT_MAX_OUTPUT
+
+    plain = resolved.model_copy(update={"effort": None})
+    assert model_settings(plain)["max_tokens"] == DEFAULT_MAX_OUTPUT
+    capped = plain.model_copy(update={"max_output_tokens": 2048})
+    assert model_settings(capped)["max_tokens"] == 4096  # room left for the answer
+    capped = plain.model_copy(update={"max_output_tokens": 6000})
+    assert model_settings(capped)["max_tokens"] == 6000
+    for agent in (capped, capped.model_copy(update={"model": "google/gemini-flash"})):
+        run(agent, tokenlean, **model_settings(agent))
+        body = json.loads(tokenlean.seen[-1].content)
+        # the route's own field for it: max_tokens, or max_completion_tokens
+        assert (body.get("max_tokens") or body.get("max_completion_tokens")) == 6000
+
+
+def test_the_default_cap_leaves_room_for_reasoning(resolved):  # DF-398
+    """Reasoning is billed and capped as output: a high-effort call's cap must exceed its
+    reasoning budget, or the provider refuses it (or the answer is cut off)."""
+    from agentic.agents.metering import DEFAULT_MAX_OUTPUT
+    from agentic.agents.models import REASONING_OUTPUT
+
+    high = resolved.model_copy(update={"effort": "high", "max_output_tokens": None})
+    assert model_settings(high)["max_tokens"] == DEFAULT_MAX_OUTPUT + REASONING_OUTPUT["high"]
+    tight = high.model_copy(update={"max_output_tokens": 8192})
+    assert model_settings(tight)["max_tokens"] > REASONING_OUTPUT["high"]

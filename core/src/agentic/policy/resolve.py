@@ -58,6 +58,8 @@ class ResolvedAgent(BaseModel):
     model: str
     effort: str | None
     temperature: float | None
+    # the tier's output cap per call (DF-398); None: the framework's default
+    max_output_tokens: int | None = None
     backend: str
     tools: list[str]
     shell: list[str]  # allowed command prefixes, minus any that a deny entry covers
@@ -188,7 +190,7 @@ def resolve_agent(
     deny = _merge_deny(policy.deny, team.deny if team else None, agent.deny)
     team_cap = team.limits_max.get(agent.type) if team else None
 
-    # Tier defaults (effort, temperature) belong to the tier's model; they are not
+    # Tier defaults (effort, temperature, output cap) belong to the tier's model; they are not
     # applied to an explicitly named different model.
     tier_spec = policy.team_overrides.get(ctx.team or "", {}).get(tier) or policy.tiers[tier]
     defaults_apply = agent.model is None or agent.model == tier_model
@@ -203,6 +205,7 @@ def resolve_agent(
         temperature=agent.temperature
         if agent.temperature is not None
         else (tier_spec.temperature if defaults_apply else None),
+        max_output_tokens=tier_spec.max_output_tokens if defaults_apply else None,
         backend=backend,
         tools=tools,
         shell=[cmd for cmd in shell if not any(_covers(d, cmd) for d in deny.shell)],
