@@ -25,9 +25,11 @@ required_steps:
 # the Maven/Gradle test conventions with no binary. codebase-memory-mcp (MIT) answers
 # better, but it is a native binary: pin it only after your security review approves it.
 # Its SECURITY.md describes an update check on MCP start; agentic runs it only in CLI
-# mode. Windows refuses the build until you mark it `signed`. To approve it, put these
-# files on the mirror and add this entry to tool-pins.yaml. The hashes are the
-# publisher's checksums.txt for release v0.12.1:
+# mode, and always inside the OS sandbox with no allowed host (srt on macOS and Linux):
+# a laptop without a ready sandbox does not get it. Windows developers use its Linux
+# build inside WSL2; its native Windows build is never offered, so pin none. To approve
+# it, put these files on the mirror and add this entry to tool-pins.yaml. The hashes are
+# the publisher's checksums.txt for release v0.12.1:
 #
 # tools:
 #   codebase-memory-mcp:
@@ -35,10 +37,6 @@ required_steps:
 #     binary: codebase-memory-mcp
 #     when: on_request
 #     assets:
-#       windows-x86_64:
-#         file: codebase-memory-mcp/v0.12.1/codebase-memory-mcp-windows-amd64.zip
-#         sha256: 4e4e0f16b45233af5c757a1fcbe3c3b16e9056375b1fbe2ce020b6de75dedcc0
-#         signed: false                 # true only after you check its code signature
 #       darwin-aarch64:
 #         file: codebase-memory-mcp/v0.12.1/codebase-memory-mcp-darwin-arm64.tar.gz
 #         sha256: 9bfcbe38414b47969a3e1d1c1999f5357409387c86fa3d24221b5458267660d2

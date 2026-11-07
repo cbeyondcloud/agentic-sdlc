@@ -11,7 +11,13 @@ SECURITY.md describes starts on MCP `initialize`. Each answer first re-indexes t
 (incremental after the first time; `index_timeout_s`), then queries it
 (`QUERY_TIMEOUT_S` each). The tool's home and caches stay inside the run's data
 folder, and it gets a small allow-listed environment: no credentials and no proxy
-settings. This does not block the network; the org's approval covers that (DF-921).
+settings.
+
+Every call runs inside the OS sandbox (`SrtSandbox`, D38) with no allowed host, so no
+update check or other request leaves the machine; it writes only its data folder, and
+policy's `deny_read` paths are hidden from it (DF-921, owner decision 2026-11-07). There
+is no unsandboxed fallback: without `srt` the tool cannot run, and the caller offers
+this adapter only where the sandbox is ready (`agentic_cli.codeintel.locate_backend`).
 
   * `tests_for`: the files with a TESTS edge into the seed;
   * `dependents`: files with a code edge into the seed, ranked by edge count, then the
@@ -26,7 +32,9 @@ is not tried again by this adapter: every later answer fails at once.
 
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
@@ -35,6 +43,8 @@ from agentic.backends.processes import run_contained
 from agentic.codeintel.crg import diff_files
 from agentic.codeintel.interface import Candidates, CodeIntelError
 from agentic.codeintel.tools import tree_path
+from agentic.sandbox.rules import SandboxRules
+from agentic.sandbox.srt import SrtSandbox
 
 #: Edge types that are structure, similarity or git history, not dependencies (S5).
 NOISE = frozenset(
@@ -57,6 +67,8 @@ MAX_IMPACT_SEEDS = 50  # changed files whose dependents `impact` adds
 QUERY_TIMEOUT_S = 120.0
 #: The only variables the tool gets from this process (the OS needs them to start it).
 _PASSED = ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL")
+#: What `srt` itself also gets (a Node program: its own home); the tool's are set inside.
+_SRT_PASSED = (*_PASSED, "HOME", "USERPROFILE")
 
 
 def _quoted(text: str) -> str:
@@ -68,11 +80,24 @@ class CodebaseMemory:
     supports = frozenset({"dependents", "impact", "tests_for", "overview"})
 
     def __init__(
-        self, command: Sequence[str], tree: Path, data: Path, *, index_timeout_s: float = 600
+        self,
+        command: Sequence[str],
+        tree: Path,
+        data: Path,
+        *,
+        srt: Sequence[str] = ("srt",),
+        deny_read: Sequence[Path] = (),  # policy's `sandbox.deny_read`, absolute
+        index_timeout_s: float = 600,
     ) -> None:
         self.command, self.tree, self.data = list(command), Path(tree), Path(data)
         self.index_timeout_s = index_timeout_s
         self._broken: str | None = None  # why the tool cannot run; set once
+        folder = self.data.resolve()
+        folder.mkdir(parents=True, exist_ok=True)
+        rules = SandboxRules(write=(folder,), deny_read=tuple(deny_read), allowed_domains=())
+        # a settings folder of its own: adapters of parallel steps share the data folder
+        settings = Path(tempfile.mkdtemp(prefix="sandbox-", dir=folder))
+        self.sandbox = SrtSandbox(rules, settings, srt=srt)
 
     def tests_for(self, path: str) -> Candidates:
         rows = self._edges_into([path], self._project())
@@ -175,11 +200,16 @@ class CodebaseMemory:
     def _run(self, tool: str, args: dict, *, timeout: float) -> dict:
         if self._broken is not None:
             raise CodeIntelError(f"codebase-memory-mcp could not run: {self._broken}")
+        if shutil.which(self.command[0]) is None:  # inside srt, a missing tool is no OSError
+            self._broken = f"{self.command[0]} is not an installed program"
+            raise CodeIntelError(f"codebase-memory-mcp could not run: {self._broken}")
         try:
+            prefix = self.sandbox.command_prefix()  # ends `env NAME=value ...`: add the tool's
+            inner = [*prefix, *self._env(), *self.command, "cli", "--quiet", "--json", tool]
             done = run_contained(
-                [*self.command, "cli", "--quiet", "--json", tool],
+                inner,
                 input=json.dumps(args),
-                env=self._env(),
+                env={k: v for k, v in os.environ.items() if k.upper() in _SRT_PASSED},
                 cwd=self.data,
                 timeout=timeout,
             )
@@ -193,15 +223,16 @@ class CodebaseMemory:
             )
         return _payload(done.stdout, tool)
 
-    def _env(self) -> dict[str, str]:
+    def _env(self) -> list[str]:
+        """The tool's home and caches, as `NAME=value` for the `env` inside the sandbox:
+        srt keeps its own home, the tool gets the data folder's."""
         home, cache = self.data / "cbm-home", self.data / "cbm-cache"
         for folder in (home, cache):
             folder.mkdir(parents=True, exist_ok=True)
-        env = {k: v for k, v in os.environ.items() if k.upper() in _PASSED}
-        for name in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME"):
-            env[name] = str(home)
+        names = ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "XDG_CONFIG_HOME")
+        env = {name: str(home) for name in names}
         env["XDG_CACHE_HOME"] = env["CBM_CACHE_DIR"] = str(cache)
-        return env
+        return [f"{name}={value}" for name, value in env.items()]
 
 
 def _ranked(counts: Counter) -> list[str]:

@@ -585,3 +585,34 @@ def test_init_warns_once_about_a_credential_file_the_org_now_forbids(
     main(["init", "--standalone", "--policy", str(policy_repo)])
     err = capsys.readouterr().err
     assert err.count("still holds keys") == 1 and str(home / FILE_NAME) in err
+
+
+@pytest.mark.parametrize("when", ["on_request", "always"])
+def test_native_windows_is_never_offered_the_jvm_backend_and_is_pointed_to_wsl2(
+    when, setup_repo, policy_repo, deps, monkeypatch, capsys
+):  # DF-925 (owner decision 2026-11-07): Windows uses the Linux build inside WSL2 only
+    blob = tarball("codebase-memory-mcp.exe", b"native build\n")
+    sha = hashlib.sha256(blob).hexdigest()
+    FILES[f"{MIRROR}/cbm/cbm-windows.zip"] = blob
+    pins = policy_repo / "policy" / "tool-pins.yaml"
+    pins.write_text(
+        pins.read_text(encoding="utf-8")
+        + f"""  codebase-memory-mcp:
+    version: v0.12.1
+    binary: codebase-memory-mcp
+    when: {when}
+    assets:
+      windows-x86_64: {{file: cbm/cbm-windows.zip, sha256: "{sha}", signed: true}}
+      {LINUX}: {{file: cbm/cbm-linux.tar.gz, sha256: "{"0" * 64}"}}
+""",
+        encoding="utf-8",
+    )
+    deps.platform = "windows-x86_64"
+    try:
+        init(setup_repo, policy_repo, monkeypatch, "--install-missing", "--yes")
+    finally:
+        del FILES[f"{MIRROR}/cbm/cbm-windows.zip"]
+    backend = item(report_of(capsys), "tool: codebase-memory-mcp")
+    assert backend["status"] == "info" and "WSL2" in backend["detail"]
+    assert "Linux build" in backend["detail"]
+    assert not (agentic_home() / "tools" / "codebase-memory-mcp").exists()

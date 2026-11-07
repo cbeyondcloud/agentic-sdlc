@@ -50,6 +50,7 @@ from agentic.orgapi import Me
 from agentic.orgapi.rbac import OrgAuthorizer
 from agentic.policy import ResolvedAgent
 from agentic.sandbox.readiness import Readiness, SandboxDecision, decide_sandbox, readiness
+from agentic.sandbox.rules import expand_home
 from agentic.skills.catalog import CatalogError, load_catalog
 from agentic.skills.install import log_record, sync_skills
 from agentic.skills.loader import InstalledSkills
@@ -409,7 +410,10 @@ class Runtime:
             self._backend = backend_for(
                 self.ws.repo,
                 codeintel_settings(self.ws.config),
-                lambda: locate_backend(tool_locator(self.ws.home, self.ws.policy())),
+                # DF-921: only where the sandbox is ready; DF-925: never native Windows
+                lambda: locate_backend(
+                    tool_locator(self.ws.home, self.ws.policy()), machine_readiness
+                ),
             )
         return self._backend
 
@@ -772,6 +776,7 @@ class Runtime:
             codeintel_settings(self.ws.config),
             crg_available=codeintel_index.available(),
             backend=self._codeintel_backend(),  # M3-27: JVM repos, when the org pins it
+            deny_read=expand_home(self.ws.policy().sandbox.effective_deny_read, Path.home()),
         )
         library = self._installed()
         return StepWiring(

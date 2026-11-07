@@ -505,6 +505,19 @@ def test_asking_for_the_backend_without_a_pin_warns_with_a_fix(repo, capsys):
     assert "tool-pins.yaml" in found["fix"]
 
 
+def test_the_backend_s_sandbox_check_asks_the_machine_doctor_describes(tmp_path):
+    # DF-921: the JVM backend is offered only where this sandbox is ready
+    from types import SimpleNamespace
+
+    from agentic.policy import SandboxPolicy
+
+    ws, policy = SimpleNamespace(repo=tmp_path), SimpleNamespace(sandbox=SandboxPolicy())
+    deps = doctor.DoctorDeps(which=lambda name: None, system="Linux", kernel_release="6.8.0")
+    found = doctor._sandbox_readiness(ws, policy, deps)
+    assert found.platform == "linux" and not found.available
+    assert "srt" in {c.name for c in found.checks if not c.ok}
+
+
 def test_the_keyring_probe_asks_the_injected_provider(home, gateway):  # DF-961
     asked = []
 

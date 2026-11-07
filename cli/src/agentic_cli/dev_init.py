@@ -46,6 +46,7 @@ from agentic.skills.catalog import CATALOG_FILE
 from agentic.skills.install import sync_skills
 from agentic.skills.select import pipeline_skills, select_skills, team_packs
 from agentic_cli import readiness
+from agentic_cli.codeintel import WSL2_ONLY
 from agentic_cli.download import download
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
@@ -372,6 +373,7 @@ class _Tools:
                     download=deps.download,
                     platform=deps.platform,
                     record=self._attested(audit.record),
+                    wsl2_only=WSL2_ONLY,  # DF-925: their Linux build, inside WSL2 only
                 )
             except ToolFetchError as error:
                 self.problem = str(error)
@@ -397,7 +399,9 @@ class _Tools:
             return [Item("tools", "missing", self.problem, "fix tool_mirror_url in org policy")]
         items = []
         for name, pin in sorted(self.policy.tool_pins.items()):
-            if pin.when == "always" or (pin.when == "licence_scan" and self.policy.licence_scan):
+            if pin.when != "on_request" and (why := self.fetcher.withheld(name)):
+                items.append(Item(f"tool: {name}", "info", f"not offered here: {why}"))
+            elif pin.when == "always" or (pin.when == "licence_scan" and self.policy.licence_scan):
                 items.append(_tool_item(name, pin, self.fetcher.fetch(name, pin), required=True))
             elif pin.when == "licence_scan":
                 items.append(Item(f"tool: {name}", "info", "not needed: licence scanning is off"))
@@ -411,6 +415,9 @@ class _Tools:
         items, pending = [], []
         for name, pin in sorted(self.policy.tool_pins.items()):
             if pin.when != "on_request":
+                continue
+            if why := self.fetcher.withheld(name):  # never installed, nor its cache used
+                items.append(Item(f"tool: {name}", "info", f"not offered here: {why}"))
                 continue
             on_path = self.deps.which(pin.binary)
             cached = self.fetcher.cached(name, pin)

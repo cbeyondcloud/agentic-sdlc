@@ -30,6 +30,7 @@ from agentic.review.prepass import builtin_checks, merge, prefixed, render
 from agentic.security.secret_scan import SecretScanner
 from agentic.skills.install import log_record
 from agentic.skills.personal import PersonalContext
+from agentic_cli.codeintel import WSL2_ONLY
 from agentic_cli.errors import CliError
 from sdlc_commons.review_prepass import ToolLocator, external_checks
 from sdlc_commons.tool_fetch import ToolFetcher, ToolFetchError, current_platform
@@ -55,7 +56,11 @@ def tool_locator(home: Path, policy: OrgPolicy) -> ToolLocator:
     if policy.tool_pins and policy.tool_mirror_url:
         try:
             cache = ToolFetcher(
-                home / "tools", policy.tool_mirror_url, download=_never, platform=platform
+                home / "tools",
+                policy.tool_mirror_url,
+                download=_never,
+                platform=platform,
+                wsl2_only=WSL2_ONLY,  # DF-925: never a native Windows build of these
             )
         except ToolFetchError:
             cache = None

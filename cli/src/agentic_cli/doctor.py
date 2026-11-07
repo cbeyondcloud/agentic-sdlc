@@ -49,6 +49,8 @@ from agentic.hosting.git import remote_url
 from agentic.policy import OrgPolicy, SandboxPolicy
 from agentic.policy.model import gateway_model
 from agentic.sandbox.process import withheld_names
+from agentic.sandbox.readiness import Readiness
+from agentic.sandbox.readiness import readiness as sandbox_readiness
 from agentic.transport import probe_gateway
 from agentic_cli import __version__, codeintel, control_plane, hosting, housekeeping, readiness
 from agentic_cli.config import user_config
@@ -186,7 +188,7 @@ def run_doctor(cwd: Path, home: Path, env: Mapping[str, str], deps: DoctorDeps) 
     if ws is not None:
         add(_local_data(ws))
     if ws is not None and policy is not None:
-        add(_codeintel(ws, policy))
+        add(_codeintel(ws, policy, deps))
     add(_withheld(env, policy))
     add(_policy_repo_protection(settings, credentials))
     return report
@@ -500,7 +502,7 @@ def _local_data(ws: Workspace) -> Check:
     return Check("local data", "ok", "under its cap")
 
 
-def _codeintel(ws: Workspace, policy: OrgPolicy) -> Check:
+def _codeintel(ws: Workspace, policy: OrgPolicy, deps: DoctorDeps) -> Check:
     """M3-27: which code intelligence answers in this repository, from the verified tool
     cache only (doctor fetches nothing)."""
     from agentic_cli.step_extras import tool_locator  # it imports the runtime's peers
@@ -514,10 +516,26 @@ def _codeintel(ws: Workspace, policy: OrgPolicy) -> Check:
         settings,
         crg_available=codeintel_index.available(),
         backend=codeintel.backend_for(
-            ws.repo, settings, lambda: codeintel.locate_backend(tool_locator(ws.home, policy))
+            ws.repo,
+            settings,
+            lambda: codeintel.locate_backend(
+                tool_locator(ws.home, policy), lambda: _sandbox_readiness(ws, policy, deps)
+            ),
         ),
     )
     return Check("code intelligence", status, detail, fix)
+
+
+def _sandbox_readiness(ws: Workspace, policy: OrgPolicy, deps: DoctorDeps) -> Readiness:
+    """This machine's sandbox as a run sees it (`runtime.machine_readiness`: no tree
+    check), asked of the machine doctor describes (DF-921)."""
+    return sandbox_readiness(
+        system=deps.system,
+        kernel_release=deps.kernel_release,
+        which=deps.which,
+        run=deps.run,
+        srt_version=policy.sandbox.srt_version,
+    )
 
 
 def _withheld(env: Mapping[str, str], policy: OrgPolicy | None) -> Check:

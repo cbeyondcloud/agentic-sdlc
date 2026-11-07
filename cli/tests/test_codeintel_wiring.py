@@ -8,6 +8,7 @@ import pytest
 from cli_helpers import skip_unless_graph_required
 
 from agentic.codeintel import Candidates, CodeIntelError, Combined
+from agentic.sandbox.readiness import Check, Readiness
 from agentic_cli import codeintel
 from agentic_cli.errors import CliError
 from agentic_cli.exit_codes import ExitCode
@@ -329,9 +330,10 @@ def test_the_backend_is_located_in_the_verified_tool_cache_only(tmp_path):
             assert name == codeintel.BACKEND_TOOL
             return None, "not installed"
 
-    assert codeintel.locate_backend(Locator()) == codeintel.Backend(None, True, "not installed")
+    found = codeintel.locate_backend(Locator(), ready)
+    assert found == codeintel.Backend(None, True, "not installed")
     Locator.pins = {}
-    assert codeintel.locate_backend(Locator()).pinned is False
+    assert codeintel.locate_backend(Locator(), ready).pinned is False
 
 
 def test_codeintel_status_explains_the_choice(jvm_repo, tmp_path):
@@ -383,7 +385,8 @@ class _Artefact:
     ("platform", "assets", "permanent"),
     [
         ("windows-x86_64", {"windows-x86_64": _Artefact(signed=False)}, True),
-        ("windows-x86_64", {"windows-x86_64": _Artefact(signed=True)}, False),
+        ("windows-x86_64", {"windows-x86_64": _Artefact(signed=True)}, True),  # DF-925
+        ("windows-x86_64", {"linux-x86_64": _Artefact(signed=False)}, True),
         ("darwin-aarch64", {"linux-x86_64": _Artefact(signed=False)}, True),
         ("darwin-aarch64", {"darwin-aarch64": _Artefact(signed=False)}, False),
     ],
@@ -398,17 +401,85 @@ def test_a_build_this_machine_can_never_run_is_permanent(platform, assets, perma
         def locate(self, name):
             return None, "not here"
 
-    assert codeintel.locate_backend(Locator()).permanent is permanent
+    assert codeintel.locate_backend(Locator(), ready).permanent is permanent
 
 
 def test_a_permanent_gap_is_info_not_a_warning_unless_asked_for(jvm_repo):
-    gap = codeintel.Backend(None, pinned=True, why="no signed Windows build", permanent=True)
+    gap = codeintel.Backend(None, pinned=True, why=codeintel.NATIVE_WINDOWS, permanent=True)
     assert (
         codeintel.codeintel_warning(jvm_repo, settings(), crg_available=True, backend=gap) is None
     )
     status, detail, _ = codeintel.codeintel_status(
         jvm_repo, settings(), crg_available=True, backend=gap
     )
-    assert status == "info" and "no signed Windows build" in detail
+    assert status == "info" and "WSL2" in detail
     asked = settings(adapter="codebase-memory")
     assert codeintel.codeintel_warning(jvm_repo, asked, crg_available=True, backend=gap)
+
+
+# ── DF-921 / DF-925 (owner decisions 2026-11-07) ─────────────────────────────
+
+
+def ready() -> Readiness:
+    return Readiness("linux", ())  # every check passed
+
+
+def _locator(platform: str, assets: dict, found: Path | None = None):
+    class Locator:
+        pins = {"codebase-memory-mcp": _Pin(assets)}
+
+        def __init__(self):
+            self.platform, self.asked = platform, []
+
+        def locate(self, name):
+            self.asked.append(name)
+            return found, "" if found else "not installed"
+
+    return Locator()
+
+
+def test_native_windows_never_gets_the_backend_and_is_pointed_to_wsl2(tmp_path):
+    def never():
+        raise AssertionError("native Windows needs no sandbox check: it is refused")
+
+    signed = {"windows-x86_64": _Artefact(signed=True)}  # even a build the org marked signed
+    locator = _locator("windows-x86_64", signed, found=tmp_path / "cbm.exe")
+    found = codeintel.locate_backend(locator, never)
+    assert found.path is None and found.pinned and found.permanent
+    assert "WSL2" in found.why and "Linux build" in found.why
+    assert locator.asked == []  # the native build is not even looked up
+    asked = settings(adapter="codebase-memory")
+    status, detail, fix = codeintel.codeintel_status(
+        tmp_path, asked, crg_available=True, backend=found
+    )
+    assert status == "warn" and "WSL2" in detail and "WSL2" in fix and "pin" not in fix
+
+
+def test_without_a_ready_sandbox_the_backend_is_refused_saying_what_to_install(tmp_path):
+    missing = Readiness(
+        "macos", (Check("srt", False, "not found", "npm install -g sandbox-runtime"),)
+    )
+    locator = _locator("darwin-aarch64", {"darwin-aarch64": _Artefact(False)}, tmp_path / "cbm")
+    found = codeintel.locate_backend(locator, lambda: missing)
+    assert found.path is None and found.pinned and not found.permanent
+    assert "sandbox" in found.why and "no network" in found.why
+    assert "srt" in found.fix and "agentic doctor" in found.fix
+    status, detail, fix = codeintel.codeintel_status(
+        Path(tmp_path), settings(adapter="codebase-memory"), crg_available=True, backend=found
+    )
+    assert status == "warn" and "sandbox" in detail and fix == found.fix
+
+
+def test_with_a_ready_sandbox_the_installed_backend_is_used(tmp_path):
+    locator = _locator("linux-x86_64", {"linux-x86_64": _Artefact(False)}, tmp_path / "cbm")
+    assert codeintel.locate_backend(locator, ready).path == tmp_path / "cbm"
+
+
+def test_the_backend_runs_inside_the_sandbox_with_no_host_and_policy_s_denials(jvm_repo, tmp_path):
+    backend = codeintel.Backend(tmp_path / "cbm", pinned=True)
+    secrets = (tmp_path / "home" / ".ssh",)
+    make = codeintel.codeintel_for(
+        jvm_repo, settings(), crg_available=False, backend=backend, deny_read=secrets
+    )
+    rules = make(jvm_repo, tmp_path / "data").adapters[1].sandbox.rules
+    assert rules.allowed_domains == () and rules.deny_read == secrets
