@@ -41,6 +41,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings
 
+from agentic.agents.metering import DEFAULT_MAX_OUTPUT
 from agentic.definitions import DefinitionError
 from agentic.eval.blind import LeakCheck
 from agentic.policy import OrgPolicy
@@ -48,7 +49,9 @@ from agentic.yamlio import YamlFileError, load_yaml, read_text
 
 JUDGE_TIER = "eval-judge"
 CRITERIA = 5  # S10 rubric shape: 5 criteria x 0-2 = 10
-JUDGE_SETTINGS = {"temperature": 0.0}  # the default; the eval-judge tier may set its own
+#: The default; the eval-judge tier may set its own temperature and output cap. Every
+#: call is capped: without one a gateway reserves the model's whole output (DF-398).
+JUDGE_SETTINGS = {"temperature": 0.0, "max_tokens": DEFAULT_MAX_OUTPUT}
 MIN_EVIDENCE = 12  # characters of a quote, after collapsing whitespace
 UNKNOWN_FAMILY = "unknown"
 # S10 verbosity check: every output a judge sees is cut at the same length, so length
@@ -471,7 +474,10 @@ def resolve_judge(
         family or UNKNOWN_FAMILY,
         same,
         tuple(sorted(f or UNKNOWN_FAMILY for f in by_model.values())),
-        settings={"temperature": spec.temperature if spec.temperature is not None else 0.0},
+        settings={
+            "temperature": spec.temperature if spec.temperature is not None else 0.0,
+            "max_tokens": spec.max_output_tokens or DEFAULT_MAX_OUTPUT,
+        },
         warnings=tuple(warnings),
     )
 

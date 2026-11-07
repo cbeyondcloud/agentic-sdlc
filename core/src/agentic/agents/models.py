@@ -125,17 +125,19 @@ def metered_model(
 #: Every provider bills and caps reasoning as output, so a call's cap leaves this room
 #: beside the answer's - a cap at or under it is refused, or truncates the answer.
 REASONING_OUTPUT = {"low": 2_048, "medium": 10_000, "high": 16_384}
-#: The least room a capped call keeps for its answer, beyond its reasoning.
+#: The least room the default cap keeps for the answer, beyond the reasoning.
 MIN_ANSWER_OUTPUT = 4_096
 
 
 def output_cap(agent: ResolvedAgent) -> int:
-    """The most output tokens one call of the agent asks for (DF-398): the tier's cap, else
-    the answer room the budget hold assumes plus the effort's reasoning room - never so
-    small that reasoning leaves no room for the answer."""
+    """The most output tokens one call of the agent asks for (DF-398): the tier's cap as
+    set (its admin knows the model's output limit, which a raised cap would exceed), else
+    the output the budget hold assumes, raised where the effort's reasoning would leave
+    the answer too little room."""
+    if agent.max_output_tokens:
+        return agent.max_output_tokens
     reasoning = REASONING_OUTPUT.get(agent.effort or "", 0)
-    cap = agent.max_output_tokens or DEFAULT_MAX_OUTPUT + reasoning
-    return max(cap, reasoning + MIN_ANSWER_OUTPUT)
+    return max(DEFAULT_MAX_OUTPUT, reasoning + MIN_ANSWER_OUTPUT)
 
 
 def model_settings(agent: ResolvedAgent) -> ModelSettings:

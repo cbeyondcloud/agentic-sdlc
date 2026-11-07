@@ -6,7 +6,8 @@
 # serves, written the way the gateway names it. `family:` groups models from one
 # maker, so the eval judge can be chosen from another family than the agents.
 # `max_output_tokens:` (optional) caps the output one call may ask for, reasoning
-# included; unset, each call asks for 16,384 plus its effort's reasoning room.
+# included. Set it for a model whose output limit is under what a call asks for
+# when it is unset: 16,384 (20,480 at `effort: high`).
 # =============================================================================
 tiers:
   deep-reasoning:                       # architecture and design: the strongest model

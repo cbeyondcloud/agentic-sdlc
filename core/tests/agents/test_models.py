@@ -164,8 +164,6 @@ def test_every_call_sends_a_bounded_output_cap(resolved, tokenlean):  # DF-398
 
     plain = resolved.model_copy(update={"effort": None})
     assert model_settings(plain)["max_tokens"] == DEFAULT_MAX_OUTPUT
-    capped = plain.model_copy(update={"max_output_tokens": 2048})
-    assert model_settings(capped)["max_tokens"] == 4096  # room left for the answer
     capped = plain.model_copy(update={"max_output_tokens": 6000})
     assert model_settings(capped)["max_tokens"] == 6000
     for agent in (capped, capped.model_copy(update={"model": "google/gemini-flash"})):
@@ -176,15 +174,23 @@ def test_every_call_sends_a_bounded_output_cap(resolved, tokenlean):  # DF-398
 
 
 def test_the_default_cap_leaves_room_for_reasoning(resolved):  # DF-398
-    """Reasoning is billed and capped as output: a high-effort call's cap must exceed its
-    reasoning budget, or the provider refuses it (or the answer is cut off)."""
+    """Reasoning is billed and capped as output: a high-effort call's default cap must
+    exceed its reasoning budget, or the provider refuses it (or the answer is cut off)."""
     from agentic.agents.metering import DEFAULT_MAX_OUTPUT
-    from agentic.agents.models import REASONING_OUTPUT
+    from agentic.agents.models import MIN_ANSWER_OUTPUT, REASONING_OUTPUT
 
+    for effort in (None, "low", "medium"):
+        agent = resolved.model_copy(update={"effort": effort, "max_output_tokens": None})
+        assert model_settings(agent)["max_tokens"] == DEFAULT_MAX_OUTPUT
     high = resolved.model_copy(update={"effort": "high", "max_output_tokens": None})
-    assert model_settings(high)["max_tokens"] == DEFAULT_MAX_OUTPUT + REASONING_OUTPUT["high"]
-    tight = high.model_copy(update={"max_output_tokens": 8192})
-    assert model_settings(tight)["max_tokens"] > REASONING_OUTPUT["high"]
+    assert model_settings(high)["max_tokens"] == REASONING_OUTPUT["high"] + MIN_ANSWER_OUTPUT
+
+
+def test_a_tiers_own_cap_is_sent_as_set(resolved):  # DF-398 (review)
+    """An admin who caps a tier knows its model's output limit: the cap is never raised
+    (a raised cap over the model's limit is refused by the provider)."""
+    tight = resolved.model_copy(update={"effort": "high", "max_output_tokens": 8192})
+    assert model_settings(tight)["max_tokens"] == 8192
 
 
 def test_a_fresh_model_asks_the_gateway_for_a_new_answer(resolved, tokenlean):  # DF-1004
