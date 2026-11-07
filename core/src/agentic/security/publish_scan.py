@@ -85,11 +85,17 @@ class PublishBlocked(SinkError):
         action: str,
         *,
         index: int = 0,
+        findings: Sequence[str] = (),
     ) -> None:
         super().__init__(run_id, seq)
         self.run_id, self.seq, self.event = run_id, seq, event
         self.kinds, self.fields, self.action = tuple(kinds), tuple(fields), action
         self.index = index
+        # the finding kinds as ids (a detector, `pii:<entity>`): what a held-back marker
+        # names (DF-536), never a value
+        self.findings = tuple(findings)
+        # whether the control plane took the held-back marker (set by the sink that sends it)
+        self.marked = False
 
     def __str__(self) -> str:
         if self.delivered:
@@ -181,7 +187,9 @@ class PublishGuard:
             self.on_event(found)
             kinds = sorted(_kind(name) for name in counts)
             event = str(entry.get("event"))
-            raise PublishBlocked(run_id, seq, event, kinds, hit, self.action, index=index)
+            raise PublishBlocked(
+                run_id, seq, event, kinds, hit, self.action, index=index, findings=sorted(counts)
+            )
 
     def findings(self, fields: dict) -> dict[str, int]:
         """What a scan finds in `fields` (detector, or `pii:<entity>` -> how many), with

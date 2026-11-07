@@ -21,12 +21,12 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from agentic.orgapi import ChainHead, IngestResult
+from agentic.orgapi import ChainHead, HeldBackRequest, HeldBackResult, IngestResult
 from agentic_cp.alerts.budget import check_run, check_team, step_spend
 from agentic_cp.alerts.gates import gate_waiting
 from agentic_cp.audit import AuditEvent, append
 from agentic_cp.auth.tokens import TokenContext
-from agentic_cp.errors import ApiProblem
+from agentic_cp.errors import ApiProblem, not_found
 from agentic_cp.ingest.health import waits
 from agentic_cp.rbac.authz import EnforcerCache, Team, require
 from agentic_cp.tables import policy_versions, run_events, runs
@@ -35,6 +35,9 @@ from sdlc_commons.ledger import NAMESPACE, verify_entries
 
 #: Codes of refusals that are audited in the tenant's chain (a gap is a sink catching up).
 AUDITED = {"ingest.chain_broken": "ingest.chain_rejected", "ingest.fork": "ingest.fork"}
+#: The terminal status of a run the publish scan held back (DF-536). Not `open`: it holds
+#: no concurrency slot, never goes stale and is not counted as running.
+HELD_BACK = "held_back"
 
 
 def event_time(value: object) -> datetime | None:
@@ -246,6 +249,8 @@ async def ingest_batch(
     closing = [entry for entry in rest if entry["event"] == "run_closed"]
     if closing:  # a stale run too: a run that died is closed by `agentic stop` (M3-07)
         values["status"] = str(closing[-1].get("status") or "closed")[:32]
+    elif row.status == HELD_BACK:  # DF-536: the rest, published after a local redaction
+        values["status"] = "open"
     if waits(rest):  # never cleared here: a late batch must not make it look dead (M3-07)
         values["waiting"] = True
     if new_run:
@@ -268,6 +273,21 @@ async def ingest_batch(
             ),
             clock=clock,
         )
+    if row.status == HELD_BACK:
+        await append(
+            conn,
+            AuditEvent(
+                event="run.republished",
+                actor=ctx.email,
+                actor_kind=ctx.actor_kind,
+                target=f"run:{run_id}",
+                team=row.team,
+                run_id=run_id,
+                before={"status": HELD_BACK},
+                after={"status": values["status"], "head_seq": last["seq"]},
+            ),
+            clock=clock,
+        )
     if added:
         await check_run(conn, row, spent_before, spent_before + added, sinks=alerts, clock=clock)
         await check_team(conn, row, added, sinks=alerts, clock=clock)
@@ -275,6 +295,57 @@ async def ingest_batch(
     return IngestResult(
         accepted=len(rest), duplicates=len(old), head=ChainHead(seq=last["seq"], hash=last["hash"])
     )
+
+
+async def hold_back(
+    conn: AsyncConnection,
+    ctx: TokenContext,
+    run_id: str,
+    marker: HeldBackRequest,
+    *,
+    cache: EnforcerCache,
+    clock: Callable[[], datetime],
+) -> HeldBackResult:
+    """Close the run out as held back at event `marker.seq` (DF-536). The marker names the
+    event right after the stored head, so it never skips what the client could send, and
+    the head does not move: entries the scan passes later (after a local redaction) are
+    ingested as any batch is, and re-open the run. The same marker again changes nothing."""
+    row = (
+        await conn.execute(select(runs).where(runs.c.run_id == run_id).with_for_update())
+    ).first()
+    if row is None:
+        raise not_found("run")
+    if ctx.user_id != row.started_by:
+        await require(ctx, "run.cancel.any", Team(row.team), conn=conn, cache=cache)
+    head = ChainHead(seq=row.head_seq, hash=row.head_hash)
+    if marker.seq != head.seq + 1:
+        raise head_problem(
+            "ingest.gap",
+            f"the run is held back at event {marker.seq}, the control plane holds up to {head.seq}",
+            head,
+            hint=f"send the run's events up to {marker.seq - 1} first",
+        )
+    if row.status == HELD_BACK:
+        return HeldBackResult(status=HELD_BACK, head=head, duplicate=True)
+    if row.status not in ("open", "stale"):
+        raise ApiProblem(409, "run.closed", f"the run is already closed ({row.status})")
+    await conn.execute(update(runs).where(runs.c.run_id == run_id).values(status=HELD_BACK))
+    await append(
+        conn,
+        AuditEvent(
+            event="run.held_back",
+            actor=ctx.email,
+            actor_kind=ctx.actor_kind,
+            target=f"run:{run_id}",
+            team=row.team,
+            run_id=run_id,
+            reason="the publish scan held the run back before central publish",
+            before={"status": row.status},
+            after={"seq": marker.seq, "kinds": sorted(set(marker.kinds))},
+        ),
+        clock=clock,
+    )
+    return HeldBackResult(status=HELD_BACK, head=head)
 
 
 async def _policy_known(conn: AsyncConnection, version: str) -> bool:

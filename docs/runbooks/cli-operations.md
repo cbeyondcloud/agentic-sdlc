@@ -55,6 +55,23 @@ it.
 2. the policy's `local.disk_cap_gb`;
 3. 20 GB.
 
+## A run the publish scan held back
+
+Before a run's events go to the control plane, the publish scan looks for secrets and
+personal data. An event that was chained with one cannot be masked any more, so it and
+every later event stay in the local run ledger. `agentic sync` sends the clean events
+before it. It then tells the control plane that the run is held back, naming only the
+kinds of finding (for example `pii:credit-card`), never what was found. The control plane
+shows the run with status `held_back` and writes a `run.held_back` audit record. The run no
+longer counts as running, and `agentic sync` no longer exits 1 for it. If the control plane
+cannot be told (it is offline, or it refuses), the run stays an error, and the next sync
+tries again.
+
+An org admin can still publish the rest later. Redact the run's ledger on the laptop and
+chain it again from the held-back event, then run `agentic sync`. The control plane checks
+the new entries from its head as it does for any batch. The run becomes `open` again (or
+takes its `run_closed` status), and a `run.republished` audit record is written.
+
 ## `agentic doctor`: what is wrong with this machine
 
 ```text

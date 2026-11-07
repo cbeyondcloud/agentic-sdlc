@@ -79,6 +79,8 @@ class FakeControlPlane:
     heartbeats: list[dict] = field(default_factory=list)  # run id + body of each beat (M3-07)
     refuse_heartbeats: bool = False  # answer every beat 503
     chargeback: list[dict] = field(default_factory=list)  # dash_chargeback rows (M3-01)
+    held_back: dict[str, dict] = field(default_factory=dict)  # run -> marker body (DF-536)
+    refuse_held_back: bool = False  # answer every held-back marker 503
 
     def add_audit(self, count: int, *, team_of=lambda seq: "payments") -> list[dict]:
         """`count` chained audit records appended to the tenant's chain."""
@@ -503,6 +505,8 @@ class FakeControlPlane:
             if self.refuse_heartbeats:
                 return _problem(503, "unavailable", "the control plane is overloaded")
             return httpx2.Response(200, json={"status": "open", "counted": True, "revived": False})
+        if path.startswith("/v1/runs/") and path.endswith("/held-back"):  # DF-536
+            return self._held_back(path.split("/")[3], json.loads(request.content))
         if path.startswith("/v1/runs/") and path.endswith("/events"):
             if self.max_body is not None and len(request.content) > self.max_body:
                 return _problem(413, "too_large", f"the body is over {self.max_body} bytes")
@@ -687,6 +691,22 @@ class FakeControlPlane:
             "author": self.email,
             "corrected_by": self.email,
         }
+
+    def _held_back(self, run_id: str, body: dict) -> httpx2.Response:
+        """As the control plane does: the marker names the event right after the head."""
+        if self.refuse_held_back:
+            return _problem(503, "unavailable", "the control plane is overloaded")
+        stored = self.events.get(run_id)
+        if not stored:
+            return _problem(404, "not_found", "no such run")
+        head = {"seq": stored[-1]["seq"], "hash": stored[-1]["hash"]}
+        if body["seq"] != head["seq"] + 1:
+            return _problem(409, "ingest.gap", "gap", extra={"head": head})
+        duplicate = self.held_back.get(run_id) == body
+        self.held_back[run_id] = body
+        return httpx2.Response(
+            200, json={"status": "held_back", "head": head, "duplicate": duplicate}
+        )
 
     def _ingest(self, run_id: str, entries: list[dict]) -> httpx2.Response:
         if self.refuse_ingest is not None:

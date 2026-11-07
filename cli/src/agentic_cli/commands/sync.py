@@ -7,7 +7,9 @@ syncing sends exactly what the control plane has not taken yet, in order; it de-
 by (run, seq, hash), so syncing twice changes nothing. A run the control plane refuses (a
 changed chain) is reported and left queued; the others still go. A run the publish scan
 holds back (M2-49: a chained event with a secret or personal data) is sent up to that event
-and reported as held back, with who to ask: syncing again cannot send the rest."""
+and reported as held back, with who to ask: syncing again cannot send the rest. The control
+plane is told (DF-536: the finding kinds only), closes the run out as held back, and the run
+is no longer an error here; while it cannot be told, the run stays one."""
 
 from typing import Annotated
 
@@ -75,6 +77,9 @@ def register(app: typer.Typer) -> None:
                 line = f"{name}: sent {result['sent']}, queued {result['queued']}"
                 if "blocked" in result:
                     line += f", held back from event {result['blocked']['seq']}"
+                if "held_back" in result:  # DF-536: kinds only, never what was found
+                    kinds = ", ".join(result["held_back"]["kinds"])
+                    line += f" ({kinds}; the control plane shows the run as held back)"
                 if "error" in result:
                     line += f" ({result['error']})"
                 console.print(line, markup=False)
@@ -134,4 +139,7 @@ def _sync_run(ws: Workspace, sink: control_plane.ControlPlaneSink, run_id: str) 
                 f"ask your org admin how to handle a run the publish scan held back; its "
                 f"full record stays in {ledger.folder} and syncing again will not send it"
             )
+            if first.marked:  # DF-536: the control plane closed it out as held back
+                del result["error"]
+                result["held_back"] = {"seq": first.seq, "kinds": list(first.findings)}
     return result

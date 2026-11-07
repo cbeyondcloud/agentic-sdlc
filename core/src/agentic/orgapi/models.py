@@ -363,6 +363,31 @@ class HeartbeatResult(BaseModel):
     revived: bool = False
 
 
+#: A publish-scan finding kind as the marker names it: a detector or `pii:<entity>`, an id
+#: (DF-536). A kind can never carry what the scan found.
+FINDING_KIND = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$"
+
+
+class HeldBackRequest(RequestModel):
+    """`POST /v1/runs/{run_id}/held-back` (DF-536): the publish scan held the run back at
+    event `seq` (the one right after what the control plane holds), for `kinds` of finding.
+    Only kinds travel, never a value or a field; the run is closed out as `held_back`."""
+
+    seq: int = Field(ge=1)
+    kinds: list[Annotated[str, StringConstraints(pattern=FINDING_KIND)]] = Field(
+        min_length=1, max_length=32
+    )
+
+
+class HeldBackResult(BaseModel):
+    """The run's status and chain head after the marker; `duplicate` when it was already
+    held back at that event (nothing changed)."""
+
+    status: str
+    head: ChainHead
+    duplicate: bool = False
+
+
 ScopeKind = Literal["tenant", "team", "user", "repo", "pipeline", "agent", "model", "backend"]
 
 
