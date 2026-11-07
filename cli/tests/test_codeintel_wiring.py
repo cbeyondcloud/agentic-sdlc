@@ -405,14 +405,14 @@ def test_a_build_this_machine_can_never_run_is_permanent(platform, assets, perma
 
 
 def test_a_permanent_gap_is_info_not_a_warning_unless_asked_for(jvm_repo):
-    gap = codeintel.Backend(None, pinned=True, why="no signed Windows build", permanent=True)
+    gap = codeintel.Backend(None, pinned=True, why=codeintel.NATIVE_WINDOWS, permanent=True)
     assert (
         codeintel.codeintel_warning(jvm_repo, settings(), crg_available=True, backend=gap) is None
     )
     status, detail, _ = codeintel.codeintel_status(
         jvm_repo, settings(), crg_available=True, backend=gap
     )
-    assert status == "info" and "no signed Windows build" in detail
+    assert status == "info" and "WSL2" in detail
     asked = settings(adapter="codebase-memory")
     assert codeintel.codeintel_warning(jvm_repo, asked, crg_available=True, backend=gap)
 
@@ -448,6 +448,11 @@ def test_native_windows_never_gets_the_backend_and_is_pointed_to_wsl2(tmp_path):
     assert found.path is None and found.pinned and found.permanent
     assert "WSL2" in found.why and "Linux build" in found.why
     assert locator.asked == []  # the native build is not even looked up
+    asked = settings(adapter="codebase-memory")
+    status, detail, fix = codeintel.codeintel_status(
+        tmp_path, asked, crg_available=True, backend=found
+    )
+    assert status == "warn" and "WSL2" in detail and "WSL2" in fix and "pin" not in fix
 
 
 def test_without_a_ready_sandbox_the_backend_is_refused_saying_what_to_install(tmp_path):

@@ -527,13 +527,13 @@ def _codeintel(ws: Workspace, policy: OrgPolicy, deps: DoctorDeps) -> Check:
 
 
 def _sandbox_readiness(ws: Workspace, policy: OrgPolicy, deps: DoctorDeps) -> Readiness:
-    """This machine's sandbox, as the sandbox checks above saw it (DF-921)."""
+    """This machine's sandbox as a run sees it (`runtime.machine_readiness`: no tree
+    check), asked of the machine doctor describes (DF-921)."""
     return sandbox_readiness(
         system=deps.system,
         kernel_release=deps.kernel_release,
         which=deps.which,
         run=deps.run,
-        tree=ws.repo,
         srt_version=policy.sandbox.srt_version,
     )
 

@@ -2,6 +2,7 @@
 one-shot `cli` commands with JSON arguments on stdin, never an MCP session."""
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -93,7 +94,7 @@ if rest[:1] == ["env"]:
         env[name] = value
 log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "srt.jsonl")
 with open(log, "a", encoding="utf-8") as out:
-    out.write(json.dumps({"settings": rules, "argv": rest}) + "\n")
+    out.write(json.dumps({"settings": rules, "argv": rest, "home": os.environ.get("HOME")}) + "\n")
 done = subprocess.run(rest, input=sys.stdin.read(), env=env, text=True, capture_output=True)
 sys.stdout.write(done.stdout)
 sys.stderr.write(done.stderr)
@@ -174,7 +175,7 @@ def test_an_unreadable_answer_is_a_codeintel_error(fake, tree, tmp_path):
 def test_a_missing_binary_is_a_codeintel_error(tree, tmp_path):
     missing = [str(tmp_path / "nowhere" / "cbm")]
     intel = CodebaseMemory(missing, tree, tmp_path / "data", srt=fake_srt(tmp_path))
-    with pytest.raises(CodeIntelError, match="index_repository failed"):
+    with pytest.raises(CodeIntelError, match="could not run"):
         intel.tests_for(SEED)
 
 
@@ -221,7 +222,7 @@ def test_malformed_answers_are_codeintel_errors(stdout, tree, tmp_path, monkeypa
         return subprocess.CompletedProcess(argv, 0, out, "")
 
     monkeypatch.setattr(cbm, "run_contained", fake_run)
-    intel = CodebaseMemory(["cbm"], tree, tmp_path / "data")
+    intel = CodebaseMemory([sys.executable], tree, tmp_path / "data")
     with pytest.raises(CodeIntelError):
         intel.dependents(SEED)
     with pytest.raises(CodeIntelError):
@@ -238,7 +239,7 @@ def test_a_tool_that_cannot_start_is_not_tried_again(tree, tmp_path, monkeypatch
         raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
 
     monkeypatch.setattr(cbm, "run_contained", fake_run)
-    intel = CodebaseMemory(["cbm"], tree, tmp_path / "data")
+    intel = CodebaseMemory([sys.executable], tree, tmp_path / "data")
     for _ in range(3):
         with pytest.raises(CodeIntelError, match="could not run"):
             intel.tests_for(SEED)
@@ -257,7 +258,7 @@ def test_queries_get_a_shorter_timeout_than_indexing(tree, tmp_path, monkeypatch
         return subprocess.CompletedProcess(argv, 0, envelope, "")
 
     monkeypatch.setattr(cbm, "run_contained", fake_run)
-    CodebaseMemory(["cbm"], tree, tmp_path / "data").tests_for(SEED)
+    CodebaseMemory([sys.executable], tree, tmp_path / "data").tests_for(SEED)
     assert timeouts["query_graph"] < timeouts["index_repository"]
 
 
@@ -271,7 +272,7 @@ def test_tool_paths_are_normalised_into_the_tree(tree, tmp_path, monkeypatch):
         return subprocess.CompletedProcess(argv, 0, json.dumps({"content": [{"text": text}]}), "")
 
     monkeypatch.setattr(cbm, "run_contained", fake_run)
-    found = CodebaseMemory(["cbm"], tree, tmp_path / "data").tests_for(SEED).files
+    found = CodebaseMemory([sys.executable], tree, tmp_path / "data").tests_for(SEED).files
     assert set(found) == {"src/test/java/a/FooTest.java", "src/main/java/b/Bar.java"}
 
 
@@ -312,3 +313,34 @@ def test_without_the_sandbox_the_tool_never_runs(fake, tree, tmp_path):
     with pytest.raises(CodeIntelError, match="could not run"):
         intel.tests_for(SEED)
     assert not fake[1].exists()  # never started unsandboxed
+
+
+def test_adapters_sharing_a_data_folder_keep_their_own_sandbox_settings(tree, tmp_path):
+    # parallel steps of one run share it: one settings file each, never a half-written one
+    first, second = (CodebaseMemory([sys.executable], tree, tmp_path / "data") for _ in "ab")
+    assert first.sandbox.settings != second.sandbox.settings
+
+
+def test_the_tool_gets_its_home_inside_the_sandbox_and_srt_keeps_its_own(
+    fake, tree, tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HOME", str(tmp_path / "real-home"))
+    adapter(fake, tree, tmp_path).tests_for(SEED)
+    outside = sandboxed(tmp_path)[0]
+    assert outside["home"] == str(tmp_path / "real-home")  # srt, a Node program, keeps it
+    assert outside["argv"][: len(fake[0])] == fake[0]
+    home = Path(calls(fake[1])[0]["env"]["HOME"]).resolve()
+    assert home.is_relative_to((tmp_path / "data").resolve())
+
+
+@pytest.mark.skipif(shutil.which("srt") is None, reason="needs the real srt (macOS, Linux, WSL2)")
+def test_under_the_real_sandbox_the_tool_answers_and_reaches_no_host(tree, tmp_path):
+    data = tmp_path / "data"
+    script = data / "fake" / "cbm.py"  # inside the only writable folder, with its log
+    script.parent.mkdir(parents=True)
+    script.write_text(FAKE, encoding="utf-8")
+    log = data / "fake" / "calls.jsonl"
+    intel = CodebaseMemory([sys.executable, str(script), str(log)], tree, data)
+    assert intel.tests_for(SEED).files == ("src/test/java/a/FooTest.java",)
+    settings = json.loads(intel.sandbox.settings.read_text(encoding="utf-8"))
+    assert settings["network"]["allowedDomains"] == []

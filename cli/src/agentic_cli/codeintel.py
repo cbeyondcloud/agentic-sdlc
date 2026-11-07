@@ -100,7 +100,8 @@ def locate_backend(locator: Locator, ready: Callable[[], Readiness]) -> Backend:
     asked only when the org pins a build for this platform)."""
     pin = locator.pins.get(BACKEND_TOOL)
     if pin is not None and locator.platform.startswith("windows"):  # DF-925
-        return Backend(None, pinned=True, why=NATIVE_WINDOWS, permanent=True)
+        fix = "run agentic inside WSL2 (`agentic doctor` lists the setup steps)"
+        return Backend(None, pinned=True, why=NATIVE_WINDOWS, permanent=True, fix=fix)
     if pin is not None and locator.platform in pin.assets:
         sandbox = ready()
         if not sandbox.available:  # DF-921: never run without it
